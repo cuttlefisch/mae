@@ -1,181 +1,91 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e M1-M5+M7(partial) complete (405 tests).
-Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI
-integration, search, visual mode, change/repeat/replace, scroll, and fuzzy
-file picker all working. Count prefix (M4) in progress.
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3e M6/M7 COMPLETE (506 tests).
+Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
+integration, search, visual mode, text objects, change/repeat/replace, scroll,
+indent/dedent, case change, line join, fuzzy file picker, command history, shell
+escape, and horizontal scroll all working.
 
-Self-hosting goal: use MAE + Claude to develop MAE itself.
+Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 ---
 
 ## Comprehensive Feature Checklist
 
-### What We Have (338 tests, Phase 3e M1 complete)
+### What We Have (506 tests)
 
 | Category | Features |
 |----------|----------|
-| **Modes** | Normal, Insert, Visual (char/line), Command, ConversationInput, Search |
-| **Movement** | hjkl, 0/$, gg/G, w/b/e/W/B/E, f/F/t/T, %, {/} |
+| **Modes** | Normal, Insert, Visual (char/line), Command, ConversationInput, Search, FilePicker |
+| **Movement** | hjkl, 0/$, gg/G, w/b/e/W/B/E, f/F/t/T, %, {/}, H/M/L |
 | **Search** | /pattern, ?pattern, n/N, *, :s///g, :%s///g, :noh, highlights |
-| **Editing** | i/a/A/o/O, x, dd/dw/d$/d0, cc/cw/C/c0, r, `.` repeat, u/Ctrl-r |
+| **Editing** | i/a/A/o/O, x, dd/dw/d$/d0, cc/cw/C/c0, r, J, >>/<\<, ~, gUU/guu, `.` repeat, u/Ctrl-r |
+| **Text Objects** | ci"/di(/ya{/iw/aw/iW/aW + all paired delimiters + quotes |
 | **Yank/Paste** | yy/yw/y$/y0, p/P, register system |
+| **Count Prefix** | 5j, 3dd, 2dw, 10G — pervasive across motions and operators |
+| **Scroll** | Ctrl-U/D/F/B, zz/zt/zb, horizontal scroll in split windows |
 | **Windows** | split v/h, close, focus hjkl, binary tree layout |
-| **Buffers** | next/prev/kill/switch, modified tracking |
-| **Files** | :e, :w, :wq, :q, :q! |
-| **AI** | Claude/OpenAI tool-calling, conversation buffer, streaming |
+| **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
+| **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
+| **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
+| **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer |
 | **Scheme** | Steel runtime, init.scm, define-key, eval REPL |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
 | **Debug** | Self-debug state inspection, DAP protocol types |
-| **Renderer** | Line numbers, status bar, which-key popup, multi-window, search highlights, selection highlights |
+| **Renderer** | Line numbers, status bar, which-key popup, multi-window, search/selection highlights |
+| **CI** | GitHub Actions (check/test/clippy/fmt), tag-based release, dependabot, git-cliff changelog |
 
-### Tier 1: Blocking Self-Hosting (must complete for dogfooding)
+### Remaining Tier 1: Blocking Self-Hosting
 
-| # | Feature | Vi Keys | Phase | Status |
-|---|---------|---------|-------|--------|
-| 1 | Search forward/backward | `/`, `?`, `n`, `N` | 3e M1 | **DONE** |
-| 2 | Substitute | `:s///`, `:%s///g` | 3e M1 | **DONE** |
-| 3 | Search word under cursor | `*` | 3e M1 | **DONE** |
-| 4 | Visual mode (charwise) | `v` + motions + d/y/c | 3e M2 | **DONE** |
-| 5 | Visual mode (linewise) | `V` + motions + d/y/c | 3e M2 | **DONE** |
-| 6 | Change operator | `c`+motion, `cc`, `C` | 3e M3 | **DONE** |
-| 7 | Dot repeat | `.` | 3e M3 | **DONE** |
-| 8 | Count prefix | `5j`, `3dd`, `2dw` | 3e M4 | In progress |
-| 9 | Scroll commands | Ctrl-U/D/F/B | 3e M5 | **DONE** |
-| 10 | Replace char | `r` | 3e M3 | **DONE** |
-| 11 | Line join | `J` | 3e M6 | Not started |
-| 12 | Indent/dedent | `>>`, `<<` | 3e M6 | Not started |
-| 13 | File picker | `SPC f f` (fuzzy) | 3e M7 | **DONE** |
-| 14 | Save-as | `:w path` | 3e M7 | **DONE** |
-| 15 | Multi-buffer AI tools | AI: open_file, buffer by name | 3f M1 | Not started |
-| 16 | Project search | AI: grep across project | 3f M4 | Not started |
+| # | Feature | Phase | Status |
+|---|---------|-------|--------|
+| 1 | Multi-buffer AI tools (open_file, buffer by name) | 3f M1 | Not started |
+| 2 | Project search (AI: grep across project) | 3f M4 | Not started |
+| 3 | Marks (`m`+letter, `'`+letter) | 3e M6 | Deferred |
+| 4 | Macros (`q` record, `@` playback) | 3e M6 | Deferred |
 
-### Tier 2: Expected in Vi-like Editor (friction without these)
-
-| # | Feature | Vi Keys | Phase |
-|---|---------|---------|-------|
-| 17 | Screen-relative cursor | `H`, `M`, `L` | 3e M5 | **DONE** |
-| 18 | Scroll position | `zz`, `zt`, `zb` | 3e M5 | **DONE** |
-| 19 | Marks | `m`+letter, `'`+letter | 3e M6 |
-| 20 | Macros | `q` record, `@` playback | 3e M6 |
-| 21 | Case change | `~`, `gU`, `gu` | 3e M6 |
-| 22 | Text objects | `ci"`, `di(`, `ya{` | 3e M6 |
-| 23 | Alternate file | `Ctrl-^` | 3e M7 |
-| 24 | Command history | up/down in `:` mode | 3e M7 |
-| 25 | Tab completion | in `:e` paths | 3e M7 | **DONE** |
-| 26 | Shell escape | `:!cmd`, `:read !cmd` | 3e M7 |
-| 27 | Search highlight clear | `:noh` | 3e M1 | **DONE** |
-
-### Tier 3: Quality of Life (defer past self-hosting)
+### Tier 2: Quality of Life
 
 | # | Feature | Phase |
 |---|---------|-------|
-| 28 | System clipboard | `"+y`, `"+p` | 3e M7 |
-| 29 | Auto-reload on external change | 3e future |
-| 30 | Backup/swap files | 3e future |
-| 31 | Read-only file detection | 3e future |
-| 32 | CRLF line ending handling | 3e future |
-| 33 | `:set` options | 3e future |
-| 34 | Mouse support | 3e future |
-| 35 | Code folding | 4c+ |
-| 36 | Multiple cursors | Future |
-| 37 | Session persistence | 3f M3 |
+| 5 | System clipboard (`"+y`, `"+p`) | 3e M7 |
+| 6 | Auto-reload on external change | future |
+| 7 | `:set` options | future |
+| 8 | Mouse support | future |
+| 9 | `:read !cmd` | future |
+| 10 | Multiple cursors | future |
+| 11 | Session persistence | 3f M3 |
 
 ---
 
-## Phase 3d: Dogfood the AI
+## Phase 3e: Editor Essentials ✅ COMPLETE (506 tests)
 
-Validate that Claude works inside MAE. Fix what breaks. This is the gate
-to self-hosting.
+### M1: Search ✅ (338 tests)
+- [x] /pattern, ?pattern, n/N, *, :s///g, :%s///g, :noh, highlights
 
-### M1: Smoke test
-- [ ] `ANTHROPIC_API_KEY=... cargo run` — verify startup
-- [ ] `SPC a a` → conversation buffer opens
-- [ ] Type "what buffer am I in?" → Claude calls `cursor_info`, responds
-- [ ] Type "read the first 5 lines" → Claude calls `buffer_read`
-- [ ] Type "add a comment on line 1" → Claude calls `buffer_write`
-- [ ] Tool calls visible in conversation as `[Tool: ...]` entries
-- [ ] `:ai-status` shows provider/model/connected
-- [ ] Without API key: helpful error message
+### M2: Visual Mode ✅ (364 tests)
+- [x] v/V, selection highlight, d/y/c operators, motion extension
 
-### M2: Fix what breaks
-- [ ] Bug fixes from M1 testing (unknown scope)
-- [ ] Tune system prompt based on Claude's actual behavior
-- [ ] Verify streaming display works (chunks appear incrementally)
-- [ ] Verify cancel (`C-c` in ConversationInput) stops generation
+### M3: Change + Repeat + Replace ✅ (405 tests)
+- [x] c+motion, cc, C, c0, `.` dot repeat, `r` replace
 
----
+### M4: Count Prefix ✅ (426 tests)
+- [x] 5j, 3dd, 2dw, 10G — pervasive across all motions and operators
 
-## Phase 3e: Editor Essentials
+### M5: Scroll + Screen Movement ✅ (433 tests)
+- [x] Ctrl-U/D/F/B, zz/zt/zb, H/M/L, horizontal scroll in split windows
 
-Missing vi operations needed before MAE is usable for real editing.
-
-### M1: Search ✅ COMPLETE (338 tests)
-- [x] `/pattern` forward search (regex-based)
-- [x] `?pattern` backward search
-- [x] `n` / `N` next/previous match (wrapping)
-- [x] `*` search word under cursor
-- [x] `:s/old/new/g` substitute (current line)
-- [x] `:%s/old/new/g` substitute (whole buffer)
-- [x] `:noh` / `:nohlsearch` clear highlights
-- [x] Search highlights in renderer (yellow bg)
-- [x] Search mode with `/` and `?` prompts in command line
-- [x] "N of M" match status display
-
-### M2: Visual Mode ✅ COMPLETE (364 tests)
-- [x] `v` character-wise visual selection
-- [x] `V` line-wise visual selection
-- [x] Selection highlight in renderer (`ui.selection` style)
-- [x] `d`/`x`, `y`, `c` operate on selection
-- [x] Visual mode + motion (extend selection with hjkl, w, b, etc.)
-- [x] Toggle v/V between char/line, Esc exits to Normal
-- [x] 25 tests covering mode transitions, selection range, operators, keybindings
-
-### M3: Change + Repeat + Replace ✅ COMPLETE (405 tests)
-- [x] `c`+motion, `cc`, `C`, `c0` (change operator)
-- [x] `.` (dot repeat — replay last edit with inserted text)
-- [x] `r` (replace single char)
-- [x] 17 tests covering change ops, replace, dot repeat, keybindings
-
-### M4: Count Prefix
-- [ ] `5j`, `3dd`, `2dw`, `10G` etc.
-- [ ] Pervasive: touches dispatch loop and all motion/operator commands
-
-### M5: Scroll + Screen Movement ✅ COMPLETE (376→388 tests)
-- [x] Ctrl-U/D (half page), Ctrl-F/B (full page)
-- [x] `zz`/`zt`/`zb` (center/top/bottom)
-- [x] `H`/`M`/`L` (screen top/middle/bottom)
-- [x] `viewport_height` field on Editor, updated from renderer each frame
-- [x] 12 tests covering scroll, screen-relative cursor, boundary clamping
-
-### M6: Operators + Marks + Macros
-- [ ] `J` (line join), `>>` `<<` (indent/dedent)
-- [ ] `~` `gU` `gu` (case change)
-- [ ] `m`/`'`/`` ` `` (marks)
-- [ ] `q`/`@` (macros)
-- [ ] `ci"` `di(` `ya{` (text objects — inner/around)
-
-### M7: File & Buffer UX (partial) ✅ PARTIAL (388→405 tests)
-- [x] `SPC f f` (fuzzy file picker — centered popup, recursive scan, subsequence matching)
-- [x] `:e` tab completion (Tab cycles through matches)
-- [x] `:w path` (save-as)
-- [x] 12 tests for file scanning, fuzzy matching, tab completion
-- [ ] `Ctrl-^` (alternate file), command history (up/down in `:`)
-- [ ] `:!cmd` (shell escape), `:read !cmd`
-- [ ] System clipboard (`"+y`, `"+p`)
-
-### Previously Completed (from prior plans)
-- Word motions: w/b/e/W/B/E/f/F/t/T/%/{/} ✅
-- Yank/Paste: yy/yw/y$/y0/p/P, registers ✅
-- Delete ops: dd/dw/d$/d0 ✅
-- Buffer mgmt: next/prev/kill/switch ✅
+### M6: Operators + Text Objects ✅ (506 tests)
+- [x] J (line join), >> << (indent/dedent), ~ gUU guu (case change)
+- [x] Text objects: ci" di( ya{ iw aw iW aW + all paired delimiters
+- [x] Ctrl-^ (alternate file), command history, :!cmd (shell escape)
 
 ---
 
 ## Phase 3f: AI Multi-File
 
-Extend AI tools so Claude can operate across multiple files and buffers.
-Required for self-hosting (Claude needs to edit multiple crate files).
+Extend AI tools so the AI agent can operate across multiple files and buffers.
+Required for self-hosting (AI needs to edit multiple crate files).
 
 ### M1: Buffer & File Tools
 - [ ] `open_file` tool — AI can open a file into a new buffer
@@ -199,6 +109,43 @@ Required for self-hosting (Claude needs to edit multiple crate files).
 - [ ] `project_search` tool — grep across project (ripgrep)
 - [ ] Working directory awareness in system prompt
 - [ ] Git status awareness in system prompt
+
+---
+
+## Phase 3g: Hardening
+
+Architecture review (April 2026) identified structural debt that must be
+addressed before the codebase grows further. Informed by lessons from Emacs's
+xdisp.c monolith, Xi Editor's over-engineering, and Remacs's accumulated debt.
+
+### M1: Split editor.rs
+- [ ] editor.rs is 3926+ lines — split into editor/mod.rs (state), dispatch.rs,
+      motion.rs, edit_ops.rs, search_ops.rs
+- [ ] Preserve all 506+ tests during refactor
+- [ ] No functional changes — pure structural refactor
+
+### M2: Error Handling
+- [ ] Replace all production unwrap()/expect() with proper error handling
+- [ ] Mutex locks: use parking_lot (no poisoning) or catch panics
+- [ ] Bounds-check window→buffer indexing in renderer
+
+### M3: Resource Bounding
+- [ ] Bound undo/redo stacks (1000 entries)
+- [ ] Bound command history (500 entries)
+- [ ] Bound conversation entries (5000 entries or ~50MB)
+- [ ] Clear search matches on buffer change
+
+### M4: AI Security & Robustness
+- [ ] Validate AI tool arguments against typed schemas (not serde_json::Value)
+- [ ] Sanitize shell_exec: allowlist or direct execve (no shell injection)
+- [ ] Add backpressure to AI event channels (warn when near capacity)
+- [ ] Add message history truncation (keep last N messages + system prompt)
+- [ ] Add circuit breaker with exponential backoff on provider errors
+
+### M5: Scheme Runtime Boundary
+- [ ] Define trait-based API between core and scheme (insurance if Steel doesn't scale)
+- [ ] Benchmark Steel under realistic load (1000 rapid edits, 50 buffers, sustained REPL)
+- [ ] Document Steel limitations and workarounds
 
 ---
 
@@ -231,7 +178,6 @@ Language server integration. AI gets semantic code intelligence.
 - [ ] `textDocument/completion` triggered on input
 - [ ] Completion popup in renderer
 - [ ] Tab/Enter to accept, Esc to dismiss
-- [ ] AI-assisted completion (Claude suggests, LSP validates)
 
 ### M5: Scheme + AI Exposure
 - [ ] Scheme functions: `(lsp-definition)`, `(lsp-references)`, `(lsp-hover)`
@@ -240,7 +186,31 @@ Language server integration. AI gets semantic code intelligence.
 
 ---
 
-## Phase 4b: DAP Client
+## Phase 4b: Syntax Highlighting (Tree-sitter)
+
+Tree-sitter integration for structural editing and display. Moved up in
+priority — proven killer feature in Helix and Zed. Can be developed
+concurrently with LSP.
+
+### M1: Tree-sitter Core
+- [ ] tree-sitter dependency, grammar loading (Rust, Scheme, TOML, Markdown)
+- [ ] Parse buffer on change (incremental)
+- [ ] Syntax tree stored per-buffer
+
+### M2: Highlight
+- [ ] Theme-aware syntax highlighting (theme keys: `syntax.keyword`,
+      `syntax.string`, `syntax.comment`, etc.)
+- [ ] Incremental re-highlight on edit
+- [ ] Language detection from file extension
+
+### M3: Structural Operations
+- [ ] Select syntax node at cursor
+- [ ] Expand/contract selection by tree level
+- [ ] AI tool: `syntax_tree` — read syntax tree for current selection
+
+---
+
+## Phase 4c: DAP Client
 
 Debug adapter integration. Wires existing protocol types to live debuggers.
 
@@ -265,39 +235,10 @@ Debug adapter integration. Wires existing protocol types to live debuggers.
 - [ ] Variable hover (show value at cursor)
 - [ ] Watch expressions
 
-### M4: Debug UI
-- [ ] Split layout: source | variables | call stack
-- [ ] PUDB-style TUI with resizable panes
-- [ ] Thread switcher
-- [ ] Expandable variable tree rendering
-
-### M5: AI Debug Tools
+### M4: AI Debug Tools
 - [ ] AI tools: `dap_continue`, `dap_step`, `dap_inspect_variable`
 - [ ] AI can set breakpoints, inspect state, suggest fixes
 - [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)`
-- [ ] System prompt updated with debug tool docs
-
----
-
-## Phase 4c: Syntax Highlighting
-
-Tree-sitter integration for structural editing and display.
-
-### M1: Tree-sitter Core
-- [ ] tree-sitter dependency, grammar loading
-- [ ] Parse buffer on change (incremental)
-- [ ] Syntax tree stored per-buffer
-
-### M2: Highlight
-- [ ] Theme-aware syntax highlighting (theme keys: `syntax.keyword`,
-      `syntax.string`, `syntax.comment`, etc.)
-- [ ] Incremental re-highlight on edit
-- [ ] Language detection from file extension
-
-### M3: Structural Operations
-- [ ] Select syntax node at cursor
-- [ ] Expand/contract selection by tree level
-- [ ] AI tool: `syntax_tree` — read syntax tree for current selection
 
 ---
 
@@ -324,26 +265,41 @@ SQLite-backed graph store with org-mode parser.
 
 ---
 
+## Future Considerations (from editor history research)
+
+These are architectural investments informed by studying Neovim, Helix, Zed,
+Xi, and other editor projects. Not scheduled yet.
+
+| Consideration | Source | Notes |
+|---------------|--------|-------|
+| Atomic transaction model for buffer edits | Helix | Simplifies undo/redo, gives AI clean edit history |
+| MCP (Model Context Protocol) compatibility | Zed | Becoming standard for AI tool integration |
+| Remote UI protocol (renderer detachment) | Neovim | Enables future GUI frontends without architecture change |
+| Streaming diff protocol for AI edits | Zed | Token-by-token buffer updates during AI generation |
+| WASI plugin system | Lapce | Language-agnostic plugins beyond Scheme (Phase 5+) |
+
+---
+
 ## Milestone Dependencies
 
 ```
-Phase 3d (dogfood)
+Phase 3e (editor essentials) ✅ COMPLETE
     │
-    ├─→ Phase 3e (editor essentials)  ← M1 search, M2 visual COMPLETE
+    ├─→ Phase 3f (AI multi-file) ← needed for self-hosting
     │       │
-    │       └─→ Phase 3f (AI multi-file)  ← needed for self-hosting
+    │       └─→ Phase 3g (hardening) ← before codebase grows further
     │
-    ├─→ Phase 4c (syntax highlighting)  ← independent, high visual impact
+    ├─→ Phase 4b (syntax highlighting) ← high visual impact, concurrent with LSP
     │
-    └─→ Phase 4a (LSP)  ← needed for real coding
+    └─→ Phase 4a (LSP) ← biggest unlock for self-hosting
             │
-            └─→ Phase 4b (DAP)  ← depends on LSP patterns
+            └─→ Phase 4c (DAP) ← depends on LSP patterns
                     │
-                    └─→ Phase 5 (KB)  ← lowest priority
+                    └─→ Phase 5 (KB) ← lowest priority
 ```
 
-Phases 3e, 3f, and 4c can be interleaved. LSP (4a) is the biggest single
-unlock for self-hosting — once Claude has semantic understanding, it can
+Phases 3f, 3g, and 4b can be interleaved. LSP (4a) is the biggest single
+unlock for self-hosting — once the AI has semantic understanding, it can
 navigate and refactor effectively.
 
 ---
@@ -352,12 +308,11 @@ navigate and refactor effectively.
 
 | Phase | Current | Target |
 |-------|---------|--------|
-| 3e M1 | 338     | 338 ✅ (search: 22 unit + 13 integration) |
-| 3e M2 | 364     | 364 ✅ (visual mode: 25 tests) |
-| 3e M3-M7 | —   | +35 (change, count, scroll, text objects) |
+| 3e    | 506     | 506 ✅ (search, visual, change, count, scroll, text objects, M6, M7) |
 | 3f    | —       | +15 (multi-file AI tools) |
+| 3g    | —       | +0 (refactor, no new features — preserve existing 506+) |
 | 4a    | —       | +25 (LSP connection, navigation, diagnostics) |
-| 4b    | 8       | +20 (DAP lifecycle, breakpoints, state) |
-| 4c    | —       | +10 (tree-sitter parse, highlight) |
+| 4b    | —       | +10 (tree-sitter parse, highlight) |
+| 4c    | 8       | +20 (DAP lifecycle, breakpoints, state) |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **338** | **~483** |
+| **Total** | **506** | **~591** |
