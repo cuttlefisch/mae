@@ -1,0 +1,62 @@
+# Default MAE theme — ANSI named colors only, works on all terminals.
+
+[palette]
+
+[styles]
+"ui.background" = { bg = "black" }
+"ui.text" = { fg = "white" }
+"ui.window.border" = { fg = "dark_gray" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "white", bg = "dark_gray" }
+"ui.statusline.text" = { fg = "white", bg = "dark_gray" }
+"ui.statusline.mode.normal" = { fg = "black", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "black", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "black", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "black", bg = "magenta", bold = true }
+"ui.gutter" = { fg = "dark_gray" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "white" }
+"ui.popup.key" = { fg = "white", bold = true }
+"ui.popup.group" = { fg = "cyan", bold = true }
+"ui.popup.text" = { fg = "gray" }
+"ui.commandline" = { fg = "white" }
+"ui.cursor" = { fg = "black", bg = "white" }
+"ui.selection" = { bg = "blue" }
+"ui.search.match" = { fg = "black", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "yellow" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "dark_gray" }
+"diagnostic.trace" = { fg = "dark_gray", dim = true }
+"diagnostic.target" = { fg = "cyan" }
+
+"conversation.user" = { fg = "cyan", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "yellow" }
+"conversation.tool.result" = { fg = "dark_gray" }
+"conversation.input" = { fg = "cyan" }
+
+"debug.current_line" = { bg = "yellow", fg = "black" }
+"debug.breakpoint" = { fg = "red", bold = true }
+"debug.variable.name" = { fg = "yellow" }
+"debug.variable.type" = { fg = "cyan" }
+"debug.variable.value" = { fg = "white" }
+"debug.stack.active" = { fg = "white", bold = true }
+"debug.stack.inactive" = { fg = "gray" }
+"debug.output" = { fg = "white" }
+"debug.hint" = { fg = "dark_gray" }
+
+"keyword" = { fg = "red" }
+"string" = { fg = "green" }
+"number" = { fg = "magenta" }
+"comment" = { fg = "dark_gray", italic = true }
+"function" = { fg = "cyan" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "white" }
+"operator" = { fg = "white" }
+"constant" = { fg = "magenta" }
+"attribute" = { fg = "cyan" }
+"namespace" = { fg = "yellow" }
+"punctuation" = { fg = "gray" }

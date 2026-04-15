@@ -1,0 +1,61 @@
+# Solarized Dark — precision colors by Ethan Schoonover
+inherits = "default"
+
+[palette]
+base03 = "#002b36"
+base02 = "#073642"
+base01 = "#586e75"
+base00 = "#657b83"
+base0 = "#839496"
+base1 = "#93a1a1"
+base2 = "#eee8d5"
+base3 = "#fdf6e3"
+yellow = "#b58900"
+orange = "#cb4b16"
+red = "#dc322f"
+magenta = "#d33682"
+violet = "#6c71c4"
+blue = "#268bd2"
+cyan = "#2aa198"
+green = "#859900"
+
+[styles]
+"ui.background" = { bg = "base03" }
+"ui.text" = { fg = "base0" }
+"ui.window.border" = { fg = "base01" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "base1", bg = "base02" }
+"ui.statusline.text" = { fg = "base1", bg = "base02" }
+"ui.statusline.mode.normal" = { fg = "base03", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "base03", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "base03", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "base03", bg = "magenta", bold = true }
+"ui.gutter" = { fg = "base01" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "base0", bg = "base02" }
+"ui.popup.key" = { fg = "base1", bold = true }
+"ui.popup.group" = { fg = "cyan", bold = true }
+"ui.popup.text" = { fg = "base01" }
+"ui.commandline" = { fg = "base0" }
+"ui.cursor" = { fg = "base03", bg = "base0" }
+"ui.selection" = { bg = "base02" }
+"ui.search.match" = { fg = "base03", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "yellow" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "base01" }
+"diagnostic.target" = { fg = "cyan" }
+
+"keyword" = { fg = "green" }
+"string" = { fg = "cyan" }
+"number" = { fg = "magenta" }
+"comment" = { fg = "base01", italic = true }
+"function" = { fg = "blue" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "base0" }
+"operator" = { fg = "green" }
+"constant" = { fg = "violet" }
+"attribute" = { fg = "orange" }
+"namespace" = { fg = "yellow" }
+"punctuation" = { fg = "base01" }

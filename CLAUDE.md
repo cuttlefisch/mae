@@ -43,32 +43,38 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 ## Development Priorities
 
 Start terminal-only. Skip GUI until the model works.
+Granular milestone tracking lives in **ROADMAP.md**.
 
-### Phase 1: Core + Renderer (MVP)
+### Phase 1: Core + Renderer (MVP) — COMPLETE
 - Buffer type using ropey (insert, delete, cursor movement)
 - Event loop (keyboard input → command dispatch)
 - Terminal renderer via ratatui/crossterm
 - Basic modal editing (vi-like normal/insert modes)
 - Single-file editing with save/load
 
-### Phase 2: Scheme Runtime
-- Embed Steel (or evaluate alternatives) as the extension language
-- Expose buffer operations to Scheme
+### Phase 2: Scheme Runtime — COMPLETE
+- Steel embedded as the extension language
+- Buffer operations exposed to Scheme
 - Config file loading (`init.scm`)
 - Command binding from Scheme (`(define-key ...)`)
-- REPL / eval-expression equivalent
+- REPL / eval-expression (`:eval`)
 
-### Phase 3: AI Integration
-- Tool-calling transport layer (HTTP to Claude API / local models)
-- Map Scheme API surface to AI tool definitions
-- AI can read/edit buffers, navigate, execute commands
-- Conversation context management
+### Phase 3: AI Integration — COMPLETE
+- Tool-calling transport (Claude API + OpenAI API)
+- Scheme API surface mapped to AI tool definitions (10 tools + all commands)
+- AI can read/edit buffers, navigate, execute commands, inspect editor state
+- Conversation buffer with streaming, tool call display
+- Permission tiers (ReadOnly/Write/Shell/Privileged)
 
-### Phase 4: LSP + DAP
+### Phase 3d-f: Dogfooding + Editor Essentials + AI Multi-File — IN PROGRESS
+- See ROADMAP.md for granular milestones
+
+### Phase 4: LSP + DAP + Syntax Highlighting
 - LSP client connecting to language servers
 - Expose LSP results to both Scheme and AI tool calls
-- DAP client connecting to debug adapters
+- DAP client connecting to debug adapters (protocol types done)
 - Expose DAP state to both Scheme and AI tool calls
+- Tree-sitter syntax highlighting
 
 ### Phase 5: Knowledge Base
 - SQLite-backed graph store

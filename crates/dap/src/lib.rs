@@ -1,1 +1,5 @@
-// mae-dap: DAP client with first-class AI integration
+pub mod protocol;
+pub mod transport;
+
+pub use protocol::*;
+pub use transport::{DapTransport, TransportError};

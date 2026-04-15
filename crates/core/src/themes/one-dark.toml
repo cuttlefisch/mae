@@ -1,0 +1,74 @@
+# One Dark — Atom's iconic dark theme
+inherits = "default"
+
+[palette]
+bg = "#282c34"
+bg_light = "#2c313c"
+bg_highlight = "#3e4452"
+fg = "#abb2bf"
+fg_dark = "#5c6370"
+red = "#e06c75"
+green = "#98c379"
+yellow = "#e5c07b"
+blue = "#61afef"
+purple = "#c678dd"
+cyan = "#56b6c2"
+orange = "#d19a66"
+gutter = "#4b5263"
+
+[styles]
+"ui.background" = { bg = "bg" }
+"ui.text" = { fg = "fg" }
+"ui.window.border" = { fg = "bg_highlight" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "fg", bg = "bg_light" }
+"ui.statusline.text" = { fg = "fg", bg = "bg_light" }
+"ui.statusline.mode.normal" = { fg = "bg", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "bg", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "bg", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "bg", bg = "purple", bold = true }
+"ui.gutter" = { fg = "gutter" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "fg", bg = "bg_light" }
+"ui.popup.key" = { fg = "fg", bold = true }
+"ui.popup.group" = { fg = "cyan", bold = true }
+"ui.popup.text" = { fg = "fg_dark" }
+"ui.commandline" = { fg = "fg" }
+"ui.cursor" = { fg = "bg", bg = "fg" }
+"ui.selection" = { bg = "bg_highlight" }
+"ui.search.match" = { fg = "bg", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "yellow" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "fg_dark" }
+"diagnostic.trace" = { fg = "gutter", dim = true }
+"diagnostic.target" = { fg = "cyan" }
+
+"conversation.user" = { fg = "cyan", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "orange" }
+"conversation.tool.result" = { fg = "fg_dark" }
+"conversation.input" = { fg = "cyan" }
+
+"debug.current_line" = { bg = "yellow", fg = "bg" }
+"debug.breakpoint" = { fg = "red", bold = true }
+"debug.variable.name" = { fg = "red" }
+"debug.variable.type" = { fg = "cyan" }
+"debug.variable.value" = { fg = "fg" }
+"debug.stack.active" = { fg = "fg", bold = true }
+"debug.stack.inactive" = { fg = "fg_dark" }
+
+"keyword" = { fg = "purple" }
+"string" = { fg = "green" }
+"number" = { fg = "orange" }
+"comment" = { fg = "fg_dark", italic = true }
+"function" = { fg = "blue" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "red" }
+"operator" = { fg = "cyan" }
+"constant" = { fg = "orange" }
+"attribute" = { fg = "yellow" }
+"namespace" = { fg = "yellow" }
+"punctuation" = { fg = "fg" }

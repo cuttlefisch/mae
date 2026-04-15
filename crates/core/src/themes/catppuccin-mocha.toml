@@ -1,0 +1,87 @@
+# Catppuccin Mocha — soothing pastel dark theme
+inherits = "default"
+
+[palette]
+rosewater = "#f5e0dc"
+flamingo = "#f2cdcd"
+pink = "#f5c2e7"
+mauve = "#cba6f7"
+red = "#f38ba8"
+maroon = "#eba0ac"
+peach = "#fab387"
+yellow = "#f9e2af"
+green = "#a6e3a1"
+teal = "#94e2d5"
+sky = "#89dceb"
+sapphire = "#74c7ec"
+blue = "#89b4fa"
+lavender = "#b4befe"
+text = "#cdd6f4"
+subtext1 = "#bac2de"
+subtext0 = "#a6adc8"
+overlay2 = "#9399b2"
+overlay1 = "#7f849c"
+overlay0 = "#6c7086"
+surface2 = "#585b70"
+surface1 = "#45475a"
+surface0 = "#313244"
+base = "#1e1e2e"
+mantle = "#181825"
+crust = "#11111b"
+
+[styles]
+"ui.background" = { bg = "base" }
+"ui.text" = { fg = "text" }
+"ui.window.border" = { fg = "surface2" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "text", bg = "mantle" }
+"ui.statusline.text" = { fg = "text", bg = "mantle" }
+"ui.statusline.mode.normal" = { fg = "base", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "base", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "base", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "base", bg = "mauve", bold = true }
+"ui.gutter" = { fg = "overlay0" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "text", bg = "surface0" }
+"ui.popup.key" = { fg = "text", bold = true }
+"ui.popup.group" = { fg = "teal", bold = true }
+"ui.popup.text" = { fg = "subtext0" }
+"ui.commandline" = { fg = "text" }
+"ui.cursor" = { fg = "base", bg = "text" }
+"ui.selection" = { bg = "surface1" }
+"ui.search.match" = { fg = "base", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "yellow" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "overlay1" }
+"diagnostic.trace" = { fg = "overlay0", dim = true }
+"diagnostic.target" = { fg = "teal" }
+
+"conversation.user" = { fg = "sapphire", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "peach" }
+"conversation.tool.result" = { fg = "overlay1" }
+"conversation.input" = { fg = "sapphire" }
+
+"debug.current_line" = { bg = "yellow", fg = "base" }
+"debug.breakpoint" = { fg = "red", bold = true }
+"debug.variable.name" = { fg = "yellow" }
+"debug.variable.type" = { fg = "teal" }
+"debug.variable.value" = { fg = "text" }
+"debug.stack.active" = { fg = "text", bold = true }
+"debug.stack.inactive" = { fg = "overlay1" }
+
+"keyword" = { fg = "mauve" }
+"string" = { fg = "green" }
+"number" = { fg = "peach" }
+"comment" = { fg = "overlay1", italic = true }
+"function" = { fg = "blue" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "text" }
+"operator" = { fg = "sky" }
+"constant" = { fg = "peach" }
+"attribute" = { fg = "teal" }
+"namespace" = { fg = "blue" }
+"punctuation" = { fg = "overlay2" }

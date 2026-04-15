@@ -4,3 +4,9 @@ description = "Display and rendering layer (terminal + GPU)"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
+
+[dependencies]
+mae-core = { path = "../core" }
+ratatui = "0.29"
+crossterm = "0.28"
+tracing = { workspace = true }

@@ -1,0 +1,73 @@
+# Dracula — dark theme by Zeno Rocha
+inherits = "default"
+
+[palette]
+bg = "#282a36"
+bg_dark = "#21222c"
+bg_light = "#44475a"
+fg = "#f8f8f2"
+comment = "#6272a4"
+cyan = "#8be9fd"
+green = "#50fa7b"
+orange = "#ffb86c"
+pink = "#ff79c6"
+purple = "#bd93f9"
+red = "#ff5555"
+yellow = "#f1fa8c"
+
+[styles]
+"ui.background" = { bg = "bg" }
+"ui.text" = { fg = "fg" }
+"ui.window.border" = { fg = "comment" }
+"ui.window.border.active" = { fg = "purple" }
+"ui.statusline" = { fg = "fg", bg = "bg_light" }
+"ui.statusline.text" = { fg = "fg", bg = "bg_light" }
+"ui.statusline.mode.normal" = { fg = "bg", bg = "purple", bold = true }
+"ui.statusline.mode.insert" = { fg = "bg", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "bg", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "bg", bg = "pink", bold = true }
+"ui.gutter" = { fg = "comment" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "fg", bg = "bg_dark" }
+"ui.popup.key" = { fg = "fg", bold = true }
+"ui.popup.group" = { fg = "cyan", bold = true }
+"ui.popup.text" = { fg = "comment" }
+"ui.commandline" = { fg = "fg" }
+"ui.cursor" = { fg = "bg", bg = "fg" }
+"ui.selection" = { bg = "bg_light" }
+"ui.search.match" = { fg = "bg", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "orange" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "comment" }
+"diagnostic.trace" = { fg = "comment", dim = true }
+"diagnostic.target" = { fg = "cyan" }
+
+"conversation.user" = { fg = "cyan", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "orange" }
+"conversation.tool.result" = { fg = "comment" }
+"conversation.input" = { fg = "cyan" }
+
+"debug.current_line" = { bg = "yellow", fg = "bg" }
+"debug.breakpoint" = { fg = "red", bold = true }
+"debug.variable.name" = { fg = "pink" }
+"debug.variable.type" = { fg = "cyan" }
+"debug.variable.value" = { fg = "fg" }
+"debug.stack.active" = { fg = "fg", bold = true }
+"debug.stack.inactive" = { fg = "comment" }
+
+"keyword" = { fg = "pink" }
+"string" = { fg = "yellow" }
+"number" = { fg = "purple" }
+"comment" = { fg = "comment", italic = true }
+"function" = { fg = "green" }
+"type" = { fg = "cyan" }
+"variable" = { fg = "fg" }
+"operator" = { fg = "pink" }
+"constant" = { fg = "purple" }
+"attribute" = { fg = "green" }
+"namespace" = { fg = "cyan" }
+"punctuation" = { fg = "fg" }

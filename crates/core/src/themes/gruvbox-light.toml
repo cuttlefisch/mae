@@ -1,0 +1,58 @@
+# Gruvbox Light — warm retro theme, light variant
+inherits = "default"
+
+[palette]
+bg0 = "#fbf1c7"
+bg1 = "#ebdbb2"
+bg2 = "#d5c4a1"
+bg3 = "#bdae93"
+fg0 = "#282828"
+fg1 = "#3c3836"
+fg2 = "#504945"
+fg3 = "#665c54"
+fg4 = "#7c6f64"
+red = "#cc241d"
+green = "#98971a"
+yellow = "#d79921"
+blue = "#458588"
+purple = "#b16286"
+aqua = "#689d6a"
+orange = "#d65d0e"
+gray = "#928374"
+
+[styles]
+"ui.background" = { bg = "bg0" }
+"ui.text" = { fg = "fg1" }
+"ui.window.border" = { fg = "bg3" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "fg1", bg = "bg1" }
+"ui.statusline.text" = { fg = "fg1", bg = "bg1" }
+"ui.statusline.mode.normal" = { fg = "bg0", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "bg0", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "bg0", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "bg0", bg = "purple", bold = true }
+"ui.gutter" = { fg = "bg3" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "fg1", bg = "bg1" }
+"ui.popup.key" = { fg = "fg0", bold = true }
+"ui.popup.group" = { fg = "aqua", bold = true }
+"ui.popup.text" = { fg = "fg3" }
+"ui.commandline" = { fg = "fg1" }
+"ui.cursor" = { fg = "bg0", bg = "fg1" }
+"ui.selection" = { bg = "bg2" }
+"ui.search.match" = { fg = "bg0", bg = "yellow" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "orange" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.debug" = { fg = "gray" }
+"diagnostic.target" = { fg = "aqua" }
+
+"keyword" = { fg = "red" }
+"string" = { fg = "green" }
+"number" = { fg = "purple" }
+"comment" = { fg = "gray", italic = true }
+"function" = { fg = "green" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "blue" }
+"constant" = { fg = "purple" }
