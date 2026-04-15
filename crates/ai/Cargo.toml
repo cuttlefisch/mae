@@ -1,0 +1,6 @@
+[package]
+name = "mae-ai"
+description = "AI agent integration layer (tool-calling, transport)"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"

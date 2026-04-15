@@ -1,0 +1,6 @@
+[package]
+name = "mae-dap"
+description = "DAP client with first-class AI integration"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
