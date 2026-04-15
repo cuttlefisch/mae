@@ -97,13 +97,37 @@ async fn main() -> io::Result<()> {
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     loop {
-        // Update viewport height and scroll before rendering
+        // Update viewport dimensions and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
         editor
             .window_mgr
             .focused_window_mut()
             .ensure_scroll(viewport_height);
+
+        // Horizontal scroll: compute text width from focused window's actual area
+        {
+            let (term_w, term_h) = renderer.terminal_size()?;
+            let window_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: term_w,
+                height: term_h.saturating_sub(2), // status bar + command line
+            };
+            let focused_id = editor.window_mgr.focused_id();
+            let rects = editor.window_mgr.layout_rects(window_area);
+            if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+                // inner_rect subtracts 2 for border, gutter takes more
+                let inner_w = win_rect.width.saturating_sub(2) as usize;
+                let buf = &editor.buffers[editor.active_buffer_idx()];
+                let gutter_w = mae_renderer::gutter_width(buf.line_count());
+                let text_w = inner_w.saturating_sub(gutter_w);
+                editor
+                    .window_mgr
+                    .focused_window_mut()
+                    .ensure_scroll_horizontal(text_w);
+            }
+        }
 
         renderer.render(&editor)?;
 
@@ -182,6 +206,7 @@ async fn main() -> io::Result<()> {
                         // Just mark streaming as done.
                         if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
                             conv_buf.streaming = false;
+                            conv_buf.streaming_start = None;
                         }
                         editor.set_status("[AI] Done");
                     }
@@ -190,6 +215,7 @@ async fn main() -> io::Result<()> {
                         if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
                             conv_buf.push_system(format!("Error: {}", msg));
                             conv_buf.streaming = false;
+                            conv_buf.streaming_start = None;
                         }
                         editor.set_status(format!("[AI error] {}", msg));
                     }
@@ -350,13 +376,29 @@ fn load_ai_config() -> Option<ProviderConfig> {
         _ => std::env::var("ANTHROPIC_API_KEY").ok(),
     };
 
-    // No API key = no AI
-    api_key.as_ref()?;
+    let has_custom_base = std::env::var("MAE_AI_BASE_URL").is_ok();
+
+    // No API key = no AI (unless using a local provider like Ollama)
+    if api_key.is_none() && !has_custom_base {
+        return None;
+    }
+
+    // If custom base URL is set, default to openai-compatible provider
+    let provider_type = if has_custom_base && provider_type == "claude" {
+        "openai".into()
+    } else {
+        provider_type
+    };
 
     let model = std::env::var("MAE_AI_MODEL").unwrap_or_else(|_| match provider_type.as_str() {
         "openai" => "gpt-4o".into(),
         _ => "claude-sonnet-4-20250514".into(),
     });
+
+    let timeout_secs: u64 = std::env::var("MAE_AI_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
 
     Some(ProviderConfig {
         provider_type,
@@ -365,6 +407,7 @@ fn load_ai_config() -> Option<ProviderConfig> {
         base_url: std::env::var("MAE_AI_BASE_URL").ok(),
         max_tokens: 4096,
         temperature: None,
+        timeout_secs,
     })
 }
 
@@ -798,6 +841,7 @@ fn handle_conversation_input(
                     conv.push_user(&input);
                     conv.input_line.clear();
                     conv.streaming = true;
+                    conv.streaming_start = Some(std::time::Instant::now());
                 }
             }
             if !input.is_empty() {
@@ -812,6 +856,7 @@ fn handle_conversation_input(
                         .set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
                     if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
                         conv.streaming = false;
+                        conv.streaming_start = None;
                     }
                 }
             }
@@ -830,6 +875,7 @@ fn handle_conversation_input(
                 if conv.streaming {
                     info!("user cancelled AI streaming");
                     conv.streaming = false;
+                    conv.streaming_start = None;
                     conv.push_system("[cancelled]");
                     if let Some(tx) = ai_tx {
                         if tx.try_send(AiCommand::Cancel).is_err() {

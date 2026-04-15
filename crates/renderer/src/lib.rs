@@ -255,7 +255,9 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
             };
             let display_col =
                 grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
-            let screen_col = gutter_w as u16 + display_col as u16;
+            let scroll_col =
+                grapheme::display_width_up_to_grapheme(&line_text, focused_win.col_offset);
+            let screen_col = gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
             if screen_row < inner.height {
                 frame
                     .set_cursor_position(Position::new(inner.x + screen_col, inner.y + screen_row));
@@ -330,11 +332,13 @@ fn render_buffer(
 
     let mut lines = Vec::with_capacity(viewport_height);
 
+    let col_offset = win.col_offset;
+
     for i in 0..viewport_height {
         let line_idx = win.scroll_offset + i;
         if line_idx < buf.line_count() {
             let line_text = buf.rope().line(line_idx);
-            let display: String = line_text
+            let full_display: String = line_text
                 .chars()
                 .filter(|c| *c != '\n' && *c != '\r')
                 .collect();
@@ -343,17 +347,17 @@ fn render_buffer(
 
             if needs_spans {
                 let line_char_start = buf.rope().line_to_char(line_idx);
-                let line_char_end = line_char_start + display.chars().count();
+                let full_chars: Vec<char> = full_display.chars().collect();
+                let full_count = full_chars.len();
+                let line_char_end = line_char_start + full_count;
 
-                // Build a per-char style array: default text, overridden by selection, overridden by search
-                let display_chars: Vec<char> = display.chars().collect();
-                let char_count = display_chars.len();
-                let mut styles: Vec<Style> = vec![text_style; char_count];
+                // Build a per-char style array over the full line
+                let mut styles: Vec<Style> = vec![text_style; full_count];
 
                 // Apply selection highlight (lower priority)
                 if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
                     let s = sel_start.saturating_sub(line_char_start);
-                    let e = (sel_end - line_char_start).min(char_count);
+                    let e = (sel_end - line_char_start).min(full_count);
                     for style in styles[s..e].iter_mut() {
                         *style = selection_style;
                     }
@@ -366,24 +370,29 @@ fn render_buffer(
                             continue;
                         }
                         let ms = m.start.saturating_sub(line_char_start);
-                        let me = (m.end - line_char_start).min(char_count);
+                        let me = (m.end - line_char_start).min(full_count);
                         for style in styles[ms..me].iter_mut() {
                             *style = search_style;
                         }
                     }
                 }
 
+                // Apply horizontal scroll: slice chars and styles from col_offset
+                let visible_start = col_offset.min(full_count);
+                let display_chars = &full_chars[visible_start..];
+                let visible_styles = &styles[visible_start..];
+
                 // Coalesce consecutive chars with same style into spans
                 let mut spans = vec![Span::styled(line_num, gutter_style)];
                 if !display_chars.is_empty() {
                     let mut run_start = 0;
-                    let mut run_style = styles[0];
-                    for j in 1..char_count {
-                        if styles[j] != run_style {
+                    let mut run_style = visible_styles[0];
+                    for j in 1..display_chars.len() {
+                        if visible_styles[j] != run_style {
                             let s: String = display_chars[run_start..j].iter().collect();
                             spans.push(Span::styled(s, run_style));
                             run_start = j;
-                            run_style = styles[j];
+                            run_style = visible_styles[j];
                         }
                     }
                     let s: String = display_chars[run_start..].iter().collect();
@@ -392,6 +401,8 @@ fn render_buffer(
 
                 lines.push(Line::from(spans));
             } else {
+                // Apply horizontal scroll to simple (no highlight) lines
+                let display: String = full_display.chars().skip(col_offset).collect();
                 lines.push(Line::from(vec![
                     Span::styled(line_num, gutter_style),
                     Span::styled(display, text_style),
@@ -701,10 +712,19 @@ fn render_conversation_window(
     };
 
     let title = format!(" {} ", buf.name);
-    let streaming_indicator = if buf.conversation.as_ref().is_some_and(|c| c.streaming) {
-        " [streaming...] "
+    let streaming_indicator = if let Some(conv) = buf.conversation.as_ref() {
+        if conv.streaming {
+            if let Some(start) = conv.streaming_start {
+                let elapsed = start.elapsed().as_secs();
+                format!(" [waiting... {}s] ", elapsed)
+            } else {
+                " [waiting...] ".to_string()
+            }
+        } else {
+            String::new()
+        }
     } else {
-        ""
+        String::new()
     };
 
     let block = Block::default()
@@ -842,7 +862,7 @@ fn render_messages_window(
 // Utilities
 // ---------------------------------------------------------------------------
 
-fn gutter_width(line_count: usize) -> usize {
+pub fn gutter_width(line_count: usize) -> usize {
     let digits = if line_count == 0 {
         1
     } else {

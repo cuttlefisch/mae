@@ -993,6 +993,7 @@ impl Editor {
                 {
                     if conv.streaming {
                         conv.streaming = false;
+                        conv.streaming_start = None;
                         conv.push_system("[cancelled]");
                         self.set_status("[AI] Cancelled");
                     } else {
@@ -2343,10 +2344,12 @@ mod tests {
         // Simulate streaming state
         if let Some(conv) = editor.buffers[1].conversation.as_mut() {
             conv.streaming = true;
+            conv.streaming_start = Some(std::time::Instant::now());
         }
         editor.dispatch_builtin("ai-cancel");
         let conv = editor.buffers[1].conversation.as_ref().unwrap();
         assert!(!conv.streaming);
+        assert!(conv.streaming_start.is_none());
         assert!(editor.status_msg.contains("Cancelled"));
     }
 

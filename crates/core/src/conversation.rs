@@ -51,6 +51,8 @@ pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
     pub input_line: String,
     pub streaming: bool,
+    /// When streaming started, used to display elapsed time in the UI.
+    pub streaming_start: Option<std::time::Instant>,
     version: u64,
 }
 
@@ -66,6 +68,7 @@ impl Conversation {
             entries: Vec::new(),
             input_line: String::new(),
             streaming: false,
+            streaming_start: None,
             version: 0,
         }
     }

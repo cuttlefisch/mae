@@ -27,6 +27,9 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub max_tokens: u32,
     pub temperature: Option<f64>,
+    /// HTTP request timeout in seconds. Defaults to 300 (5 min) for slow
+    /// local inference (Ollama on CPU can take 60-120+ seconds per turn).
+    pub timeout_secs: u64,
 }
 
 /// Agent provider trait — the abstraction that makes MAE agent-agnostic.

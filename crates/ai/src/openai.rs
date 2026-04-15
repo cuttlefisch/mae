@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, warn};
@@ -17,7 +19,10 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(config: ProviderConfig) -> Self {
         OpenAiProvider {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs))
+                .build()
+                .expect("failed to build HTTP client"),
             config,
         }
     }
@@ -121,6 +126,7 @@ impl OpenAiProvider {
         let text = message
             .get("content")
             .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
         let tool_calls: Vec<ToolCall> = message

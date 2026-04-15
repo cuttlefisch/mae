@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, warn};
@@ -17,7 +19,10 @@ pub struct ClaudeProvider {
 impl ClaudeProvider {
     pub fn new(config: ProviderConfig) -> Self {
         ClaudeProvider {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs))
+                .build()
+                .expect("failed to build HTTP client"),
             config,
         }
     }

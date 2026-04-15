@@ -5,4 +5,5 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+.envrc
 README.org

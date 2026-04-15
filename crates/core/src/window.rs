@@ -14,6 +14,7 @@ pub struct Window {
     pub cursor_row: usize,
     pub cursor_col: usize,
     pub scroll_offset: usize,
+    pub col_offset: usize,
 }
 
 impl Window {
@@ -24,6 +25,7 @@ impl Window {
             cursor_row: 0,
             cursor_col: 0,
             scroll_offset: 0,
+            col_offset: 0,
         }
     }
 
@@ -282,6 +284,20 @@ impl Window {
         }
         if self.cursor_row >= self.scroll_offset + viewport_height {
             self.scroll_offset = self.cursor_row - viewport_height + 1;
+        }
+    }
+
+    /// Adjust horizontal scroll so the cursor column stays visible.
+    /// `viewport_width` is the number of text columns available (after gutter).
+    pub fn ensure_scroll_horizontal(&mut self, viewport_width: usize) {
+        if viewport_width == 0 {
+            return;
+        }
+        if self.cursor_col < self.col_offset {
+            self.col_offset = self.cursor_col;
+        }
+        if self.cursor_col >= self.col_offset + viewport_width {
+            self.col_offset = self.cursor_col - viewport_width + 1;
         }
     }
 }
@@ -1046,5 +1062,66 @@ mod tests {
         // Should refocus to remaining window
         assert_eq!(wm.focused_id(), 0);
         assert_eq!(wm.window_count(), 1);
+    }
+
+    // --- Horizontal scroll tests ---
+
+    #[test]
+    fn col_offset_starts_at_zero() {
+        let win = Window::new(0, 0);
+        assert_eq!(win.col_offset, 0);
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_no_shift_when_visible() {
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 5;
+        win.ensure_scroll_horizontal(80);
+        assert_eq!(win.col_offset, 0);
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_shifts_right() {
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 90;
+        win.ensure_scroll_horizontal(80);
+        // cursor_col (90) >= col_offset (0) + viewport_width (80), so shift
+        assert_eq!(win.col_offset, 11); // 90 - 80 + 1
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_shifts_left() {
+        let mut win = Window::new(0, 0);
+        win.col_offset = 20;
+        win.cursor_col = 10;
+        win.ensure_scroll_horizontal(80);
+        // cursor_col (10) < col_offset (20), so shift left
+        assert_eq!(win.col_offset, 10);
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_zero_width_noop() {
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 50;
+        win.ensure_scroll_horizontal(0);
+        assert_eq!(win.col_offset, 0);
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_cursor_at_edge() {
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 79;
+        win.ensure_scroll_horizontal(80);
+        // Exactly at last visible column — no shift needed
+        assert_eq!(win.col_offset, 0);
+    }
+
+    #[test]
+    fn ensure_scroll_horizontal_cursor_one_past_edge() {
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 80;
+        win.ensure_scroll_horizontal(80);
+        // One past edge — needs shift
+        assert_eq!(win.col_offset, 1);
     }
 }
