@@ -701,10 +701,13 @@ fn handle_normal_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
-    // If a char-argument command is pending (f/F/t/T), capture the next char
+    // If a char-argument command is pending (f/F/t/T or text objects), capture the next char
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
-            editor.dispatch_char_motion(&cmd, ch);
+            // Try text object dispatch first, then fall back to char motion
+            if !editor.dispatch_text_object(&cmd, ch) {
+                editor.dispatch_char_motion(&cmd, ch);
+            }
         }
         // Any key (including Escape) clears the pending state
         return;
@@ -754,10 +757,12 @@ fn handle_visual_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
-    // Handle pending char-argument commands (f/F/t/T)
+    // Handle pending char-argument commands (f/F/t/T or text objects)
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
-            editor.dispatch_char_motion(&cmd, ch);
+            if !editor.dispatch_text_object(&cmd, ch) {
+                editor.dispatch_char_motion(&cmd, ch);
+            }
         }
         return;
     }
@@ -915,6 +920,9 @@ fn handle_command_mode(
             editor.mode = Mode::Normal;
             editor.command_line.clear();
 
+            // Record in command history before executing
+            editor.push_command_history(&cmd);
+
             // :ai-status — show AI configuration
             if cmd == "ai-status" {
                 let config = load_ai_config();
@@ -1009,6 +1017,12 @@ fn handle_command_mode(
                     editor.command_line = format!("e {}", completion);
                 }
             }
+        }
+        KeyCode::Up => {
+            editor.command_history_prev();
+        }
+        KeyCode::Down => {
+            editor.command_history_next();
         }
         KeyCode::Backspace => {
             if editor.command_line.is_empty() {

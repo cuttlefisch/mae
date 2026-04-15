@@ -455,6 +455,264 @@ fn is_blank_line(rope: &Rope, line: usize) -> bool {
     true
 }
 
+/// Resolve the char-offset range for a text object defined by paired delimiters or quotes.
+///
+/// For nested delimiters `()[]{}`: searches backward for the opening delimiter
+/// containing `pos`, then forward for its matching close. Handles nesting.
+///
+/// For quotes `"'``: finds the quote pair on the current line containing or
+/// nearest to `pos`.
+///
+/// Returns `Some((start, end))` as a half-open range `[start, end)`.
+/// - `inner = true`: contents between delimiters (exclusive of delimiters)
+/// - `inner = false` (around): includes the delimiters themselves
+pub fn text_object_range(
+    rope: &Rope,
+    pos: usize,
+    obj: char,
+    inner: bool,
+) -> Option<(usize, usize)> {
+    let len = rope.len_chars();
+    if len == 0 || pos >= len {
+        return None;
+    }
+
+    match obj {
+        '(' | ')' => paired_delimiter_range(rope, pos, '(', ')', inner),
+        '[' | ']' => paired_delimiter_range(rope, pos, '[', ']', inner),
+        '{' | '}' => paired_delimiter_range(rope, pos, '{', '}', inner),
+        '<' | '>' => paired_delimiter_range(rope, pos, '<', '>', inner),
+        '"' | '\'' | '`' => quote_range(rope, pos, obj, inner),
+        _ => None,
+    }
+}
+
+/// Find the range of a paired nesting delimiter containing `pos`.
+fn paired_delimiter_range(
+    rope: &Rope,
+    pos: usize,
+    open: char,
+    close: char,
+    inner: bool,
+) -> Option<(usize, usize)> {
+    let len = rope.len_chars();
+
+    // If cursor is ON the close delimiter, start the backward search from
+    // one position before it so we correctly find the matching open.
+    let search_start = if rope.char(pos) == close && pos > 0 {
+        pos - 1
+    } else {
+        pos
+    };
+
+    // Search backward for the nearest unmatched open delimiter
+    let mut depth: i32 = 0;
+    let mut found_open = None;
+
+    let mut p = search_start;
+    loop {
+        let ch = rope.char(p);
+        if ch == close {
+            depth += 1;
+        } else if ch == open {
+            if depth == 0 {
+                found_open = Some(p);
+                break;
+            }
+            depth -= 1;
+        }
+        if p == 0 {
+            break;
+        }
+        p -= 1;
+    }
+
+    let open_pos = found_open?;
+
+    // Now find matching close from open_pos
+    let mut depth: i32 = 1;
+    let mut p = open_pos + 1;
+    let mut found_close = None;
+    while p < len {
+        let ch = rope.char(p);
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth -= 1;
+            if depth == 0 {
+                found_close = Some(p);
+                break;
+            }
+        }
+        p += 1;
+    }
+
+    let close_pos = found_close?;
+
+    if inner {
+        Some((open_pos + 1, close_pos))
+    } else {
+        Some((open_pos, close_pos + 1))
+    }
+}
+
+/// Find the range of a quote pair on the current line containing `pos`.
+fn quote_range(rope: &Rope, pos: usize, quote: char, inner: bool) -> Option<(usize, usize)> {
+    let line_idx = rope.char_to_line(pos);
+    let line_start = rope.line_to_char(line_idx);
+    let line = rope.line(line_idx);
+    let line_len = line.len_chars();
+    let col = pos - line_start;
+
+    // Collect all quote positions on this line (excluding trailing newline)
+    let effective_len = if line_len > 0 && line.char(line_len - 1) == '\n' {
+        line_len - 1
+    } else {
+        line_len
+    };
+
+    let mut quote_positions: Vec<usize> = Vec::new();
+    for i in 0..effective_len {
+        if line.char(i) == quote {
+            quote_positions.push(i);
+        }
+    }
+
+    // We need pairs. Find the pair that contains our cursor.
+    // Iterate over consecutive pairs (0,1), (2,3), etc.
+    let mut i = 0;
+    while i + 1 < quote_positions.len() {
+        let q_open = quote_positions[i];
+        let q_close = quote_positions[i + 1];
+
+        // Check if cursor is within (or on) this pair
+        if col >= q_open && col <= q_close {
+            let abs_open = line_start + q_open;
+            let abs_close = line_start + q_close;
+            return if inner {
+                Some((abs_open + 1, abs_close))
+            } else {
+                Some((abs_open, abs_close + 1))
+            };
+        }
+        i += 2;
+    }
+
+    None
+}
+
+/// Resolve the char-offset range for `iw` (inner word) or `aw` (around word).
+///
+/// - `inner = true` (`iw`): the word (or whitespace run) under the cursor.
+/// - `inner = false` (`aw`): the word plus trailing whitespace, or leading
+///   whitespace if there is no trailing whitespace.
+///
+/// Returns `Some((start, end))` as a half-open range.
+pub fn word_object_range(rope: &Rope, pos: usize, inner: bool) -> Option<(usize, usize)> {
+    let len = rope.len_chars();
+    if len == 0 || pos >= len {
+        return None;
+    }
+
+    let cls = classify(rope.char(pos));
+
+    // Find extent of same-class chars around pos
+    let mut start = pos;
+    while start > 0 && classify(rope.char(start - 1)) == cls {
+        start -= 1;
+    }
+    let mut end = pos + 1;
+    while end < len && classify(rope.char(end)) == cls {
+        end += 1;
+    }
+
+    if !inner {
+        // "around" — include trailing whitespace, or leading if no trailing
+        let orig_end = end;
+        while end < len && classify(rope.char(end)) == CharClass::Whitespace {
+            end += 1;
+        }
+        if end == orig_end {
+            // No trailing whitespace — try leading
+            while start > 0 && classify(rope.char(start - 1)) == CharClass::Whitespace {
+                start -= 1;
+            }
+        }
+    }
+
+    Some((start, end))
+}
+
+/// Resolve the char-offset range for `iW` (inner WORD) or `aW` (around WORD).
+///
+/// WORD is whitespace-delimited (anything that's not whitespace/newline).
+pub fn big_word_object_range(rope: &Rope, pos: usize, inner: bool) -> Option<(usize, usize)> {
+    let len = rope.len_chars();
+    if len == 0 || pos >= len {
+        return None;
+    }
+
+    let ch = rope.char(pos);
+    let on_ws = matches!(classify(ch), CharClass::Whitespace | CharClass::Newline);
+
+    let mut start = pos;
+    let mut end = pos + 1;
+
+    if on_ws {
+        // On whitespace: the "word" is the whitespace run
+        while start > 0
+            && matches!(
+                classify(rope.char(start - 1)),
+                CharClass::Whitespace | CharClass::Newline
+            )
+        {
+            start -= 1;
+        }
+        while end < len
+            && matches!(
+                classify(rope.char(end)),
+                CharClass::Whitespace | CharClass::Newline
+            )
+        {
+            end += 1;
+        }
+    } else {
+        // On non-whitespace: the WORD is the non-whitespace run
+        while start > 0
+            && !matches!(
+                classify(rope.char(start - 1)),
+                CharClass::Whitespace | CharClass::Newline
+            )
+        {
+            start -= 1;
+        }
+        while end < len
+            && !matches!(
+                classify(rope.char(end)),
+                CharClass::Whitespace | CharClass::Newline
+            )
+        {
+            end += 1;
+        }
+    }
+
+    if !inner {
+        // "around" — include trailing whitespace, or leading if no trailing
+        let orig_end = end;
+        while end < len && matches!(classify(rope.char(end)), CharClass::Whitespace) {
+            end += 1;
+        }
+        if end == orig_end && !on_ws {
+            // No trailing whitespace — try leading
+            while start > 0 && matches!(classify(rope.char(start - 1)), CharClass::Whitespace) {
+                start -= 1;
+            }
+        }
+    }
+
+    Some((start, end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,5 +971,214 @@ mod tests {
     fn paragraph_backward_at_start() {
         let rope = Rope::from_str("aaa\nbbb\n");
         assert_eq!(paragraph_backward(&rope, 0), 0);
+    }
+
+    // --- text_object_range: paired delimiters ---
+
+    #[test]
+    fn text_object_inner_parens() {
+        let rope = Rope::from_str("foo(bar)baz");
+        // cursor on 'a' (pos 5) inside parens
+        assert_eq!(text_object_range(&rope, 5, '(', true), Some((4, 7)));
+    }
+
+    #[test]
+    fn text_object_around_parens() {
+        let rope = Rope::from_str("foo(bar)baz");
+        // cursor on 'a' (pos 5)
+        assert_eq!(text_object_range(&rope, 5, '(', false), Some((3, 8)));
+    }
+
+    #[test]
+    fn text_object_closing_paren_also_works() {
+        let rope = Rope::from_str("foo(bar)baz");
+        // Using ')' as the object char should work identically
+        assert_eq!(text_object_range(&rope, 5, ')', true), Some((4, 7)));
+    }
+
+    #[test]
+    fn text_object_nested_parens() {
+        // "(a (b) c)" — cursor on 'b' (pos 4)
+        let rope = Rope::from_str("(a (b) c)");
+        // inner of the innermost pair containing 'b': (b) -> inner is just "b" -> (4, 5)
+        assert_eq!(text_object_range(&rope, 4, '(', true), Some((4, 5)));
+    }
+
+    #[test]
+    fn text_object_nested_parens_outer() {
+        // "(a (b) c)" — cursor on 'a' (pos 1)
+        let rope = Rope::from_str("(a (b) c)");
+        // inner of the outer pair
+        assert_eq!(text_object_range(&rope, 1, '(', true), Some((1, 8)));
+    }
+
+    #[test]
+    fn text_object_inner_braces() {
+        let rope = Rope::from_str("fn() { body }");
+        // cursor on 'b' (pos 7)
+        assert_eq!(text_object_range(&rope, 7, '{', true), Some((6, 12)));
+    }
+
+    #[test]
+    fn text_object_around_braces() {
+        let rope = Rope::from_str("fn() { body }");
+        assert_eq!(text_object_range(&rope, 7, '{', false), Some((5, 13)));
+    }
+
+    #[test]
+    fn text_object_inner_brackets() {
+        let rope = Rope::from_str("[a, b, c]");
+        // cursor on 'b' (pos 4)
+        assert_eq!(text_object_range(&rope, 4, '[', true), Some((1, 8)));
+    }
+
+    #[test]
+    fn text_object_around_brackets() {
+        let rope = Rope::from_str("[a, b, c]");
+        assert_eq!(text_object_range(&rope, 4, ']', false), Some((0, 9)));
+    }
+
+    #[test]
+    fn text_object_inner_angle_brackets() {
+        let rope = Rope::from_str("Vec<String>");
+        // cursor on 'S' (pos 4)
+        assert_eq!(text_object_range(&rope, 4, '<', true), Some((4, 10)));
+    }
+
+    #[test]
+    fn text_object_no_match_returns_none() {
+        let rope = Rope::from_str("hello world");
+        assert_eq!(text_object_range(&rope, 3, '(', true), None);
+    }
+
+    #[test]
+    fn text_object_cursor_on_open_delim() {
+        let rope = Rope::from_str("(abc)");
+        // cursor on '(' itself
+        assert_eq!(text_object_range(&rope, 0, '(', true), Some((1, 4)));
+        assert_eq!(text_object_range(&rope, 0, '(', false), Some((0, 5)));
+    }
+
+    #[test]
+    fn text_object_cursor_on_close_delim() {
+        let rope = Rope::from_str("(abc)");
+        // cursor on ')' — should still find the pair
+        assert_eq!(text_object_range(&rope, 4, '(', true), Some((1, 4)));
+    }
+
+    // --- text_object_range: quotes ---
+
+    #[test]
+    fn text_object_inner_double_quotes() {
+        let rope = Rope::from_str("he said \"hello\" there");
+        // cursor on 'l' (pos 11) inside the quotes
+        assert_eq!(text_object_range(&rope, 11, '"', true), Some((9, 14)));
+    }
+
+    #[test]
+    fn text_object_around_double_quotes() {
+        let rope = Rope::from_str("he said \"hello\" there");
+        assert_eq!(text_object_range(&rope, 11, '"', false), Some((8, 15)));
+    }
+
+    #[test]
+    fn text_object_inner_single_quotes() {
+        let rope = Rope::from_str("say 'fine' here");
+        // cursor on 'i' (pos 6) inside 'fine'
+        assert_eq!(text_object_range(&rope, 6, '\'', true), Some((5, 9)));
+    }
+
+    #[test]
+    fn text_object_inner_backticks() {
+        let rope = Rope::from_str("use `code` here");
+        // cursor on 'o' (pos 6)
+        assert_eq!(text_object_range(&rope, 6, '`', true), Some((5, 9)));
+    }
+
+    #[test]
+    fn text_object_quotes_no_match() {
+        let rope = Rope::from_str("no quotes here");
+        assert_eq!(text_object_range(&rope, 3, '"', true), None);
+    }
+
+    #[test]
+    fn text_object_cursor_on_quote_char() {
+        let rope = Rope::from_str("say \"hi\"");
+        // cursor on opening quote (pos 4)
+        assert_eq!(text_object_range(&rope, 4, '"', true), Some((5, 7)));
+        assert_eq!(text_object_range(&rope, 4, '"', false), Some((4, 8)));
+    }
+
+    #[test]
+    fn text_object_empty_rope() {
+        let rope = Rope::from_str("");
+        assert_eq!(text_object_range(&rope, 0, '(', true), None);
+    }
+
+    // --- word_object_range (iw/aw) ---
+
+    #[test]
+    fn word_object_inner_basic() {
+        let rope = Rope::from_str("hello world");
+        // cursor on 'e' (pos 1)
+        assert_eq!(word_object_range(&rope, 1, true), Some((0, 5)));
+    }
+
+    #[test]
+    fn word_object_around_basic() {
+        let rope = Rope::from_str("hello world");
+        // cursor on 'e' (pos 1) — word + trailing space
+        assert_eq!(word_object_range(&rope, 1, false), Some((0, 6)));
+    }
+
+    #[test]
+    fn word_object_around_last_word() {
+        let rope = Rope::from_str("hello world");
+        // cursor on 'o' (pos 8) in 'world' — no trailing space, so include leading
+        assert_eq!(word_object_range(&rope, 8, false), Some((5, 11)));
+    }
+
+    #[test]
+    fn word_object_inner_on_whitespace() {
+        let rope = Rope::from_str("hello   world");
+        // cursor on space (pos 6) — inner selects the whitespace run
+        assert_eq!(word_object_range(&rope, 6, true), Some((5, 8)));
+    }
+
+    #[test]
+    fn word_object_inner_punctuation() {
+        let rope = Rope::from_str("foo.bar");
+        // cursor on '.' (pos 3) — punct is its own class
+        assert_eq!(word_object_range(&rope, 3, true), Some((3, 4)));
+    }
+
+    // --- big_word_object_range (iW/aW) ---
+
+    #[test]
+    fn big_word_object_inner() {
+        let rope = Rope::from_str("foo.bar baz");
+        // cursor on '.' (pos 3) — WORD includes foo.bar
+        assert_eq!(big_word_object_range(&rope, 3, true), Some((0, 7)));
+    }
+
+    #[test]
+    fn big_word_object_around() {
+        let rope = Rope::from_str("foo.bar baz");
+        // cursor on '.' (pos 3) — around includes trailing space
+        assert_eq!(big_word_object_range(&rope, 3, false), Some((0, 8)));
+    }
+
+    #[test]
+    fn big_word_object_around_last() {
+        let rope = Rope::from_str("hello foo.bar");
+        // cursor on '.' (pos 9) — no trailing ws, include leading
+        assert_eq!(big_word_object_range(&rope, 9, false), Some((5, 13)));
+    }
+
+    #[test]
+    fn big_word_object_inner_on_whitespace() {
+        let rope = Rope::from_str("abc   def");
+        // cursor on space (pos 4) — inner selects whitespace run
+        assert_eq!(big_word_object_range(&rope, 4, true), Some((3, 6)));
     }
 }

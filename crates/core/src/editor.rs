@@ -79,6 +79,12 @@ pub struct Editor {
     pub count_prefix: Option<usize>,
     /// Count saved for pending char-argument commands (f/F/t/T/r + char).
     pub pending_char_count: usize,
+    /// Index of the previously active buffer (for Ctrl-^ alternate file).
+    pub alternate_buffer_idx: Option<usize>,
+    /// Command-line history (for up/down recall in `:` mode).
+    pub command_history: Vec<String>,
+    /// Current index into command_history when recalling (None = not recalling).
+    pub command_history_idx: Option<usize>,
 }
 
 impl Default for Editor {
@@ -117,6 +123,9 @@ impl Editor {
             insert_initiated_by: None,
             count_prefix: None,
             pending_char_count: 1,
+            alternate_buffer_idx: None,
+            command_history: Vec::new(),
+            command_history_idx: None,
         }
     }
 
@@ -149,6 +158,9 @@ impl Editor {
             insert_initiated_by: None,
             count_prefix: None,
             pending_char_count: 1,
+            alternate_buffer_idx: None,
+            command_history: Vec::new(),
+            command_history_idx: None,
         }
     }
 
@@ -219,6 +231,13 @@ impl Editor {
         normal.bind(parse_key_seq("dw"), "delete-word-forward");
         normal.bind(parse_key_seq("d$"), "delete-to-line-end");
         normal.bind(parse_key_seq("d0"), "delete-to-line-start");
+        // Text object operators
+        normal.bind(parse_key_seq("di"), "delete-inner-object");
+        normal.bind(parse_key_seq("da"), "delete-around-object");
+        normal.bind(parse_key_seq("ci"), "change-inner-object");
+        normal.bind(parse_key_seq("ca"), "change-around-object");
+        normal.bind(parse_key_seq("yi"), "yank-inner-object");
+        normal.bind(parse_key_seq("ya"), "yank-around-object");
         // Change operators
         normal.bind(parse_key_seq("cc"), "change-line");
         normal.bind(parse_key_seq("cw"), "change-word-forward");
@@ -227,6 +246,16 @@ impl Editor {
         normal.bind(parse_key_seq("c0"), "change-to-line-start");
         // Replace
         normal.bind(parse_key_seq("r"), "replace-char-await");
+        // Join, indent, dedent
+        normal.bind(parse_key_seq("J"), "join-lines");
+        normal.bind(parse_key_seq(">>"), "indent-line");
+        normal.bind(parse_key_seq("<<"), "dedent-line");
+        // Case change
+        normal.bind(parse_key_seq("~"), "toggle-case");
+        normal.bind(parse_key_seq_spaced("g U U"), "uppercase-line");
+        normal.bind(parse_key_seq_spaced("g u u"), "lowercase-line");
+        // Alternate file
+        normal.bind(vec![KeyPress::ctrl('6')], "alternate-file");
         // Dot repeat
         normal.bind(parse_key_seq("."), "dot-repeat");
         // Yank/Paste
@@ -365,6 +394,9 @@ impl Editor {
         visual.bind(parse_key_seq("x"), "visual-delete");
         visual.bind(parse_key_seq("y"), "visual-yank");
         visual.bind(parse_key_seq("c"), "visual-change");
+        // Text objects in visual mode
+        visual.bind(parse_key_seq("i"), "visual-inner-object");
+        visual.bind(parse_key_seq("a"), "visual-around-object");
         // Mode switches
         visual.bind(parse_key_seq("v"), "enter-visual-char");
         visual.bind(parse_key_seq("V"), "enter-visual-line");
@@ -910,10 +942,12 @@ impl Editor {
                 if self.buffers.len() <= 1 {
                     return true;
                 }
+                let prev_idx = self.active_buffer_idx();
                 let win = self.window_mgr.focused_window_mut();
                 win.buffer_idx = (win.buffer_idx + 1) % self.buffers.len();
                 win.cursor_row = 0;
                 win.cursor_col = 0;
+                self.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[win.buffer_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
             }
@@ -921,11 +955,13 @@ impl Editor {
                 if self.buffers.len() <= 1 {
                     return true;
                 }
+                let prev_idx = self.active_buffer_idx();
                 let count = self.buffers.len();
                 let win = self.window_mgr.focused_window_mut();
                 win.buffer_idx = (win.buffer_idx + count - 1) % count;
                 win.cursor_row = 0;
                 win.cursor_col = 0;
+                self.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[win.buffer_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
             }
@@ -1080,6 +1116,18 @@ impl Editor {
             "visual-yank" => self.visual_yank(),
             "visual-change" => self.visual_change(),
 
+            // Text object operators — set pending char command to await object char
+            "delete-inner-object"
+            | "delete-around-object"
+            | "change-inner-object"
+            | "change-around-object"
+            | "yank-inner-object"
+            | "yank-around-object"
+            | "visual-inner-object"
+            | "visual-around-object" => {
+                self.pending_char_command = Some(name.to_string());
+            }
+
             // Search
             "search-forward-start" => {
                 self.search_state.direction = SearchDirection::Forward;
@@ -1177,6 +1225,96 @@ impl Editor {
             // Dot repeat
             "dot-repeat" => {
                 self.replay_last_edit();
+            }
+
+            // Join lines
+            "join-lines" => {
+                for _ in 0..n {
+                    self.join_line();
+                }
+                self.record_edit_with_count("join-lines", count);
+            }
+
+            // Indent / dedent
+            "indent-line" => {
+                let idx = self.active_buffer_idx();
+                let start_row = self.window_mgr.focused_window().cursor_row;
+                let line_count = self.buffers[idx].line_count();
+                let end_row = (start_row + n).min(line_count);
+                for row in start_row..end_row {
+                    let line_start = self.buffers[idx].rope().line_to_char(row);
+                    self.buffers[idx].insert_text_at(line_start, "    ");
+                }
+                self.record_edit_with_count("indent-line", count);
+            }
+            "dedent-line" => {
+                let idx = self.active_buffer_idx();
+                let start_row = self.window_mgr.focused_window().cursor_row;
+                let line_count = self.buffers[idx].line_count();
+                let end_row = (start_row + n).min(line_count);
+                for row in start_row..end_row {
+                    let line_start = self.buffers[idx].rope().line_to_char(row);
+                    let line_text = self.buffers[idx].line_text(row);
+                    let spaces: usize = line_text.chars().take(4).take_while(|c| *c == ' ').count();
+                    if spaces > 0 {
+                        self.buffers[idx].delete_range(line_start, line_start + spaces);
+                    }
+                }
+                // Clamp cursor col after dedent
+                let idx2 = self.active_buffer_idx();
+                let win = self.window_mgr.focused_window_mut();
+                win.clamp_cursor(&self.buffers[idx2]);
+                self.record_edit_with_count("dedent-line", count);
+            }
+
+            // Case change
+            "toggle-case" => {
+                for _ in 0..n {
+                    self.toggle_case_at_cursor();
+                }
+                self.record_edit_with_count("toggle-case", count);
+            }
+            "uppercase-line" => {
+                let idx = self.active_buffer_idx();
+                let row = self.window_mgr.focused_window().cursor_row;
+                let line_start = self.buffers[idx].rope().line_to_char(row);
+                let line_len = self.buffers[idx].line_len(row);
+                if line_len > 0 {
+                    let text = self.buffers[idx].text_range(line_start, line_start + line_len);
+                    let upper = text.to_uppercase();
+                    self.buffers[idx].delete_range(line_start, line_start + line_len);
+                    self.buffers[idx].insert_text_at(line_start, &upper);
+                }
+                self.record_edit("uppercase-line");
+            }
+            "lowercase-line" => {
+                let idx = self.active_buffer_idx();
+                let row = self.window_mgr.focused_window().cursor_row;
+                let line_start = self.buffers[idx].rope().line_to_char(row);
+                let line_len = self.buffers[idx].line_len(row);
+                if line_len > 0 {
+                    let text = self.buffers[idx].text_range(line_start, line_start + line_len);
+                    let lower = text.to_lowercase();
+                    self.buffers[idx].delete_range(line_start, line_start + line_len);
+                    self.buffers[idx].insert_text_at(line_start, &lower);
+                }
+                self.record_edit("lowercase-line");
+            }
+
+            // Alternate file
+            "alternate-file" => {
+                if let Some(alt_idx) = self.alternate_buffer_idx {
+                    if alt_idx < self.buffers.len() {
+                        let current = self.active_buffer_idx();
+                        self.alternate_buffer_idx = Some(current);
+                        let win = self.window_mgr.focused_window_mut();
+                        win.buffer_idx = alt_idx;
+                        win.cursor_row = 0;
+                        win.cursor_col = 0;
+                        let name = self.buffers[alt_idx].name.clone();
+                        self.set_status(format!("Buffer: {}", name));
+                    }
+                }
             }
 
             // File operations
@@ -1334,6 +1472,199 @@ impl Editor {
             _ => return false,
         }
         true
+    }
+
+    /// Resolve a text object range given the object character and inner/around flag.
+    /// Returns None if the object char is not recognized or no match is found.
+    fn resolve_text_object(&self, obj: char, inner: bool) -> Option<(usize, usize)> {
+        let idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let pos = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let rope = self.buffers[idx].rope();
+        match obj {
+            'w' => crate::word::word_object_range(rope, pos, inner),
+            'W' => crate::word::big_word_object_range(rope, pos, inner),
+            '(' | ')' | 'b' | '[' | ']' | '{' | '}' | 'B' | '<' | '>' | '"' | '\'' | '`' => {
+                // Map aliases: b -> (, B -> {
+                let effective = match obj {
+                    'b' => '(',
+                    'B' => '{',
+                    _ => obj,
+                };
+                crate::word::text_object_range(rope, pos, effective, inner)
+            }
+            _ => None,
+        }
+    }
+
+    /// Delete a text object range, storing deleted text in the default register.
+    pub fn delete_text_object(&mut self, obj: char, inner: bool) {
+        if let Some((start, end)) = self.resolve_text_object(obj, inner) {
+            if start >= end {
+                return;
+            }
+            let idx = self.active_buffer_idx();
+            let text = self.buffers[idx].text_range(start, end);
+            self.buffers[idx].delete_range(start, end);
+            self.registers.insert('"', text);
+            // Move cursor to start of deleted range
+            let rope = self.buffers[idx].rope();
+            let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
+            let line_start = rope.line_to_char(new_row);
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = new_row;
+            win.cursor_col = start.saturating_sub(line_start);
+            win.clamp_cursor(&self.buffers[idx]);
+            let cmd_name = if inner {
+                "delete-inner-object"
+            } else {
+                "delete-around-object"
+            };
+            self.record_edit(cmd_name);
+        }
+    }
+
+    /// Change a text object: delete the range and enter insert mode.
+    pub fn change_text_object(&mut self, obj: char, inner: bool) {
+        if let Some((start, end)) = self.resolve_text_object(obj, inner) {
+            if start >= end {
+                return;
+            }
+            let idx = self.active_buffer_idx();
+            let text = self.buffers[idx].text_range(start, end);
+            self.buffers[idx].delete_range(start, end);
+            self.registers.insert('"', text);
+            // Move cursor to start of deleted range
+            let rope = self.buffers[idx].rope();
+            let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
+            let line_start = rope.line_to_char(new_row);
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = new_row;
+            win.cursor_col = start.saturating_sub(line_start);
+            win.clamp_cursor(&self.buffers[idx]);
+            let cmd_name = if inner {
+                "change-inner-object"
+            } else {
+                "change-around-object"
+            };
+            self.enter_insert_for_change(cmd_name);
+        }
+    }
+
+    /// Yank a text object range into the default register.
+    pub fn yank_text_object(&mut self, obj: char, inner: bool) {
+        if let Some((start, end)) = self.resolve_text_object(obj, inner) {
+            if start >= end {
+                return;
+            }
+            let idx = self.active_buffer_idx();
+            let text = self.buffers[idx].text_range(start, end);
+            self.registers.insert('"', text);
+            self.set_status("yanked text object");
+        }
+    }
+
+    /// Set the visual selection to cover a text object range.
+    pub fn visual_select_text_object(&mut self, obj: char, inner: bool) {
+        if let Some((start, end)) = self.resolve_text_object(obj, inner) {
+            if start >= end {
+                return;
+            }
+            let idx = self.active_buffer_idx();
+            let rope = self.buffers[idx].rope();
+            // Set anchor to start
+            let start_row = rope.char_to_line(start);
+            let start_line = rope.line_to_char(start_row);
+            self.visual_anchor_row = start_row;
+            self.visual_anchor_col = start - start_line;
+            // Set cursor to end - 1 (since visual selection is inclusive)
+            let end_char = end.saturating_sub(1);
+            let end_row = rope.char_to_line(end_char);
+            let end_line = rope.line_to_char(end_row);
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = end_row;
+            win.cursor_col = end_char - end_line;
+        }
+    }
+
+    /// Dispatch a text object command that was pending a char argument.
+    /// Returns true if handled.
+    pub fn dispatch_text_object(&mut self, command: &str, ch: char) -> bool {
+        match command {
+            "delete-inner-object" => self.delete_text_object(ch, true),
+            "delete-around-object" => self.delete_text_object(ch, false),
+            "change-inner-object" => self.change_text_object(ch, true),
+            "change-around-object" => self.change_text_object(ch, false),
+            "yank-inner-object" => self.yank_text_object(ch, true),
+            "yank-around-object" => self.yank_text_object(ch, false),
+            "visual-inner-object" => self.visual_select_text_object(ch, true),
+            "visual-around-object" => self.visual_select_text_object(ch, false),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Join current line with the next: remove newline, collapse leading whitespace to one space.
+    fn join_line(&mut self) {
+        let idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line_count = self.buffers[idx].line_count();
+        if row + 1 >= line_count {
+            return; // last line, nothing to join
+        }
+        // Find the newline at end of current line
+        let line_start = self.buffers[idx].rope().line_to_char(row);
+        let line_chars = self.buffers[idx].rope().line(row).len_chars();
+        let newline_pos = line_start + line_chars - 1; // position of '\n'
+
+        // Count leading whitespace on next line
+        let next_line_text = self.buffers[idx].line_text(row + 1);
+        let leading_ws: usize = next_line_text
+            .chars()
+            .take_while(|c| c.is_whitespace() && *c != '\n')
+            .count();
+
+        // Delete from newline through leading whitespace of next line
+        let delete_end = newline_pos + 1 + leading_ws;
+        self.buffers[idx].delete_range(newline_pos, delete_end);
+
+        // Insert a single space (unless current line was empty or next line was empty after stripping)
+        let next_remaining = &next_line_text[next_line_text
+            .char_indices()
+            .nth(leading_ws)
+            .map(|(i, _)| i)
+            .unwrap_or(next_line_text.len())..];
+        let next_has_content = !next_remaining.is_empty() && next_remaining != "\n";
+        if next_has_content {
+            self.buffers[idx].insert_text_at(newline_pos, " ");
+        }
+    }
+
+    /// Toggle the case of the character under the cursor and advance.
+    fn toggle_case_at_cursor(&mut self) {
+        let idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let row = win.cursor_row;
+        let col = win.cursor_col;
+        let line_len = self.buffers[idx].line_len(row);
+        if col >= line_len {
+            return;
+        }
+        let offset = self.buffers[idx].char_offset_at(row, col);
+        let ch = self.buffers[idx].rope().char(offset);
+        let toggled: String = if ch.is_uppercase() {
+            ch.to_lowercase().collect()
+        } else {
+            ch.to_uppercase().collect()
+        };
+        self.buffers[idx].delete_range(offset, offset + 1);
+        self.buffers[idx].insert_text_at(offset, &toggled);
+        // Advance cursor
+        let win = self.window_mgr.focused_window_mut();
+        let new_line_len = self.buffers[idx].line_len(row);
+        if col + 1 < new_line_len {
+            win.cursor_col = col + 1;
+        }
     }
 
     /// Enter insert mode from a change command, recording state for dot-repeat.
@@ -1553,6 +1884,36 @@ impl Editor {
                 true
             }
             _ => {
+                // Shell escape: :!cmd
+                if let Some(shell_cmd) = cmd.strip_prefix('!') {
+                    let shell_cmd = shell_cmd.trim();
+                    if shell_cmd.is_empty() {
+                        self.set_status("Usage: :!<command>");
+                        return true;
+                    }
+                    match std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(shell_cmd)
+                        .output()
+                    {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let result = if !stdout.is_empty() {
+                                stdout.trim().to_string()
+                            } else if !stderr.is_empty() {
+                                stderr.trim().to_string()
+                            } else {
+                                format!("(exit {})", output.status.code().unwrap_or(-1))
+                            };
+                            self.set_status(result);
+                        }
+                        Err(e) => {
+                            self.set_status(format!("Shell error: {}", e));
+                        }
+                    }
+                    return true;
+                }
                 // Check for substitute commands: s/.../.../  or %s/.../.../
                 if cmd.starts_with("s/") || cmd.starts_with("%s/") {
                     self.execute_substitute_command(cmd);
@@ -2020,12 +2381,55 @@ impl Editor {
         }
     }
 
+    /// Push a command to the command history (skipping consecutive duplicates).
+    pub fn push_command_history(&mut self, cmd: &str) {
+        if cmd.is_empty() {
+            return;
+        }
+        if self.command_history.last().map(|s| s.as_str()) == Some(cmd) {
+            return; // skip consecutive duplicate
+        }
+        self.command_history.push(cmd.to_string());
+        self.command_history_idx = None;
+    }
+
+    /// Recall previous command from history (Up arrow in command mode).
+    pub fn command_history_prev(&mut self) {
+        if self.command_history.is_empty() {
+            return;
+        }
+        let idx = match self.command_history_idx {
+            Some(0) => return, // already at oldest
+            Some(i) => i - 1,
+            None => self.command_history.len() - 1,
+        };
+        self.command_history_idx = Some(idx);
+        self.command_line = self.command_history[idx].clone();
+    }
+
+    /// Recall next command from history (Down arrow in command mode).
+    pub fn command_history_next(&mut self) {
+        let idx = match self.command_history_idx {
+            Some(i) => i + 1,
+            None => return,
+        };
+        if idx >= self.command_history.len() {
+            self.command_history_idx = None;
+            self.command_line.clear();
+        } else {
+            self.command_history_idx = Some(idx);
+            self.command_line = self.command_history[idx].clone();
+        }
+    }
+
     pub fn open_file(&mut self, path: &str) {
         match Buffer::from_file(Path::new(path)) {
             Ok(buf) => {
                 let name = buf.name.clone();
+                let prev_idx = self.active_buffer_idx();
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
+                self.alternate_buffer_idx = Some(prev_idx);
                 self.window_mgr.focused_window_mut().buffer_idx = new_idx;
                 self.set_status(format!("\"{}\" opened", name));
             }
@@ -3677,5 +4081,487 @@ mod tests {
         // second lands on blank line 3.
         let row = editor.window_mgr.focused_window().cursor_row;
         assert_eq!(row, 3);
+    }
+
+    // --- Text object editor integration tests ---
+
+    #[test]
+    fn delete_inner_parens() {
+        let mut editor = editor_with_text("foo(bar)baz");
+        // Move cursor inside parens: col 4 = 'b'
+        editor.window_mgr.focused_window_mut().cursor_col = 4;
+        editor.delete_text_object('(', true);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "foo()baz");
+        assert_eq!(editor.registers.get(&'"'), Some(&"bar".to_string()));
+    }
+
+    #[test]
+    fn delete_around_parens() {
+        let mut editor = editor_with_text("foo(bar)baz");
+        editor.window_mgr.focused_window_mut().cursor_col = 4;
+        editor.delete_text_object('(', false);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "foobaz");
+        assert_eq!(editor.registers.get(&'"'), Some(&"(bar)".to_string()));
+    }
+
+    #[test]
+    fn change_inner_quotes() {
+        let mut editor = editor_with_text("say \"hello\"");
+        // Move cursor inside quotes: col 5 = 'h'
+        editor.window_mgr.focused_window_mut().cursor_col = 5;
+        editor.change_text_object('"', true);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "say \"\"");
+        assert_eq!(editor.mode, Mode::Insert);
+        assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn yank_inner_braces() {
+        let mut editor = editor_with_text("{ code }");
+        // cursor at col 2 = 'c'
+        editor.window_mgr.focused_window_mut().cursor_col = 2;
+        editor.yank_text_object('{', true);
+        assert_eq!(editor.registers.get(&'"'), Some(&" code ".to_string()));
+        // Buffer unchanged
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "{ code }");
+    }
+
+    #[test]
+    fn delete_inner_word() {
+        let mut editor = editor_with_text("hello world");
+        // cursor at col 0 = 'h'
+        editor.delete_text_object('w', true);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, " world");
+        assert_eq!(editor.registers.get(&'"'), Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn delete_around_word() {
+        let mut editor = editor_with_text("hello world");
+        // cursor at col 0 = 'h', around word includes trailing space
+        editor.delete_text_object('w', false);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "world");
+    }
+
+    #[test]
+    fn visual_select_inner_parens() {
+        let mut editor = editor_with_text("(abc)");
+        editor.enter_visual_mode(VisualType::Char);
+        // cursor at col 2 = 'b'
+        editor.window_mgr.focused_window_mut().cursor_col = 2;
+        editor.visual_select_text_object('(', true);
+        // Anchor should be at start of inner (col 1), cursor at end (col 3)
+        assert_eq!(editor.visual_anchor_col, 1);
+        let win = editor.window_mgr.focused_window();
+        assert_eq!(win.cursor_col, 3);
+    }
+
+    #[test]
+    fn text_object_dispatch_method() {
+        let mut editor = editor_with_text("foo(bar)baz");
+        editor.window_mgr.focused_window_mut().cursor_col = 4;
+        assert!(editor.dispatch_text_object("delete-inner-object", '('));
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "foo()baz");
+    }
+
+    #[test]
+    fn text_object_dispatch_unknown_returns_false() {
+        let mut editor = editor_with_text("hello");
+        assert!(!editor.dispatch_text_object("unknown-command", '('));
+    }
+
+    #[test]
+    fn normal_keymap_has_text_object_bindings() {
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        // di → delete-inner-object
+        assert_eq!(
+            normal.lookup(&parse_key_seq("di")),
+            LookupResult::Exact("delete-inner-object")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("da")),
+            LookupResult::Exact("delete-around-object")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("ci")),
+            LookupResult::Exact("change-inner-object")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("ca")),
+            LookupResult::Exact("change-around-object")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("yi")),
+            LookupResult::Exact("yank-inner-object")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("ya")),
+            LookupResult::Exact("yank-around-object")
+        );
+    }
+
+    #[test]
+    fn visual_keymap_has_text_object_bindings() {
+        let editor = Editor::new();
+        let visual = editor.keymaps.get("visual").unwrap();
+        // In visual mode, 'i' is a prefix for text objects
+        // Since there are no longer bindings starting with just 'i',
+        // it should be an exact match
+        assert_eq!(
+            visual.lookup(&parse_key_seq("i")),
+            LookupResult::Exact("visual-inner-object")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("a")),
+            LookupResult::Exact("visual-around-object")
+        );
+    }
+
+    #[test]
+    fn text_object_commands_registered() {
+        let editor = Editor::new();
+        assert!(editor.commands.contains("delete-inner-object"));
+        assert!(editor.commands.contains("delete-around-object"));
+        assert!(editor.commands.contains("change-inner-object"));
+        assert!(editor.commands.contains("change-around-object"));
+        assert!(editor.commands.contains("yank-inner-object"));
+        assert!(editor.commands.contains("yank-around-object"));
+        assert!(editor.commands.contains("visual-inner-object"));
+        assert!(editor.commands.contains("visual-around-object"));
+    }
+
+    #[test]
+    fn delete_inner_word_cursor_position() {
+        // After deleting inner word, cursor should be at start of deleted range
+        let mut editor = editor_with_text("hello world");
+        editor.window_mgr.focused_window_mut().cursor_col = 7; // on 'o' in 'world'
+        editor.delete_text_object('w', true);
+        let win = editor.window_mgr.focused_window();
+        assert_eq!(win.cursor_col, 6); // start of 'world'
+    }
+
+    #[test]
+    fn yank_inner_brackets_no_modification() {
+        let mut editor = editor_with_text("[items]");
+        editor.window_mgr.focused_window_mut().cursor_col = 3;
+        editor.yank_text_object('[', true);
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "[items]"); // unchanged
+        assert_eq!(editor.registers.get(&'"'), Some(&"items".to_string()));
+    }
+
+    #[test]
+    fn text_object_no_match_is_noop() {
+        let mut editor = editor_with_text("hello world");
+        editor.delete_text_object('(', true);
+        // Nothing should change
+        let text = editor.buffers[0].rope().to_string();
+        assert_eq!(text, "hello world");
+        assert!(!editor.registers.contains_key(&'"'));
+    }
+}
+
+#[cfg(test)]
+mod m6_m7_tests {
+    use crate::buffer::Buffer;
+    use crate::editor::Editor;
+    use crate::keymap::{parse_key_seq, parse_key_seq_spaced, KeyPress};
+    use crate::LookupResult;
+
+    fn editor_with_text(text: &str) -> Editor {
+        let mut editor = Editor::new();
+        for ch in text.chars() {
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[0].insert_char(win, ch);
+        }
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.window_mgr.focused_window_mut().cursor_col = 0;
+        editor
+    }
+
+    #[test]
+    fn join_lines_basic() {
+        let mut editor = editor_with_text("hello\nworld");
+        editor.dispatch_builtin("join-lines");
+        assert_eq!(editor.buffers[0].text(), "hello world");
+    }
+
+    #[test]
+    fn join_lines_strips_leading_whitespace() {
+        let mut editor = editor_with_text("hello\n    world");
+        editor.dispatch_builtin("join-lines");
+        assert_eq!(editor.buffers[0].text(), "hello world");
+    }
+
+    #[test]
+    fn join_lines_last_line_noop() {
+        let mut editor = editor_with_text("only line");
+        editor.dispatch_builtin("join-lines");
+        assert_eq!(editor.buffers[0].text(), "only line");
+    }
+
+    #[test]
+    fn join_lines_with_count() {
+        let mut editor = editor_with_text("line1\nline2\nline3");
+        editor.count_prefix = Some(2);
+        editor.dispatch_builtin("join-lines");
+        assert_eq!(editor.buffers[0].text(), "line1 line2 line3");
+    }
+
+    #[test]
+    fn join_lines_empty_next_line() {
+        let mut editor = editor_with_text("hello\n\nworld");
+        editor.dispatch_builtin("join-lines");
+        assert_eq!(editor.buffers[0].text(), "hello\nworld");
+    }
+
+    #[test]
+    fn indent_line_adds_spaces() {
+        let mut editor = editor_with_text("hello");
+        editor.dispatch_builtin("indent-line");
+        assert_eq!(editor.buffers[0].text(), "    hello");
+    }
+
+    #[test]
+    fn dedent_line_removes_spaces() {
+        let mut editor = editor_with_text("    hello");
+        editor.dispatch_builtin("dedent-line");
+        assert_eq!(editor.buffers[0].text(), "hello");
+    }
+
+    #[test]
+    fn dedent_line_partial() {
+        let mut editor = editor_with_text("  hello");
+        editor.dispatch_builtin("dedent-line");
+        assert_eq!(editor.buffers[0].text(), "hello");
+    }
+
+    #[test]
+    fn dedent_line_no_spaces_noop() {
+        let mut editor = editor_with_text("hello");
+        editor.dispatch_builtin("dedent-line");
+        assert_eq!(editor.buffers[0].text(), "hello");
+    }
+
+    #[test]
+    fn indent_with_count() {
+        let mut editor = editor_with_text("aaa\nbbb\nccc");
+        editor.count_prefix = Some(3);
+        editor.dispatch_builtin("indent-line");
+        assert_eq!(editor.buffers[0].text(), "    aaa\n    bbb\n    ccc");
+    }
+
+    #[test]
+    fn dedent_with_count_multiple() {
+        let mut editor = editor_with_text("    aaa\n    bbb\n    ccc");
+        editor.count_prefix = Some(3);
+        editor.dispatch_builtin("dedent-line");
+        assert_eq!(editor.buffers[0].text(), "aaa\nbbb\nccc");
+    }
+
+    #[test]
+    fn toggle_case_lower_to_upper() {
+        let mut editor = editor_with_text("hello");
+        editor.dispatch_builtin("toggle-case");
+        assert_eq!(editor.buffers[0].text(), "Hello");
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 1);
+    }
+
+    #[test]
+    fn toggle_case_upper_to_lower() {
+        let mut editor = editor_with_text("Hello");
+        editor.dispatch_builtin("toggle-case");
+        assert_eq!(editor.buffers[0].text(), "hello");
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 1);
+    }
+
+    #[test]
+    fn toggle_case_with_count() {
+        let mut editor = editor_with_text("hello");
+        editor.count_prefix = Some(3);
+        editor.dispatch_builtin("toggle-case");
+        assert_eq!(editor.buffers[0].text(), "HELlo");
+        assert_eq!(editor.window_mgr.focused_window().cursor_col, 3);
+    }
+
+    #[test]
+    fn uppercase_line() {
+        let mut editor = editor_with_text("hello world");
+        editor.dispatch_builtin("uppercase-line");
+        assert_eq!(editor.buffers[0].text(), "HELLO WORLD");
+    }
+
+    #[test]
+    fn lowercase_line() {
+        let mut editor = editor_with_text("HELLO WORLD");
+        editor.dispatch_builtin("lowercase-line");
+        assert_eq!(editor.buffers[0].text(), "hello world");
+    }
+
+    #[test]
+    fn alternate_file_switches() {
+        let mut editor = Editor::new();
+        editor.buffers.push(Buffer::new());
+        editor.buffers[1].name = "second".to_string();
+        editor.dispatch_builtin("next-buffer");
+        assert_eq!(editor.active_buffer_idx(), 1);
+        assert_eq!(editor.alternate_buffer_idx, Some(0));
+        editor.dispatch_builtin("alternate-file");
+        assert_eq!(editor.active_buffer_idx(), 0);
+        assert_eq!(editor.alternate_buffer_idx, Some(1));
+    }
+
+    #[test]
+    fn alternate_file_none_is_noop() {
+        let mut editor = Editor::new();
+        assert!(editor.alternate_buffer_idx.is_none());
+        editor.dispatch_builtin("alternate-file");
+        assert_eq!(editor.active_buffer_idx(), 0);
+    }
+
+    #[test]
+    fn alternate_file_double_toggle() {
+        let mut editor = Editor::new();
+        editor.buffers.push(Buffer::new());
+        editor.buffers[1].name = "second".to_string();
+        editor.dispatch_builtin("next-buffer");
+        editor.dispatch_builtin("alternate-file");
+        assert_eq!(editor.active_buffer_idx(), 0);
+        editor.dispatch_builtin("alternate-file");
+        assert_eq!(editor.active_buffer_idx(), 1);
+    }
+
+    #[test]
+    fn command_history_records() {
+        let mut editor = Editor::new();
+        editor.push_command_history("w");
+        assert_eq!(editor.command_history, vec!["w"]);
+    }
+
+    #[test]
+    fn command_history_no_duplicates_consecutive() {
+        let mut editor = Editor::new();
+        editor.push_command_history("w");
+        editor.push_command_history("w");
+        assert_eq!(editor.command_history.len(), 1);
+    }
+
+    #[test]
+    fn command_history_allows_non_consecutive_duplicates() {
+        let mut editor = Editor::new();
+        editor.push_command_history("w");
+        editor.push_command_history("q");
+        editor.push_command_history("w");
+        assert_eq!(editor.command_history.len(), 3);
+    }
+
+    #[test]
+    fn command_history_prev_recalls() {
+        let mut editor = Editor::new();
+        editor.push_command_history("first");
+        editor.push_command_history("second");
+        editor.command_history_prev();
+        assert_eq!(editor.command_line, "second");
+        editor.command_history_prev();
+        assert_eq!(editor.command_line, "first");
+    }
+
+    #[test]
+    fn command_history_next_clears() {
+        let mut editor = Editor::new();
+        editor.push_command_history("first");
+        editor.push_command_history("second");
+        editor.command_history_prev();
+        editor.command_history_prev();
+        assert_eq!(editor.command_line, "first");
+        editor.command_history_next();
+        assert_eq!(editor.command_line, "second");
+        editor.command_history_next();
+        assert_eq!(editor.command_line, "");
+    }
+
+    #[test]
+    fn command_history_empty_is_noop() {
+        let mut editor = Editor::new();
+        editor.command_history_prev();
+        assert_eq!(editor.command_line, "");
+    }
+
+    #[test]
+    fn shell_escape_basic() {
+        let mut editor = Editor::new();
+        editor.execute_command("!echo hello");
+        assert_eq!(editor.status_msg, "hello");
+    }
+
+    #[test]
+    fn shell_escape_empty_shows_usage() {
+        let mut editor = Editor::new();
+        editor.execute_command("!");
+        assert!(editor.status_msg.contains("Usage"));
+    }
+
+    #[test]
+    fn m6_m7_commands_registered() {
+        let editor = Editor::new();
+        let cmds = [
+            "join-lines",
+            "indent-line",
+            "dedent-line",
+            "toggle-case",
+            "uppercase-line",
+            "lowercase-line",
+            "alternate-file",
+            "shell-command",
+        ];
+        for cmd in &cmds {
+            assert!(
+                editor.commands.contains(cmd),
+                "Command '{}' not registered",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn m6_m7_keybindings() {
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        assert_eq!(
+            normal.lookup(&parse_key_seq("J")),
+            LookupResult::Exact("join-lines")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq(">>")),
+            LookupResult::Exact("indent-line")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("<<")),
+            LookupResult::Exact("dedent-line")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("~")),
+            LookupResult::Exact("toggle-case")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq_spaced("g U U")),
+            LookupResult::Exact("uppercase-line")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq_spaced("g u u")),
+            LookupResult::Exact("lowercase-line")
+        );
+        assert_eq!(
+            normal.lookup(&[KeyPress::ctrl('6')]),
+            LookupResult::Exact("alternate-file")
+        );
     }
 }

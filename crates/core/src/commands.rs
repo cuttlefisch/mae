@@ -182,6 +182,21 @@ impl CommandRegistry {
         reg.register_builtin("change-to-line-start", "Change to start of line (c0)");
         // Replace
         reg.register_builtin("replace-char-await", "Replace char under cursor (r)");
+        // Join, indent, dedent
+        reg.register_builtin("join-lines", "Join current line with next line (J)");
+        reg.register_builtin("indent-line", "Indent current line by 4 spaces (>>)");
+        reg.register_builtin("dedent-line", "Dedent current line by up to 4 spaces (<<)");
+        // Case change
+        reg.register_builtin("toggle-case", "Toggle case of char under cursor (~)");
+        reg.register_builtin("uppercase-line", "Uppercase current line (gUU)");
+        reg.register_builtin("lowercase-line", "Lowercase current line (guu)");
+        // Alternate file
+        reg.register_builtin(
+            "alternate-file",
+            "Switch to alternate (previous) buffer (C-^)",
+        );
+        // Shell escape
+        reg.register_builtin("shell-command", "Run a shell command (:!cmd)");
         // Dot repeat
         reg.register_builtin("dot-repeat", "Repeat last edit (.)");
         // Yank/Paste
@@ -250,6 +265,34 @@ impl CommandRegistry {
         reg.register_builtin("search-prev", "Jump to previous match (N)");
         reg.register_builtin("search-word-under-cursor", "Search word under cursor (*)");
         reg.register_builtin("clear-search-highlight", "Clear search highlights (:noh)");
+
+        // Text objects
+        reg.register_builtin(
+            "delete-inner-object",
+            "Delete inner text object (di + char)",
+        );
+        reg.register_builtin(
+            "delete-around-object",
+            "Delete around text object (da + char)",
+        );
+        reg.register_builtin(
+            "change-inner-object",
+            "Change inner text object (ci + char)",
+        );
+        reg.register_builtin(
+            "change-around-object",
+            "Change around text object (ca + char)",
+        );
+        reg.register_builtin("yank-inner-object", "Yank inner text object (yi + char)");
+        reg.register_builtin("yank-around-object", "Yank around text object (ya + char)");
+        reg.register_builtin(
+            "visual-inner-object",
+            "Select inner text object in visual mode (i + char)",
+        );
+        reg.register_builtin(
+            "visual-around-object",
+            "Select around text object in visual mode (a + char)",
+        );
 
         // Debugging
         reg.register_builtin("debug-self", "Open self-debug view (Rust + Scheme state)");
