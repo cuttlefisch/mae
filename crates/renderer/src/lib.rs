@@ -4,7 +4,9 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use mae_core::{grapheme, Editor, Key, Mode, NamedColor, ThemeColor, ThemeStyle, VisualType, Window};
+use mae_core::{
+    grapheme, Editor, Key, Mode, NamedColor, ThemeColor, ThemeStyle, VisualType, Window,
+};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
@@ -144,14 +146,11 @@ fn render_frame(frame: &mut Frame, editor: &Editor) {
         };
 
         let cols = (area.width as usize / 25).max(1);
-        let rows = (entries.len() + cols - 1) / cols;
+        let rows = entries.len().div_ceil(cols);
         let popup_height = (rows as u16 + 2).min(area.height / 2).max(3);
 
-        let chunks = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(popup_height),
-        ])
-        .split(area);
+        let chunks =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);
 
         render_window_area(frame, chunks[0], editor);
         render_which_key_popup(frame, chunks[1], editor, &entries);
@@ -244,8 +243,9 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
                 frame.set_cursor_position(Position::new(input_x, input_y));
             }
         } else {
-            let screen_row =
-                focused_win.cursor_row.saturating_sub(focused_win.scroll_offset) as u16;
+            let screen_row = focused_win
+                .cursor_row
+                .saturating_sub(focused_win.scroll_offset) as u16;
             let line_text = if focused_win.cursor_row < focused_buf.line_count() {
                 let line = focused_buf.rope().line(focused_win.cursor_row);
                 let s: String = line.chars().collect();
@@ -253,16 +253,12 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
             } else {
                 String::new()
             };
-            let display_col = grapheme::display_width_up_to_grapheme(
-                &line_text,
-                focused_win.cursor_col,
-            );
+            let display_col =
+                grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
             let screen_col = gutter_w as u16 + display_col as u16;
             if screen_row < inner.height {
-                frame.set_cursor_position(Position::new(
-                    inner.x + screen_col,
-                    inner.y + screen_row,
-                ));
+                frame
+                    .set_cursor_position(Position::new(inner.x + screen_col, inner.y + screen_row));
             }
         }
     }
@@ -322,7 +318,8 @@ fn render_buffer(
     let text_style = ts(editor, "ui.text");
     let search_style = ts(editor, "ui.search.match");
     let selection_style = ts(editor, "ui.selection");
-    let highlight_search = editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
+    let highlight_search =
+        editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
     let highlight_selection = matches!(editor.mode, Mode::Visual(_));
     let (sel_start, sel_end) = if highlight_selection {
         editor.visual_selection_range()
@@ -337,7 +334,10 @@ fn render_buffer(
         let line_idx = win.scroll_offset + i;
         if line_idx < buf.line_count() {
             let line_text = buf.rope().line(line_idx);
-            let display: String = line_text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+            let display: String = line_text
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .collect();
 
             let line_num = format!("{:>width$} ", line_idx + 1, width = gutter_w - 1);
 
@@ -511,7 +511,7 @@ fn format_keypress(kp: &mae_core::KeyPress) -> String {
         Key::F(n) => {
             s.push_str(&format!("F{}", n));
         }
-        _ => s.push_str("?"),
+        _ => s.push('?'),
     }
     s
 }
@@ -525,7 +525,7 @@ fn render_which_key_popup(
     let breadcrumb: String = editor
         .which_key_prefix
         .iter()
-        .map(|kp| format_keypress(kp))
+        .map(format_keypress)
         .collect::<Vec<_>>()
         .join(" > ");
 
@@ -650,7 +650,13 @@ fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor) {
         0
     };
 
-    for (display_idx, &filtered_idx) in picker.filtered.iter().skip(start).take(results_height).enumerate() {
+    for (display_idx, &filtered_idx) in picker
+        .filtered
+        .iter()
+        .skip(start)
+        .take(results_height)
+        .enumerate()
+    {
         let path = &picker.candidates[filtered_idx];
         let actual_idx = start + display_idx;
         let style = if actual_idx == picker.selected {
@@ -695,7 +701,7 @@ fn render_conversation_window(
     };
 
     let title = format!(" {} ", buf.name);
-    let streaming_indicator = if buf.conversation.as_ref().map_or(false, |c| c.streaming) {
+    let streaming_indicator = if buf.conversation.as_ref().is_some_and(|c| c.streaming) {
         " [streaming...] "
     } else {
         ""
@@ -741,13 +747,9 @@ fn render_conversation_window(
                 mae_core::conversation::LineStyle::ToolResultText => {
                     ts(editor, "conversation.tool.result")
                 }
-                mae_core::conversation::LineStyle::SystemText => {
-                    ts(editor, "conversation.system")
-                }
+                mae_core::conversation::LineStyle::SystemText => ts(editor, "conversation.system"),
                 mae_core::conversation::LineStyle::Separator => Style::default(),
-                mae_core::conversation::LineStyle::InputPrompt => {
-                    ts(editor, "conversation.input")
-                }
+                mae_core::conversation::LineStyle::InputPrompt => ts(editor, "conversation.input"),
             };
             lines.push(Line::from(Span::styled(rl.text.clone(), style)));
         }
@@ -792,10 +794,8 @@ fn render_messages_window(
     let total = entries.len();
     let start = if win.scroll_offset > 0 {
         win.scroll_offset.min(total)
-    } else if total > viewport_height {
-        total - viewport_height
     } else {
-        0
+        total.saturating_sub(viewport_height)
     };
 
     let target_style = ts(editor, "diagnostic.target");

@@ -270,9 +270,7 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
 /// "C-w v"   → [Ctrl-w, Char('v')]  (2 keys, not 3 — the space is a delimiter)
 /// "dd"      → [Char('d'), Char('d')] (single token, no spaces)
 pub fn parse_key_seq_spaced(s: &str) -> Vec<KeyPress> {
-    s.split_whitespace()
-        .flat_map(|token| parse_key_seq(token))
-        .collect()
+    s.split_whitespace().flat_map(parse_key_seq).collect()
 }
 
 fn match_named_key(s: &str) -> Option<(Key, usize)> {
@@ -309,8 +307,7 @@ fn match_named_key(s: &str) -> Option<(Key, usize)> {
     }
 
     // F-keys
-    if s.starts_with('f') {
-        let rest = &s[1..];
+    if let Some(rest) = s.strip_prefix('f') {
         if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
             if let Ok(n) = rest[..end].parse::<u8>() {
                 return Some((Key::F(n), 1 + end));
@@ -443,10 +440,7 @@ mod tests {
         // When both 'd' (exact) and 'dd' (longer) are bound,
         // Prefix wins — dispatch must wait for more keys.
         // This is critical for vi-style operators.
-        assert_eq!(
-            km.lookup(&[KeyPress::char('d')]),
-            LookupResult::Prefix
-        );
+        assert_eq!(km.lookup(&[KeyPress::char('d')]), LookupResult::Prefix);
         assert_eq!(
             km.lookup(&[KeyPress::char('d'), KeyPress::char('d')]),
             LookupResult::Exact("delete-line")

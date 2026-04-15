@@ -16,9 +16,22 @@ pub struct FilePicker {
 
 /// Directories to skip during recursive scan.
 const SKIP_DIRS: &[&str] = &[
-    ".git", "target", "node_modules", ".cache", ".next", "__pycache__",
-    ".mypy_cache", ".pytest_cache", "dist", "build", ".eggs", ".tox",
-    "vendor", ".bundle", "zig-cache", "zig-out",
+    ".git",
+    "target",
+    "node_modules",
+    ".cache",
+    ".next",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+    ".eggs",
+    ".tox",
+    "vendor",
+    ".bundle",
+    "zig-cache",
+    "zig-out",
 ];
 
 /// Max recursion depth for directory walking.
@@ -54,9 +67,7 @@ impl FilePicker {
                 .candidates
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, path)| {
-                    score_match(path, &query_lower).map(|s| (idx, s))
-                })
+                .filter_map(|(idx, path)| score_match(path, &query_lower).map(|s| (idx, s)))
                 .collect();
             // Higher score = better match, sort descending
             scored.sort_by(|a, b| b.1.cmp(&a.1));
@@ -129,7 +140,12 @@ fn score_match(path: &str, query: &[char]) -> Option<i64> {
             }
 
             // Bonus for matching at word boundaries (after / or . or _ or -)
-            if pi == 0 || matches!(path_lower.get(pi.saturating_sub(1)), Some('/' | '.' | '_' | '-')) {
+            if pi == 0
+                || matches!(
+                    path_lower.get(pi.saturating_sub(1)),
+                    Some('/' | '.' | '_' | '-')
+                )
+            {
                 score += 8;
             }
 
@@ -153,7 +169,11 @@ fn score_match(path: &str, query: &[char]) -> Option<i64> {
 
     // Bonus for prefix match of filename
     if let Some(fp) = first_match_pos {
-        let last_slash = path_lower.iter().rposition(|c| *c == '/').map(|p| p + 1).unwrap_or(0);
+        let last_slash = path_lower
+            .iter()
+            .rposition(|c| *c == '/')
+            .map(|p| p + 1)
+            .unwrap_or(0);
         if fp == last_slash {
             score += 15; // Query starts matching at filename start
         }
@@ -219,8 +239,18 @@ pub fn complete_path(input: &str) -> Vec<String> {
     let (dir, prefix) = if input.ends_with('/') || input.ends_with(std::path::MAIN_SEPARATOR) {
         (PathBuf::from(input), String::new())
     } else if let Some(parent) = path.parent() {
-        let prefix = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        (if parent.as_os_str().is_empty() { PathBuf::from(".") } else { parent.to_path_buf() }, prefix)
+        let prefix = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (
+            if parent.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                parent.to_path_buf()
+            },
+            prefix,
+        )
     } else {
         (PathBuf::from("."), input.to_string())
     };
@@ -307,7 +337,11 @@ mod tests {
         let picker = FilePicker::scan(tmp.path());
         for c in &picker.candidates {
             assert!(!c.contains("target/"), "should skip target: {}", c);
-            assert!(!c.contains("node_modules/"), "should skip node_modules: {}", c);
+            assert!(
+                !c.contains("node_modules/"),
+                "should skip node_modules: {}",
+                c
+            );
         }
     }
 
@@ -341,8 +375,16 @@ mod tests {
         picker.query = "mrs".to_string();
         picker.update_filter();
         // "main.rs" matches subsequence m-r-s (via src/main.rs)
-        let names: Vec<&str> = picker.filtered.iter().map(|&i| picker.candidates[i].as_str()).collect();
-        assert!(names.iter().any(|n| n.contains("main.rs")), "should match main.rs, got: {:?}", names);
+        let names: Vec<&str> = picker
+            .filtered
+            .iter()
+            .map(|&i| picker.candidates[i].as_str())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("main.rs")),
+            "should match main.rs, got: {:?}",
+            names
+        );
     }
 
     #[test]
@@ -364,9 +406,17 @@ mod tests {
         let mut picker = FilePicker::scan(tmp.path());
         picker.query = "main".to_string();
         picker.update_filter();
-        let names: Vec<&str> = picker.filtered.iter().map(|&i| picker.candidates[i].as_str()).collect();
+        let names: Vec<&str> = picker
+            .filtered
+            .iter()
+            .map(|&i| picker.candidates[i].as_str())
+            .collect();
         assert!(!names.is_empty());
-        assert!(names[0].contains("main.rs"), "main.rs should rank first, got: {:?}", names);
+        assert!(
+            names[0].contains("main.rs"),
+            "main.rs should rank first, got: {:?}",
+            names
+        );
     }
 
     #[test]

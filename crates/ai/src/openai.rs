@@ -133,8 +133,7 @@ impl OpenAiProvider {
                         let func = call.get("function")?;
                         let name = func.get("name")?.as_str()?.to_string();
                         let args_str = func.get("arguments")?.as_str()?;
-                        let arguments =
-                            serde_json::from_str(args_str).unwrap_or(json!({}));
+                        let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
                         Some(ToolCall {
                             id,
                             name,

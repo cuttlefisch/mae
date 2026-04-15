@@ -8,7 +8,7 @@
 /// buffer. Conversation is inherently structured (roles, tool calls,
 /// results). Render it directly.
 
-/// Role of a conversation entry.
+// Role of a conversation entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConversationRole {
     User,
@@ -52,6 +52,12 @@ pub struct Conversation {
     pub input_line: String,
     pub streaming: bool,
     version: u64,
+}
+
+impl Default for Conversation {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Conversation {
@@ -276,8 +282,14 @@ mod tests {
         assert_eq!(conv.entries.len(), 4);
         assert_eq!(conv.entries[0].role, ConversationRole::User);
         assert_eq!(conv.entries[1].role, ConversationRole::Assistant);
-        assert!(matches!(conv.entries[2].role, ConversationRole::ToolCall { .. }));
-        assert!(matches!(conv.entries[3].role, ConversationRole::ToolResult { .. }));
+        assert!(matches!(
+            conv.entries[2].role,
+            ConversationRole::ToolCall { .. }
+        ));
+        assert!(matches!(
+            conv.entries[3].role,
+            ConversationRole::ToolResult { .. }
+        ));
     }
 
     #[test]

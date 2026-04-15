@@ -146,25 +146,33 @@ impl Window {
     }
 
     pub fn move_find_char(&mut self, buf: &crate::buffer::Buffer, ch: char) {
-        if let Some(col) = crate::word::find_char_forward(buf.rope(), self.cursor_row, self.cursor_col, ch) {
+        if let Some(col) =
+            crate::word::find_char_forward(buf.rope(), self.cursor_row, self.cursor_col, ch)
+        {
             self.cursor_col = col;
         }
     }
 
     pub fn move_find_char_back(&mut self, buf: &crate::buffer::Buffer, ch: char) {
-        if let Some(col) = crate::word::find_char_backward(buf.rope(), self.cursor_row, self.cursor_col, ch) {
+        if let Some(col) =
+            crate::word::find_char_backward(buf.rope(), self.cursor_row, self.cursor_col, ch)
+        {
             self.cursor_col = col;
         }
     }
 
     pub fn move_till_char(&mut self, buf: &crate::buffer::Buffer, ch: char) {
-        if let Some(col) = crate::word::find_char_forward_till(buf.rope(), self.cursor_row, self.cursor_col, ch) {
+        if let Some(col) =
+            crate::word::find_char_forward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
+        {
             self.cursor_col = col;
         }
     }
 
     pub fn move_till_char_back(&mut self, buf: &crate::buffer::Buffer, ch: char) {
-        if let Some(col) = crate::word::find_char_backward_till(buf.rope(), self.cursor_row, self.cursor_col, ch) {
+        if let Some(col) =
+            crate::word::find_char_backward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
+        {
             self.cursor_col = col;
         }
     }
@@ -440,12 +448,15 @@ impl WindowManager {
 
         // Replace the focused leaf with a split
         let old_focused = self.focused;
-        self.replace_leaf(old_focused, LayoutNode::Split {
-            direction,
-            ratio: 0.5,
-            first: Box::new(LayoutNode::Leaf(old_focused)),
-            second: Box::new(LayoutNode::Leaf(new_id)),
-        });
+        self.replace_leaf(
+            old_focused,
+            LayoutNode::Split {
+                direction,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(old_focused)),
+                second: Box::new(LayoutNode::Leaf(new_id)),
+            },
+        );
 
         Ok(new_id)
     }
@@ -602,7 +613,9 @@ impl WindowManager {
                         direction,
                         ratio,
                         first: Box::new(Self::replace_leaf_recursive(
-                            *first, target_id, replacement,
+                            *first,
+                            target_id,
+                            replacement,
                         )),
                         second,
                     }
@@ -612,7 +625,9 @@ impl WindowManager {
                         ratio,
                         first,
                         second: Box::new(Self::replace_leaf_recursive(
-                            *second, target_id, replacement,
+                            *second,
+                            target_id,
+                            replacement,
                         )),
                     }
                 }
@@ -813,7 +828,7 @@ mod tests {
         // Left gets 50% width
         assert_eq!(left.x, 0);
         assert_eq!(left.width, 60); // 120 * 0.5
-        // Right gets the other 50%
+                                    // Right gets the other 50%
         assert_eq!(right.x, 60);
         assert_eq!(right.width, 60);
         // Both full height
@@ -897,7 +912,7 @@ mod tests {
 
     #[test]
     fn scroll_half_up_moves_cursor_and_scroll() {
-        let buf = make_buffer(100);
+        let _buf = make_buffer(100);
         let mut win = Window::new(0, 0);
         win.cursor_row = 50;
         win.scroll_offset = 40;
@@ -920,7 +935,7 @@ mod tests {
 
     #[test]
     fn scroll_page_up_moves_full_page() {
-        let buf = make_buffer(100);
+        let _buf = make_buffer(100);
         let mut win = Window::new(0, 0);
         win.cursor_row = 50;
         win.scroll_offset = 40;
@@ -1005,7 +1020,7 @@ mod tests {
 
     #[test]
     fn scroll_half_up_clamps_at_start() {
-        let buf = make_buffer(100);
+        let _buf = make_buffer(100);
         let mut win = Window::new(0, 0);
         win.cursor_row = 3;
         win.scroll_offset = 2;

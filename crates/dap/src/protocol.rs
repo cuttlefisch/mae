@@ -390,9 +390,10 @@ impl DapStackFrame {
         mae_core::StackFrame {
             id: self.id,
             name: self.name.clone(),
-            source: self.source.as_ref().and_then(|s| {
-                s.path.clone().or_else(|| s.name.clone())
-            }),
+            source: self
+                .source
+                .as_ref()
+                .and_then(|s| s.path.clone().or_else(|| s.name.clone())),
             line: self.line,
             column: self.column,
         }
@@ -425,7 +426,9 @@ impl DapBreakpoint {
         mae_core::Breakpoint {
             id: self.id.unwrap_or(0),
             verified: self.verified,
-            source: self.source.as_ref()
+            source: self
+                .source
+                .as_ref()
                 .and_then(|s| s.path.clone().or_else(|| s.name.clone()))
                 .unwrap_or_default(),
             line: self.line.unwrap_or(0),

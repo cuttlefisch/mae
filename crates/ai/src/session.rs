@@ -212,10 +212,22 @@ impl AgentSession {
             for call in &response.tool_calls {
                 // shell_exec runs async on this task — no need to cross to main thread
                 if call.name == "shell_exec" {
-                    let command_arg = call.arguments.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                    debug!(tool = "shell_exec", command = command_arg, "executing shell command on AI task");
+                    let command_arg = call
+                        .arguments
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    debug!(
+                        tool = "shell_exec",
+                        command = command_arg,
+                        "executing shell command on AI task"
+                    );
                     let result = Self::execute_shell(call).await;
-                    debug!(tool = "shell_exec", success = result.success, "shell command complete");
+                    debug!(
+                        tool = "shell_exec",
+                        success = result.success,
+                        "shell command complete"
+                    );
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(result),
@@ -263,7 +275,10 @@ impl AgentSession {
             // Loop: provider sees tool results and may issue more calls
         }
 
-        warn!(max_rounds = self.max_rounds, "AI exceeded maximum tool call rounds");
+        warn!(
+            max_rounds = self.max_rounds,
+            "AI exceeded maximum tool call rounds"
+        );
         let _ = self
             .event_tx
             .send(AiEvent::Error(format!(
@@ -330,10 +345,7 @@ mod tests {
 
         tokio::spawn(session.run());
 
-        cmd_tx
-            .send(AiCommand::Prompt("hi".into()))
-            .await
-            .unwrap();
+        cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
         // Should get TextResponse then SessionComplete
         match event_rx.recv().await.unwrap() {
@@ -428,10 +440,7 @@ mod tests {
 
         tokio::spawn(session.run());
 
-        cmd_tx
-            .send(AiCommand::Prompt("hi".into()))
-            .await
-            .unwrap();
+        cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
         match event_rx.recv().await.unwrap() {
             AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
@@ -465,10 +474,7 @@ mod tests {
 
         tokio::spawn(session.run());
 
-        cmd_tx
-            .send(AiCommand::Prompt("loop".into()))
-            .await
-            .unwrap();
+        cmd_tx.send(AiCommand::Prompt("loop".into())).await.unwrap();
 
         // Drain events until we get the error
         let mut found_error = false;

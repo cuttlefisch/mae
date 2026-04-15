@@ -80,10 +80,13 @@ impl SchemeRuntime {
 
         // Register define-key: (define-key MAP KEY COMMAND)
         let s = shared.clone();
-        engine.register_fn("define-key", move |map: String, key: String, cmd: String| {
-            s.lock().unwrap().keymap_bindings.push((map, key, cmd));
-            SteelVal::Void
-        });
+        engine.register_fn(
+            "define-key",
+            move |map: String, key: String, cmd: String| {
+                s.lock().unwrap().keymap_bindings.push((map, key, cmd));
+                SteelVal::Void
+            },
+        );
 
         // Register define-command: (define-command NAME DOC SCHEME-FN-NAME)
         let s = shared.clone();
@@ -170,10 +173,8 @@ impl SchemeRuntime {
         let win = editor.window_mgr.focused_window();
         self.engine
             .register_value("*buffer-name*", SteelVal::StringV(buf.name.clone().into()));
-        self.engine.register_value(
-            "*buffer-modified?*",
-            SteelVal::BoolV(buf.modified),
-        );
+        self.engine
+            .register_value("*buffer-modified?*", SteelVal::BoolV(buf.modified));
         self.engine.register_value(
             "*buffer-line-count*",
             SteelVal::IntV(buf.line_count() as isize),
@@ -207,9 +208,7 @@ impl SchemeRuntime {
         let cmd_count = state.command_defs.len();
         for (name, doc, scheme_fn) in state.command_defs.drain(..) {
             debug!(command = %name, scheme_fn = %scheme_fn, "registering scheme command");
-            editor
-                .commands
-                .register_scheme(&name, &doc, &scheme_fn);
+            editor.commands.register_scheme(&name, &doc, &scheme_fn);
         }
 
         // Apply status message
@@ -224,7 +223,11 @@ impl SchemeRuntime {
         }
 
         if binding_count > 0 || cmd_count > 0 {
-            info!(keybindings = binding_count, commands = cmd_count, "scheme config applied to editor");
+            info!(
+                keybindings = binding_count,
+                commands = cmd_count,
+                "scheme config applied to editor"
+            );
         }
     }
 
@@ -275,7 +278,7 @@ fn steel_val_to_string(val: &SteelVal) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mae_core::{Editor, CommandSource, parse_key_seq};
+    use mae_core::{parse_key_seq, CommandSource, Editor};
 
     #[test]
     fn new_runtime_creates_successfully() {
@@ -314,10 +317,7 @@ mod tests {
 
         let keymap = editor.keymaps.get("normal").unwrap();
         let seq = parse_key_seq("Q");
-        assert_eq!(
-            keymap.lookup(&seq),
-            mae_core::LookupResult::Exact("quit")
-        );
+        assert_eq!(keymap.lookup(&seq), mae_core::LookupResult::Exact("quit"));
     }
 
     #[test]
@@ -395,7 +395,8 @@ mod tests {
         let mut rt = SchemeRuntime::new().unwrap();
         let mut editor = Editor::new();
 
-        rt.eval(r#"(define-key "normal" "SPC t t" "my-custom-cmd")"#).unwrap();
+        rt.eval(r#"(define-key "normal" "SPC t t" "my-custom-cmd")"#)
+            .unwrap();
         rt.apply_to_editor(&mut editor);
 
         let keymap = editor.keymaps.get("normal").unwrap();
@@ -438,7 +439,8 @@ mod tests {
     #[test]
     fn list_user_commands_after_define() {
         let mut rt = SchemeRuntime::new().unwrap();
-        rt.eval(r#"(define-command "greet" "Say hello" "greet-fn")"#).unwrap();
+        rt.eval(r#"(define-command "greet" "Say hello" "greet-fn")"#)
+            .unwrap();
         let cmds = rt.list_user_commands();
         assert_eq!(cmds.len(), 1);
         assert_eq!(cmds[0].0, "greet");
@@ -465,16 +467,28 @@ mod tests {
         let mut rt = SchemeRuntime::new().unwrap();
         let mut editor = Editor::new();
 
-        rt.eval(r#"
+        rt.eval(
+            r#"
             (define-key "normal" "j" "move-down")
             (define-key "normal" "k" "move-up")
             (define-key "normal" "dd" "delete-line")
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         rt.apply_to_editor(&mut editor);
 
         let km = editor.keymaps.get("normal").unwrap();
-        assert_eq!(km.lookup(&parse_key_seq("j")), mae_core::LookupResult::Exact("move-down"));
-        assert_eq!(km.lookup(&parse_key_seq("k")), mae_core::LookupResult::Exact("move-up"));
-        assert_eq!(km.lookup(&parse_key_seq("dd")), mae_core::LookupResult::Exact("delete-line"));
+        assert_eq!(
+            km.lookup(&parse_key_seq("j")),
+            mae_core::LookupResult::Exact("move-down")
+        );
+        assert_eq!(
+            km.lookup(&parse_key_seq("k")),
+            mae_core::LookupResult::Exact("move-up")
+        );
+        assert_eq!(
+            km.lookup(&parse_key_seq("dd")),
+            mae_core::LookupResult::Exact("delete-line")
+        );
     }
 }

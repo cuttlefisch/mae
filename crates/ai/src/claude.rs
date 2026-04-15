@@ -194,10 +194,7 @@ impl AgentProvider for ClaudeProvider {
         let response = self
             .client
             .post(url)
-            .header(
-                "x-api-key",
-                self.config.api_key.as_deref().unwrap_or(""),
-            )
+            .header("x-api-key", self.config.api_key.as_deref().unwrap_or(""))
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)

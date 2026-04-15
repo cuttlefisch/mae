@@ -80,7 +80,12 @@ pub fn word_start_backward(rope: &Rope, pos: usize) -> usize {
     p -= 1;
 
     // Skip whitespace/newlines backward
-    while p > 0 && matches!(classify(rope.char(p)), CharClass::Whitespace | CharClass::Newline) {
+    while p > 0
+        && matches!(
+            classify(rope.char(p)),
+            CharClass::Whitespace | CharClass::Newline
+        )
+    {
         p -= 1;
     }
 
@@ -116,7 +121,12 @@ pub fn word_end_forward(rope: &Rope, pos: usize) -> usize {
     }
 
     // Skip whitespace/newlines
-    while p < len && matches!(classify(rope.char(p)), CharClass::Whitespace | CharClass::Newline) {
+    while p < len
+        && matches!(
+            classify(rope.char(p)),
+            CharClass::Whitespace | CharClass::Newline
+        )
+    {
         p += 1;
     }
 
@@ -176,7 +186,12 @@ pub fn big_word_start_backward(rope: &Rope, pos: usize) -> usize {
     let mut p = pos - 1;
 
     // Skip whitespace/newlines backward
-    while p > 0 && matches!(classify(rope.char(p)), CharClass::Whitespace | CharClass::Newline) {
+    while p > 0
+        && matches!(
+            classify(rope.char(p)),
+            CharClass::Whitespace | CharClass::Newline
+        )
+    {
         p -= 1;
     }
 
@@ -211,7 +226,12 @@ pub fn big_word_end_forward(rope: &Rope, pos: usize) -> usize {
     }
 
     // Skip whitespace/newlines
-    while p < len && matches!(classify(rope.char(p)), CharClass::Whitespace | CharClass::Newline) {
+    while p < len
+        && matches!(
+            classify(rope.char(p)),
+            CharClass::Whitespace | CharClass::Newline
+        )
+    {
         p += 1;
     }
 
@@ -246,12 +266,7 @@ pub fn find_char_forward(rope: &Rope, line: usize, col: usize, target: char) -> 
         line_len
     };
 
-    for c in (col + 1)..end {
-        if line_slice.char(c) == target {
-            return Some(c);
-        }
-    }
-    None
+    ((col + 1)..end).find(|&c| line_slice.char(c) == target)
 }
 
 /// vi `F` — find char backward on current line (inclusive).
@@ -265,12 +280,9 @@ pub fn find_char_backward(rope: &Rope, line: usize, col: usize, target: char) ->
     }
 
     let search_end = col.min(line_slice.len_chars());
-    for c in (0..search_end).rev() {
-        if line_slice.char(c) == target {
-            return Some(c);
-        }
-    }
-    None
+    (0..search_end)
+        .rev()
+        .find(|&c| line_slice.char(c) == target)
 }
 
 /// vi `t` — find char forward, stop one before (till).
@@ -279,7 +291,12 @@ pub fn find_char_forward_till(rope: &Rope, line: usize, col: usize, target: char
 }
 
 /// vi `T` — find char backward, stop one after (till).
-pub fn find_char_backward_till(rope: &Rope, line: usize, col: usize, target: char) -> Option<usize> {
+pub fn find_char_backward_till(
+    rope: &Rope,
+    line: usize,
+    col: usize,
+    target: char,
+) -> Option<usize> {
     find_char_backward(rope, line, col, target).map(|c| (c + 1).min(col))
 }
 
@@ -495,7 +512,7 @@ mod tests {
         // From 'h', skip 'hello', hit newline → stop at newline
         let pos = word_start_forward(&rope, 0);
         assert_eq!(pos, 5); // lands on '\n'
-        // From newline, advance past it
+                            // From newline, advance past it
         let pos2 = word_start_forward(&rope, 5);
         assert_eq!(pos2, 6); // lands on 'w'
     }
@@ -537,8 +554,8 @@ mod tests {
     fn b_punct_to_word() {
         let rope = Rope::from_str("hello.world");
         assert_eq!(word_start_backward(&rope, 6), 5); // from 'w' → '.'? No, '.' is punct, 'w' is word → back to 'w' at 6
-        // Actually from pos 6 ('w'), back one is '.', which is punct, skip punct → just '.' → back to start of punct = 5
-        // Then from 5 (which is '.'), go back: that's after the word 'hello'
+                                                      // Actually from pos 6 ('w'), back one is '.', which is punct, skip punct → just '.' → back to start of punct = 5
+                                                      // Then from 5 (which is '.'), go back: that's after the word 'hello'
     }
 
     // --- word_end_forward (e) ---

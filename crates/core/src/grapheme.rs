@@ -45,7 +45,7 @@ pub fn grapheme_to_char_offset(s: &str, grapheme_idx: usize) -> usize {
 pub fn display_width_up_to_grapheme(s: &str, grapheme_idx: usize) -> usize {
     s.graphemes(true)
         .take(grapheme_idx)
-        .map(|g| UnicodeWidthStr::width(g))
+        .map(UnicodeWidthStr::width)
         .sum()
 }
 
@@ -102,7 +102,7 @@ mod tests {
     fn mixed_ascii_cjk_emoji() {
         let s = "hi你好👋";
         assert_eq!(grapheme_count(s), 5); // h, i, 你, 好, 👋
-        // h=1, i=1, 你=2, 好=2, 👋=2 = 8
+                                          // h=1, i=1, 你=2, 好=2, 👋=2 = 8
         assert_eq!(display_width(s), 8);
     }
 

@@ -33,6 +33,12 @@ pub struct CommandRegistry {
     commands: HashMap<String, Command>,
 }
 
+impl Default for CommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandRegistry {
     pub fn new() -> Self {
         CommandRegistry {
@@ -121,7 +127,10 @@ impl CommandRegistry {
         reg.register_builtin("move-word-backward", "Move to start of previous word (b)");
         reg.register_builtin("move-word-end", "Move to end of word (e)");
         reg.register_builtin("move-big-word-forward", "Move to start of next WORD (W)");
-        reg.register_builtin("move-big-word-backward", "Move to start of previous WORD (B)");
+        reg.register_builtin(
+            "move-big-word-backward",
+            "Move to start of previous WORD (B)",
+        );
         reg.register_builtin("move-big-word-end", "Move to end of WORD (E)");
         reg.register_builtin("move-matching-bracket", "Jump to matching bracket (%)");
         reg.register_builtin("move-paragraph-forward", "Move to next paragraph (})");
@@ -142,8 +151,14 @@ impl CommandRegistry {
 
         // Screen-relative cursor
         reg.register_builtin("move-screen-top", "Move cursor to top visible line (H)");
-        reg.register_builtin("move-screen-middle", "Move cursor to middle visible line (M)");
-        reg.register_builtin("move-screen-bottom", "Move cursor to bottom visible line (L)");
+        reg.register_builtin(
+            "move-screen-middle",
+            "Move cursor to middle visible line (M)",
+        );
+        reg.register_builtin(
+            "move-screen-bottom",
+            "Move cursor to bottom visible line (L)",
+        );
 
         // Editing
         reg.register_builtin("delete-char-forward", "Delete character under cursor");
@@ -152,8 +167,14 @@ impl CommandRegistry {
         reg.register_builtin("delete-word-forward", "Delete to next word start (dw)");
         reg.register_builtin("delete-to-line-end", "Delete to end of line (d$)");
         reg.register_builtin("delete-to-line-start", "Delete to start of line (d0)");
-        reg.register_builtin("open-line-below", "Open new line below and enter insert mode");
-        reg.register_builtin("open-line-above", "Open new line above and enter insert mode");
+        reg.register_builtin(
+            "open-line-below",
+            "Open new line below and enter insert mode",
+        );
+        reg.register_builtin(
+            "open-line-above",
+            "Open new line above and enter insert mode",
+        );
         // Change operators
         reg.register_builtin("change-line", "Change entire line (cc)");
         reg.register_builtin("change-word-forward", "Change to next word (cw)");
@@ -238,7 +259,10 @@ impl CommandRegistry {
         reg.register_builtin("debug-step-over", "Step over (next line)");
         reg.register_builtin("debug-step-into", "Step into function");
         reg.register_builtin("debug-step-out", "Step out of function");
-        reg.register_builtin("debug-toggle-breakpoint", "Toggle breakpoint on current line");
+        reg.register_builtin(
+            "debug-toggle-breakpoint",
+            "Toggle breakpoint on current line",
+        );
         reg.register_builtin("debug-inspect", "Inspect variable or evaluate expression");
 
         reg

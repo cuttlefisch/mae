@@ -92,9 +92,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> DapTransport<R, W> {
             // Ignore other headers (e.g. Content-Type)
         }
 
-        let length = content_length.ok_or_else(|| {
-            TransportError::InvalidHeader("missing Content-Length header".into())
-        })?;
+        let length = content_length
+            .ok_or_else(|| TransportError::InvalidHeader("missing Content-Length header".into()))?;
 
         // Read exactly `length` bytes
         let mut body = vec![0u8; length];

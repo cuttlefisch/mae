@@ -14,15 +14,24 @@ pub mod word;
 
 pub use buffer::{Buffer, BufferKind};
 pub use commands::{Command, CommandRegistry, CommandSource};
-pub use debug::{Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable};
 pub use conversation::Conversation;
+pub use debug::{
+    Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
+};
 pub use editor::{EditRecord, Editor};
-pub use keymap::{Key, KeyPress, Keymap, LookupResult, WhichKeyEntry, parse_key_seq, parse_key_seq_spaced};
-pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
-pub use theme::{BundledResolver, NamedColor, Theme, ThemeColor, ThemeError, ThemeResolver, ThemeStyle, bundled_theme_names, default_theme};
-pub use search::{SearchDirection, SearchMatch, SearchState};
 pub use file_picker::FilePicker;
-pub use window::{Direction, LayoutNode, Rect as WinRect, SplitDirection, Window, WindowId, WindowManager};
+pub use keymap::{
+    parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
+};
+pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
+pub use search::{SearchDirection, SearchMatch, SearchState};
+pub use theme::{
+    bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,
+    ThemeResolver, ThemeStyle,
+};
+pub use window::{
+    Direction, LayoutNode, Rect as WinRect, SplitDirection, Window, WindowId, WindowManager,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisualType {

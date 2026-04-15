@@ -207,8 +207,11 @@ pub fn classify_command_permission(name: &str) -> PermissionTier {
     match name {
         // Movement and read-only state changes
         n if n.starts_with("move-") => PermissionTier::ReadOnly,
-        "enter-normal-mode" | "enter-insert-mode" | "enter-command-mode"
-        | "enter-insert-mode-after" | "enter-insert-mode-eol" => PermissionTier::ReadOnly,
+        "enter-normal-mode"
+        | "enter-insert-mode"
+        | "enter-command-mode"
+        | "enter-insert-mode-after"
+        | "enter-insert-mode-eol" => PermissionTier::ReadOnly,
 
         // Editing commands
         n if n.starts_with("delete-") || n.starts_with("open-line-") => PermissionTier::Write,
@@ -273,7 +276,9 @@ mod tests {
         // All names should match [a-z_]+
         for tool in &tools {
             assert!(
-                tool.name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                tool.name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
                 "bad tool name: {}",
                 tool.name
             );
@@ -307,22 +312,40 @@ mod tests {
 
     #[test]
     fn classify_movement_is_readonly() {
-        assert_eq!(classify_command_permission("move-up"), PermissionTier::ReadOnly);
-        assert_eq!(classify_command_permission("move-down"), PermissionTier::ReadOnly);
-        assert_eq!(classify_command_permission("move-to-line-start"), PermissionTier::ReadOnly);
+        assert_eq!(
+            classify_command_permission("move-up"),
+            PermissionTier::ReadOnly
+        );
+        assert_eq!(
+            classify_command_permission("move-down"),
+            PermissionTier::ReadOnly
+        );
+        assert_eq!(
+            classify_command_permission("move-to-line-start"),
+            PermissionTier::ReadOnly
+        );
     }
 
     #[test]
     fn classify_editing_is_write() {
-        assert_eq!(classify_command_permission("delete-line"), PermissionTier::Write);
+        assert_eq!(
+            classify_command_permission("delete-line"),
+            PermissionTier::Write
+        );
         assert_eq!(classify_command_permission("undo"), PermissionTier::Write);
         assert_eq!(classify_command_permission("save"), PermissionTier::Write);
     }
 
     #[test]
     fn classify_quit_is_privileged() {
-        assert_eq!(classify_command_permission("quit"), PermissionTier::Privileged);
-        assert_eq!(classify_command_permission("force-quit"), PermissionTier::Privileged);
+        assert_eq!(
+            classify_command_permission("quit"),
+            PermissionTier::Privileged
+        );
+        assert_eq!(
+            classify_command_permission("force-quit"),
+            PermissionTier::Privileged
+        );
     }
 
     #[test]

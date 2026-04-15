@@ -6,12 +6,12 @@ use regex::Regex;
 use crate::buffer::Buffer;
 use crate::commands::CommandRegistry;
 use crate::debug::{DebugState, DebugTarget};
-use crate::keymap::{parse_key_seq, parse_key_seq_spaced, Key, Keymap, KeyPress};
+use crate::file_picker::FilePicker;
+use crate::keymap::{parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap};
 use crate::messages::MessageLog;
 use crate::search::{self, SearchDirection, SearchState};
-use crate::theme::{Theme, default_theme, bundled_theme_names, BundledResolver};
-use crate::window::{Direction, SplitDirection, WindowManager, Rect};
-use crate::file_picker::FilePicker;
+use crate::theme::{bundled_theme_names, default_theme, BundledResolver, Theme};
+use crate::window::{Direction, Rect, SplitDirection, WindowManager};
 use crate::{Mode, VisualType};
 
 /// Record of a repeatable edit for dot-repeat (`.`).
@@ -79,6 +79,12 @@ pub struct Editor {
     pub count_prefix: Option<usize>,
     /// Count saved for pending char-argument commands (f/F/t/T/r + char).
     pub pending_char_count: usize,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Editor {
@@ -481,13 +487,17 @@ impl Editor {
             "move-big-word-forward" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_big_word_forward(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_big_word_forward(buf);
                 }
             }
             "move-big-word-backward" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_big_word_backward(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_big_word_backward(buf);
                 }
             }
             "move-big-word-end" => {
@@ -498,18 +508,24 @@ impl Editor {
             }
             "move-matching-bracket" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                self.window_mgr.focused_window_mut().move_matching_bracket(buf);
+                self.window_mgr
+                    .focused_window_mut()
+                    .move_matching_bracket(buf);
             }
             "move-paragraph-forward" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_paragraph_forward(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_paragraph_forward(buf);
                 }
             }
             "move-paragraph-backward" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_paragraph_backward(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_paragraph_backward(buf);
                 }
             }
             "find-char-forward-await" => {
@@ -540,7 +556,9 @@ impl Editor {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let vh = self.viewport_height;
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().scroll_half_down(buf, vh);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .scroll_half_down(buf, vh);
                 }
             }
             "scroll-page-up" => {
@@ -553,7 +571,9 @@ impl Editor {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let vh = self.viewport_height;
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().scroll_page_down(buf, vh);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .scroll_page_down(buf, vh);
                 }
             }
             "scroll-center" => {
@@ -565,7 +585,9 @@ impl Editor {
             }
             "scroll-bottom" => {
                 let vh = self.viewport_height;
-                self.window_mgr.focused_window_mut().scroll_cursor_bottom(vh);
+                self.window_mgr
+                    .focused_window_mut()
+                    .scroll_cursor_bottom(vh);
             }
             // Screen-relative cursor
             "move-screen-top" => {
@@ -573,12 +595,16 @@ impl Editor {
             }
             "move-screen-middle" => {
                 let vh = self.viewport_height;
-                self.window_mgr.focused_window_mut().move_to_screen_middle(vh);
+                self.window_mgr
+                    .focused_window_mut()
+                    .move_to_screen_middle(vh);
             }
             "move-screen-bottom" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let vh = self.viewport_height;
-                self.window_mgr.focused_window_mut().move_to_screen_bottom(buf, vh);
+                self.window_mgr
+                    .focused_window_mut()
+                    .move_to_screen_bottom(buf, vh);
             }
 
             // Editing
@@ -668,7 +694,11 @@ impl Editor {
                 if !yanked.is_empty() {
                     self.registers.insert('"', yanked);
                     let yanked_count = end_row - start_row;
-                    self.set_status(format!("{} line{} yanked", yanked_count, if yanked_count == 1 { "" } else { "s" }));
+                    self.set_status(format!(
+                        "{} line{} yanked",
+                        yanked_count,
+                        if yanked_count == 1 { "" } else { "s" }
+                    ));
                 }
             }
             "yank-word-forward" => {
@@ -712,7 +742,8 @@ impl Editor {
                             // Insert on line below
                             let win = self.window_mgr.focused_window();
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
-                            let line_len = self.buffers[idx].rope().line(win.cursor_row).len_chars();
+                            let line_len =
+                                self.buffers[idx].rope().line(win.cursor_row).len_chars();
                             let insert_pos = line_start + line_len;
                             self.buffers[idx].insert_text_at(insert_pos, &text);
                             let win = self.window_mgr.focused_window_mut();
@@ -720,7 +751,8 @@ impl Editor {
                             win.cursor_col = 0;
                         } else {
                             let win = self.window_mgr.focused_window();
-                            let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+                            let offset =
+                                self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
                             let insert_pos = (offset + 1).min(self.buffers[idx].rope().len_chars());
                             self.buffers[idx].insert_text_at(insert_pos, &text);
                             // Move cursor to end of pasted text
@@ -750,7 +782,8 @@ impl Editor {
                             win.cursor_col = 0;
                         } else {
                             let win = self.window_mgr.focused_window();
-                            let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+                            let offset =
+                                self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
                             self.buffers[idx].insert_text_at(offset, &text);
                             let end_pos = offset + text.chars().count() - 1;
                             let rope = self.buffers[idx].rope();
@@ -821,7 +854,10 @@ impl Editor {
             "split-vertical" => {
                 let buf_idx = self.active_buffer_idx();
                 let area = self.default_area();
-                match self.window_mgr.split(SplitDirection::Vertical, buf_idx, area) {
+                match self
+                    .window_mgr
+                    .split(SplitDirection::Vertical, buf_idx, area)
+                {
                     Ok(_) => {}
                     Err(e) => self.set_status(e),
                 }
@@ -829,13 +865,20 @@ impl Editor {
             "split-horizontal" => {
                 let buf_idx = self.active_buffer_idx();
                 let area = self.default_area();
-                match self.window_mgr.split(SplitDirection::Horizontal, buf_idx, area) {
+                match self
+                    .window_mgr
+                    .split(SplitDirection::Horizontal, buf_idx, area)
+                {
                     Ok(_) => {}
                     Err(e) => self.set_status(e),
                 }
             }
             "close-window" => {
-                if self.window_mgr.close(self.window_mgr.focused_id()).is_none() {
+                if self
+                    .window_mgr
+                    .close(self.window_mgr.focused_id())
+                    .is_none()
+                {
                     self.set_status("Cannot close last window");
                 }
             }
@@ -915,11 +958,20 @@ impl Editor {
                 }
             }
             "switch-buffer" => {
-                let list: Vec<String> = self.buffers.iter().enumerate().map(|(i, b)| {
-                    let modified = if b.modified { " [+]" } else { "" };
-                    let current = if i == self.active_buffer_idx() { ">" } else { " " };
-                    format!("{}{} {}{}", current, i, b.name, modified)
-                }).collect();
+                let list: Vec<String> = self
+                    .buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| {
+                        let modified = if b.modified { " [+]" } else { "" };
+                        let current = if i == self.active_buffer_idx() {
+                            ">"
+                        } else {
+                            " "
+                        };
+                        format!("{}{} {}{}", current, i, b.name, modified)
+                    })
+                    .collect();
                 self.set_status(list.join("  |  "));
             }
             "find-file" => {
@@ -934,7 +986,11 @@ impl Editor {
             "ai-cancel" => {
                 // Mark streaming as stopped in conversation buffer.
                 // Actual channel cancel is handled by the binary (AiCommand::Cancel).
-                if let Some(conv) = self.buffers.iter_mut().find_map(|b| b.conversation.as_mut()) {
+                if let Some(conv) = self
+                    .buffers
+                    .iter_mut()
+                    .find_map(|b| b.conversation.as_mut())
+                {
                     if conv.streaming {
                         conv.streaming = false;
                         conv.push_system("[cancelled]");
@@ -985,7 +1041,9 @@ impl Editor {
                     let source = self.buffers[buf_idx].name.clone();
                     let state = self.debug_state.as_mut().unwrap();
                     // Toggle: remove if exists at this line, else add
-                    let existing = state.breakpoints.get(&source)
+                    let existing = state
+                        .breakpoints
+                        .get(&source)
                         .and_then(|bps| bps.iter().find(|b| b.line == line).map(|b| b.id));
                     if let Some(id) = existing {
                         state.remove_breakpoint(id);
@@ -1007,20 +1065,16 @@ impl Editor {
             }
 
             // Visual mode
-            "enter-visual-char" => {
-                match self.mode {
-                    Mode::Visual(VisualType::Char) => self.mode = Mode::Normal,
-                    Mode::Visual(VisualType::Line) => self.mode = Mode::Visual(VisualType::Char),
-                    _ => self.enter_visual_mode(VisualType::Char),
-                }
-            }
-            "enter-visual-line" => {
-                match self.mode {
-                    Mode::Visual(VisualType::Line) => self.mode = Mode::Normal,
-                    Mode::Visual(VisualType::Char) => self.mode = Mode::Visual(VisualType::Line),
-                    _ => self.enter_visual_mode(VisualType::Line),
-                }
-            }
+            "enter-visual-char" => match self.mode {
+                Mode::Visual(VisualType::Char) => self.mode = Mode::Normal,
+                Mode::Visual(VisualType::Line) => self.mode = Mode::Visual(VisualType::Char),
+                _ => self.enter_visual_mode(VisualType::Char),
+            },
+            "enter-visual-line" => match self.mode {
+                Mode::Visual(VisualType::Line) => self.mode = Mode::Normal,
+                Mode::Visual(VisualType::Char) => self.mode = Mode::Visual(VisualType::Line),
+                _ => self.enter_visual_mode(VisualType::Line),
+            },
             "visual-delete" => self.visual_delete(),
             "visual-yank" => self.visual_yank(),
             "visual-change" => self.visual_change(),
@@ -1230,28 +1284,25 @@ impl Editor {
 
     /// Dispatch a char-argument motion (f/F/t/T/r + char). Returns true if handled.
     pub fn dispatch_char_motion(&mut self, command: &str, ch: char) -> bool {
-        match command {
-            "replace-char" => {
-                let idx = self.active_buffer_idx();
-                let win = self.window_mgr.focused_window();
-                let row = win.cursor_row;
-                let col = win.cursor_col;
-                let line_len = self.buffers[idx].line_len(row);
-                if col < line_len {
-                    let offset = self.buffers[idx].char_offset_at(row, col);
-                    self.buffers[idx].delete_range(offset, offset + 1);
-                    self.buffers[idx].insert_text_at(offset, &ch.to_string());
-                    // Record for dot-repeat
-                    self.last_edit = Some(EditRecord {
-                        command: "replace-char".to_string(),
-                        inserted_text: None,
-                        char_arg: Some(ch),
-                        count: None,
-                    });
-                }
-                return true;
+        if command == "replace-char" {
+            let idx = self.active_buffer_idx();
+            let win = self.window_mgr.focused_window();
+            let row = win.cursor_row;
+            let col = win.cursor_col;
+            let line_len = self.buffers[idx].line_len(row);
+            if col < line_len {
+                let offset = self.buffers[idx].char_offset_at(row, col);
+                self.buffers[idx].delete_range(offset, offset + 1);
+                self.buffers[idx].insert_text_at(offset, &ch.to_string());
+                // Record for dot-repeat
+                self.last_edit = Some(EditRecord {
+                    command: "replace-char".to_string(),
+                    inserted_text: None,
+                    char_arg: Some(ch),
+                    count: None,
+                });
             }
-            _ => {}
+            return true;
         }
 
         let repeat = self.pending_char_count;
@@ -1259,10 +1310,26 @@ impl Editor {
         let buf = &self.buffers[self.active_buffer_idx()];
         let win = self.window_mgr.focused_window_mut();
         match command {
-            "find-char-forward" => { for _ in 0..repeat { win.move_find_char(buf, ch); } }
-            "find-char-backward" => { for _ in 0..repeat { win.move_find_char_back(buf, ch); } }
-            "till-char-forward" => { for _ in 0..repeat { win.move_till_char(buf, ch); } }
-            "till-char-backward" => { for _ in 0..repeat { win.move_till_char_back(buf, ch); } }
+            "find-char-forward" => {
+                for _ in 0..repeat {
+                    win.move_find_char(buf, ch);
+                }
+            }
+            "find-char-backward" => {
+                for _ in 0..repeat {
+                    win.move_find_char_back(buf, ch);
+                }
+            }
+            "till-char-forward" => {
+                for _ in 0..repeat {
+                    win.move_till_char(buf, ch);
+                }
+            }
+            "till-char-backward" => {
+                for _ in 0..repeat {
+                    win.move_till_char_back(buf, ch);
+                }
+            }
             _ => return false,
         }
         true
@@ -1281,7 +1348,10 @@ impl Editor {
     /// Called when exiting insert mode to finalize the dot-repeat record.
     /// Captures any text that was typed during the insert session.
     pub fn finalize_insert_for_repeat(&mut self) {
-        if let (Some(cmd), Some(start_offset)) = (self.insert_initiated_by.take(), self.insert_start_offset.take()) {
+        if let (Some(cmd), Some(start_offset)) = (
+            self.insert_initiated_by.take(),
+            self.insert_start_offset.take(),
+        ) {
             let idx = self.active_buffer_idx();
             let win = self.window_mgr.focused_window();
             let current_offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
@@ -1339,7 +1409,10 @@ impl Editor {
                     self.dispatch_char_motion("replace-char", ch);
                 }
             }
-            "change-line" | "change-word-forward" | "change-to-line-end" | "change-to-line-start" => {
+            "change-line"
+            | "change-word-forward"
+            | "change-to-line-end"
+            | "change-to-line-start" => {
                 // Re-dispatch the change command (which enters insert mode)
                 self.dispatch_builtin(&record.command);
                 // Now we need to insert the recorded text and return to normal mode
@@ -1351,7 +1424,8 @@ impl Editor {
                     // Move cursor past inserted text
                     let new_offset = offset + text.chars().count();
                     let rope = self.buffers[idx].rope();
-                    let new_row = rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
+                    let new_row =
+                        rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
                     let line_start = rope.line_to_char(new_row);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = new_row;
@@ -1374,7 +1448,8 @@ impl Editor {
                     self.buffers[idx].insert_text_at(offset, text);
                     let new_offset = offset + text.chars().count();
                     let rope = self.buffers[idx].rope();
-                    let new_row = rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
+                    let new_row =
+                        rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
                     let line_start = rope.line_to_char(new_row);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = new_row;
@@ -1561,7 +1636,11 @@ impl Editor {
 
             // Show "N of M" status
             let matches = &self.search_state.matches;
-            let idx = matches.iter().position(|sm| sm.start == m.start).map(|i| i + 1).unwrap_or(0);
+            let idx = matches
+                .iter()
+                .position(|sm| sm.start == m.start)
+                .map(|i| i + 1)
+                .unwrap_or(0);
             self.set_status(format!("[{}/{}]", idx, matches.len()));
         } else {
             self.set_status("Pattern not found");
@@ -1631,7 +1710,8 @@ impl Editor {
             let line_text = self.buffers[idx].line_text(line_idx);
             let line_content = line_text.trim_end_matches('\n');
 
-            let (new_text, count) = search::substitute_line(line_content, &re, &sub.replacement, sub.global);
+            let (new_text, count) =
+                search::substitute_line(line_content, &re, &sub.replacement, sub.global);
             if count > 0 {
                 total_subs += count;
                 lines_changed += 1;
@@ -1642,9 +1722,13 @@ impl Editor {
         }
 
         if total_subs > 0 {
-            self.set_status(format!("{} substitution{} on {} line{}",
-                total_subs, if total_subs == 1 { "" } else { "s" },
-                lines_changed, if lines_changed == 1 { "" } else { "s" }));
+            self.set_status(format!(
+                "{} substitution{} on {} line{}",
+                total_subs,
+                if total_subs == 1 { "" } else { "s" },
+                lines_changed,
+                if lines_changed == 1 { "" } else { "s" }
+            ));
             self.recompute_search_matches();
         } else {
             self.set_status("Pattern not found");
@@ -1683,7 +1767,10 @@ impl Editor {
         if names.is_empty() {
             return;
         }
-        let current_idx = names.iter().position(|n| n == &self.theme.name).unwrap_or(0);
+        let current_idx = names
+            .iter()
+            .position(|n| n == &self.theme.name)
+            .unwrap_or(0);
         let next_idx = (current_idx + 1) % names.len();
         self.set_theme_by_name(&names[next_idx]);
     }
@@ -1692,7 +1779,10 @@ impl Editor {
     /// Uses `BufferKind::Messages` — the renderer reads live from `editor.message_log`.
     /// No rope copy needed; the buffer is just a view marker.
     pub fn open_messages_buffer(&mut self) {
-        let existing_idx = self.buffers.iter().position(|b| b.kind == crate::buffer::BufferKind::Messages);
+        let existing_idx = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Messages);
 
         if let Some(idx) = existing_idx {
             self.window_mgr.focused_window_mut().buffer_idx = idx;
@@ -1707,7 +1797,10 @@ impl Editor {
 
     /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.
     pub fn open_conversation_buffer(&mut self) {
-        let conv_idx = self.buffers.iter().position(|b| b.kind == crate::buffer::BufferKind::Conversation);
+        let conv_idx = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Conversation);
         let idx = if let Some(i) = conv_idx {
             i
         } else {
@@ -1722,7 +1815,7 @@ impl Editor {
     /// current Rust state. Scheme state is populated separately when the
     /// binary calls `populate_scheme_debug_state()` (since core doesn't own SchemeRuntime).
     pub fn start_self_debug(&mut self) {
-        use crate::debug::{StackFrame, Scope, Variable};
+        use crate::debug::{Scope, StackFrame, Variable};
 
         let mut state = DebugState::new_self_debug();
 
@@ -1760,44 +1853,153 @@ impl Editor {
         // Editor State variables
         let buf = self.active_buffer();
         let win = self.window_mgr.focused_window();
-        state.variables.insert("Editor State".into(), vec![
-            Variable { name: "mode".into(), value: format!("{:?}", self.mode), var_type: Some("Mode".into()), variables_reference: 0 },
-            Variable { name: "running".into(), value: format!("{}", self.running), var_type: Some("bool".into()), variables_reference: 0 },
-            Variable { name: "status_msg".into(), value: self.status_msg.clone(), var_type: Some("String".into()), variables_reference: 0 },
-            Variable { name: "command_line".into(), value: self.command_line.clone(), var_type: Some("String".into()), variables_reference: 0 },
-            Variable { name: "buffer_count".into(), value: format!("{}", self.buffers.len()), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "window_count".into(), value: format!("{}", self.window_mgr.window_count()), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "theme".into(), value: self.theme.name.clone(), var_type: Some("Theme".into()), variables_reference: 0 },
-            Variable { name: "command_count".into(), value: format!("{}", self.commands.len()), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "message_log_entries".into(), value: format!("{}", self.message_log.len()), var_type: Some("usize".into()), variables_reference: 0 },
-        ]);
+        state.variables.insert(
+            "Editor State".into(),
+            vec![
+                Variable {
+                    name: "mode".into(),
+                    value: format!("{:?}", self.mode),
+                    var_type: Some("Mode".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "running".into(),
+                    value: format!("{}", self.running),
+                    var_type: Some("bool".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "status_msg".into(),
+                    value: self.status_msg.clone(),
+                    var_type: Some("String".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "command_line".into(),
+                    value: self.command_line.clone(),
+                    var_type: Some("String".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "buffer_count".into(),
+                    value: format!("{}", self.buffers.len()),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "window_count".into(),
+                    value: format!("{}", self.window_mgr.window_count()),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "theme".into(),
+                    value: self.theme.name.clone(),
+                    var_type: Some("Theme".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "command_count".into(),
+                    value: format!("{}", self.commands.len()),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "message_log_entries".into(),
+                    value: format!("{}", self.message_log.len()),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+            ],
+        );
 
         // Active Buffer variables
-        state.variables.insert("Active Buffer".into(), vec![
-            Variable { name: "name".into(), value: buf.name.clone(), var_type: Some("String".into()), variables_reference: 0 },
-            Variable { name: "kind".into(), value: format!("{:?}", buf.kind), var_type: Some("BufferKind".into()), variables_reference: 0 },
-            Variable { name: "modified".into(), value: format!("{}", buf.modified), var_type: Some("bool".into()), variables_reference: 0 },
-            Variable { name: "line_count".into(), value: format!("{}", buf.line_count()), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "file_path".into(), value: buf.file_path().map_or("None".to_string(), |p| p.display().to_string()), var_type: Some("Option<PathBuf>".into()), variables_reference: 0 },
-        ]);
+        state.variables.insert(
+            "Active Buffer".into(),
+            vec![
+                Variable {
+                    name: "name".into(),
+                    value: buf.name.clone(),
+                    var_type: Some("String".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "kind".into(),
+                    value: format!("{:?}", buf.kind),
+                    var_type: Some("BufferKind".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "modified".into(),
+                    value: format!("{}", buf.modified),
+                    var_type: Some("bool".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "line_count".into(),
+                    value: format!("{}", buf.line_count()),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "file_path".into(),
+                    value: buf
+                        .file_path()
+                        .map_or("None".to_string(), |p| p.display().to_string()),
+                    var_type: Some("Option<PathBuf>".into()),
+                    variables_reference: 0,
+                },
+            ],
+        );
 
         // Active Window variables
-        state.variables.insert("Active Window".into(), vec![
-            Variable { name: "cursor_row".into(), value: format!("{}", win.cursor_row), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "cursor_col".into(), value: format!("{}", win.cursor_col), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "scroll_offset".into(), value: format!("{}", win.scroll_offset), var_type: Some("usize".into()), variables_reference: 0 },
-            Variable { name: "buffer_idx".into(), value: format!("{}", win.buffer_idx), var_type: Some("usize".into()), variables_reference: 0 },
-        ]);
+        state.variables.insert(
+            "Active Window".into(),
+            vec![
+                Variable {
+                    name: "cursor_row".into(),
+                    value: format!("{}", win.cursor_row),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "cursor_col".into(),
+                    value: format!("{}", win.cursor_col),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "scroll_offset".into(),
+                    value: format!("{}", win.scroll_offset),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "buffer_idx".into(),
+                    value: format!("{}", win.buffer_idx),
+                    var_type: Some("usize".into()),
+                    variables_reference: 0,
+                },
+            ],
+        );
 
         // All Buffers (expandable summary)
-        let all_bufs: Vec<Variable> = self.buffers.iter().enumerate().map(|(i, b)| {
-            Variable {
+        let all_bufs: Vec<Variable> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .map(|(i, b)| Variable {
                 name: format!("[{}]", i),
-                value: format!("{} ({}{})", b.name, format!("{:?}", b.kind), if b.modified { ", modified" } else { "" }),
+                value: format!(
+                    "{} ({:?}{})",
+                    b.name,
+                    b.kind,
+                    if b.modified { ", modified" } else { "" }
+                ),
                 var_type: Some("Buffer".into()),
                 variables_reference: 0,
-            }
-        }).collect();
+            })
+            .collect();
         state.variables.insert("All Buffers".into(), all_bufs);
 
         // Mark as stopped (self-debug is always "stopped" — it's a snapshot)
@@ -2050,14 +2252,34 @@ mod tests {
     fn all_leader_targets_registered() {
         let editor = Editor::new();
         let leader_targets = [
-            "command-palette", "save", "kill-buffer", "next-buffer",
-            "prev-buffer", "find-file", "split-vertical", "split-horizontal",
-            "close-window", "focus-left", "focus-down", "focus-up",
-            "focus-right", "ai-prompt", "ai-cancel", "describe-key",
-            "describe-command", "quit", "force-quit",
-            "debug-self", "debug-start", "debug-stop", "debug-continue",
-            "debug-step-over", "debug-step-into", "debug-step-out",
-            "debug-toggle-breakpoint", "debug-inspect",
+            "command-palette",
+            "save",
+            "kill-buffer",
+            "next-buffer",
+            "prev-buffer",
+            "find-file",
+            "split-vertical",
+            "split-horizontal",
+            "close-window",
+            "focus-left",
+            "focus-down",
+            "focus-up",
+            "focus-right",
+            "ai-prompt",
+            "ai-cancel",
+            "describe-key",
+            "describe-command",
+            "quit",
+            "force-quit",
+            "debug-self",
+            "debug-start",
+            "debug-stop",
+            "debug-continue",
+            "debug-step-over",
+            "debug-step-into",
+            "debug-step-out",
+            "debug-toggle-breakpoint",
+            "debug-inspect",
         ];
         for target in &leader_targets {
             assert!(
@@ -2076,10 +2298,7 @@ mod tests {
         // C-w v should be 2 keys (Ctrl-w then v), not 3
         let seq = parse_key_seq_spaced("C-w v");
         assert_eq!(seq.len(), 2);
-        assert_eq!(
-            normal.lookup(&seq),
-            LookupResult::Exact("split-vertical")
-        );
+        assert_eq!(normal.lookup(&seq), LookupResult::Exact("split-vertical"));
     }
 
     #[test]
@@ -2092,7 +2311,10 @@ mod tests {
 
         assert_eq!(editor.mode, Mode::ConversationInput);
         assert_eq!(editor.buffers.len(), 2);
-        assert_eq!(editor.buffers[1].kind, crate::buffer::BufferKind::Conversation);
+        assert_eq!(
+            editor.buffers[1].kind,
+            crate::buffer::BufferKind::Conversation
+        );
         assert_eq!(editor.buffers[1].name, "*AI*");
         assert_eq!(editor.active_buffer_idx(), 1);
     }
@@ -2386,9 +2608,11 @@ mod tests {
     #[test]
     fn next_buffer_cycles() {
         let mut editor = Editor::new();
-        let mut b = Buffer::new(); b.name = "a".into();
+        let mut b = Buffer::new();
+        b.name = "a".into();
         editor.buffers.push(b);
-        let mut b = Buffer::new(); b.name = "b".into();
+        let mut b = Buffer::new();
+        b.name = "b".into();
         editor.buffers.push(b);
         assert_eq!(editor.buffers.len(), 3);
         editor.window_mgr.focused_window_mut().buffer_idx = 0;
@@ -2403,9 +2627,11 @@ mod tests {
     #[test]
     fn prev_buffer_cycles() {
         let mut editor = Editor::new();
-        let mut b = Buffer::new(); b.name = "a".into();
+        let mut b = Buffer::new();
+        b.name = "a".into();
         editor.buffers.push(b);
-        let mut b = Buffer::new(); b.name = "b".into();
+        let mut b = Buffer::new();
+        b.name = "b".into();
         editor.buffers.push(b);
         editor.window_mgr.focused_window_mut().buffer_idx = 0;
         editor.dispatch_builtin("prev-buffer");
@@ -2466,14 +2692,29 @@ mod tests {
     fn new_commands_registered() {
         let editor = Editor::new();
         let new_commands = [
-            "move-word-forward", "move-word-backward", "move-word-end",
-            "move-big-word-forward", "move-big-word-backward", "move-big-word-end",
-            "move-matching-bracket", "move-paragraph-forward", "move-paragraph-backward",
-            "find-char-forward-await", "find-char-backward-await",
-            "till-char-forward-await", "till-char-backward-await",
-            "delete-word-forward", "delete-to-line-end", "delete-to-line-start",
-            "yank-line", "yank-word-forward", "yank-to-line-end", "yank-to-line-start",
-            "paste-after", "paste-before", "switch-buffer",
+            "move-word-forward",
+            "move-word-backward",
+            "move-word-end",
+            "move-big-word-forward",
+            "move-big-word-backward",
+            "move-big-word-end",
+            "move-matching-bracket",
+            "move-paragraph-forward",
+            "move-paragraph-backward",
+            "find-char-forward-await",
+            "find-char-backward-await",
+            "till-char-forward-await",
+            "till-char-backward-await",
+            "delete-word-forward",
+            "delete-to-line-end",
+            "delete-to-line-start",
+            "yank-line",
+            "yank-word-forward",
+            "yank-to-line-end",
+            "yank-to-line-start",
+            "paste-after",
+            "paste-before",
+            "switch-buffer",
         ];
         for cmd in &new_commands {
             assert!(
@@ -2491,13 +2732,34 @@ mod tests {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").unwrap();
         use crate::keymap::{parse_key_seq, LookupResult};
-        assert_eq!(normal.lookup(&parse_key_seq("w")), LookupResult::Exact("move-word-forward"));
-        assert_eq!(normal.lookup(&parse_key_seq("b")), LookupResult::Exact("move-word-backward"));
-        assert_eq!(normal.lookup(&parse_key_seq("e")), LookupResult::Exact("move-word-end"));
-        assert_eq!(normal.lookup(&parse_key_seq("W")), LookupResult::Exact("move-big-word-forward"));
-        assert_eq!(normal.lookup(&parse_key_seq("B")), LookupResult::Exact("move-big-word-backward"));
-        assert_eq!(normal.lookup(&parse_key_seq("E")), LookupResult::Exact("move-big-word-end"));
-        assert_eq!(normal.lookup(&parse_key_seq("%")), LookupResult::Exact("move-matching-bracket"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("w")),
+            LookupResult::Exact("move-word-forward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("b")),
+            LookupResult::Exact("move-word-backward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("e")),
+            LookupResult::Exact("move-word-end")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("W")),
+            LookupResult::Exact("move-big-word-forward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("B")),
+            LookupResult::Exact("move-big-word-backward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("E")),
+            LookupResult::Exact("move-big-word-end")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("%")),
+            LookupResult::Exact("move-matching-bracket")
+        );
     }
 
     #[test]
@@ -2506,11 +2768,26 @@ mod tests {
         let normal = editor.keymaps.get("normal").unwrap();
         use crate::keymap::{parse_key_seq, LookupResult};
         assert_eq!(normal.lookup(&parse_key_seq("y")), LookupResult::Prefix);
-        assert_eq!(normal.lookup(&parse_key_seq("yy")), LookupResult::Exact("yank-line"));
-        assert_eq!(normal.lookup(&parse_key_seq("yw")), LookupResult::Exact("yank-word-forward"));
-        assert_eq!(normal.lookup(&parse_key_seq("p")), LookupResult::Exact("paste-after"));
-        assert_eq!(normal.lookup(&parse_key_seq("P")), LookupResult::Exact("paste-before"));
-        assert_eq!(normal.lookup(&parse_key_seq("dw")), LookupResult::Exact("delete-word-forward"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("yy")),
+            LookupResult::Exact("yank-line")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("yw")),
+            LookupResult::Exact("yank-word-forward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("p")),
+            LookupResult::Exact("paste-after")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("P")),
+            LookupResult::Exact("paste-before")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("dw")),
+            LookupResult::Exact("delete-word-forward")
+        );
     }
 
     // --- Search ---
@@ -2613,11 +2890,26 @@ mod tests {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").unwrap();
         use crate::keymap::LookupResult;
-        assert_eq!(normal.lookup(&parse_key_seq("/")), LookupResult::Exact("search-forward-start"));
-        assert_eq!(normal.lookup(&parse_key_seq("?")), LookupResult::Exact("search-backward-start"));
-        assert_eq!(normal.lookup(&parse_key_seq("n")), LookupResult::Exact("search-next"));
-        assert_eq!(normal.lookup(&parse_key_seq("N")), LookupResult::Exact("search-prev"));
-        assert_eq!(normal.lookup(&parse_key_seq("*")), LookupResult::Exact("search-word-under-cursor"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("/")),
+            LookupResult::Exact("search-forward-start")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("?")),
+            LookupResult::Exact("search-backward-start")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("n")),
+            LookupResult::Exact("search-next")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("N")),
+            LookupResult::Exact("search-prev")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("*")),
+            LookupResult::Exact("search-word-under-cursor")
+        );
     }
 
     #[test]
@@ -2790,7 +3082,10 @@ mod tests {
         let mut editor = editor_with_text("hello world test");
         editor.dispatch_builtin("enter-visual-char");
         let buf = &editor.buffers[editor.active_buffer_idx()];
-        editor.window_mgr.focused_window_mut().move_word_forward(buf);
+        editor
+            .window_mgr
+            .focused_window_mut()
+            .move_word_forward(buf);
         let (start, end) = editor.visual_selection_range();
         assert_eq!(start, 0);
         assert!(end >= 6); // at least "hello " selected
@@ -2847,7 +3142,10 @@ mod tests {
         editor.visual_yank();
         assert_eq!(editor.registers.get(&'"').unwrap(), "line1\n");
         // Text unchanged
-        assert_eq!(editor.active_buffer().rope().to_string(), "line1\nline2\nline3");
+        assert_eq!(
+            editor.active_buffer().rope().to_string(),
+            "line1\nline2\nline3"
+        );
         assert_eq!(editor.mode, Mode::Normal);
     }
 
@@ -2898,7 +3196,10 @@ mod tests {
         // gg (already at top), then V, then G
         editor.dispatch_builtin("enter-visual-line");
         let buf = &editor.buffers[editor.active_buffer_idx()];
-        editor.window_mgr.focused_window_mut().move_to_last_line(buf);
+        editor
+            .window_mgr
+            .focused_window_mut()
+            .move_to_last_line(buf);
         let (start, end) = editor.visual_selection_range();
         assert_eq!(start, 0);
         assert_eq!(end, 17); // entire buffer
@@ -2918,28 +3219,58 @@ mod tests {
         let editor = Editor::new();
         let visual = editor.keymaps.get("visual").expect("visual keymap exists");
         // Check a few movement keys
-        assert_eq!(visual.lookup(&parse_key_seq("h")), LookupResult::Exact("move-left"));
-        assert_eq!(visual.lookup(&parse_key_seq("j")), LookupResult::Exact("move-down"));
-        assert_eq!(visual.lookup(&parse_key_seq("w")), LookupResult::Exact("move-word-forward"));
-        assert_eq!(visual.lookup(&parse_key_seq("b")), LookupResult::Exact("move-word-backward"));
+        assert_eq!(
+            visual.lookup(&parse_key_seq("h")),
+            LookupResult::Exact("move-left")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("j")),
+            LookupResult::Exact("move-down")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("w")),
+            LookupResult::Exact("move-word-forward")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("b")),
+            LookupResult::Exact("move-word-backward")
+        );
     }
 
     #[test]
     fn visual_keymap_has_operators() {
         let editor = Editor::new();
         let visual = editor.keymaps.get("visual").expect("visual keymap exists");
-        assert_eq!(visual.lookup(&parse_key_seq("d")), LookupResult::Exact("visual-delete"));
-        assert_eq!(visual.lookup(&parse_key_seq("y")), LookupResult::Exact("visual-yank"));
-        assert_eq!(visual.lookup(&parse_key_seq("c")), LookupResult::Exact("visual-change"));
-        assert_eq!(visual.lookup(&parse_key_seq("x")), LookupResult::Exact("visual-delete"));
+        assert_eq!(
+            visual.lookup(&parse_key_seq("d")),
+            LookupResult::Exact("visual-delete")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("y")),
+            LookupResult::Exact("visual-yank")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("c")),
+            LookupResult::Exact("visual-change")
+        );
+        assert_eq!(
+            visual.lookup(&parse_key_seq("x")),
+            LookupResult::Exact("visual-delete")
+        );
     }
 
     #[test]
-    fn normal_keymap_has_v_V() {
+    fn normal_keymap_has_v_and_big_v() {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").expect("normal keymap exists");
-        assert_eq!(normal.lookup(&parse_key_seq("v")), LookupResult::Exact("enter-visual-char"));
-        assert_eq!(normal.lookup(&parse_key_seq("V")), LookupResult::Exact("enter-visual-line"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("v")),
+            LookupResult::Exact("enter-visual-char")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("V")),
+            LookupResult::Exact("enter-visual-line")
+        );
     }
 
     // ===== Change operator tests =====
@@ -3098,32 +3429,56 @@ mod tests {
     fn normal_keymap_has_change_bindings() {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").expect("normal keymap exists");
-        assert_eq!(normal.lookup(&parse_key_seq("cc")), LookupResult::Exact("change-line"));
-        assert_eq!(normal.lookup(&parse_key_seq("cw")), LookupResult::Exact("change-word-forward"));
-        assert_eq!(normal.lookup(&parse_key_seq("c$")), LookupResult::Exact("change-to-line-end"));
-        assert_eq!(normal.lookup(&parse_key_seq("C")), LookupResult::Exact("change-to-line-end"));
-        assert_eq!(normal.lookup(&parse_key_seq("c0")), LookupResult::Exact("change-to-line-start"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("cc")),
+            LookupResult::Exact("change-line")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("cw")),
+            LookupResult::Exact("change-word-forward")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("c$")),
+            LookupResult::Exact("change-to-line-end")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("C")),
+            LookupResult::Exact("change-to-line-end")
+        );
+        assert_eq!(
+            normal.lookup(&parse_key_seq("c0")),
+            LookupResult::Exact("change-to-line-start")
+        );
     }
 
     #[test]
     fn normal_keymap_has_replace_binding() {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").expect("normal keymap exists");
-        assert_eq!(normal.lookup(&parse_key_seq("r")), LookupResult::Exact("replace-char-await"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq("r")),
+            LookupResult::Exact("replace-char-await")
+        );
     }
 
     #[test]
     fn normal_keymap_has_dot_repeat_binding() {
         let editor = Editor::new();
         let normal = editor.keymaps.get("normal").expect("normal keymap exists");
-        assert_eq!(normal.lookup(&parse_key_seq(".")), LookupResult::Exact("dot-repeat"));
+        assert_eq!(
+            normal.lookup(&parse_key_seq(".")),
+            LookupResult::Exact("dot-repeat")
+        );
     }
 
     #[test]
     fn replace_char_await_sets_pending() {
         let mut editor = editor_with_text("hello");
         editor.dispatch_builtin("replace-char-await");
-        assert_eq!(editor.pending_char_command, Some("replace-char".to_string()));
+        assert_eq!(
+            editor.pending_char_command,
+            Some("replace-char".to_string())
+        );
     }
 
     // ===== Count prefix tests (Phase 3e M4) =====
@@ -3260,7 +3615,10 @@ mod tests {
         let reg = editor.registers.get(&'"').unwrap();
         assert_eq!(reg, "line1\nline2\n");
         // Buffer unchanged
-        assert_eq!(editor.active_buffer().rope().to_string(), "line1\nline2\nline3\nline4\n");
+        assert_eq!(
+            editor.active_buffer().rope().to_string(),
+            "line1\nline2\nline3\nline4\n"
+        );
     }
 
     #[test]
@@ -3275,9 +3633,8 @@ mod tests {
 
     #[test]
     fn scroll_half_down_with_count() {
-        let mut editor = editor_with_text(
-            &(0..50).map(|i| format!("line{}\n", i)).collect::<String>()
-        );
+        let mut editor =
+            editor_with_text(&(0..50).map(|i| format!("line{}\n", i)).collect::<String>());
         editor.viewport_height = 20;
         editor.count_prefix = Some(2);
         editor.dispatch_builtin("scroll-half-down");

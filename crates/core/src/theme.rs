@@ -91,11 +91,23 @@ impl ThemeResolver for BundledResolver {
 pub fn bundled_themes() -> HashMap<String, &'static str> {
     let mut m = HashMap::new();
     m.insert("default".into(), include_str!("themes/default.toml"));
-    m.insert("gruvbox-dark".into(), include_str!("themes/gruvbox-dark.toml"));
-    m.insert("gruvbox-light".into(), include_str!("themes/gruvbox-light.toml"));
+    m.insert(
+        "gruvbox-dark".into(),
+        include_str!("themes/gruvbox-dark.toml"),
+    );
+    m.insert(
+        "gruvbox-light".into(),
+        include_str!("themes/gruvbox-light.toml"),
+    );
     m.insert("dracula".into(), include_str!("themes/dracula.toml"));
-    m.insert("catppuccin-mocha".into(), include_str!("themes/catppuccin-mocha.toml"));
-    m.insert("solarized-dark".into(), include_str!("themes/solarized-dark.toml"));
+    m.insert(
+        "catppuccin-mocha".into(),
+        include_str!("themes/catppuccin-mocha.toml"),
+    );
+    m.insert(
+        "solarized-dark".into(),
+        include_str!("themes/solarized-dark.toml"),
+    );
     m.insert("one-dark".into(), include_str!("themes/one-dark.toml"));
     m
 }
@@ -315,18 +327,9 @@ fn parse_style_value(
             } else {
                 None
             };
-            let bold = tbl
-                .get("bold")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let italic = tbl
-                .get("italic")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let dim = tbl
-                .get("dim")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let bold = tbl.get("bold").and_then(|v| v.as_bool()).unwrap_or(false);
+            let italic = tbl.get("italic").and_then(|v| v.as_bool()).unwrap_or(false);
+            let dim = tbl.get("dim").and_then(|v| v.as_bool()).unwrap_or(false);
             let underline = tbl
                 .get("underline")
                 .and_then(|v| v.as_bool())
@@ -357,11 +360,23 @@ mod tests {
 
     #[test]
     fn parse_hex_colors() {
-        assert_eq!(parse_hex_color("#cc241d").unwrap(), ThemeColor::Rgb(204, 36, 29));
-        assert_eq!(parse_hex_color("#fff").unwrap(), ThemeColor::Rgb(255, 255, 255));
-        assert_eq!(parse_hex_color("#282828").unwrap(), ThemeColor::Rgb(40, 40, 40));
+        assert_eq!(
+            parse_hex_color("#cc241d").unwrap(),
+            ThemeColor::Rgb(204, 36, 29)
+        );
+        assert_eq!(
+            parse_hex_color("#fff").unwrap(),
+            ThemeColor::Rgb(255, 255, 255)
+        );
+        assert_eq!(
+            parse_hex_color("#282828").unwrap(),
+            ThemeColor::Rgb(40, 40, 40)
+        );
         // 8-char hex (alpha ignored)
-        assert_eq!(parse_hex_color("#cc241dff").unwrap(), ThemeColor::Rgb(204, 36, 29));
+        assert_eq!(
+            parse_hex_color("#cc241dff").unwrap(),
+            ThemeColor::Rgb(204, 36, 29)
+        );
     }
 
     #[test]
@@ -458,10 +473,7 @@ red = "#cc0000"
         // Child overrides red in palette
         assert_eq!(theme.palette["red"], ThemeColor::Rgb(204, 0, 0));
         // Child overrides ui.text
-        assert_eq!(
-            theme.style("ui.text").fg,
-            Some(ThemeColor::Rgb(204, 0, 0))
-        );
+        assert_eq!(theme.style("ui.text").fg, Some(ThemeColor::Rgb(204, 0, 0)));
         // Parent's ui.gutter is inherited
         assert_eq!(
             theme.style("ui.gutter").fg,

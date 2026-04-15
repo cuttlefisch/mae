@@ -3,16 +3,11 @@ use ropey::Rope;
 
 use crate::word;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchDirection {
+    #[default]
     Forward,
     Backward,
-}
-
-impl Default for SearchDirection {
-    fn default() -> Self {
-        Self::Forward
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -70,7 +70,7 @@ async fn main() -> io::Result<()> {
         }
         Err(e) => {
             error!(error = %e, "failed to initialize scheme runtime");
-            return Err(io::Error::new(io::ErrorKind::Other, e.message));
+            return Err(io::Error::other(e.message));
         }
     };
 
@@ -79,7 +79,10 @@ async fn main() -> io::Result<()> {
 
     // Initialize AI agent (if configured)
     let (mut ai_event_rx, ai_command_tx) = setup_ai(&editor);
-    info!(ai_configured = ai_command_tx.is_some(), "AI agent setup complete");
+    info!(
+        ai_configured = ai_command_tx.is_some(),
+        "AI agent setup complete"
+    );
 
     // Build tool list for AI executor (used when handling tool call requests)
     let all_tools = {
@@ -97,7 +100,10 @@ async fn main() -> io::Result<()> {
         // Update viewport height and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
-        editor.window_mgr.focused_window_mut().ensure_scroll(viewport_height);
+        editor
+            .window_mgr
+            .focused_window_mut()
+            .ensure_scroll(viewport_height);
 
         renderer.render(&editor)?;
 
@@ -182,7 +188,7 @@ async fn main() -> io::Result<()> {
                     AiEvent::Error(msg) => {
                         error!(error = %msg, "AI error");
                         if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.push_system(&format!("Error: {}", msg));
+                            conv_buf.push_system(format!("Error: {}", msg));
                             conv_buf.streaming = false;
                         }
                         editor.set_status(format!("[AI error] {}", msg));
@@ -324,13 +330,7 @@ fn setup_ai(
             t
         };
 
-        let session = AgentSession::new(
-            provider,
-            tools,
-            build_system_prompt(),
-            event_tx,
-            cmd_rx,
-        );
+        let session = AgentSession::new(provider, tools, build_system_prompt(), event_tx, cmd_rx);
 
         tokio::spawn(session.run());
 
@@ -669,7 +669,9 @@ fn handle_normal_mode(
 
     // Count prefix accumulation: digits 1-9 start a count, 0 continues it
     if let KeyCode::Char(ch @ '1'..='9') = key.code {
-        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && pending_keys.is_empty()
         {
             let digit = (ch as usize) - ('0' as usize);
@@ -679,7 +681,9 @@ fn handle_normal_mode(
         }
     }
     if let KeyCode::Char('0') = key.code {
-        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && editor.count_prefix.is_some()
             && pending_keys.is_empty()
         {
@@ -717,7 +721,9 @@ fn handle_visual_mode(
 
     // Count prefix accumulation (same as normal mode)
     if let KeyCode::Char(ch @ '1'..='9') = key.code {
-        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && pending_keys.is_empty()
         {
             let digit = (ch as usize) - ('0' as usize);
@@ -727,7 +733,9 @@ fn handle_visual_mode(
         }
     }
     if let KeyCode::Char('0') = key.code {
-        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        if !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             && editor.count_prefix.is_some()
             && pending_keys.is_empty()
         {
@@ -800,9 +808,8 @@ fn handle_conversation_input(
                     editor.set_status("[AI] Thinking...");
                 } else {
                     warn!("AI prompt submitted but no AI provider configured");
-                    editor.set_status(
-                        "AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
-                    );
+                    editor
+                        .set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
                     if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
                         conv.streaming = false;
                     }
@@ -868,7 +875,9 @@ fn handle_command_mode(
                 if let Some(ref cfg) = config {
                     editor.set_status(format!(
                         "AI: provider={}, model={}, connected={}",
-                        cfg.provider_type, cfg.model, ai_tx.is_some()
+                        cfg.provider_type,
+                        cfg.model,
+                        ai_tx.is_some()
                     ));
                 } else {
                     editor.set_status(
@@ -886,16 +895,18 @@ fn handle_command_mode(
                     return;
                 }
                 if let Some(tx) = ai_tx {
-                    info!(prompt_len = prompt.len(), "sending AI prompt via command mode");
+                    info!(
+                        prompt_len = prompt.len(),
+                        "sending AI prompt via command mode"
+                    );
                     if tx.try_send(AiCommand::Prompt(prompt.to_string())).is_err() {
                         warn!("AI command channel full or closed — prompt dropped");
                     }
                     editor.set_status("[AI] Thinking...");
                 } else {
                     warn!("AI prompt submitted but no AI provider configured");
-                    editor.set_status(
-                        "AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
-                    );
+                    editor
+                        .set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
                 }
                 return;
             }
@@ -944,7 +955,8 @@ fn handle_command_mode(
                     editor.tab_completions = mae_core::file_picker::complete_path(path_part);
                     editor.tab_completion_idx = 0;
                 } else {
-                    editor.tab_completion_idx = (editor.tab_completion_idx + 1) % editor.tab_completions.len();
+                    editor.tab_completion_idx =
+                        (editor.tab_completion_idx + 1) % editor.tab_completions.len();
                 }
                 if !editor.tab_completions.is_empty() {
                     let completion = editor.tab_completions[editor.tab_completion_idx].clone();

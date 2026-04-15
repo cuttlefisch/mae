@@ -49,6 +49,12 @@ pub struct Buffer {
     redo_stack: Vec<EditAction>,
 }
 
+impl Default for Buffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Buffer {
     pub fn new() -> Self {
         Buffer {
@@ -115,10 +121,7 @@ impl Buffer {
             self.modified = false;
             Ok(())
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "No file path set",
-            ))
+            Err(std::io::Error::other("No file path set"))
         }
     }
 
@@ -272,8 +275,10 @@ impl Buffer {
         }
         let text: String = self.rope.slice(line_start..line_start + line_chars).into();
         self.rope.remove(line_start..line_start + line_chars);
-        self.undo_stack
-            .push(EditAction::DeleteRange { pos: line_start, text: text.clone() });
+        self.undo_stack.push(EditAction::DeleteRange {
+            pos: line_start,
+            text: text.clone(),
+        });
         self.redo_stack.clear();
         self.modified = true;
         win.clamp_cursor(self);
@@ -301,10 +306,8 @@ impl Buffer {
         }
         let text: String = self.rope.slice(start..end).into();
         self.rope.remove(start..end);
-        self.undo_stack.push(EditAction::DeleteRange {
-            pos: start,
-            text,
-        });
+        self.undo_stack
+            .push(EditAction::DeleteRange { pos: start, text });
         self.redo_stack.clear();
         self.modified = true;
     }
@@ -316,8 +319,10 @@ impl Buffer {
 
         let insert_pos = line_start + line_chars;
         self.rope.insert_char(insert_pos, '\n');
-        self.undo_stack
-            .push(EditAction::InsertChar { pos: insert_pos, ch: '\n' });
+        self.undo_stack.push(EditAction::InsertChar {
+            pos: insert_pos,
+            ch: '\n',
+        });
         self.redo_stack.clear();
         win.cursor_row += 1;
         win.cursor_col = 0;
@@ -327,8 +332,10 @@ impl Buffer {
     pub fn open_line_above(&mut self, win: &mut Window) {
         let line_start = self.rope.line_to_char(win.cursor_row);
         self.rope.insert_char(line_start, '\n');
-        self.undo_stack
-            .push(EditAction::InsertChar { pos: line_start, ch: '\n' });
+        self.undo_stack.push(EditAction::InsertChar {
+            pos: line_start,
+            ch: '\n',
+        });
         self.redo_stack.clear();
         win.cursor_col = 0;
         self.modified = true;
