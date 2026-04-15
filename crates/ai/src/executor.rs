@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use mae_core::Editor;
 
 use crate::tools::PermissionPolicy;
@@ -45,6 +47,12 @@ pub fn execute_tool(
         "command_list",
         "debug_state",
         "shell_exec",
+        "open_file",
+        "switch_buffer",
+        "close_buffer",
+        "create_file",
+        "project_files",
+        "project_search",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -81,13 +89,32 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "window_layout" => execute_window_layout(editor),
         "command_list" => execute_command_list(editor),
         "debug_state" => execute_debug_state(editor),
+        "open_file" => execute_open_file(editor, &call.arguments),
+        "switch_buffer" => execute_switch_buffer(editor, &call.arguments),
+        "close_buffer" => execute_close_buffer(editor, &call.arguments),
+        "create_file" => execute_create_file(editor, &call.arguments),
+        "project_files" => execute_project_files(&call.arguments),
+        "project_search" => execute_project_search(&call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }
 
+/// Resolve a buffer reference: if `buffer_name` is provided, find that buffer;
+/// otherwise return the active buffer index.
+fn resolve_buffer_idx(editor: &Editor, args: &serde_json::Value) -> Result<usize, String> {
+    if let Some(name) = args.get("buffer_name").and_then(|v| v.as_str()) {
+        editor
+            .find_buffer_by_name(name)
+            .ok_or_else(|| format!("No buffer named '{}'", name))
+    } else {
+        Ok(editor.active_buffer_idx())
+    }
+}
+
 fn execute_buffer_read(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
-    let buf = editor.active_buffer();
+    let buf_idx = resolve_buffer_idx(editor, args)?;
+    let buf = &editor.buffers[buf_idx];
     let total_lines = buf.line_count();
     let start = args
         .get("start_line")
@@ -118,7 +145,8 @@ fn execute_buffer_write(editor: &mut Editor, args: &serde_json::Value) -> Result
         .and_then(|v| v.as_str())
         .ok_or("Missing 'content' argument")?;
 
-    let buf = editor.active_buffer_mut();
+    let buf_idx = resolve_buffer_idx(editor, args)?;
+    let buf = &mut editor.buffers[buf_idx];
     let total_lines = buf.line_count();
 
     // Convert 1-indexed to 0-indexed
@@ -298,6 +326,222 @@ fn execute_debug_state(editor: &Editor) -> Result<String, String> {
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }
     }
+}
+
+fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'path' argument")?;
+
+    // Check if file is already open in a buffer
+    let file_path = PathBuf::from(path);
+    let canonical = file_path.canonicalize().ok();
+    let existing_idx = editor.buffers.iter().enumerate().find_map(|(i, buf)| {
+        buf.file_path().and_then(|bp| {
+            if bp == file_path || canonical.as_deref() == bp.canonicalize().ok().as_deref() {
+                Some(i)
+            } else {
+                None
+            }
+        })
+    });
+    if let Some(idx) = existing_idx {
+        let name = editor.buffers[idx].name.clone();
+        editor.switch_to_buffer(idx);
+        return Ok(format!(
+            "Switched to existing buffer '{}' (already open)",
+            name
+        ));
+    }
+
+    // Open new buffer
+    editor.open_file(path);
+    if editor.status_msg.contains("Error") {
+        Err(editor.status_msg.clone())
+    } else {
+        Ok(format!(
+            "Opened '{}' ({} lines)",
+            editor.active_buffer().name,
+            editor.active_buffer().line_count()
+        ))
+    }
+}
+
+fn execute_switch_buffer(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'name' argument")?;
+
+    let idx = editor
+        .find_buffer_by_name(name)
+        .ok_or_else(|| format!("No buffer named '{}'", name))?;
+
+    editor.switch_to_buffer(idx);
+    Ok(format!("Switched to buffer '{}'", name))
+}
+
+fn execute_close_buffer(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let idx = if let Some(name) = args.get("name").and_then(|v| v.as_str()) {
+        editor
+            .find_buffer_by_name(name)
+            .ok_or_else(|| format!("No buffer named '{}'", name))?
+    } else {
+        editor.active_buffer_idx()
+    };
+
+    if editor.buffers[idx].modified {
+        return Err(format!(
+            "Buffer '{}' has unsaved changes",
+            editor.buffers[idx].name
+        ));
+    }
+
+    let name = editor.buffers[idx].name.clone();
+    // Switch to this buffer first so kill-buffer acts on it
+    editor.switch_to_buffer(idx);
+    editor.dispatch_builtin("kill-buffer");
+    Ok(format!("Closed buffer '{}'", name))
+}
+
+fn execute_create_file(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'path' argument")?;
+    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+    let file_path = Path::new(path);
+
+    // Create parent directories if needed
+    if let Some(parent) = file_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directories: {}", e))?;
+        }
+    }
+
+    // Write the file
+    std::fs::write(file_path, content).map_err(|e| format!("Failed to create file: {}", e))?;
+
+    // Open it as a buffer
+    editor.open_file(path);
+    if editor.status_msg.contains("Error") {
+        Err(editor.status_msg.clone())
+    } else {
+        Ok(format!(
+            "Created '{}' ({} bytes) and opened as buffer",
+            path,
+            content.len()
+        ))
+    }
+}
+
+fn execute_project_files(args: &serde_json::Value) -> Result<String, String> {
+    let pattern = args.get("pattern").and_then(|v| v.as_str());
+
+    // Try git ls-files first
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .output();
+
+    let files = match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+        _ => {
+            // Fallback: list files recursively (limited depth)
+            let output = std::process::Command::new("find")
+                .args([
+                    ".",
+                    "-type",
+                    "f",
+                    "-not",
+                    "-path",
+                    "./.git/*",
+                    "-maxdepth",
+                    "5",
+                ])
+                .output()
+                .map_err(|e| format!("Failed to list files: {}", e))?;
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|l| l.strip_prefix("./").unwrap_or(l).to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    };
+
+    // Filter by pattern if provided
+    if let Some(pat) = pattern {
+        let glob = glob::Pattern::new(pat).map_err(|e| format!("Invalid glob: {}", e))?;
+        let filtered: Vec<&str> = files
+            .lines()
+            .filter(|line| {
+                glob.matches(line) || glob.matches(line.rsplit('/').next().unwrap_or(line))
+            })
+            .collect();
+        Ok(format!("{} files\n{}", filtered.len(), filtered.join("\n")))
+    } else {
+        let count = files.lines().count();
+        Ok(format!("{} files\n{}", count, files))
+    }
+}
+
+fn execute_project_search(args: &serde_json::Value) -> Result<String, String> {
+    let pattern = args
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'pattern' argument")?;
+    let glob_filter = args.get("glob").and_then(|v| v.as_str());
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100) as usize;
+
+    // Try ripgrep first, fall back to grep
+    let mut cmd = if which_exists("rg") {
+        let mut c = std::process::Command::new("rg");
+        c.args(["--line-number", "--no-heading", "--color=never"]);
+        if let Some(g) = glob_filter {
+            c.args(["--glob", g]);
+        }
+        c.args(["-m", &max_results.to_string(), pattern]);
+        c
+    } else {
+        let mut c = std::process::Command::new("grep");
+        c.args(["-rn", "--color=never"]);
+        if let Some(g) = glob_filter {
+            c.args(["--include", g]);
+        }
+        c.args([pattern, "."]);
+        c
+    };
+
+    let output = cmd.output().map_err(|e| format!("Search failed: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Truncate to max_results lines
+    let lines: Vec<&str> = stdout.lines().take(max_results).collect();
+    let total = stdout.lines().count();
+    let shown = lines.len();
+
+    let mut result = lines.join("\n");
+    if total > shown {
+        result.push_str(&format!("\n... ({} more results truncated)", total - shown));
+    }
+    if result.is_empty() {
+        result = "No matches found".into();
+    }
+    Ok(result)
+}
+
+/// Check if a command exists on PATH.
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn execute_list_buffers(editor: &Editor) -> Result<String, String> {
@@ -625,5 +869,296 @@ mod tests {
         assert!(result.output.contains("world"));
 
         std::fs::remove_file(&path).ok();
+    }
+
+    // --- Phase 3f M1: Multi-buffer AI tools ---
+
+    #[test]
+    fn open_file_creates_buffer() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mae_test_open_file.txt");
+        std::fs::write(&path, "line1\nline2\n").unwrap();
+
+        let mut editor = Editor::new();
+        let call = make_call(
+            "open_file",
+            serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "open_file failed: {}", result.output);
+        assert_eq!(editor.buffers.len(), 2);
+        assert!(editor.active_buffer().text().contains("line1"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn open_file_deduplicates() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mae_test_open_dedup.txt");
+        std::fs::write(&path, "content\n").unwrap();
+
+        let mut editor = Editor::new();
+        // Open twice
+        let call = make_call(
+            "open_file",
+            serde_json::json!({"path": path.to_str().unwrap()}),
+        );
+        execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        assert!(result.output.contains("already open"));
+        assert_eq!(editor.buffers.len(), 2); // scratch + the file, not 3
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn switch_buffer_by_name() {
+        let mut editor = Editor::new();
+        let mut b = mae_core::Buffer::new();
+        b.name = "second".into();
+        editor.buffers.push(b);
+
+        let call = make_call("switch_buffer", serde_json::json!({"name": "second"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        assert_eq!(editor.active_buffer().name, "second");
+    }
+
+    #[test]
+    fn switch_buffer_nonexistent() {
+        let mut editor = Editor::new();
+        let call = make_call("switch_buffer", serde_json::json!({"name": "nope"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("No buffer named"));
+    }
+
+    #[test]
+    fn close_buffer_by_name() {
+        let mut editor = Editor::new();
+        let mut b = mae_core::Buffer::new();
+        b.name = "tobeclosed".into();
+        editor.buffers.push(b);
+        assert_eq!(editor.buffers.len(), 2);
+
+        let call = make_call("close_buffer", serde_json::json!({"name": "tobeclosed"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "close_buffer failed: {}", result.output);
+        assert_eq!(editor.buffers.len(), 1);
+    }
+
+    #[test]
+    fn close_buffer_modified_fails() {
+        let mut editor = Editor::new();
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, 'x');
+
+        let call = make_call("close_buffer", serde_json::json!({}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("unsaved"));
+    }
+
+    #[test]
+    fn buffer_read_by_name() {
+        let mut editor = Editor::new();
+        let mut b = mae_core::Buffer::new();
+        b.name = "other".into();
+        editor.buffers.push(b);
+        // Insert text into the "other" buffer
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[1].insert_char(win, 'X');
+
+        let call = make_call("buffer_read", serde_json::json!({"buffer_name": "other"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        assert!(result.output.contains("X"));
+    }
+
+    #[test]
+    fn buffer_write_by_name() {
+        let mut editor = Editor::new();
+        let mut b = mae_core::Buffer::new();
+        b.name = "target".into();
+        editor.buffers.push(b);
+
+        let call = make_call(
+            "buffer_write",
+            serde_json::json!({"buffer_name": "target", "start_line": 1, "content": "hello\n"}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        assert!(editor.buffers[1].text().contains("hello"));
+        // Active buffer (scratch) should be unchanged
+        assert!(!editor.buffers[0].text().contains("hello"));
+    }
+
+    #[test]
+    fn create_file_and_open() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mae_test_create_file.txt");
+        // Clean up first
+        std::fs::remove_file(&path).ok();
+
+        let mut editor = Editor::new();
+        let call = make_call(
+            "create_file",
+            serde_json::json!({"path": path.to_str().unwrap(), "content": "new file\n"}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "create_file failed: {}", result.output);
+        assert_eq!(editor.buffers.len(), 2);
+        assert!(editor.active_buffer().text().contains("new file"));
+        // File should exist on disk
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn project_files_returns_results() {
+        // We're in a git repo, so this should work
+        let mut editor = Editor::new();
+        let call = make_call("project_files", serde_json::json!({}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "project_files failed: {}", result.output);
+        assert!(result.output.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn project_files_with_pattern() {
+        let mut editor = Editor::new();
+        let call = make_call("project_files", serde_json::json!({"pattern": "*.toml"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        assert!(result.output.contains("Cargo.toml"));
+        // Should not contain .rs files
+        assert!(!result.output.contains(".rs"));
+    }
+
+    #[test]
+    fn project_search_finds_pattern() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "project_search",
+            serde_json::json!({"pattern": "mae-core", "glob": "*.toml"}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "project_search failed: {}", result.output);
+        assert!(result.output.contains("mae-core"));
+    }
+
+    #[test]
+    fn project_search_with_max_results() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "project_search",
+            serde_json::json!({"pattern": "fn", "max_results": 3}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success);
+        // Should have at most 3 result lines (not counting truncation message)
+        let non_truncation_lines: Vec<&str> = result
+            .output
+            .lines()
+            .filter(|l| !l.starts_with("..."))
+            .collect();
+        assert!(non_truncation_lines.len() <= 3);
+    }
+
+    #[test]
+    fn find_buffer_by_name_helper() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.find_buffer_by_name("[scratch]"), Some(0));
+        assert_eq!(editor.find_buffer_by_name("nonexistent"), None);
+
+        let mut b = mae_core::Buffer::new();
+        b.name = "test".into();
+        editor.buffers.push(b);
+        assert_eq!(editor.find_buffer_by_name("test"), Some(1));
+    }
+
+    #[test]
+    fn switch_to_buffer_sets_alternate() {
+        let mut editor = Editor::new();
+        let mut b = mae_core::Buffer::new();
+        b.name = "other".into();
+        editor.buffers.push(b);
+
+        editor.switch_to_buffer(1);
+        assert_eq!(editor.active_buffer_idx(), 1);
+        assert_eq!(editor.alternate_buffer_idx, Some(0));
     }
 }

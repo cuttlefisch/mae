@@ -199,6 +199,136 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "open_file".into(),
+            description: "Open a file from disk into a new buffer and switch to it. If already open, switches to the existing buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path to open".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "switch_buffer".into(),
+            description: "Switch the active buffer by name. Use list_buffers to see available buffers.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Buffer name to switch to".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["name".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "close_buffer".into(),
+            description: "Close a buffer by name. Fails if the buffer has unsaved changes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Buffer name to close (default: active buffer)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "create_file".into(),
+            description: "Create a new file with content and open it as a buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "File path to create".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "content".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Initial file content (default: empty)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "project_files".into(),
+            description: "List files in the project. Uses git ls-files if in a git repo, otherwise lists files recursively. Returns one path per line.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "pattern".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Optional glob pattern to filter files (e.g. '*.rs', 'src/**/*.toml')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "project_search".into(),
+            description: "Search across project files using a regex pattern. Returns matching lines with file paths and line numbers.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "pattern".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Regex pattern to search for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "glob".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional file glob to limit search (e.g. '*.rs')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "max_results".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Maximum number of results (default: 100)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["pattern".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
 
@@ -296,7 +426,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 16);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -308,6 +438,12 @@ mod tests {
         assert!(names.contains(&"window_layout"));
         assert!(names.contains(&"command_list"));
         assert!(names.contains(&"debug_state"));
+        assert!(names.contains(&"open_file"));
+        assert!(names.contains(&"switch_buffer"));
+        assert!(names.contains(&"close_buffer"));
+        assert!(names.contains(&"create_file"));
+        assert!(names.contains(&"project_files"));
+        assert!(names.contains(&"project_search"));
     }
 
     #[test]

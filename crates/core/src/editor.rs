@@ -424,6 +424,28 @@ impl Editor {
         &mut self.buffers[idx]
     }
 
+    /// Find a buffer index by name. Returns None if not found.
+    pub fn find_buffer_by_name(&self, name: &str) -> Option<usize> {
+        self.buffers.iter().position(|b| b.name == name)
+    }
+
+    /// Switch the focused window to the buffer at the given index.
+    /// Returns false if index is out of bounds.
+    pub fn switch_to_buffer(&mut self, idx: usize) -> bool {
+        if idx >= self.buffers.len() {
+            return false;
+        }
+        let prev_idx = self.active_buffer_idx();
+        if prev_idx != idx {
+            self.alternate_buffer_idx = Some(prev_idx);
+        }
+        let win = self.window_mgr.focused_window_mut();
+        win.buffer_idx = idx;
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+        true
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
     }

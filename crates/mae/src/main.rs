@@ -412,7 +412,28 @@ fn load_ai_config() -> Option<ProviderConfig> {
 }
 
 fn build_system_prompt() -> String {
-    include_str!("system_prompt.md").into()
+    let base = include_str!("system_prompt.md");
+    let mut prompt = base.to_string();
+
+    // Add working directory context
+    if let Ok(cwd) = std::env::current_dir() {
+        prompt.push_str(&format!("\n\n## Working Directory\n`{}`\n", cwd.display()));
+    }
+
+    // Add git status context if in a git repo
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--branch"])
+        .output()
+    {
+        if output.status.success() {
+            let status = String::from_utf8_lossy(&output.stdout);
+            if !status.is_empty() {
+                prompt.push_str(&format!("\n## Git Status\n```\n{}```\n", status));
+            }
+        }
+    }
+
+    prompt
 }
 
 /// Load init.scm from standard locations.

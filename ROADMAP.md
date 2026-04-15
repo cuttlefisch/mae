@@ -1,10 +1,10 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3e M6/M7 COMPLETE (506 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE (521 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
-escape, and horizontal scroll all working.
+escape, horizontal scroll, and multi-file AI tools all working.
 
 Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
@@ -12,7 +12,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 ## Comprehensive Feature Checklist
 
-### What We Have (506 tests)
+### What We Have (521 tests)
 
 | Category | Features |
 |----------|----------|
@@ -28,7 +28,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer |
+| **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer, multi-file tools, project search |
 | **Scheme** | Steel runtime, init.scm, define-key, eval REPL |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
 | **Debug** | Self-debug state inspection, DAP protocol types |
@@ -39,8 +39,8 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 | # | Feature | Phase | Status |
 |---|---------|-------|--------|
-| 1 | Multi-buffer AI tools (open_file, buffer by name) | 3f M1 | Not started |
-| 2 | Project search (AI: grep across project) | 3f M4 | Not started |
+| 1 | Multi-buffer AI tools (open_file, buffer by name) | 3f M1 | **DONE** |
+| 2 | Project search (AI: grep across project) | 3f M4 | **DONE** |
 | 3 | Marks (`m`+letter, `'`+letter) | 3e M6 | Deferred |
 | 4 | Macros (`q` record, `@` playback) | 3e M6 | Deferred |
 
@@ -87,16 +87,16 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 Extend AI tools so the AI agent can operate across multiple files and buffers.
 Required for self-hosting (AI needs to edit multiple crate files).
 
-### M1: Buffer & File Tools
-- [ ] `open_file` tool — AI can open a file into a new buffer
-- [ ] `switch_buffer` tool — AI can switch the active buffer
-- [ ] `close_buffer` tool — AI can close a buffer
-- [ ] `buffer_read` accepts optional `buffer_name` param (not just active)
+### M1: Buffer & File Tools ✅
+- [x] `open_file` tool — AI can open a file into a new buffer
+- [x] `switch_buffer` tool — AI can switch the active buffer
+- [x] `close_buffer` tool — AI can close a buffer
+- [x] `buffer_read` accepts optional `buffer_name` param (not just active)
 
-### M2: Multi-File Editing
-- [ ] AI can read from any open buffer by name
-- [ ] AI can write to any open buffer by name
-- [ ] `create_file` tool — AI creates new file + buffer
+### M2: Multi-File Editing ✅
+- [x] AI can read from any open buffer by name
+- [x] AI can write to any open buffer by name
+- [x] `create_file` tool — AI creates new file + buffer
 - [ ] Undo per-buffer (already works, just verify with AI)
 
 ### M3: Conversation Persistence
@@ -104,11 +104,11 @@ Required for self-hosting (AI needs to edit multiple crate files).
 - [ ] Load conversation from file (`:ai-load`)
 - [ ] Conversation history survives buffer kill + reopen
 
-### M4: Project Awareness
-- [ ] `project_files` tool — list files in project (git ls-files)
-- [ ] `project_search` tool — grep across project (ripgrep)
-- [ ] Working directory awareness in system prompt
-- [ ] Git status awareness in system prompt
+### M4: Project Awareness ✅
+- [x] `project_files` tool — list files in project (git ls-files)
+- [x] `project_search` tool — grep across project (ripgrep)
+- [x] Working directory awareness in system prompt
+- [x] Git status awareness in system prompt
 
 ---
 
@@ -309,10 +309,10 @@ navigate and refactor effectively.
 | Phase | Current | Target |
 |-------|---------|--------|
 | 3e    | 506     | 506 ✅ (search, visual, change, count, scroll, text objects, M6, M7) |
-| 3f    | —       | +15 (multi-file AI tools) |
-| 3g    | —       | +0 (refactor, no new features — preserve existing 506+) |
+| 3f    | 521     | 521 ✅ M1/M2/M4 (multi-file AI tools, project search) — M3 remaining |
+| 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | —       | +25 (LSP connection, navigation, diagnostics) |
 | 4b    | —       | +10 (tree-sitter parse, highlight) |
 | 4c    | 8       | +20 (DAP lifecycle, breakpoints, state) |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **506** | **~591** |
+| **Total** | **521** | **~591** |
