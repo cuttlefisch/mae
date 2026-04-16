@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::conversation::Conversation;
+use crate::help_view::HelpView;
 use crate::window::Window;
 
 /// What kind of content this buffer holds.
@@ -16,6 +17,8 @@ pub enum BufferKind {
     Preview,
     /// In-editor log viewer (*Messages* buffer). Read-only, live view.
     Messages,
+    /// Knowledge-base viewer (`*Help*`). Body rendered live from the KB.
+    Help,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -45,6 +48,8 @@ pub struct Buffer {
     pub name: String,
     pub kind: BufferKind,
     pub conversation: Option<Conversation>,
+    /// Help-buffer navigation state. Present iff `kind == BufferKind::Help`.
+    pub help_view: Option<HelpView>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
 }
@@ -64,6 +69,7 @@ impl Buffer {
             name: String::from("[scratch]"),
             kind: BufferKind::Text,
             conversation: None,
+            help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -78,6 +84,7 @@ impl Buffer {
             name: name.into(),
             kind: BufferKind::Conversation,
             conversation: Some(Conversation::new()),
+            help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -92,6 +99,23 @@ impl Buffer {
             name: String::from("*Messages*"),
             kind: BufferKind::Messages,
             conversation: None,
+            help_view: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// Create a help buffer viewing a KB node.
+    pub fn new_help(start_node_id: impl Into<String>) -> Self {
+        let start = start_node_id.into();
+        Buffer {
+            rope: Rope::new(),
+            file_path: None,
+            modified: false,
+            name: String::from("*Help*"),
+            kind: BufferKind::Help,
+            conversation: None,
+            help_view: Some(HelpView::new(start)),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
@@ -110,6 +134,7 @@ impl Buffer {
             modified: false,
             kind: BufferKind::Text,
             conversation: None,
+            help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         })
@@ -318,10 +343,7 @@ impl Buffer {
         }
         let deleted: String = self.rope.slice(pos..cursor).into();
         self.rope.remove(pos..cursor);
-        self.push_undo(EditAction::DeleteRange {
-            pos,
-            text: deleted,
-        });
+        self.push_undo(EditAction::DeleteRange { pos, text: deleted });
         self.redo_stack.clear();
         self.modified = true;
         win.cursor_col = pos - line_start;
@@ -356,9 +378,7 @@ impl Buffer {
             let raw_end = line_start + line.len_chars();
             // If the line ends with '\n', stop before it (don't kill the newline
             // unless the cursor is already AT the newline).
-            if raw_end > line_start
-                && raw_end <= rope.len_chars()
-                && rope.char(raw_end - 1) == '\n'
+            if raw_end > line_start && raw_end <= rope.len_chars() && rope.char(raw_end - 1) == '\n'
             {
                 if cursor == raw_end - 1 {
                     // Cursor on the newline itself — kill it.

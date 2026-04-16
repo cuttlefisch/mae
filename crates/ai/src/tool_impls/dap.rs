@@ -54,10 +54,7 @@ pub fn execute_dap_start(editor: &mut Editor, args: &Value) -> Result<String, St
     // Preconditions (unknown adapter, already-active session) live in
     // `dap_start_with_adapter` so this tool and `:debug-start` agree.
     editor.dap_start_with_adapter(adapter, program, &extra_args)?;
-    Ok(format!(
-        "Starting {} session against {}",
-        adapter, program
-    ))
+    Ok(format!("Starting {} session against {}", adapter, program))
 }
 
 /// Set a breakpoint at `source:line`. Idempotent — no-op if already set.
@@ -186,11 +183,8 @@ mod tests {
     #[test]
     fn dap_start_queues_intent() {
         let mut ed = Editor::new();
-        let out = execute_dap_start(
-            &mut ed,
-            &json!({"adapter": "lldb", "program": "/bin/ls"}),
-        )
-        .unwrap();
+        let out =
+            execute_dap_start(&mut ed, &json!({"adapter": "lldb", "program": "/bin/ls"})).unwrap();
         assert!(out.contains("Starting lldb"));
         assert_eq!(ed.pending_dap_intents.len(), 1);
         assert!(ed.debug_state.is_some());
@@ -217,33 +211,24 @@ mod tests {
         // Guard lives in `dap_start_with_adapter`, so the error surfaces
         // through `Result<(), String>` to the tool layer unchanged.
         let mut ed = ed_with_dap_session();
-        let err = execute_dap_start(
-            &mut ed,
-            &json!({"adapter": "lldb", "program": "/bin/ls"}),
-        )
-        .unwrap_err();
+        let err = execute_dap_start(&mut ed, &json!({"adapter": "lldb", "program": "/bin/ls"}))
+            .unwrap_err();
         assert!(err.contains("already active"));
     }
 
     #[test]
     fn dap_start_unknown_adapter_errors() {
         let mut ed = Editor::new();
-        let err = execute_dap_start(
-            &mut ed,
-            &json!({"adapter": "bogus", "program": "/bin/ls"}),
-        )
-        .unwrap_err();
+        let err = execute_dap_start(&mut ed, &json!({"adapter": "bogus", "program": "/bin/ls"}))
+            .unwrap_err();
         assert!(err.contains("Unknown adapter"));
     }
 
     #[test]
     fn dap_set_breakpoint_returns_line_set() {
         let mut ed = Editor::new();
-        let out = execute_dap_set_breakpoint(
-            &mut ed,
-            &json!({"source": "/a.rs", "line": 10}),
-        )
-        .unwrap();
+        let out =
+            execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs", "line": 10})).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["source"], "/a.rs");
         assert_eq!(v["line"], 10);
@@ -253,16 +238,9 @@ mod tests {
     #[test]
     fn dap_set_breakpoint_is_idempotent() {
         let mut ed = Editor::new();
-        execute_dap_set_breakpoint(
-            &mut ed,
-            &json!({"source": "/a.rs", "line": 10}),
-        )
-        .unwrap();
-        let out = execute_dap_set_breakpoint(
-            &mut ed,
-            &json!({"source": "/a.rs", "line": 10}),
-        )
-        .unwrap();
+        execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs", "line": 10})).unwrap();
+        let out =
+            execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs", "line": 10})).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         // Still one entry — not duplicated.
         assert_eq!(v["all_lines_for_source"], json!([10]));
@@ -273,19 +251,15 @@ mod tests {
         let mut ed = Editor::new();
         let err = execute_dap_set_breakpoint(&mut ed, &json!({"line": 1})).unwrap_err();
         assert!(err.contains("source"));
-        let err =
-            execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs"})).unwrap_err();
+        let err = execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs"})).unwrap_err();
         assert!(err.contains("line"));
     }
 
     #[test]
     fn dap_set_breakpoint_rejects_zero_line() {
         let mut ed = Editor::new();
-        let err = execute_dap_set_breakpoint(
-            &mut ed,
-            &json!({"source": "/a.rs", "line": 0}),
-        )
-        .unwrap_err();
+        let err = execute_dap_set_breakpoint(&mut ed, &json!({"source": "/a.rs", "line": 0}))
+            .unwrap_err();
         assert!(err.contains(">= 1"));
     }
 
@@ -313,8 +287,7 @@ mod tests {
     #[test]
     fn dap_step_unknown_direction_errors() {
         let mut ed = ed_with_dap_session();
-        let err =
-            execute_dap_step(&mut ed, &json!({"direction": "sideways"})).unwrap_err();
+        let err = execute_dap_step(&mut ed, &json!({"direction": "sideways"})).unwrap_err();
         assert!(err.contains("Unknown step"));
     }
 
@@ -394,8 +367,7 @@ mod tests {
         );
 
         let out =
-            execute_dap_inspect_variable(&ed, &json!({"name": "x", "scope": "Globals"}))
-                .unwrap();
+            execute_dap_inspect_variable(&ed, &json!({"name": "x", "scope": "Globals"})).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["value"], "999");
         assert_eq!(v["scope"], "Globals");

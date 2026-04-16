@@ -1,19 +1,27 @@
+mod changes;
 mod command;
 mod dap_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
 mod file_ops;
+mod help_ops;
+mod jumps;
 mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+mod register_ops;
+mod scheme_ops;
 mod search_ops;
+mod surround;
 mod syntax_ops;
 mod text_objects;
 mod visual;
 
+pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
+pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use lsp_ops::{LspLocation, LspRange};
 pub use marks::Mark;
 
@@ -23,10 +31,12 @@ mod tests;
 use std::collections::HashMap;
 
 use crate::buffer::Buffer;
+use crate::command_palette::CommandPalette;
 use crate::commands::CommandRegistry;
 use crate::dap_intent::DapIntent;
 use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
+use crate::kb_seed::seed_kb;
 use crate::keymap::{KeyPress, Keymap};
 use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
@@ -88,6 +98,26 @@ pub struct Editor {
     pub registers: HashMap<char, String>,
     /// Pending char-argument command (e.g. after pressing `f`, waiting for target char).
     pub pending_char_command: Option<String>,
+    /// True while the user is resolving `SPC h k` (describe-key).
+    /// The next key sequence they type is looked up in the normal
+    /// keymap, and the resulting command's help page is opened instead
+    /// of dispatched. Cleared on resolution or Escape.
+    pub awaiting_key_description: bool,
+    /// Active named register selected by `"x` prefix. Consumed by the
+    /// next yank/delete/paste operation. Uppercase = append mode,
+    /// `_` = black-hole (discard), `+`/`*` = system clipboard.
+    pub active_register: Option<char>,
+    /// True after the user pressed `"` in normal/visual mode; the next
+    /// char will populate [`Self::active_register`].
+    pub pending_register_prompt: bool,
+    /// True after the user pressed `Ctrl-R` in insert mode; the next
+    /// char selects a register whose contents will be inserted at the
+    /// cursor. Cleared on resolution or Escape.
+    pub pending_insert_register: bool,
+    /// First delimiter captured during a `cs<from><to>` sequence. Set
+    /// after `cs` + the first char, consumed when the second char
+    /// arrives.
+    pub pending_surround_from: Option<char>,
     /// Search state (pattern, cached matches, direction).
     pub search_state: SearchState,
     /// Current search input being typed in Search mode.
@@ -100,6 +130,10 @@ pub struct Editor {
     pub viewport_height: usize,
     /// Fuzzy file picker state. Some when the picker overlay is active.
     pub file_picker: Option<FilePicker>,
+    /// Ranger-style directory browser. Some when the browser overlay is active.
+    pub file_browser: Option<crate::FileBrowser>,
+    /// Fuzzy command palette state. Some when the palette overlay is active.
+    pub command_palette: Option<CommandPalette>,
     /// Tab completion matches for command mode (:e path).
     pub tab_completions: Vec<String>,
     pub tab_completion_idx: usize,
@@ -109,6 +143,21 @@ pub struct Editor {
     pub insert_start_offset: Option<usize>,
     /// The command that initiated the current insert mode session (for dot-repeat).
     pub insert_initiated_by: Option<String>,
+    /// Cursor position (buffer_idx, row, col) at the point insert mode was
+    /// last exited. Used by `gi` to re-enter insert at that spot.
+    pub last_insert_pos: Option<(usize, usize, usize)>,
+    /// Jump list (vim `Ctrl-o` / `Ctrl-i`, Practical Vim ch. 9).
+    /// Oldest → newest. Capped at [`JUMP_LIST_CAP`].
+    pub jumps: Vec<JumpEntry>,
+    /// Cursor into `jumps`. `jump_idx == jumps.len()` means "past newest"
+    /// (fresh state); a successful Ctrl-o decrements it.
+    pub jump_idx: usize,
+    /// Change list (vim `g;` / `g,`, Practical Vim ch. 9). Oldest →
+    /// newest. Capped at [`CHANGE_LIST_CAP`].
+    pub changes: Vec<ChangeEntry>,
+    /// Cursor into `changes`. `change_idx == changes.len()` means
+    /// "past newest"; a successful `g;` decrements it.
+    pub change_idx: usize,
     /// Vi-style count prefix (e.g. `5j` = move down 5). None = no count typed.
     pub count_prefix: Option<usize>,
     /// Count saved for pending char-argument commands (f/F/t/T/r + char).
@@ -157,6 +206,27 @@ pub struct Editor {
     pub last_macro_register: Option<char>,
     /// Recursion depth guard during macro replay (max 10).
     pub macro_replay_depth: usize,
+    /// Knowledge base: backing store for the help system and the
+    /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
+    /// hand-authored concept nodes on startup.
+    pub kb: mae_kb::KnowledgeBase,
+    /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
+    /// `,` repeats opposite.
+    pub last_find_char: Option<(char, String)>,
+    /// Saved visual selection from last exit: (anchor_row, anchor_col, cursor_row, cursor_col, visual_type).
+    pub last_visual: Option<(usize, usize, usize, usize, crate::VisualType)>,
+    /// Scheme code queued for evaluation by the binary. Commands like
+    /// `eval-line` / `eval-buffer` push the captured text here; the
+    /// event loop drains it after dispatch (same pattern as LSP intents).
+    pub pending_scheme_eval: Vec<String>,
+    /// Running AI session spend in USD (zero for unpriced/local models).
+    /// Surfaced in the status line so users see the meter tick before
+    /// they blow past a budget.
+    pub ai_session_cost_usd: f64,
+    /// Cumulative prompt tokens this session (all providers).
+    pub ai_session_tokens_in: u64,
+    /// Cumulative completion tokens this session (all providers).
+    pub ai_session_tokens_out: u64,
 }
 
 impl Default for Editor {
@@ -167,6 +237,8 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new() -> Self {
+        let commands = CommandRegistry::with_builtins();
+        let kb = seed_kb(&commands);
         Editor {
             buffers: vec![Buffer::new()],
             window_mgr: WindowManager::new(0),
@@ -174,7 +246,7 @@ impl Editor {
             running: true,
             status_msg: String::new(),
             command_line: String::new(),
-            commands: CommandRegistry::with_builtins(),
+            commands,
             keymaps: Self::default_keymaps(),
             which_key_prefix: Vec::new(),
             message_log: MessageLog::new(1000),
@@ -182,17 +254,29 @@ impl Editor {
             debug_state: None,
             registers: HashMap::new(),
             pending_char_command: None,
+            awaiting_key_description: false,
+            active_register: None,
+            pending_register_prompt: false,
+            pending_insert_register: false,
+            pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
             file_picker: None,
+            file_browser: None,
+            command_palette: None,
             tab_completions: Vec::new(),
             tab_completion_idx: 0,
             last_edit: None,
             insert_start_offset: None,
             insert_initiated_by: None,
+            last_insert_pos: None,
+            jumps: Vec::new(),
+            jump_idx: 0,
+            changes: Vec::new(),
+            change_idx: 0,
             count_prefix: None,
             pending_char_count: 1,
             alternate_buffer_idx: None,
@@ -212,11 +296,20 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_find_char: None,
+            last_visual: None,
+            pending_scheme_eval: Vec::new(),
+            kb,
+            ai_session_cost_usd: 0.0,
+            ai_session_tokens_in: 0,
+            ai_session_tokens_out: 0,
         }
     }
 
     pub fn with_buffer(buf: Buffer) -> Self {
         let buf_file_path_snapshot = buf.file_path().map(|p| p.to_path_buf());
+        let commands = CommandRegistry::with_builtins();
+        let kb = seed_kb(&commands);
         Editor {
             buffers: vec![buf],
             window_mgr: WindowManager::new(0),
@@ -224,7 +317,7 @@ impl Editor {
             running: true,
             status_msg: String::new(),
             command_line: String::new(),
-            commands: CommandRegistry::with_builtins(),
+            commands,
             keymaps: Self::default_keymaps(),
             which_key_prefix: Vec::new(),
             message_log: MessageLog::new(1000),
@@ -232,17 +325,29 @@ impl Editor {
             debug_state: None,
             registers: HashMap::new(),
             pending_char_command: None,
+            awaiting_key_description: false,
+            active_register: None,
+            pending_register_prompt: false,
+            pending_insert_register: false,
+            pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
             file_picker: None,
+            file_browser: None,
+            command_palette: None,
             tab_completions: Vec::new(),
             tab_completion_idx: 0,
             last_edit: None,
             insert_start_offset: None,
             insert_initiated_by: None,
+            last_insert_pos: None,
+            jumps: Vec::new(),
+            jump_idx: 0,
+            changes: Vec::new(),
+            change_idx: 0,
             count_prefix: None,
             pending_char_count: 1,
             alternate_buffer_idx: None,
@@ -273,6 +378,13 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_find_char: None,
+            last_visual: None,
+            pending_scheme_eval: Vec::new(),
+            kb,
+            ai_session_cost_usd: 0.0,
+            ai_session_tokens_in: 0,
+            ai_session_tokens_out: 0,
         }
     }
 
@@ -282,7 +394,12 @@ impl Editor {
             Mode::Normal => "normal",
             Mode::Insert => "insert",
             Mode::Visual(_) => "visual",
-            Mode::Command | Mode::ConversationInput | Mode::Search | Mode::FilePicker => "command",
+            Mode::Command
+            | Mode::ConversationInput
+            | Mode::Search
+            | Mode::FilePicker
+            | Mode::FileBrowser
+            | Mode::CommandPalette => "command",
         };
         self.keymaps.get(name)
     }
@@ -331,6 +448,39 @@ impl Editor {
         }
         self.buffers.push(Buffer::new_conversation("*AI*"));
         self.buffers.len() - 1
+    }
+
+    /// Find or create the `*Help*` buffer and navigate it to `node_id`.
+    /// Returns the buffer index. Does NOT switch focus — callers decide.
+    pub fn ensure_help_buffer_idx(&mut self, node_id: &str) -> usize {
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Help)
+        {
+            if let Some(view) = self.buffers[idx].help_view.as_mut() {
+                view.navigate_to(node_id.to_string());
+            }
+            return idx;
+        }
+        self.buffers.push(Buffer::new_help(node_id));
+        self.buffers.len() - 1
+    }
+
+    /// Mutable view onto the help buffer's HelpView, if any help buffer exists.
+    pub fn help_view_mut(&mut self) -> Option<&mut crate::help_view::HelpView> {
+        self.buffers
+            .iter_mut()
+            .find(|b| b.kind == crate::buffer::BufferKind::Help)
+            .and_then(|b| b.help_view.as_mut())
+    }
+
+    /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
+    pub fn help_view(&self) -> Option<&crate::help_view::HelpView> {
+        self.buffers
+            .iter()
+            .find(|b| b.kind == crate::buffer::BufferKind::Help)
+            .and_then(|b| b.help_view.as_ref())
     }
 
     /// Switch the focused window to the buffer at the given index.

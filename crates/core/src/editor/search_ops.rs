@@ -89,6 +89,55 @@ impl Editor {
         }
     }
 
+    /// Select the match at-or-adjacent to the cursor in the given direction,
+    /// entering Visual Char mode with the match highlighted. Implements gn/gN
+    /// from Practical Vim tip 86.
+    ///
+    /// Returns true if a match was selected, false if no regex or no match.
+    pub(crate) fn visual_select_match(&mut self, forward: bool) -> bool {
+        let re = match self.search_state.regex {
+            Some(ref re) => re.clone(),
+            None => {
+                self.set_status("No previous search");
+                return false;
+            }
+        };
+
+        let direction = if forward {
+            SearchDirection::Forward
+        } else {
+            SearchDirection::Backward
+        };
+
+        let buf = &self.buffers[self.active_buffer_idx()];
+        let win = self.window_mgr.focused_window();
+        let char_offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+
+        let m = match search::find_match_at_or_adjacent(buf.rope(), &re, char_offset, direction) {
+            Some(m) => m,
+            None => {
+                self.set_status("Pattern not found");
+                return false;
+            }
+        };
+
+        // Set visual anchor to match start, cursor to match end - 1 (inclusive).
+        let rope = buf.rope();
+        let anchor_row = rope.char_to_line(m.start);
+        let anchor_col = m.start - rope.line_to_char(anchor_row);
+        let end_inclusive = m.end.saturating_sub(1).max(m.start);
+        let cursor_row = rope.char_to_line(end_inclusive);
+        let cursor_col = end_inclusive - rope.line_to_char(cursor_row);
+
+        self.visual_anchor_row = anchor_row;
+        self.visual_anchor_col = anchor_col;
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = cursor_row;
+        win.cursor_col = cursor_col;
+        self.mode = crate::Mode::Visual(crate::VisualType::Char);
+        true
+    }
+
     /// Search for word under cursor (* command).
     pub(crate) fn search_word_at_cursor(&mut self) {
         let buf = &self.buffers[self.active_buffer_idx()];
@@ -98,6 +147,33 @@ impl Editor {
         if let Some(pattern) = search::word_at_offset(buf.rope(), char_offset) {
             self.search_input = pattern.clone();
             self.search_state.direction = SearchDirection::Forward;
+            match Regex::new(&pattern) {
+                Ok(re) => {
+                    let matches = search::find_all(buf.rope(), &re);
+                    self.search_state.pattern = pattern;
+                    self.search_state.regex = Some(re);
+                    self.search_state.matches = matches;
+                    self.search_state.highlight_active = true;
+                    self.jump_to_next_match(true);
+                }
+                Err(e) => {
+                    self.set_status(format!("Invalid regex: {}", e));
+                }
+            }
+        } else {
+            self.set_status("No word under cursor");
+        }
+    }
+
+    /// Search for word under cursor backward (# command).
+    pub(crate) fn search_word_at_cursor_backward(&mut self) {
+        let buf = &self.buffers[self.active_buffer_idx()];
+        let win = self.window_mgr.focused_window();
+        let char_offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+
+        if let Some(pattern) = search::word_at_offset(buf.rope(), char_offset) {
+            self.search_input = pattern.clone();
+            self.search_state.direction = SearchDirection::Backward;
             match Regex::new(&pattern) {
                 Ok(re) => {
                     let matches = search::find_all(buf.rope(), &re);

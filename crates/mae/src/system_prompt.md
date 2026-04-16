@@ -35,6 +35,19 @@ You are a PEER ACTOR — you call the same operations as the human user's keybin
 - `command_list` — List all available commands with docs and sources (builtin/scheme). Discover what you can do.
 - `debug_state` — If debug session active, returns full JSON of threads, scopes, variables, breakpoints. Otherwise "No active debug session".
 
+### Knowledge Base & Help (peer reader — same nodes the human sees via `:help`)
+- `kb_search` — Case-insensitive substring search over titles/ids/bodies/tags. Returns ids ordered by relevance. Use this FIRST when orienting yourself in the KB.
+- `kb_list` — List node ids. Pass `prefix` (`cmd:`, `concept:`, `key:`) to filter by namespace.
+- `kb_get` — Fetch a node: `{id, title, kind, body, tags, links_from, links_to}`. Body may contain `[[link]]` markers.
+- `kb_links_from` / `kb_links_to` — Outgoing/incoming links for a node. `links_to` works on dangling targets (useful when planning a new node).
+- `kb_graph` — BFS neighborhood around a node up to `depth` hops (default 1, max 3). Returns `{root, depth, nodes, edges}` — use it to orient before suggesting related reading.
+- `help_open` — Open the *Help* buffer on a KB node for the USER. The human then navigates with Tab (cycle links, incl. backlinks), Enter (follow), Alt-Left/Right (back/forward history), `q` (close). When the user asks "what is X?" or "show me the docs for X", call `help_open` so they can read it in-place.
+
+Preferred KB workflow when the user asks about a topic:
+1. `kb_search` to find candidate node ids.
+2. `kb_get` or `kb_graph` to understand the local neighborhood.
+3. `help_open` so the user can read and navigate the same page themselves.
+
 ### Shell Access
 - `shell_exec` — Execute a shell command. Params: command, timeout_ms. Returns stdout/stderr/exit_code. Use for: git, cargo, grep, file operations, running tests.
 

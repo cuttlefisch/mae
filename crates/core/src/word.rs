@@ -211,6 +211,79 @@ pub fn big_word_start_backward(rope: &Rope, pos: usize) -> usize {
     p
 }
 
+/// vi `ge` — move to end of previous word.
+///
+/// Scans backward for the largest q < pos such that q is on a word or
+/// punctuation char and the char at q+1 is a different class (or q is the
+/// last char). This correctly handles: mid-word → prev word end, on-end →
+/// prev word end, on-whitespace → nearest word end behind us.
+pub fn word_end_backward(rope: &Rope, pos: usize) -> usize {
+    let len = rope.len_chars();
+    if len == 0 || pos == 0 {
+        return 0;
+    }
+    let mut q = pos - 1;
+    loop {
+        let cls = classify(rope.char(q));
+        let is_word_or_punct = cls == CharClass::Word || cls == CharClass::Punctuation;
+        let boundary = q + 1 >= len || classify(rope.char(q + 1)) != cls;
+        if is_word_or_punct && boundary {
+            return q;
+        }
+        if q == 0 {
+            return 0;
+        }
+        q -= 1;
+    }
+}
+
+/// vi `gE` — move to end of previous WORD (whitespace-delimited).
+pub fn big_word_end_backward(rope: &Rope, pos: usize) -> usize {
+    let len = rope.len_chars();
+    if len == 0 || pos == 0 {
+        return 0;
+    }
+    let mut q = pos - 1;
+    loop {
+        let is_non_ws = !matches!(
+            classify(rope.char(q)),
+            CharClass::Whitespace | CharClass::Newline
+        );
+        let next_is_ws_or_end = q + 1 >= len
+            || matches!(
+                classify(rope.char(q + 1)),
+                CharClass::Whitespace | CharClass::Newline
+            );
+        if is_non_ws && next_is_ws_or_end {
+            return q;
+        }
+        if q == 0 {
+            return 0;
+        }
+        q -= 1;
+    }
+}
+
+/// vi `^` — column of the first non-blank character on the given line.
+///
+/// Returns 0 for empty or all-whitespace lines.
+pub fn first_non_blank_col(rope: &Rope, line: usize) -> usize {
+    if line >= rope.len_lines() {
+        return 0;
+    }
+    // Use a streaming char iterator (amortised O(1) per char) instead of
+    // indexed `.char(i)` access (O(log N) each).
+    for (i, ch) in rope.line(line).chars().enumerate() {
+        if ch == '\n' {
+            break;
+        }
+        if !ch.is_whitespace() {
+            return i;
+        }
+    }
+    0
+}
+
 /// vi `E` — move to end of current/next WORD (whitespace-delimited).
 pub fn big_word_end_forward(rope: &Rope, pos: usize) -> usize {
     let len = rope.len_chars();
@@ -854,6 +927,122 @@ mod tests {
     fn big_e_skips_punct() {
         let rope = Rope::from_str("hello.world next");
         assert_eq!(big_word_end_forward(&rope, 0), 10); // end of 'hello.world'
+    }
+
+    // --- word_end_backward (ge) ---
+
+    #[test]
+    fn ge_from_next_word_start() {
+        // "foo bar" — from 'b' (pos 4), ge should land on end of 'foo' (pos 2)
+        let rope = Rope::from_str("foo bar");
+        assert_eq!(word_end_backward(&rope, 4), 2);
+    }
+
+    #[test]
+    fn ge_from_word_middle() {
+        // "foo bar" — from 'a' of 'bar' (pos 5), ge → end of 'foo' (pos 2)
+        let rope = Rope::from_str("foo bar");
+        assert_eq!(word_end_backward(&rope, 5), 2);
+    }
+
+    #[test]
+    fn ge_from_whitespace() {
+        // "foo bar" — from ' ' (pos 3), ge → end of 'foo' (pos 2)
+        let rope = Rope::from_str("foo bar");
+        assert_eq!(word_end_backward(&rope, 3), 2);
+    }
+
+    #[test]
+    fn ge_from_word_end_goes_to_prev_word_end() {
+        // "one two three" — from 'o' of 'two' (pos 6, end of two), ge → 'e' of one (pos 2)
+        let rope = Rope::from_str("one two three");
+        assert_eq!(word_end_backward(&rope, 6), 2);
+    }
+
+    #[test]
+    fn ge_at_buffer_start_returns_zero() {
+        let rope = Rope::from_str("hello");
+        assert_eq!(word_end_backward(&rope, 0), 0);
+    }
+
+    #[test]
+    fn ge_across_punct_boundary() {
+        // "foo.bar" — punct is its own class. From 'b' (pos 4), ge → '.' (pos 3).
+        let rope = Rope::from_str("foo.bar");
+        assert_eq!(word_end_backward(&rope, 4), 3);
+    }
+
+    #[test]
+    fn ge_empty_rope() {
+        let rope = Rope::from_str("");
+        assert_eq!(word_end_backward(&rope, 0), 0);
+    }
+
+    // --- big_word_end_backward (gE) ---
+
+    #[test]
+    fn big_ge_treats_punct_as_word() {
+        // "foo.bar baz" — from 'b' of 'baz' (pos 8), gE → 'r' of 'foo.bar' (pos 6)
+        let rope = Rope::from_str("foo.bar baz");
+        assert_eq!(big_word_end_backward(&rope, 8), 6);
+    }
+
+    #[test]
+    fn big_ge_from_whitespace() {
+        // "hello world" — from ' ' (pos 5), gE → 'o' of hello (pos 4)
+        let rope = Rope::from_str("hello world");
+        assert_eq!(big_word_end_backward(&rope, 5), 4);
+    }
+
+    #[test]
+    fn big_ge_at_start_returns_zero() {
+        let rope = Rope::from_str("abc");
+        assert_eq!(big_word_end_backward(&rope, 0), 0);
+    }
+
+    // --- first_non_blank_col (^) ---
+
+    #[test]
+    fn first_non_blank_on_unindented_line() {
+        let rope = Rope::from_str("hello\n");
+        assert_eq!(first_non_blank_col(&rope, 0), 0);
+    }
+
+    #[test]
+    fn first_non_blank_skips_leading_spaces() {
+        let rope = Rope::from_str("   hello\n");
+        assert_eq!(first_non_blank_col(&rope, 0), 3);
+    }
+
+    #[test]
+    fn first_non_blank_skips_tabs_and_spaces() {
+        let rope = Rope::from_str("\t  hello\n");
+        assert_eq!(first_non_blank_col(&rope, 0), 3);
+    }
+
+    #[test]
+    fn first_non_blank_all_whitespace_line() {
+        let rope = Rope::from_str("   \n");
+        // Blank line: return 0 (no non-blank to land on)
+        assert_eq!(first_non_blank_col(&rope, 0), 0);
+    }
+
+    #[test]
+    fn first_non_blank_empty_line() {
+        let rope = Rope::from_str("\n\n");
+        assert_eq!(first_non_blank_col(&rope, 0), 0);
+    }
+
+    #[test]
+    fn first_non_blank_line_out_of_range() {
+        let rope = Rope::from_str("hello\n");
+        assert_eq!(first_non_blank_col(&rope, 999), 0);
+    }
+
+    #[test]
+    fn first_non_blank_on_second_line() {
+        let rope = Rope::from_str("first\n    second\n");
+        assert_eq!(first_non_blank_col(&rope, 1), 4);
     }
 
     // --- find_char_forward (f) ---

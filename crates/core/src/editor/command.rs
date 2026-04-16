@@ -65,8 +65,94 @@ impl Editor {
                 self.dispatch_builtin("view-messages");
                 true
             }
+            "help" => {
+                // `:help`  → index; `:help <topic>` → open KB node `topic`
+                // with the same namespace-fallback the AI uses: first try
+                // the literal id, then `cmd:<topic>`, then `concept:<topic>`.
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.open_help_at("index"),
+                    Some(topic) => {
+                        let candidates = [
+                            topic.to_string(),
+                            format!("cmd:{}", topic),
+                            format!("concept:{}", topic),
+                        ];
+                        let found = candidates.iter().find(|id| self.kb.contains(id));
+                        match found {
+                            Some(id) => self.open_help_at(id),
+                            None => self.set_status(format!("No help for: {}", topic)),
+                        }
+                    }
+                }
+                true
+            }
+            "describe-command" => {
+                let Some(name) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+                    self.set_status("Usage: :describe-command <name>");
+                    return true;
+                };
+                let id = format!("cmd:{}", name);
+                if self.kb.contains(&id) {
+                    self.open_help_at(&id);
+                } else {
+                    self.set_status(format!("Unknown command: {}", name));
+                }
+                true
+            }
             "diagnostics" | "diag" => {
                 self.dispatch_builtin("lsp-show-diagnostics");
+                true
+            }
+            "changes" => {
+                self.dispatch_builtin("show-changes-buffer");
+                true
+            }
+            "reg" | "registers" | "display-registers" => {
+                self.dispatch_builtin("show-registers");
+                true
+            }
+            "kb-ingest" | "kb-ingest-dir" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-ingest <directory>"),
+                    Some(dir) => {
+                        let report = self.kb.ingest_org_dir(dir);
+                        self.set_status(format!(
+                            "kb: indexed {}, skipped {} (no :ID:), errors {}",
+                            report.indexed,
+                            report.skipped_no_id,
+                            report.read_errors.len()
+                        ));
+                    }
+                }
+                true
+            }
+            "kb-save" => {
+                self.dispatch_path_op(
+                    args,
+                    "kb-save",
+                    |ed, p| {
+                        ed.kb
+                            .save_to_sqlite(p)
+                            .map(|()| ed.kb.len())
+                            .map_err(|e| format!("kb save failed: {}", e))
+                    },
+                    "Saved",
+                    "to",
+                );
+                true
+            }
+            "kb-load" => {
+                self.dispatch_path_op(
+                    args,
+                    "kb-load",
+                    |ed, p| {
+                        ed.kb
+                            .load_from_sqlite(p)
+                            .map_err(|e| format!("kb load failed: {}", e))
+                    },
+                    "Loaded",
+                    "from",
+                );
                 true
             }
             "theme" => {
@@ -98,8 +184,7 @@ impl Editor {
                 let extra_args: Vec<String> = parts.map(|s| s.to_string()).collect();
                 match (adapter, program) {
                     (Some(adapter), Some(program)) => {
-                        if let Err(msg) =
-                            self.dap_start_with_adapter(adapter, program, &extra_args)
+                        if let Err(msg) = self.dap_start_with_adapter(adapter, program, &extra_args)
                         {
                             self.set_status(msg);
                         }

@@ -126,6 +126,23 @@ impl Window {
         self.set_cursor_from_offset(buf, new_pos);
     }
 
+    pub fn move_word_end_backward(&mut self, buf: &crate::buffer::Buffer) {
+        let offset = buf.char_offset_at(self.cursor_row, self.cursor_col);
+        let new_pos = crate::word::word_end_backward(buf.rope(), offset);
+        self.set_cursor_from_offset(buf, new_pos);
+    }
+
+    pub fn move_big_word_end_backward(&mut self, buf: &crate::buffer::Buffer) {
+        let offset = buf.char_offset_at(self.cursor_row, self.cursor_col);
+        let new_pos = crate::word::big_word_end_backward(buf.rope(), offset);
+        self.set_cursor_from_offset(buf, new_pos);
+    }
+
+    /// vi `^` — move to first non-blank column on the current line.
+    pub fn move_to_first_non_blank(&mut self, buf: &crate::buffer::Buffer) {
+        self.cursor_col = crate::word::first_non_blank_col(buf.rope(), self.cursor_row);
+    }
+
     pub fn move_matching_bracket(&mut self, buf: &crate::buffer::Buffer) {
         let offset = buf.char_offset_at(self.cursor_row, self.cursor_col);
         if let Some(new_pos) = crate::word::matching_bracket(buf.rope(), offset) {

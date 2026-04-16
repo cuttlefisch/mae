@@ -1,6 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mae_ai::AiCommand;
-use mae_core::{CommandSource, Editor, Key, KeyPress, LookupResult, Mode};
+use mae_core::{
+    BufferKind, CommandSource, Editor, Key, KeyPress, LookupResult, Mode, PalettePurpose,
+};
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
@@ -79,10 +81,31 @@ pub fn handle_key(
         }
         Mode::Search => handle_search_mode(editor, key),
         Mode::FilePicker => handle_file_picker_mode(editor, key),
+        Mode::FileBrowser => handle_file_browser_mode(editor, key),
+        Mode::CommandPalette => handle_command_palette_mode(editor, scheme, key),
     }
 
     if editor.mode != mode_before {
         pending_keys.clear();
+    }
+
+    // --- Drain pending Scheme eval requests ---
+    // Commands like `eval-line` / `eval-buffer` push code here;
+    // the actual evaluation needs the SchemeRuntime which lives in
+    // the binary, not in mae-core.
+    if !editor.pending_scheme_eval.is_empty() {
+        let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
+        for code in &exprs {
+            let output = scheme.eval_for_repl(code, editor);
+            // Short result → status bar; always append to *Scheme* buffer.
+            let lines: Vec<&str> = output.lines().collect();
+            if let Some(result_line) = lines.iter().find(|l| l.starts_with("; =>")) {
+                editor.set_status(result_line.trim_start_matches("; => "));
+            } else if let Some(err_line) = lines.iter().find(|l| l.starts_with("; error")) {
+                editor.set_status(*err_line);
+            }
+            editor.append_to_scheme_repl(&output);
+        }
     }
 }
 
@@ -163,7 +186,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
             if let Some(path) = picker.selected_path() {
                 editor.file_picker = None;
                 editor.mode = Mode::Normal;
-                editor.open_file(&path.to_string_lossy());
+                editor.open_file(&path);
             } else {
                 editor.file_picker = None;
                 editor.mode = Mode::Normal;
@@ -173,8 +196,17 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Up | KeyCode::BackTab => {
             picker.move_up();
         }
-        KeyCode::Down | KeyCode::Tab => {
+        KeyCode::Down => {
             picker.move_down();
+        }
+        KeyCode::Tab => {
+            // Doom-style: complete to longest shared prefix of filtered
+            // matches. If the prefix is already exhausted (single match or
+            // no common ground), fall back to moving the selection down —
+            // preserves the previous Tab = next candidate behavior.
+            if !picker.complete_longest_prefix() {
+                picker.move_down();
+            }
         }
         KeyCode::Backspace => {
             if picker.query.is_empty() {
@@ -203,6 +235,155 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
     }
 }
 
+/// Key handling for the ranger-style `FileBrowser` overlay.
+///
+/// Motion keys mirror vim where it makes sense (`j`/`k`, `h`/`l`), with
+/// Enter activating the selection (descend or open). A typed query
+/// narrows the current directory listing; descending clears it.
+///
+/// Exit via Esc / `q` / Ctrl-C.
+fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
+    use mae_core::file_browser::Activation;
+
+    let browser = match editor.file_browser.as_mut() {
+        Some(b) => b,
+        None => {
+            editor.mode = Mode::Normal;
+            return;
+        }
+    };
+
+    // Ctrl- bindings first so they can't be shadowed by plain-char handling.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('c') => {
+                editor.file_browser = None;
+                editor.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Char('j') => {
+                browser.move_down();
+                return;
+            }
+            KeyCode::Char('k') => {
+                browser.move_up();
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            editor.file_browser = None;
+            editor.mode = Mode::Normal;
+        }
+        KeyCode::Char('q') if browser.query.is_empty() => {
+            editor.file_browser = None;
+            editor.mode = Mode::Normal;
+        }
+        KeyCode::Enter | KeyCode::Char('l') if browser.query.is_empty() => {
+            if let Activation::OpenFile(path) = browser.activate() {
+                editor.file_browser = None;
+                editor.mode = Mode::Normal;
+                editor.open_file(&path);
+            }
+            // Descended / Nothing: stay in browser mode with refreshed listing.
+        }
+        // Enter while a query is active still activates (so users don't
+        // have to hit Backspace to clear the filter first).
+        KeyCode::Enter => {
+            if let Activation::OpenFile(path) = browser.activate() {
+                editor.file_browser = None;
+                editor.mode = Mode::Normal;
+                editor.open_file(&path);
+            }
+        }
+        KeyCode::Up => browser.move_up(),
+        KeyCode::Down => browser.move_down(),
+        KeyCode::Char('k') if browser.query.is_empty() => browser.move_up(),
+        KeyCode::Char('j') if browser.query.is_empty() => browser.move_down(),
+        KeyCode::Char('h') if browser.query.is_empty() => browser.ascend(),
+        KeyCode::Backspace => {
+            if browser.query.is_empty() {
+                // Empty query → Backspace means "go up one directory".
+                browser.ascend();
+            } else {
+                browser.query.pop();
+                browser.update_filter();
+            }
+        }
+        KeyCode::Char(ch) => {
+            browser.query.push(ch);
+            browser.update_filter();
+        }
+        _ => {}
+    }
+}
+
+fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, key: KeyEvent) {
+    // Pull the selected command name out *before* doing anything that
+    // might need a mutable borrow on `editor` (like closing the palette
+    // and dispatching). This avoids borrow-checker friction.
+    let palette = match editor.command_palette.as_mut() {
+        Some(p) => p,
+        None => {
+            editor.mode = Mode::Normal;
+            return;
+        }
+    };
+
+    match key.code {
+        KeyCode::Esc => {
+            editor.command_palette = None;
+            editor.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            let name = palette.selected_name().map(|s| s.to_string());
+            let purpose = palette.purpose;
+            editor.command_palette = None;
+            editor.mode = Mode::Normal;
+            match (name, purpose) {
+                (Some(cmd), PalettePurpose::Execute) => dispatch_command(editor, scheme, &cmd),
+                (Some(cmd), PalettePurpose::Describe) => {
+                    editor.open_help_at(&format!("cmd:{}", cmd))
+                }
+                (None, _) => editor.set_status("No command selected"),
+            }
+        }
+        KeyCode::Up | KeyCode::BackTab => {
+            palette.move_up();
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            palette.move_down();
+        }
+        KeyCode::Backspace => {
+            if palette.query.is_empty() {
+                editor.command_palette = None;
+                editor.mode = Mode::Normal;
+            } else {
+                palette.query.pop();
+                palette.update_filter();
+            }
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            palette.move_up();
+        }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            palette.move_down();
+        }
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.command_palette = None;
+            editor.mode = Mode::Normal;
+        }
+        KeyCode::Char(ch) => {
+            palette.query.push(ch);
+            palette.update_filter();
+        }
+        _ => {}
+    }
+}
+
 fn handle_keymap_mode(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
@@ -224,7 +405,12 @@ fn handle_keymap_mode(
         Mode::Normal => "normal",
         Mode::Insert => "insert",
         Mode::Visual(_) => "visual",
-        Mode::Command | Mode::ConversationInput | Mode::Search | Mode::FilePicker => "command",
+        Mode::Command
+        | Mode::ConversationInput
+        | Mode::Search
+        | Mode::FilePicker
+        | Mode::FileBrowser
+        | Mode::CommandPalette => "command",
     };
 
     let result = editor
@@ -253,17 +439,102 @@ fn handle_keymap_mode(
     }
 }
 
+/// Resolve one key sequence while `SPC h k` (describe-key) is armed.
+///
+/// Accumulates into `pending_keys`, consults the normal keymap, and on
+/// `Exact` opens the bound command's help page instead of dispatching
+/// it. `Prefix` keeps collecting; `None` reports "not bound". Escape
+/// cancels.
+fn handle_describe_key_await(editor: &mut Editor, key: KeyEvent, pending_keys: &mut Vec<KeyPress>) {
+    // Ctrl-C is always a hard exit.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        editor.awaiting_key_description = false;
+        pending_keys.clear();
+        editor.which_key_prefix.clear();
+        editor.running = false;
+        return;
+    }
+    if key.code == KeyCode::Esc {
+        editor.awaiting_key_description = false;
+        pending_keys.clear();
+        editor.which_key_prefix.clear();
+        editor.set_status("describe-key cancelled");
+        return;
+    }
+
+    let Some(kp) = crossterm_to_keypress(&key) else {
+        return;
+    };
+    pending_keys.push(kp);
+
+    let result = editor
+        .keymaps
+        .get("normal")
+        .map(|km| km.lookup(pending_keys))
+        .unwrap_or(LookupResult::None);
+
+    match result {
+        LookupResult::Exact(cmd) => {
+            let cmd = cmd.to_string();
+            editor.awaiting_key_description = false;
+            pending_keys.clear();
+            editor.which_key_prefix.clear();
+            let id = format!("cmd:{}", cmd);
+            if editor.kb.contains(&id) {
+                editor.open_help_at(&id);
+            } else {
+                // Command is bound but has no KB node (rare — all
+                // registered commands are seeded). Still useful to tell
+                // the user what it resolves to.
+                editor.set_status(format!("Key bound to: {} (no help page)", cmd));
+            }
+        }
+        LookupResult::Prefix => {
+            editor.which_key_prefix = pending_keys.clone();
+        }
+        LookupResult::None => {
+            editor.awaiting_key_description = false;
+            pending_keys.clear();
+            editor.which_key_prefix.clear();
+            editor.set_status("Key not bound");
+        }
+    }
+}
+
 fn handle_normal_mode(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // If we're resolving `SPC h k`, every subsequent keypress feeds
+    // into normal-keymap lookup until we get Exact/None. Bypass count
+    // prefix, char-await, and help-buffer shortcuts — this interaction
+    // is strictly "what command does this key sequence run?"
+    if editor.awaiting_key_description {
+        handle_describe_key_await(editor, key, pending_keys);
+        return;
+    }
+
+    // `"<char>` — register prompt. Capture the next char into
+    // active_register; Escape cancels. See register_ops.rs for the
+    // semantics of each register letter.
+    if editor.pending_register_prompt {
+        editor.pending_register_prompt = false;
+        if let KeyCode::Char(ch) = key.code {
+            editor.active_register = Some(ch);
+            editor.set_status(format!("\"{}", ch));
+        } else {
+            editor.set_status("");
+        }
+        return;
+    }
+
     // If a char-argument command is pending (f/F/t/T or text objects), capture the next char
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
             // Try text object dispatch first, then fall back to char motion
-            if !editor.dispatch_text_object(&cmd, ch) {
+            if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
                 editor.dispatch_char_motion(&cmd, ch);
             }
         }
@@ -306,6 +577,110 @@ fn handle_normal_mode(
             return;
         }
     }
+
+    // Help buffer: intercept a small set of navigation keys before the
+    // generic Normal-mode keymap lookup. This keeps the help buffer
+    // reachable with muscle-memory keys without polluting the global
+    // keymap (Tab/Enter mean different things elsewhere).
+    let is_help = {
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].kind == BufferKind::Help
+    };
+    if is_help && pending_keys.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let count = editor.count_prefix.unwrap_or(1).max(1);
+        match key.code {
+            KeyCode::Enter => {
+                editor.help_follow_link();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Tab => {
+                editor.help_next_link();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::BackTab => {
+                editor.help_prev_link();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('q') if !ctrl => {
+                editor.help_close();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('o') if ctrl => {
+                editor.help_back();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('i') if ctrl => {
+                editor.help_forward();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('j') if !ctrl => {
+                if let Some(view) = editor.help_view_mut() {
+                    view.scroll_down(count);
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('k') if !ctrl => {
+                if let Some(view) = editor.help_view_mut() {
+                    view.scroll_up(count);
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // In Normal mode, intercept j/k/G/gg for conversation buffer scrolling
+    // and `i` to re-enter ConversationInput mode.
+    let is_conv = {
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].conversation.is_some()
+    };
+    if is_conv && pending_keys.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let count = editor.count_prefix.unwrap_or(1).max(1);
+        match key.code {
+            KeyCode::Char('j') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                    conv.scroll_down(count);
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('k') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                    conv.scroll_up(count);
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('G') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                    conv.scroll_to_bottom();
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('i') | KeyCode::Char('a') if !ctrl => {
+                editor.mode = Mode::ConversationInput;
+                editor.count_prefix = None;
+                return;
+            }
+            _ => {}
+        }
+    }
+
     handle_keymap_mode(editor, scheme, key, pending_keys);
 }
 
@@ -315,10 +690,22 @@ fn handle_visual_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // Register prompt (`"<char>` in visual mode — same semantics as Normal).
+    if editor.pending_register_prompt {
+        editor.pending_register_prompt = false;
+        if let KeyCode::Char(ch) = key.code {
+            editor.active_register = Some(ch);
+            editor.set_status(format!("\"{}", ch));
+        } else {
+            editor.set_status("");
+        }
+        return;
+    }
+
     // Handle pending char-argument commands (f/F/t/T or text objects)
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
-            if !editor.dispatch_text_object(&cmd, ch) {
+            if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
                 editor.dispatch_char_motion(&cmd, ch);
             }
         }
@@ -364,10 +751,31 @@ fn handle_insert_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // Ctrl-R <reg> — insert the named register's contents at the cursor.
+    // The next char is captured here (after Ctrl-R has already fired).
+    // Escape cancels.
+    if editor.pending_insert_register {
+        editor.pending_insert_register = false;
+        if let KeyCode::Char(ch) = key.code {
+            editor.insert_from_register(ch);
+        }
+        return;
+    }
+
     // If the completion popup is visible, Tab/Ctrl-n/Ctrl-p navigate it.
     // When the popup is not visible, Tab falls through to keymap (which will
     // find no binding and do nothing, which is acceptable for now).
     let popup_open = !editor.completion_items.is_empty();
+
+    // Ctrl-R: arm the register-prompt state. Handled before the char
+    // dispatch below because `Ctrl-R` without popup would otherwise hit
+    // the generic `Char('r')` insertion path.
+    if let KeyCode::Char('r') = key.code {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            editor.pending_insert_register = true;
+            return;
+        }
+    }
 
     match key.code {
         KeyCode::Tab if popup_open => {
@@ -483,53 +891,77 @@ fn handle_insert_mode(
     handle_keymap_mode(editor, scheme, key, pending_keys);
 }
 
+fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>) {
+    let buf_idx = editor.active_buffer_idx();
+
+    // Reject submissions while the previous turn is still streaming.
+    // Otherwise a user who types faster than the provider responds ends
+    // up with a visibly "off by one" transcript: multiple [You] blocks
+    // appear before any [AI] reply, and the replies land interleaved
+    // with the next batch of prompts. This guard keeps the conversation
+    // strictly turn-by-turn so prompts stay aligned with their answers.
+    let (already_streaming, has_input) = match editor.buffers[buf_idx].conversation.as_ref() {
+        Some(conv) => (conv.streaming, !conv.input_line.is_empty()),
+        None => (false, false),
+    };
+    if !has_input {
+        editor.mode = Mode::Normal;
+        return;
+    }
+    if already_streaming {
+        editor.set_status("[AI] still responding — wait for the reply or press SPC a a to cancel");
+        return;
+    }
+
+    let input = editor.buffers[buf_idx]
+        .conversation
+        .as_mut()
+        .map(|conv| {
+            let input = conv.input_line.clone();
+            conv.push_user(&input);
+            conv.input_line.clear();
+            conv.input_cursor = 0;
+            conv.scroll_to_bottom();
+            conv.streaming = true;
+            conv.streaming_start = Some(std::time::Instant::now());
+            input
+        })
+        .unwrap_or_default();
+
+    if let Some(tx) = ai_tx {
+        if tx.try_send(AiCommand::Prompt(input)).is_err() {
+            warn!("AI command channel full or closed — prompt dropped");
+        }
+        editor.set_status("[AI] Thinking...");
+    } else {
+        warn!("AI prompt submitted but no AI provider configured");
+        editor.set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+        if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+            conv.streaming = false;
+            conv.streaming_start = None;
+        }
+    }
+    editor.mode = Mode::Normal;
+}
+
 fn handle_conversation_input(
     editor: &mut Editor,
     key: KeyEvent,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
     match key.code {
+        // --- Mode transitions ---
         KeyCode::Esc => {
             editor.mode = Mode::Normal;
         }
         KeyCode::Enter => {
-            let buf_idx = editor.active_buffer_idx();
-            let mut input = String::new();
-            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
-                input = conv.input_line.clone();
-                if !input.is_empty() {
-                    conv.push_user(&input);
-                    conv.input_line.clear();
-                    conv.streaming = true;
-                    conv.streaming_start = Some(std::time::Instant::now());
-                }
-            }
-            if !input.is_empty() {
-                if let Some(tx) = ai_tx {
-                    if tx.try_send(AiCommand::Prompt(input)).is_err() {
-                        warn!("AI command channel full or closed — prompt dropped");
-                    }
-                    editor.set_status("[AI] Thinking...");
-                } else {
-                    warn!("AI prompt submitted but no AI provider configured");
-                    editor
-                        .set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
-                    if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
-                        conv.streaming = false;
-                        conv.streaming_start = None;
-                    }
-                }
-            }
-            editor.mode = Mode::Normal;
+            conv_submit(editor, ai_tx);
         }
-        KeyCode::Backspace => {
-            let buf_idx = editor.active_buffer_idx();
-            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
-                conv.input_line.pop();
-            }
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Cancel streaming if active, otherwise exit mode
+
+        // --- Cancel / quit ---
+        KeyCode::Char('c') if ctrl => {
             let buf_idx = editor.active_buffer_idx();
             if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
                 if conv.streaming {
@@ -547,12 +979,125 @@ fn handle_conversation_input(
             }
             editor.running = false;
         }
-        KeyCode::Char(ch) => {
+
+        // --- Cursor movement ---
+        KeyCode::Char('a') if ctrl => {
             let buf_idx = editor.active_buffer_idx();
             if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
-                conv.input_line.push(ch);
+                conv.input_move_home();
             }
         }
+        KeyCode::Char('e') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_end();
+            }
+        }
+        KeyCode::Home => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_home();
+            }
+        }
+        KeyCode::End => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_end();
+            }
+        }
+        KeyCode::Char('b') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_backward();
+            }
+        }
+        KeyCode::Char('f') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_forward();
+            }
+        }
+        KeyCode::Left => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_backward();
+            }
+        }
+        KeyCode::Right => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_move_forward();
+            }
+        }
+
+        // --- Deletion ---
+        KeyCode::Backspace => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_backspace();
+            }
+        }
+        KeyCode::Char('h') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_backspace();
+            }
+        }
+        KeyCode::Delete => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_delete_forward();
+            }
+        }
+        KeyCode::Char('d') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_delete_forward();
+            }
+        }
+        KeyCode::Char('w') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_kill_word_backward();
+            }
+        }
+        KeyCode::Char('u') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_kill_to_start();
+            }
+        }
+        KeyCode::Char('k') if ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_kill_to_end();
+            }
+        }
+
+        // --- Scroll history (stay in input mode) ---
+        KeyCode::PageUp => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.scroll_up(10);
+            }
+        }
+        KeyCode::PageDown => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.scroll_down(10);
+            }
+        }
+
+        // --- Regular character insertion ---
+        KeyCode::Char(ch) if !ctrl => {
+            let buf_idx = editor.active_buffer_idx();
+            if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
+                conv.input_insert_char(ch);
+                // Scroll to bottom when typing so the user sees the prompt.
+                conv.scroll_to_bottom();
+            }
+        }
+
         _ => {}
     }
 }

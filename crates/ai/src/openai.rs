@@ -167,10 +167,23 @@ impl OpenAiProvider {
             }
         };
 
+        // OpenAI-compatible endpoints put token counts at the top level
+        // under "usage". Ollama's older builds may omit it — treat as
+        // absent (the session tracker will skip budget math for that
+        // turn rather than double-count the next one).
+        let usage = body.get("usage").map(|u| Usage {
+            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+        });
+
         Ok(ProviderResponse {
             text,
             tool_calls,
             stop_reason,
+            usage,
         })
     }
 }

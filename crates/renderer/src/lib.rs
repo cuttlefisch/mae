@@ -8,11 +8,11 @@ use mae_core::{
     grapheme, DiagnosticSeverity, Editor, HighlightSpan, Key, Mode, NamedColor, ThemeColor,
     ThemeStyle, VisualType, Window,
 };
-use std::collections::HashMap;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
+use std::collections::HashMap;
 
 /// Terminal renderer using ratatui/crossterm.
 ///
@@ -145,6 +145,32 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         render_status_bar(frame, chunks[1], editor);
         render_command_line(frame, chunks[2], editor);
         render_file_picker(frame, area, editor);
+    } else if editor.file_browser.is_some() {
+        // File browser overlay — same surrounding layout as the picker.
+        let chunks = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_status_bar(frame, chunks[1], editor);
+        render_command_line(frame, chunks[2], editor);
+        render_file_browser(frame, area, editor);
+    } else if editor.command_palette.is_some() {
+        // Command palette overlay — same layout as file picker, different popup.
+        let chunks = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_status_bar(frame, chunks[1], editor);
+        render_command_line(frame, chunks[2], editor);
+        render_command_palette(frame, area, editor);
     } else if !editor.which_key_prefix.is_empty() {
         // Which-key popup mode: [window area | which-key panel]
         let entries = if let Some(km) = editor.keymaps.get("normal") {
@@ -250,6 +276,9 @@ fn render_window_area(
                 mae_core::BufferKind::Messages => {
                     render_messages_window(frame, ratatui_rect, win, is_focused, editor);
                 }
+                mae_core::BufferKind::Help => {
+                    render_help_window(frame, ratatui_rect, buf, is_focused, editor);
+                }
                 _ => {
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
                     render_window(frame, ratatui_rect, buf, win, is_focused, editor, spans);
@@ -283,13 +312,11 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
 
         if editor.mode == Mode::Command {
             // command_cursor is a byte offset; count chars for display width.
-            let cursor_col = editor.command_line[..editor.command_cursor.min(editor.command_line.len())]
+            let cursor_col = editor.command_line
+                [..editor.command_cursor.min(editor.command_line.len())]
                 .chars()
                 .count() as u16;
-            frame.set_cursor_position(Position::new(
-                cmd_area.x + 1 + cursor_col,
-                cmd_area.y,
-            ));
+            frame.set_cursor_position(Position::new(cmd_area.x + 1 + cursor_col, cmd_area.y));
         } else if editor.mode == Mode::Search {
             frame.set_cursor_position(Position::new(
                 cmd_area.x + 1 + editor.search_input.len() as u16,
@@ -297,9 +324,15 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
             ));
         } else if editor.mode == Mode::ConversationInput {
             if let Some(ref conv) = focused_buf.conversation {
-                let input_x = inner.x + 2 + conv.input_line.len() as u16;
-                let input_y = inner.y + inner.height.saturating_sub(1);
-                frame.set_cursor_position(Position::new(input_x, input_y));
+                // Only show cursor if the input prompt is visible (scroll == 0
+                // means we're at the bottom where the prompt lives).
+                if conv.scroll == 0 {
+                    let cursor_byte = conv.input_cursor.min(conv.input_line.len());
+                    let cursor_col = conv.input_line[..cursor_byte].chars().count() as u16;
+                    let input_x = inner.x + 2 + cursor_col;
+                    let input_y = inner.y + inner.height.saturating_sub(1);
+                    frame.set_cursor_position(Position::new(input_x, input_y));
+                }
             }
         } else {
             let screen_row = focused_win
@@ -494,17 +527,12 @@ fn render_buffer(
                     let line_byte_start = buf.rope().char_to_byte(line_char_start);
                     let line_byte_end = buf.rope().char_to_byte(line_char_end);
                     for span in spans {
-                        if span.byte_end <= line_byte_start
-                            || span.byte_start >= line_byte_end
-                        {
+                        if span.byte_end <= line_byte_start || span.byte_start >= line_byte_end {
                             continue;
                         }
                         let sb = span.byte_start.max(line_byte_start);
                         let eb = span.byte_end.min(line_byte_end);
-                        let sc = buf
-                            .rope()
-                            .byte_to_char(sb)
-                            .saturating_sub(line_char_start);
+                        let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
                         let ec = buf
                             .rope()
                             .byte_to_char(eb)
@@ -599,10 +627,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
     // Recording indicator takes priority over the normal mode label.
     let recording_label: String;
     let mode_str = if editor.macro_recording {
-        recording_label = format!(
-            " REC @{} ",
-            editor.macro_register.unwrap_or('?')
-        );
+        recording_label = format!(" REC @{} ", editor.macro_register.unwrap_or('?'));
         recording_label.as_str()
     } else {
         match editor.mode {
@@ -614,6 +639,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
             Mode::ConversationInput => " AI INPUT ",
             Mode::Search => " SEARCH ",
             Mode::FilePicker => " FIND FILE ",
+            Mode::FileBrowser => " BROWSE ",
+            Mode::CommandPalette => " COMMAND PALETTE ",
         }
     };
     let mode_style = match editor.mode {
@@ -622,7 +649,9 @@ fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
         Mode::Visual(_) => ts(editor, "ui.statusline.mode.normal"),
         Mode::Command => ts(editor, "ui.statusline.mode.command"),
         Mode::ConversationInput => ts(editor, "ui.statusline.mode.conversation"),
-        Mode::Search | Mode::FilePicker => ts(editor, "ui.statusline.mode.command"),
+        Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
+            ts(editor, "ui.statusline.mode.command")
+        }
     };
 
     let sl_style = ts(editor, "ui.statusline");
@@ -631,20 +660,52 @@ fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
     let file_info = format!(" {}{}", buf.name, modified);
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
 
+    // AI spend meter, only shown once a session has had at least one turn.
+    // Format: "$0.12 · 4.2k/1.1k " (cost · tokens_in/tokens_out).
+    // Cost is omitted for unpriced models (Ollama) since it's always zero.
+    let ai_info: String = if editor.ai_session_tokens_in == 0 && editor.ai_session_tokens_out == 0 {
+        String::new()
+    } else {
+        let tokens = format!(
+            "{}/{}",
+            format_tokens(editor.ai_session_tokens_in),
+            format_tokens(editor.ai_session_tokens_out),
+        );
+        if editor.ai_session_cost_usd > 0.0 {
+            format!(" ${:.2} · {} ", editor.ai_session_cost_usd, tokens)
+        } else {
+            format!(" {} ", tokens)
+        }
+    };
+
     let remaining = (area.width as usize)
         .saturating_sub(mode_str.len())
         .saturating_sub(file_info.len())
+        .saturating_sub(ai_info.len())
         .saturating_sub(position.len());
 
     let status_line = Line::from(vec![
         Span::styled(mode_str, mode_style),
         Span::styled(file_info, sl_style),
         Span::styled(" ".repeat(remaining), sl_style),
+        Span::styled(ai_info, sl_style),
         Span::styled(position, sl_style),
     ]);
 
     let paragraph = Paragraph::new(status_line);
     frame.render_widget(paragraph, area);
+}
+
+/// Compact token count for the status line: 870 → "870", 4_200 → "4.2k",
+/// 1_234_567 → "1.2M". Bounded to 5 chars so the status line stays tidy.
+fn format_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -818,9 +879,8 @@ fn render_completion_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor
     } else {
         editor_area.y + cursor_screen_row.saturating_sub(popup_height)
     };
-    let popup_left = (editor_area.x + cursor_screen_col).min(
-        editor_area.x + editor_area.width.saturating_sub(popup_width),
-    );
+    let popup_left = (editor_area.x + cursor_screen_col)
+        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
 
     let popup_area = Rect {
         x: popup_left,
@@ -974,6 +1034,219 @@ fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor) {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// File browser popup (SPC f d)
+// ---------------------------------------------------------------------------
+
+fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let browser = match &editor.file_browser {
+        Some(b) => b,
+        None => return,
+    };
+
+    // Same geometry as the fuzzy picker so users aren't thrown by the switch.
+    let popup_w = (area.width * 70 / 100).max(40).min(area.width);
+    let popup_h = (area.height * 60 / 100).max(10).min(area.height);
+    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border.active");
+    let match_count = browser.filtered.len();
+    let total = browser.entries.len();
+    // Title shows the current dir path so users know where they are.
+    let cwd_display = browser.cwd.display().to_string();
+    let title = format!(" {} ({}/{}) ", cwd_display, match_count, total);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+
+    let text_style = ts(editor, "ui.text");
+    let selection_style = ts(editor, "ui.selection");
+    let prompt_style = ts(editor, "ui.popup.key");
+    // Dirs get the keyword color so they visually pop from regular files.
+    let dir_style = ts(editor, "keyword");
+
+    // First line: query input (empty is fine).
+    let query_line = Line::from(vec![
+        Span::styled("> ", prompt_style),
+        Span::styled(&browser.query, text_style),
+    ]);
+
+    let results_height = (inner.height - 1) as usize;
+    let mut lines = vec![query_line];
+
+    let start = if browser.selected >= results_height {
+        browser.selected - results_height + 1
+    } else {
+        0
+    };
+
+    for (display_idx, &idx) in browser
+        .filtered
+        .iter()
+        .skip(start)
+        .take(results_height)
+        .enumerate()
+    {
+        let entry = &browser.entries[idx];
+        let actual_idx = start + display_idx;
+        let base_style = if entry.is_dir { dir_style } else { text_style };
+        let style = if actual_idx == browser.selected {
+            selection_style
+        } else {
+            base_style
+        };
+
+        let mut name = entry.display();
+        let max_w = inner.width as usize - 1;
+        if name.len() > max_w {
+            // Prefer keeping the end (the distinguishing suffix).
+            name = format!("…{}", &name[name.len() - max_w + 1..]);
+        }
+        lines.push(Line::from(Span::styled(name, style)));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    // Place cursor at end of the query input.
+    frame.set_cursor_position(Position::new(
+        inner.x + 2 + browser.query.len() as u16,
+        inner.y,
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Command palette popup (SPC SPC)
+// ---------------------------------------------------------------------------
+
+fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let palette = match &editor.command_palette {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Centered popup: 70% width, 60% height (min 10 lines, min 40 cols)
+    let popup_w = (area.width * 70 / 100).max(40).min(area.width);
+    let popup_h = (area.height * 60 / 100).max(10).min(area.height);
+    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border.active");
+    let match_count = palette.filtered.len();
+    let total = palette.entries.len();
+    let title = format!(" Commands ({}/{}) ", match_count, total);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
+
+    let text_style = ts(editor, "ui.text");
+    let selection_style = ts(editor, "ui.selection");
+    let prompt_style = ts(editor, "ui.popup.key");
+    // Doc column uses the dim "popup.text" style — themes define this as
+    // the subdued secondary color (comment grey, base01, fg_dark, …).
+    let doc_style = ts(editor, "ui.popup.text");
+
+    // Query line
+    let query_line = Line::from(vec![
+        Span::styled("> ", prompt_style),
+        Span::styled(&palette.query, text_style),
+    ]);
+
+    let results_height = (inner.height - 1) as usize;
+    let mut lines = vec![query_line];
+
+    let start = if palette.selected >= results_height {
+        palette.selected - results_height + 1
+    } else {
+        0
+    };
+
+    // Compute a column width for the name portion so docs line up.
+    // Cap at 32 to keep long helper names from eating the whole popup.
+    let name_col = palette
+        .filtered
+        .iter()
+        .skip(start)
+        .take(results_height)
+        .map(|&i| palette.entries[i].name.len())
+        .max()
+        .unwrap_or(0)
+        .min(32);
+
+    for (display_idx, &entry_idx) in palette
+        .filtered
+        .iter()
+        .skip(start)
+        .take(results_height)
+        .enumerate()
+    {
+        let entry = &palette.entries[entry_idx];
+        let actual_idx = start + display_idx;
+        let row_style = if actual_idx == palette.selected {
+            selection_style
+        } else {
+            text_style
+        };
+        let doc_row_style = if actual_idx == palette.selected {
+            selection_style
+        } else {
+            doc_style
+        };
+
+        let name_display = if entry.name.len() > name_col {
+            format!("{:<w$}", &entry.name[..name_col], w = name_col)
+        } else {
+            format!("{:<w$}", entry.name, w = name_col)
+        };
+
+        let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3); // 1 leading space + 2 for "  " separator
+        let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
+            let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
+            s.push('…');
+            s
+        } else {
+            entry.doc.clone()
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {}  ", name_display), row_style),
+            Span::styled(doc_display, doc_row_style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    frame.set_cursor_position(Position::new(
+        inner.x + 2 + palette.query.len() as u16,
+        inner.y,
+    ));
+}
+
 fn render_conversation_window(
     frame: &mut Frame,
     area: Rect,
@@ -1016,11 +1289,9 @@ fn render_conversation_window(
         let rendered = conv.rendered_lines();
         let viewport_height = inner.height as usize;
 
-        let start = if rendered.len() > viewport_height {
-            rendered.len() - viewport_height
-        } else {
-            0
-        };
+        // Auto-scroll to bottom when scroll==0; scroll>0 offsets upward.
+        let auto_start = rendered.len().saturating_sub(viewport_height);
+        let start = auto_start.saturating_sub(conv.scroll);
 
         let mut lines: Vec<Line> = Vec::new();
         for rl in rendered.iter().skip(start).take(viewport_height) {
@@ -1051,9 +1322,275 @@ fn render_conversation_window(
             lines.push(Line::from(Span::styled(rl.text.clone(), style)));
         }
 
-        let paragraph = Paragraph::new(lines);
+        // Wrap long lines (tool-call JSON, long assistant prose) instead
+        // of silently truncating at the window edge. `trim: false`
+        // preserves leading whitespace so tool-result indentation and
+        // code blocks stay aligned.
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Help window (live view of a KB node)
+// ---------------------------------------------------------------------------
+
+/// Render a `*Help*` buffer. Pulls the current KB node from `editor.kb`
+/// every frame so KB regeneration is reflected immediately.
+///
+/// Layout:
+/// - Title header + kind/id/tags metadata
+/// - Body with `[[link]]` / `[[link|display]]` segments styled distinctly
+/// - **Neighborhood** footer: outgoing links first (with target titles),
+///   then backlinks (with source titles). Dangling targets render as
+///   `(missing)`.
+/// - Keybinding hint line
+///
+/// The focused link (from `HelpView.focused_link`, resolved against
+/// `editor.help_navigable_links()` — outgoing ++ backlinks) gets a
+/// selection highlight in both the body (for outgoing) and the
+/// neighborhood footer.
+///
+/// `view.scroll` is applied after layout so everything (neighborhood
+/// included) scrolls as a single document.
+fn render_help_window(
+    frame: &mut Frame,
+    area: Rect,
+    buf: &mae_core::Buffer,
+    focused: bool,
+    editor: &Editor,
+) {
+    let border_style = if focused {
+        ts(editor, "ui.window.border.active")
+    } else {
+        ts(editor, "ui.window.border")
+    };
+
+    let Some(view) = buf.help_view.as_ref() else {
+        return;
+    };
+
+    let block_title = match editor.kb.get(&view.current) {
+        Some(n) => format!(" *Help* — {} ", n.title),
+        None => format!(" *Help* — {} ", view.current),
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(block_title);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let Some(node) = editor.kb.get(&view.current) else {
+        let warn = ts(editor, "diagnostic.warn");
+        let msg = format!("(no such KB node: {})", view.current);
+        frame.render_widget(Paragraph::new(Line::styled(msg, warn)), inner);
+        return;
+    };
+
+    let text_style = ts(editor, "ui.text");
+    let meta_style = ts(editor, "ui.popup.text");
+    let section_style = ts(editor, "ui.popup.group").add_modifier(Modifier::BOLD);
+    let header_style = ts(editor, "ui.popup.group").add_modifier(Modifier::BOLD);
+    let link_style = ts(editor, "diagnostic.target").add_modifier(Modifier::UNDERLINED);
+    let focused_link_style = ts(editor, "ui.selection").add_modifier(Modifier::UNDERLINED);
+    let dangling_style = ts(editor, "diagnostic.warn");
+
+    // The combined navigable list is the single source of truth for
+    // focus ordering (outgoing ++ backlinks, deduped). Both body link
+    // highlighting and neighborhood-footer highlighting consult it.
+    let nav_links = editor.help_navigable_links();
+    let outgoing = editor.kb.links_from(&node.id);
+    let incoming = editor.kb.links_to(&node.id);
+    let focused_target: Option<&str> = view
+        .focused_link
+        .and_then(|i| nav_links.get(i).map(String::as_str));
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::styled(node.title.clone(), header_style));
+    lines.push(Line::styled(
+        format!("{} · {}", node_kind_label(node.kind), node.id),
+        meta_style,
+    ));
+    if !node.tags.is_empty() {
+        lines.push(Line::styled(
+            format!("tags: {}", node.tags.join(", ")),
+            meta_style,
+        ));
+    }
+    lines.push(Line::raw(""));
+
+    for body_line in node.body.lines() {
+        let spans = render_help_body_line(
+            body_line,
+            text_style,
+            link_style,
+            focused_link_style,
+            focused_target,
+        );
+        if spans.is_empty() {
+            lines.push(Line::raw(""));
+        } else {
+            lines.push(Line::from(spans));
+        }
+    }
+
+    // Neighborhood footer — local graph in adjacency-list form.
+    if !outgoing.is_empty() || !incoming.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("── Neighborhood ──", section_style));
+    }
+    if !outgoing.is_empty() {
+        lines.push(Line::styled("Outgoing:", meta_style));
+        for target in &outgoing {
+            lines.push(render_neighbor_row(
+                editor,
+                target,
+                '→',
+                focused_target == Some(target.as_str()),
+                text_style,
+                link_style,
+                focused_link_style,
+                dangling_style,
+                meta_style,
+            ));
+        }
+    }
+    if !incoming.is_empty() {
+        lines.push(Line::styled(
+            format!("Backlinks ({}):", incoming.len()),
+            meta_style,
+        ));
+        for src in &incoming {
+            lines.push(render_neighbor_row(
+                editor,
+                src,
+                '←',
+                focused_target == Some(src.as_str()),
+                text_style,
+                link_style,
+                focused_link_style,
+                dangling_style,
+                meta_style,
+            ));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Tab/S-Tab: focus link · Enter: follow · C-o/C-i: back/forward · q: close",
+        meta_style,
+    ));
+
+    let viewport_height = inner.height as usize;
+    let max_scroll = lines.len().saturating_sub(viewport_height);
+    let scroll = view.scroll.min(max_scroll);
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll)
+        .take(viewport_height)
+        .collect();
+
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+/// Build one line of the neighborhood footer:
+/// `  → target-id              Title of the target node`
+/// Missing (dangling) targets render title as `(missing)` in warn style.
+#[allow(clippy::too_many_arguments)]
+fn render_neighbor_row(
+    editor: &Editor,
+    target_id: &str,
+    arrow: char,
+    is_focused: bool,
+    text_style: Style,
+    link_style: Style,
+    focused_link_style: Style,
+    dangling_style: Style,
+    meta_style: Style,
+) -> Line<'static> {
+    let id_style = if is_focused {
+        focused_link_style
+    } else {
+        link_style
+    };
+    // Pad id column to 26 chars so titles align neatly.
+    let id_display = format!("{:<26}", target_id);
+    let (title_text, title_style) = match editor.kb.get(target_id) {
+        Some(n) => (n.title.clone(), text_style),
+        None => ("(missing)".to_string(), dangling_style),
+    };
+    Line::from(vec![
+        Span::styled(format!("  {} ", arrow), meta_style),
+        Span::styled(id_display, id_style),
+        Span::raw(" "),
+        Span::styled(title_text, title_style),
+    ])
+}
+
+fn node_kind_label(kind: mae_core::KbNodeKind) -> &'static str {
+    match kind {
+        mae_core::KbNodeKind::Index => "index",
+        mae_core::KbNodeKind::Command => "command",
+        mae_core::KbNodeKind::Concept => "concept",
+        mae_core::KbNodeKind::Key => "key",
+        mae_core::KbNodeKind::Note => "note",
+    }
+}
+
+/// Split a single body line into styled spans, highlighting `[[…]]`
+/// link markers. Mirrors `mae_kb::parse_links` scanning logic but emits
+/// plain-text runs too so the renderer can style each segment.
+fn render_help_body_line(
+    line: &str,
+    text_style: Style,
+    link_style: Style,
+    focused_link_style: Style,
+    focused_target: Option<&str>,
+) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let bytes = line.as_bytes();
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            if let Some(end_rel) = line[i + 2..].find("]]") {
+                let inner = &line[i + 2..i + 2 + end_rel];
+                let (target, display) = match inner.find('|') {
+                    Some(bar) => (inner[..bar].trim(), inner[bar + 1..].trim()),
+                    None => {
+                        let t = inner.trim();
+                        (t, t)
+                    }
+                };
+                if !target.is_empty() {
+                    if cursor < i {
+                        out.push(Span::styled(line[cursor..i].to_string(), text_style));
+                    }
+                    let style = if focused_target == Some(target) {
+                        focused_link_style
+                    } else {
+                        link_style
+                    };
+                    out.push(Span::styled(display.to_string(), style));
+                    cursor = i + 2 + end_rel + 2;
+                    i = cursor;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    if cursor < line.len() {
+        out.push(Span::styled(line[cursor..].to_string(), text_style));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,5 +1825,100 @@ mod tests {
         assert_eq!(gutter_width(100), 4);
         assert_eq!(gutter_width(999), 4);
         assert_eq!(gutter_width(1000), 5);
+    }
+
+    // --- Help body line rendering --------------------------------------
+
+    /// Helper: pick distinct styles for each role so tests can tell them apart.
+    fn help_test_styles() -> (Style, Style, Style) {
+        let text = Style::default().fg(Color::White);
+        let link = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::UNDERLINED);
+        let focused = Style::default()
+            .bg(Color::Blue)
+            .add_modifier(Modifier::UNDERLINED);
+        (text, link, focused)
+    }
+
+    #[test]
+    fn help_line_plain_text_is_single_span() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line("no links here", text, link, focused, None);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "no links here");
+        assert_eq!(spans[0].style, text);
+    }
+
+    #[test]
+    fn help_line_splits_around_link() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line(
+            "see [[concept:buffer]] for details",
+            text,
+            link,
+            focused,
+            None,
+        );
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "see ");
+        assert_eq!(spans[0].style, text);
+        assert_eq!(spans[1].content, "concept:buffer");
+        assert_eq!(spans[1].style, link);
+        assert_eq!(spans[2].content, " for details");
+        assert_eq!(spans[2].style, text);
+    }
+
+    #[test]
+    fn help_line_uses_display_override() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line(
+            "goto [[concept:buffer|the buffer]]",
+            text,
+            link,
+            focused,
+            None,
+        );
+        // display text, not target, is what renders
+        let link_span = spans.iter().find(|s| s.style == link).unwrap();
+        assert_eq!(link_span.content, "the buffer");
+    }
+
+    #[test]
+    fn help_line_focused_link_highlighted() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line("[[a]] and [[b]]", text, link, focused, Some("b"));
+        let a_span = spans.iter().find(|s| s.content == "a").unwrap();
+        let b_span = spans.iter().find(|s| s.content == "b").unwrap();
+        assert_eq!(a_span.style, link);
+        assert_eq!(b_span.style, focused);
+    }
+
+    #[test]
+    fn help_line_empty_target_is_plain_text() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line("[[]] stays", text, link, focused, None);
+        // The scanner doesn't emit a link for empty target; the brackets
+        // remain in the text run.
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "[[]] stays");
+    }
+
+    #[test]
+    fn help_line_unclosed_bracket_is_plain_text() {
+        let (text, link, focused) = help_test_styles();
+        let spans = render_help_body_line("oops [[nope", text, link, focused, None);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "oops [[nope");
+    }
+
+    #[test]
+    fn node_kind_label_covers_all_variants() {
+        use mae_core::KbNodeKind;
+        assert_eq!(node_kind_label(KbNodeKind::Index), "index");
+        assert_eq!(node_kind_label(KbNodeKind::Command), "command");
+        assert_eq!(node_kind_label(KbNodeKind::Concept), "concept");
+        assert_eq!(node_kind_label(KbNodeKind::Key), "key");
+        assert_eq!(node_kind_label(KbNodeKind::Note), "note");
     }
 }

@@ -48,6 +48,37 @@ pub fn find_all(rope: &Rope, regex: &Regex) -> Vec<SearchMatch> {
     matches
 }
 
+/// Find the match containing `char_offset` if any, otherwise the nearest
+/// match in `direction`. Wraps around the buffer when exhausted.
+///
+/// This is the `gn` / `gN` primitive from Practical Vim tip 86: the match
+/// "at or after/before" the cursor, so pressing `gn` while already inside
+/// a match selects that match instead of skipping past it.
+pub fn find_match_at_or_adjacent(
+    rope: &Rope,
+    regex: &Regex,
+    char_offset: usize,
+    direction: SearchDirection,
+) -> Option<SearchMatch> {
+    let matches = find_all(rope, regex);
+    if matches.is_empty() {
+        return None;
+    }
+    match direction {
+        SearchDirection::Forward => matches
+            .iter()
+            .find(|m| m.end > char_offset)
+            .copied()
+            .or_else(|| matches.first().copied()),
+        SearchDirection::Backward => matches
+            .iter()
+            .rev()
+            .find(|m| m.start <= char_offset)
+            .copied()
+            .or_else(|| matches.last().copied()),
+    }
+}
+
 /// Find the next match after char_offset in the given direction. Wraps if requested.
 pub fn find_next(
     rope: &Rope,
@@ -298,6 +329,62 @@ mod tests {
         let rope = Rope::from_str("hello world");
         let re = Regex::new("xyz").unwrap();
         let m = find_next(&rope, &re, 0, SearchDirection::Forward, true);
+        assert!(m.is_none());
+    }
+
+    // --- find_match_at_or_adjacent (gn / gN primitive) ---
+
+    #[test]
+    fn at_or_adjacent_forward_inside_match() {
+        // Cursor inside a match should select that match (Practical Vim tip 86)
+        let rope = Rope::from_str("hello world hello");
+        let re = Regex::new("hello").unwrap();
+        // cursor at 'e' of first hello (offset 1)
+        let m = find_match_at_or_adjacent(&rope, &re, 1, SearchDirection::Forward);
+        assert_eq!(m, Some(SearchMatch { start: 0, end: 5 }));
+    }
+
+    #[test]
+    fn at_or_adjacent_forward_after_match() {
+        let rope = Rope::from_str("hello world hello");
+        let re = Regex::new("hello").unwrap();
+        // cursor past first match; should get second
+        let m = find_match_at_or_adjacent(&rope, &re, 6, SearchDirection::Forward);
+        assert_eq!(m, Some(SearchMatch { start: 12, end: 17 }));
+    }
+
+    #[test]
+    fn at_or_adjacent_forward_wraps() {
+        let rope = Rope::from_str("hello world");
+        let re = Regex::new("hello").unwrap();
+        // cursor past only match — wrap back to it
+        let m = find_match_at_or_adjacent(&rope, &re, 10, SearchDirection::Forward);
+        assert_eq!(m, Some(SearchMatch { start: 0, end: 5 }));
+    }
+
+    #[test]
+    fn at_or_adjacent_backward_inside_match() {
+        let rope = Rope::from_str("hello world hello");
+        let re = Regex::new("hello").unwrap();
+        // cursor inside second match
+        let m = find_match_at_or_adjacent(&rope, &re, 14, SearchDirection::Backward);
+        assert_eq!(m, Some(SearchMatch { start: 12, end: 17 }));
+    }
+
+    #[test]
+    fn at_or_adjacent_backward_before_match() {
+        let rope = Rope::from_str("hello world hello");
+        let re = Regex::new("hello").unwrap();
+        // cursor before second match; backward should give first
+        let m = find_match_at_or_adjacent(&rope, &re, 10, SearchDirection::Backward);
+        assert_eq!(m, Some(SearchMatch { start: 0, end: 5 }));
+    }
+
+    #[test]
+    fn at_or_adjacent_no_match() {
+        let rope = Rope::from_str("nothing here");
+        let re = Regex::new("xyz").unwrap();
+        let m = find_match_at_or_adjacent(&rope, &re, 0, SearchDirection::Forward);
         assert!(m.is_none());
     }
 

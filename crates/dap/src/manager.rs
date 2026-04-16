@@ -86,10 +86,7 @@ pub enum DapTaskEvent {
         text: Option<String>,
     },
     /// Adapter emitted a `continued` event.
-    Continued {
-        thread_id: i64,
-        all_threads: bool,
-    },
+    Continued { thread_id: i64, all_threads: bool },
     /// Adapter emitted a `thread` event (started/exited).
     ThreadEvent { reason: String, thread_id: i64 },
     /// Adapter emitted an `output` event.
@@ -295,9 +292,7 @@ async fn handle_command(
                         .await;
                 }
                 Err(e) => {
-                    let _ = event_tx
-                        .send(DapTaskEvent::Error { message: e })
-                        .await;
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                 }
             }
         }
@@ -325,9 +320,7 @@ async fn handle_command(
             let threads = match sess.client.threads().await {
                 Ok(t) => t,
                 Err(e) => {
-                    let _ = event_tx
-                        .send(DapTaskEvent::Error { message: e })
-                        .await;
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                     return;
                 }
             };
@@ -350,9 +343,7 @@ async fn handle_command(
                             .await;
                     }
                     Err(e) => {
-                        let _ = event_tx
-                            .send(DapTaskEvent::Error { message: e })
-                            .await;
+                        let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                     }
                 }
             }
@@ -373,9 +364,7 @@ async fn handle_command(
                         .await;
                 }
                 Err(e) => {
-                    let _ = event_tx
-                        .send(DapTaskEvent::Error { message: e })
-                        .await;
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                 }
             }
         }
@@ -401,18 +390,14 @@ async fn handle_command(
                         .await;
                 }
                 Err(e) => {
-                    let _ = event_tx
-                        .send(DapTaskEvent::Error { message: e })
-                        .await;
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                 }
             }
         }
         DapCommand::Terminate => {
             if let Some(sess) = session.as_ref() {
                 if let Err(e) = sess.client.terminate().await {
-                    let _ = event_tx
-                        .send(DapTaskEvent::Error { message: e })
-                        .await;
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                 }
             }
         }
@@ -449,19 +434,14 @@ async fn forward_exec(
         _ => unreachable!("unknown exec command: {}", cmd_name),
     };
     if let Err(e) = result {
-        let _ = event_tx
-            .send(DapTaskEvent::Error { message: e })
-            .await;
+        let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
     }
 }
 
 /// Wait for the `initialized` event with a short timeout. Returns whether
 /// we saw it. Other events that arrive while waiting are forwarded to
 /// the editor unchanged so nothing is lost.
-async fn wait_for_initialized(
-    sess: &mut Session,
-    event_tx: &mpsc::Sender<DapTaskEvent>,
-) -> bool {
+async fn wait_for_initialized(sess: &mut Session, event_tx: &mpsc::Sender<DapTaskEvent>) -> bool {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -478,9 +458,7 @@ async fn wait_for_initialized(
                 return false;
             }
             Ok(Some(DapEventKind::Error(msg))) => {
-                let _ = event_tx
-                    .send(DapTaskEvent::Error { message: msg })
-                    .await;
+                let _ = event_tx.send(DapTaskEvent::Error { message: msg }).await;
             }
             Ok(Some(DapEventKind::OrphanResponse(_))) => continue,
             Ok(Some(DapEventKind::ReverseRequest(_))) => continue,
@@ -502,16 +480,17 @@ async fn handle_adapter_event(
             let _ = event_tx.send(DapTaskEvent::AdapterExited).await;
         }
         DapEventKind::Error(msg) => {
-            let _ = event_tx
-                .send(DapTaskEvent::Error { message: msg })
-                .await;
+            let _ = event_tx.send(DapTaskEvent::Error { message: msg }).await;
         }
         DapEventKind::OrphanResponse(_) => {}
         DapEventKind::ReverseRequest(_) => {}
     }
 }
 
-async fn forward_adapter_event(e: crate::protocol::DapEvent, event_tx: &mpsc::Sender<DapTaskEvent>) {
+async fn forward_adapter_event(
+    e: crate::protocol::DapEvent,
+    event_tx: &mpsc::Sender<DapTaskEvent>,
+) {
     use crate::protocol::{OutputEventBody, StoppedEventBody, TerminatedEventBody};
 
     match e.event.as_str() {
@@ -649,7 +628,12 @@ mod tests {
             // matching request arrives before sending. Emit actions fire
             // immediately. We poll both the action channel and the transport
             // round-robin.
-            let mut pending_responses: Vec<(String, Option<serde_json::Value>, bool, Option<String>)> = Vec::new();
+            let mut pending_responses: Vec<(
+                String,
+                Option<serde_json::Value>,
+                bool,
+                Option<String>,
+            )> = Vec::new();
 
             loop {
                 tokio::select! {
@@ -728,11 +712,7 @@ mod tests {
             }
         });
 
-        (
-            client_read,
-            client_write,
-            MockAdapter { tx: action_tx },
-        )
+        (client_read, client_write, MockAdapter { tx: action_tx })
     }
 
     impl MockAdapter {
@@ -851,9 +831,7 @@ mod tests {
         (cmd_tx, evt_rx, adapter)
     }
 
-    async fn recv_with_timeout(
-        rx: &mut mpsc::Receiver<DapTaskEvent>,
-    ) -> DapTaskEvent {
+    async fn recv_with_timeout(rx: &mut mpsc::Receiver<DapTaskEvent>) -> DapTaskEvent {
         tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
             .await
             .expect("timed out waiting for DapTaskEvent")
@@ -983,10 +961,11 @@ mod tests {
         let (cmd, mut evt, _adapter) = manager_with_session().await;
         let _ = recv_with_timeout(&mut evt).await;
         // Mock adapter auto-replies with success to unlisted commands.
-        cmd.send(DapCommand::Continue { thread_id: 1 }).await.unwrap();
+        cmd.send(DapCommand::Continue { thread_id: 1 })
+            .await
+            .unwrap();
         // No event expected on success. A timeout here means success.
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), evt.recv()).await;
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), evt.recv()).await;
         assert!(result.is_err(), "unexpected event after continue");
     }
 
@@ -1127,8 +1106,7 @@ mod tests {
         let handle = tokio::spawn(run_dap_task(cmd_rx, evt_tx));
         cmd_tx.send(DapCommand::Shutdown).await.unwrap();
         drop(cmd_tx);
-        let res =
-            tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
+        let res = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
         assert!(res.is_ok(), "run_dap_task didn't exit on Shutdown");
     }
 }

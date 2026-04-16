@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod executor;
 pub mod openai;
+pub mod pricing;
 pub mod provider;
 pub mod session;
 mod tool_impls;
@@ -10,7 +11,10 @@ pub mod types;
 pub use claude::ClaudeProvider;
 pub use executor::execute_tool;
 pub use openai::OpenAiProvider;
-pub use provider::{AgentProvider, ProviderConfig, ProviderError, ProviderResponse, StopReason};
+pub use pricing::{lookup as lookup_price, ModelPrice};
+pub use provider::{
+    AgentProvider, BudgetConfig, ProviderConfig, ProviderError, ProviderResponse, StopReason, Usage,
+};
 pub use session::AgentSession;
 pub use tools::{
     ai_specific_tools, classify_command_permission, tools_from_registry, PermissionPolicy,

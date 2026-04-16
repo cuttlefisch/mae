@@ -106,6 +106,8 @@ impl Editor {
             // Invalidate tree-sitter cache so the next render reparses.
             let buf_idx = self.active_buffer_idx();
             self.syntax.invalidate(buf_idx);
+            // Capture the edit position for `g;` / `g,` navigation.
+            self.record_change();
         }
     }
 
@@ -124,6 +126,7 @@ impl Editor {
         self.lsp_notify_did_change();
         let buf_idx = self.active_buffer_idx();
         self.syntax.invalidate(buf_idx);
+        self.record_change();
     }
 
     /// Record a non-insert edit with count for dot-repeat.
@@ -140,6 +143,7 @@ impl Editor {
         self.lsp_notify_did_change();
         let buf_idx = self.active_buffer_idx();
         self.syntax.invalidate(buf_idx);
+        self.record_change();
     }
 
     /// Replay the last recorded edit (dot-repeat).
@@ -162,7 +166,10 @@ impl Editor {
             "change-line"
             | "change-word-forward"
             | "change-to-line-end"
-            | "change-to-line-start" => {
+            | "change-to-line-start"
+            | "substitute-char"
+            | "change-next-match"
+            | "change-prev-match" => {
                 // Re-dispatch the change command (which enters insert mode)
                 self.dispatch_builtin(&record.command);
                 // Now we need to insert the recorded text and return to normal mode

@@ -99,8 +99,7 @@ mod tests {
     fn syntax_tree_cursor_scope_returns_node_kind() {
         let mut ed = ed_with_rust_source("fn main() {}");
         // Cursor starts at (0,0) — on the 'fn' keyword.
-        let out =
-            execute_syntax_tree(&mut ed, &json!({"scope": "cursor"})).unwrap();
+        let out = execute_syntax_tree(&mut ed, &json!({"scope": "cursor"})).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["scope"], "cursor");
         assert!(v["node_kind"].is_string());
@@ -121,8 +120,7 @@ mod tests {
     #[test]
     fn syntax_tree_bad_scope_returns_error() {
         let mut ed = ed_with_rust_source("fn main() {}");
-        let err = execute_syntax_tree(&mut ed, &json!({"scope": "bogus"}))
-            .unwrap_err();
+        let err = execute_syntax_tree(&mut ed, &json!({"scope": "bogus"})).unwrap_err();
         assert!(err.contains("Unknown scope"));
     }
 }

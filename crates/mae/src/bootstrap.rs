@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use mae_ai::{
     ai_specific_tools, tools_from_registry, AgentSession, AiCommand, AiEvent, ClaudeProvider,
@@ -16,9 +17,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Initialize structured logging with two outputs:
 ///
-/// 1. **stderr** — newline-delimited JSON for container log aggregation
-///    (`docker logs`, `kubectl logs`, `journalctl`, Datadog, etc.)
-/// 2. **In-editor MessageLog** — ring buffer viewable via `:messages`
+/// 1. **JSON structured log** — newline-delimited JSON. Routed to `stderr`
+///    when stderr is *not* a TTY (containers, CI, `mae 2> file.log`), or
+///    to `$XDG_STATE_HOME/mae/mae.log` (fallback `~/.local/state/mae/mae.log`)
+///    when stderr *is* a TTY — because the TUI shares the tty with stderr
+///    and raw JSON lines would paint over the rendered frame. This is the
+///    same split helix/neovim use.
+/// 2. **In-editor MessageLog** — ring buffer viewable via `:messages`, so
+///    interactive users don't need to tail a file to see what's happening.
 ///
 /// The TUI owns stdout; logs must never interfere with it.
 ///
@@ -27,6 +33,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 ///   MAE_LOG=debug       — command dispatch, scheme eval, key sequences
 ///   MAE_LOG=mae=trace   — full trace including per-key events
 ///   (default)           — warn (only errors and warnings)
+///
+/// The resolved log file path (if any) is printed to stderr *before* the
+/// TUI takes the tty, so users know where to tail.
 pub fn init_logging(log_handle: mae_core::MessageLogHandle) {
     use tracing_subscriber::{fmt, EnvFilter};
 
@@ -34,20 +43,57 @@ pub fn init_logging(log_handle: mae_core::MessageLogHandle) {
         .or_else(|_| EnvFilter::try_from_env("RUST_LOG"))
         .unwrap_or_else(|_| EnvFilter::new("warn"));
 
+    let editor_layer = EditorLogLayer { handle: log_handle };
+
+    // When stderr is a TTY, writing JSON logs to it would corrupt the TUI.
+    // Fall back to a log file. When stderr is piped/redirected (container,
+    // CI, `2> file`), stderr is still the ergonomic choice.
+    let to_tty = io::stderr().is_terminal();
+    let file_writer = if to_tty { open_log_file() } else { None };
+
     let json_layer = fmt::layer()
-        .with_writer(io::stderr)
         .json()
         .with_target(true)
         .with_thread_ids(true)
         .with_span_events(fmt::format::FmtSpan::CLOSE);
 
-    let editor_layer = EditorLogLayer { handle: log_handle };
+    match file_writer {
+        Some((path, writer)) => {
+            eprintln!("mae: logging to {}", path.display());
+            let json_layer = json_layer.with_writer(writer);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(json_layer)
+                .with(editor_layer)
+                .init();
+        }
+        None => {
+            let json_layer = json_layer.with_writer(io::stderr);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(json_layer)
+                .with(editor_layer)
+                .init();
+        }
+    }
+}
 
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(json_layer)
-        .with(editor_layer)
-        .init();
+/// Resolve the log file path and open it for append. Returns None if the
+/// directory can't be created or the file can't be opened — we do not
+/// want a log-setup failure to prevent the editor from launching.
+fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
+    let dir = state_home.join("mae");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("mae.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    Some((path, Mutex::new(file)))
 }
 
 /// Tracing layer that captures events into the in-editor MessageLog.
@@ -127,7 +173,9 @@ pub fn setup_ai(
 
     if let Some(config) = config {
         let provider_name = config.provider_type.clone();
-        info!(provider = %provider_name, model = %config.model, "initializing AI provider");
+        let model = config.model.clone();
+        let budget = config.budget.clone();
+        info!(provider = %provider_name, model = %model, "initializing AI provider");
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
             _ => Box::new(ClaudeProvider::new(config)), // default to Claude
@@ -139,7 +187,8 @@ pub fn setup_ai(
             t
         };
 
-        let session = AgentSession::new(provider, tools, build_system_prompt(), event_tx, cmd_rx);
+        let session = AgentSession::new(provider, tools, build_system_prompt(), event_tx, cmd_rx)
+            .with_budget(model, budget);
 
         tokio::spawn(session.run());
 
@@ -150,48 +199,12 @@ pub fn setup_ai(
     }
 }
 
+/// Load the AI provider configuration by layering env vars over the TOML
+/// config file (if any) over built-in defaults. See `config.rs` for the
+/// precedence details.
 pub fn load_ai_config() -> Option<ProviderConfig> {
-    // Check for provider type
-    let provider_type = std::env::var("MAE_AI_PROVIDER").unwrap_or_else(|_| "claude".into());
-
-    let api_key = match provider_type.as_str() {
-        "openai" => std::env::var("OPENAI_API_KEY").ok(),
-        _ => std::env::var("ANTHROPIC_API_KEY").ok(),
-    };
-
-    let has_custom_base = std::env::var("MAE_AI_BASE_URL").is_ok();
-
-    // No API key = no AI (unless using a local provider like Ollama)
-    if api_key.is_none() && !has_custom_base {
-        return None;
-    }
-
-    // If custom base URL is set, default to openai-compatible provider
-    let provider_type = if has_custom_base && provider_type == "claude" {
-        "openai".into()
-    } else {
-        provider_type
-    };
-
-    let model = std::env::var("MAE_AI_MODEL").unwrap_or_else(|_| match provider_type.as_str() {
-        "openai" => "gpt-4o".into(),
-        _ => "claude-sonnet-4-20250514".into(),
-    });
-
-    let timeout_secs: u64 = std::env::var("MAE_AI_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(300);
-
-    Some(ProviderConfig {
-        provider_type,
-        api_key,
-        model,
-        base_url: std::env::var("MAE_AI_BASE_URL").ok(),
-        max_tokens: 4096,
-        temperature: None,
-        timeout_secs,
-    })
+    let file = crate::config::load_config();
+    crate::config::resolve_ai_config(&file)
 }
 
 fn build_system_prompt() -> String {

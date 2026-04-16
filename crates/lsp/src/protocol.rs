@@ -477,11 +477,7 @@ impl PublishDiagnosticsParams {
         let diagnostics = obj
             .get("diagnostics")
             .and_then(|d| d.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(parse_diagnostic)
-                    .collect::<Vec<_>>()
-            })
+            .map(|arr| arr.iter().filter_map(parse_diagnostic).collect::<Vec<_>>())
             .unwrap_or_default();
         Some(PublishDiagnosticsParams {
             uri,
@@ -500,10 +496,7 @@ fn parse_diagnostic(v: &serde_json::Value) -> Option<Diagnostic> {
         .and_then(|s| s.as_i64())
         .map(DiagnosticSeverity::from_i64)
         .unwrap_or(DiagnosticSeverity::Warning);
-    let source = obj
-        .get("source")
-        .and_then(|s| s.as_str())
-        .map(String::from);
+    let source = obj.get("source").and_then(|s| s.as_str()).map(String::from);
     // `code` can be a string or integer per the spec — render either as a String.
     let code = obj.get("code").and_then(|c| {
         c.as_str()
@@ -619,7 +612,10 @@ pub struct CompletionResponse {
 impl CompletionResponse {
     pub fn from_value(v: serde_json::Value) -> Self {
         if v.is_null() {
-            return CompletionResponse { items: vec![], is_incomplete: false };
+            return CompletionResponse {
+                items: vec![],
+                is_incomplete: false,
+            };
         }
         // Two shapes: CompletionList { isIncomplete, items } or just items[]
         if let Some(arr) = v.as_array() {
@@ -638,9 +634,15 @@ impl CompletionResponse {
                 .and_then(|i| i.as_array())
                 .map(|arr| arr.iter().filter_map(parse_completion_item).collect())
                 .unwrap_or_default();
-            return CompletionResponse { items, is_incomplete };
+            return CompletionResponse {
+                items,
+                is_incomplete,
+            };
         }
-        CompletionResponse { items: vec![], is_incomplete: false }
+        CompletionResponse {
+            items: vec![],
+            is_incomplete: false,
+        }
     }
 }
 
@@ -651,10 +653,7 @@ fn parse_completion_item(v: &serde_json::Value) -> Option<CompletionItem> {
         .get("insertText")
         .and_then(|s| s.as_str())
         .map(String::from);
-    let detail = obj
-        .get("detail")
-        .and_then(|s| s.as_str())
-        .map(String::from);
+    let detail = obj.get("detail").and_then(|s| s.as_str()).map(String::from);
     let kind = obj
         .get("kind")
         .and_then(|k| k.as_i64())
@@ -669,7 +668,13 @@ fn parse_completion_item(v: &serde_json::Value) -> Option<CompletionItem> {
         let end = parse_position(range.get("end")?)?;
         Some((start, end, new_text))
     });
-    Some(CompletionItem { label, insert_text, detail, kind, text_edit })
+    Some(CompletionItem {
+        label,
+        insert_text,
+        detail,
+        kind,
+        text_edit,
+    })
 }
 
 /// Params for `textDocument/completion`.
@@ -1007,10 +1012,7 @@ mod tests {
             }]
         });
         let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
-        assert_eq!(
-            parsed.diagnostics[0].severity,
-            DiagnosticSeverity::Warning
-        );
+        assert_eq!(parsed.diagnostics[0].severity, DiagnosticSeverity::Warning);
     }
 
     #[test]

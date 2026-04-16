@@ -1,4 +1,5 @@
 mod bootstrap;
+mod config;
 mod key_handling;
 
 use std::io;
@@ -11,10 +12,10 @@ use mae_core::{
     Buffer, CompletionItem as CoreCompletionItem, DapIntent, Diagnostic as CoreDiagnostic,
     DiagnosticSeverity as CoreSeverity, Editor, KeyPress, LspIntent, LspLocation, LspRange,
 };
-use mae_dap::{
-    DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint,
+use mae_dap::{DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint};
+use mae_lsp::{
+    Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position,
 };
-use mae_lsp::{Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position};
 use mae_renderer::TerminalRenderer;
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
@@ -53,6 +54,70 @@ async fn main() -> io::Result<()> {
     }));
 
     let args: Vec<String> = std::env::args().collect();
+
+    // Handle --version / --help / --init-config before the terminal UI starts.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("mae {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("mae {} — Modern AI Editor", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("USAGE:");
+        println!("  mae [FILE]");
+        println!();
+        println!("OPTIONS:");
+        println!("  -h, --help              Print this help");
+        println!("  -V, --version           Print version");
+        println!("  --init-config [--force] Write a commented template and run wizard");
+        println!("  --print-config-path     Print the config file path and exit");
+        println!("  --print-config-template Print the default commented template to stdout");
+        println!();
+        println!("CONFIG:");
+        println!("  {}", config::config_path().display());
+        println!();
+        println!("ENVIRONMENT:");
+        println!("  MAE_AI_PROVIDER     claude | openai | ollama");
+        println!("  MAE_AI_MODEL        model identifier");
+        println!("  MAE_AI_BASE_URL     custom API base URL (for Ollama/vLLM/proxies)");
+        println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
+        println!("  ANTHROPIC_API_KEY   Claude API key");
+        println!("  OPENAI_API_KEY      OpenAI API key");
+        println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
+        println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--print-config-path") {
+        println!("{}", config::config_path().display());
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--print-config-template") {
+        print!("{}", config::default_config_template());
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--init-config") {
+        let force = args.iter().any(|a| a == "--force");
+        if force || !config::config_path().exists() {
+            // Template first (safer than running the wizard blind).
+            match config::write_template_config(force) {
+                Ok(path) => println!("Wrote template to {}", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    eprintln!("{}", e);
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        config::run_wizard()?;
+        return Ok(());
+    }
+
+    // First-run wizard: runs only when stdin is a TTY, no config file exists,
+    // no AI env vars are set, and MAE_SKIP_WIZARD is not set. Must run before
+    // the renderer takes over the terminal.
+    if let Err(e) = config::maybe_run_first_run_wizard() {
+        eprintln!("warning: first-run wizard failed: {}", e);
+    }
 
     let mut editor = if args.len() > 1 {
         let path = &args[1];
@@ -251,6 +316,45 @@ async fn main() -> io::Result<()> {
                         }
                         editor.set_status(format!("[AI error] {}", msg));
                     }
+                    AiEvent::CostUpdate { session_usd, last_call_usd, tokens_in, tokens_out } => {
+                        editor.ai_session_cost_usd = session_usd;
+                        editor.ai_session_tokens_in = tokens_in;
+                        editor.ai_session_tokens_out = tokens_out;
+                        debug!(
+                            session_usd,
+                            last_call_usd,
+                            tokens_in,
+                            tokens_out,
+                            "AI cost update"
+                        );
+                    }
+                    AiEvent::BudgetWarning { session_usd, threshold_usd } => {
+                        let msg = format!(
+                            "AI budget warning: session spend ${:.4} crossed ${:.2} threshold. \
+                             Hard cap (if set) will abort the next turn.",
+                            session_usd, threshold_usd
+                        );
+                        warn!(session_usd, threshold_usd, "AI budget threshold crossed");
+                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
+                            conv_buf.push_system(msg.clone());
+                        }
+                        editor.set_status(msg);
+                    }
+                    AiEvent::BudgetExceeded { session_usd, cap_usd } => {
+                        let msg = format!(
+                            "AI budget exceeded: session spend ${:.4} reached cap ${:.2}. \
+                             Raise `ai.budget.session_hard_cap_usd` in config.toml or restart \
+                             the editor to reset.",
+                            session_usd, cap_usd
+                        );
+                        error!(session_usd, cap_usd, "AI session hard cap reached");
+                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
+                            conv_buf.push_system(msg.clone());
+                            conv_buf.streaming = false;
+                            conv_buf.streaming_start = None;
+                        }
+                        editor.set_status(msg);
+                    }
                 }
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
@@ -440,9 +544,7 @@ fn handle_lsp_event(
             let core_items: Vec<CoreCompletionItem> = items
                 .into_iter()
                 .map(|item| CoreCompletionItem {
-                    insert_text: item
-                        .insert_text
-                        .unwrap_or_else(|| item.label.clone()),
+                    insert_text: item.insert_text.unwrap_or_else(|| item.label.clone()),
                     label: item.label,
                     detail: item.detail,
                     kind_sigil: item.kind.sigil(),

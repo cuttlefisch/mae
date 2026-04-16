@@ -35,9 +35,7 @@ pub fn execute_lsp_diagnostics(editor: &Editor, args: &Value) -> Result<String, 
     // Resolve target buffer URI when scope == "buffer".
     let buffer_uri = if scope == "buffer" {
         let idx = resolve_buffer_idx(editor, args)?;
-        editor.buffers[idx]
-            .file_path()
-            .map(mae_core::path_to_uri)
+        editor.buffers[idx].file_path().map(mae_core::path_to_uri)
     } else {
         None
     };
@@ -188,8 +186,7 @@ mod tests {
             "file:///tmp/other.rs".into(),
             vec![diag(1, 2, DiagnosticSeverity::Hint, "nit")],
         );
-        let out =
-            execute_lsp_diagnostics(&ed, &json!({"scope": "all"})).unwrap();
+        let out = execute_lsp_diagnostics(&ed, &json!({"scope": "all"})).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         let files = v["files"].as_array().unwrap();
         assert_eq!(files.len(), 2);

@@ -265,10 +265,7 @@ impl Editor {
         }
 
         // Reuse an existing *Diagnostics* buffer or create one.
-        let existing = self
-            .buffers
-            .iter()
-            .position(|b| b.name == "*Diagnostics*");
+        let existing = self.buffers.iter().position(|b| b.name == "*Diagnostics*");
         let idx = if let Some(i) = existing {
             self.buffers[i].replace_contents(&body);
             i

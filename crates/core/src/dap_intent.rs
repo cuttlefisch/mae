@@ -127,7 +127,11 @@ mod tests {
             attach: false,
         };
         match intent {
-            DapIntent::StartSession { spawn, launch_args, attach } => {
+            DapIntent::StartSession {
+                spawn,
+                launch_args,
+                attach,
+            } => {
                 assert_eq!(spawn.adapter_id, "debugpy");
                 assert_eq!(launch_args["program"], "/tmp/x.py");
                 assert!(!attach);

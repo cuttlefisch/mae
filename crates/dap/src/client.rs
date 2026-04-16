@@ -416,12 +416,8 @@ impl DapClient {
     /// to exit its process after responding.
     pub async fn disconnect(&self, terminate_debuggee: bool) -> Result<DapResponse, String> {
         let args = serde_json::json!({ "terminateDebuggee": terminate_debuggee });
-        self.request(
-            "disconnect",
-            Some(args),
-            std::time::Duration::from_secs(5),
-        )
-        .await
+        self.request("disconnect", Some(args), std::time::Duration::from_secs(5))
+            .await
     }
 
     /// Send a request and wait for the matching response via oneshot.
@@ -487,7 +483,11 @@ where
                     let tx = pending.lock().await.remove(&r.request_seq);
                     if let Some(tx) = tx {
                         let _ = tx.send(r);
-                    } else if event_tx.send(DapEventKind::OrphanResponse(r)).await.is_err() {
+                    } else if event_tx
+                        .send(DapEventKind::OrphanResponse(r))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -497,7 +497,11 @@ where
                     }
                 }
                 Ok(DapMessage::Request(r)) => {
-                    if event_tx.send(DapEventKind::ReverseRequest(r)).await.is_err() {
+                    if event_tx
+                        .send(DapEventKind::ReverseRequest(r))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -506,9 +510,7 @@ where
                     break;
                 }
                 Err(e) => {
-                    let _ = event_tx
-                        .send(DapEventKind::Error(format!("{}", e)))
-                        .await;
+                    let _ = event_tx.send(DapEventKind::Error(format!("{}", e))).await;
                     break;
                 }
             }
@@ -710,10 +712,7 @@ mod tests {
                 {"id": 1, "verified": true, "line": 42}
             ]
         });
-        let (r, w) = spawn_mock_adapter(vec![
-            Action::Respond(init_caps()),
-            Action::Respond(body),
-        ]);
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
         let client = DapClient::from_streams(r, w, "mock").await.unwrap();
         let bps = client
             .set_breakpoints(
@@ -739,10 +738,7 @@ mod tests {
                 {"id": 2, "name": "worker"}
             ]
         });
-        let (r, w) = spawn_mock_adapter(vec![
-            Action::Respond(init_caps()),
-            Action::Respond(body),
-        ]);
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Respond(body)]);
         let client = DapClient::from_streams(r, w, "mock").await.unwrap();
         let threads = client.threads().await.unwrap();
         assert_eq!(threads.len(), 2);
@@ -825,10 +821,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_sends_terminate_debuggee_flag() {
-        let (r, w) = spawn_mock_adapter(vec![
-            Action::Respond(init_caps()),
-            Action::RespondOk,
-        ]);
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::RespondOk]);
         let client = DapClient::from_streams(r, w, "mock").await.unwrap();
         let resp = client.disconnect(true).await.unwrap();
         assert_eq!(resp.command, "disconnect");
@@ -863,6 +856,9 @@ mod tests {
         assert!(err.contains("timed out"), "unexpected error: {}", err);
         // Confirm pending map was cleaned up.
         let pending = client.pending.lock().await;
-        assert!(pending.is_empty(), "pending map should be cleaned on timeout");
+        assert!(
+            pending.is_empty(),
+            "pending map should be cleaned on timeout"
+        );
     }
 }

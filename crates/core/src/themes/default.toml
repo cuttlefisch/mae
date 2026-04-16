@@ -61,3 +61,12 @@
 "attribute" = { fg = "cyan" }
 "namespace" = { fg = "yellow" }
 "punctuation" = { fg = "gray" }
+
+# Markdown / org-mode markup styling.
+"markup.heading" = { fg = "yellow", bold = true }
+"markup.link" = { fg = "blue", underline = true }
+"markup.literal" = { fg = "green" }
+"markup.bold" = { fg = "white", bold = true }
+"markup.italic" = { fg = "white", italic = true }
+"markup.list" = { fg = "magenta" }
+"markup.quote" = { fg = "gray", italic = true }

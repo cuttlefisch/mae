@@ -106,8 +106,14 @@ impl Editor {
 
         match self.mode {
             Mode::Insert => self.replay_insert(kp, pending),
-            Mode::Normal | Mode::Visual(_) | Mode::Command | Mode::Search
-            | Mode::ConversationInput | Mode::FilePicker => {
+            Mode::Normal
+            | Mode::Visual(_)
+            | Mode::Command
+            | Mode::Search
+            | Mode::ConversationInput
+            | Mode::FilePicker
+            | Mode::FileBrowser
+            | Mode::CommandPalette => {
                 self.replay_via_keymap(kp, pending);
             }
         }
@@ -298,7 +304,11 @@ mod tests {
         // that the status message reports the guard fired.
         ed.registers.insert('a', "@a".to_string());
         let result = ed.replay_macro('a', 1);
-        assert!(result.is_ok(), "outer call should return Ok, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "outer call should return Ok, got {:?}",
+            result
+        );
         assert!(
             ed.status_msg.contains("recursion") || ed.status_msg.contains("depth"),
             "expected depth-guard message in status, got: {:?}",
@@ -314,10 +324,16 @@ mod tests {
         let km = ed.keymaps.get("normal").unwrap();
         use crate::keymap::parse_key_seq;
         // q is an exact match (start-recording-await)
-        assert_eq!(km.lookup(&parse_key_seq("q")), LookupResult::Exact("start-recording-await"));
+        assert_eq!(
+            km.lookup(&parse_key_seq("q")),
+            LookupResult::Exact("start-recording-await")
+        );
         // @ is an exact match (replay-macro-await) — @@ is handled by the
         // dispatch_char_motion "replay-macro" arm detecting ch == '@'
-        assert_eq!(km.lookup(&parse_key_seq("@")), LookupResult::Exact("replay-macro-await"));
+        assert_eq!(
+            km.lookup(&parse_key_seq("@")),
+            LookupResult::Exact("replay-macro-await")
+        );
     }
 
     #[test]

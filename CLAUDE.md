@@ -10,7 +10,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 
 - **Language:** Rust (core) + Scheme R7RS-small (extensions)
 - **License:** GPL-3.0-or-later
-- **Build:** `cargo check` / `cargo build` from workspace root
+- **Build:** `make check` / `make build` / `make test` / `make ci` from workspace root
 
 ## Crate Layout
 
@@ -66,25 +66,31 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Conversation buffer with streaming, tool call display
 - Permission tiers (ReadOnly/Write/Shell/Privileged)
 
-### Phases 3d–3g: Editor Essentials + AI Multi-File + Hardening — COMPLETE (589 tests)
+### Phases 3d–3h: Editor Essentials + AI Multi-File + Hardening + Vim Parity — COMPLETE (1148 tests)
 - Full vi modal editing: visual mode, text objects, marks, macros, count prefix, search, dot-repeat
 - Multi-file AI tools: open_file, switch_buffer, project_search, create_file
 - Conversation persistence: :ai-save / :ai-load with versioned JSON schema
 - Architecture hardened: editor.rs split into 9 submodules, all growth bounded,
   AI security (blocklist, circuit breaker, backpressure), error handling audited
+- Registers & clipboard, vim-surround, Scheme REPL, AI prompt UX, command palette
 
-### Phase 4: LSP + DAP — IN PROGRESS
-- LSP client: connection, navigation (gd/gr/K), diagnostics, AI lsp_diagnostics tool ✅
+### Phase 4: LSP + DAP + Syntax + KB — COMPLETE (M1-M4 each)
+- LSP client: connection, navigation (gd/gr/K), diagnostics, completion popup ✅
 - DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
+- Tree-sitter syntax highlighting: 15 languages, structural selection ✅
 - Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
-- **Next: LSP completion popup (M4), async LSP AI tools (M5), debug panel UI (4c M3)**
-- Tree-sitter syntax highlighting — planned
+- Knowledge base: in-memory graph, SQLite persistence, org-mode parser, help system, AI KB tools ✅
+- **Next: async LSP AI tools (4a M5), debug panel UI (4c M3)**
 
-### Phase 5: Knowledge Base
-- SQLite-backed graph store
-- Org-mode parser via tree-sitter
+### Phase 5: Knowledge Base — COMPLETE
+- SQLite-backed graph store with FTS5
+- Org-mode parser (hand-rolled, multi-node files)
 - Bidirectional link primitives
 - KB queries from Scheme and AI
+- Help buffer with navigation, link following, neighborhood display
+
+### Phase 6: Embedded Shell — PLANNED
+### Phase 7: Embedded Documentation — PLANNED
 
 ## Key Design Decisions Already Made
 

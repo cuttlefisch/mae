@@ -1,4 +1,5 @@
 use crate::buffer::Buffer;
+use crate::command_palette::CommandPalette;
 use crate::file_picker::FilePicker;
 use crate::theme::bundled_theme_names;
 use crate::window::{Direction, SplitDirection};
@@ -51,6 +52,7 @@ impl Editor {
                 self.window_mgr.focused_window_mut().move_to_line_end(buf);
             }
             "move-to-first-line" => {
+                self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];
                 if let Some(target) = count {
                     // ngg = go to line n (1-indexed)
@@ -62,6 +64,7 @@ impl Editor {
                 }
             }
             "move-to-last-line" => {
+                self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];
                 if let Some(target) = count {
                     // nG = go to line n (1-indexed)
@@ -112,13 +115,55 @@ impl Editor {
                     self.window_mgr.focused_window_mut().move_big_word_end(buf);
                 }
             }
+            "move-word-end-backward" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                for _ in 0..n {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_word_end_backward(buf);
+                }
+            }
+            "move-big-word-end-backward" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                for _ in 0..n {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_big_word_end_backward(buf);
+                }
+            }
+            "move-to-first-non-blank" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                self.window_mgr
+                    .focused_window_mut()
+                    .move_to_first_non_blank(buf);
+            }
+            "move-line-next-non-blank" => {
+                // vi `+` — down n lines then first non-blank
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let win = self.window_mgr.focused_window_mut();
+                for _ in 0..n {
+                    win.move_down(buf);
+                }
+                win.move_to_first_non_blank(buf);
+            }
+            "move-line-prev-non-blank" => {
+                // vi `-` — up n lines then first non-blank
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let win = self.window_mgr.focused_window_mut();
+                for _ in 0..n {
+                    win.move_up(buf);
+                }
+                win.move_to_first_non_blank(buf);
+            }
             "move-matching-bracket" => {
+                self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];
                 self.window_mgr
                     .focused_window_mut()
                     .move_matching_bracket(buf);
             }
             "move-paragraph-forward" => {
+                self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
                     self.window_mgr
@@ -127,6 +172,7 @@ impl Editor {
                 }
             }
             "move-paragraph-backward" => {
+                self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
                     self.window_mgr
@@ -236,7 +282,7 @@ impl Editor {
                     all_deleted.push_str(&deleted);
                 }
                 if !all_deleted.is_empty() {
-                    self.registers.insert('"', all_deleted);
+                    self.save_delete(all_deleted);
                 }
                 self.record_edit_with_count("delete-line", count);
             }
@@ -252,7 +298,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.clamp_cursor(&self.buffers[idx]);
                 }
@@ -268,7 +314,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.clamp_cursor(&self.buffers[idx]);
                 }
@@ -282,7 +328,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_col = 0;
                 }
@@ -298,7 +344,7 @@ impl Editor {
                     yanked.push_str(&self.buffers[idx].line_text(row));
                 }
                 if !yanked.is_empty() {
-                    self.registers.insert('"', yanked);
+                    self.save_yank(yanked);
                     let yanked_count = end_row - start_row;
                     self.set_status(format!(
                         "{} line{} yanked",
@@ -314,7 +360,7 @@ impl Editor {
                 let end = crate::word::word_start_forward(self.buffers[idx].rope(), start);
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_yank(text);
                 }
             }
             "yank-to-line-end" => {
@@ -326,7 +372,7 @@ impl Editor {
                 let end = line_start + line_len;
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_yank(text);
                 }
             }
             "yank-to-line-start" => {
@@ -336,11 +382,11 @@ impl Editor {
                 let start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_yank(text);
                 }
             }
             "paste-after" => {
-                if let Some(text) = self.registers.get(&'"').cloned() {
+                if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
@@ -375,7 +421,7 @@ impl Editor {
                 self.record_edit_with_count("paste-after", count);
             }
             "paste-before" => {
-                if let Some(text) = self.registers.get(&'"').cloned() {
+                if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
@@ -440,7 +486,43 @@ impl Editor {
                 self.window_mgr.focused_window_mut().move_to_line_end(buf);
                 self.mode = Mode::Insert;
             }
+            // Repeat f/F/t/T (;/,)
+            "repeat-find" => {
+                if let Some((ch, ref cmd)) = self.last_find_char.clone() {
+                    self.pending_char_count = n;
+                    self.dispatch_char_motion(cmd, ch);
+                }
+            }
+            "repeat-find-reverse" => {
+                if let Some((ch, ref cmd)) = self.last_find_char.clone() {
+                    let reversed = match cmd.as_str() {
+                        "find-char-forward" => "find-char-backward",
+                        "find-char-backward" => "find-char-forward",
+                        "till-char-forward" => "till-char-backward",
+                        "till-char-backward" => "till-char-forward",
+                        _ => return true,
+                    };
+                    self.pending_char_count = n;
+                    self.dispatch_char_motion(reversed, ch);
+                }
+            }
+
+            // Reselect last visual selection (gv)
+            "reselect-visual" => {
+                if let Some((ar, ac, cr, cc, vtype)) = self.last_visual {
+                    self.visual_anchor_row = ar;
+                    self.visual_anchor_col = ac;
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = cr;
+                    win.cursor_col = cc;
+                    self.mode = Mode::Visual(vtype);
+                }
+            }
+
             "enter-normal-mode" => {
+                if matches!(self.mode, Mode::Visual(_)) {
+                    self.save_visual_state();
+                }
                 if self.mode == Mode::Insert {
                     // Finalize dot-repeat record before adjusting cursor
                     self.finalize_insert_for_repeat();
@@ -448,6 +530,10 @@ impl Editor {
                     if win.cursor_col > 0 {
                         win.cursor_col -= 1;
                     }
+                    // Record exit position for `gi` (re-enter insert at last pos).
+                    let idx = self.active_buffer_idx();
+                    let w = self.window_mgr.focused_window();
+                    self.last_insert_pos = Some((idx, w.cursor_row, w.cursor_col));
                 }
                 self.mode = Mode::Normal;
             }
@@ -511,8 +597,19 @@ impl Editor {
                 self.open_messages_buffer();
             }
 
-            // Placeholder commands (stubs for leader key tree)
-            "command-palette" => self.set_status("Not yet implemented: command-palette"),
+            // Help / KB
+            "help" => self.open_help_at("index"),
+            "help-follow-link" => self.help_follow_link(),
+            "help-back" => self.help_back(),
+            "help-forward" => self.help_forward(),
+            "help-next-link" => self.help_next_link(),
+            "help-prev-link" => self.help_prev_link(),
+            "help-close" => self.help_close(),
+
+            "command-palette" => {
+                self.command_palette = Some(CommandPalette::from_registry(&self.commands));
+                self.mode = Mode::CommandPalette;
+            }
             "next-buffer" => {
                 if self.buffers.len() <= 1 {
                     return true;
@@ -596,6 +693,19 @@ impl Editor {
                 self.file_picker = Some(FilePicker::scan(&root));
                 self.mode = Mode::FilePicker;
             }
+            // Ranger/dired-style directory browser. Opens at the active
+            // buffer's parent dir (so `-` in normal mode feels spatial),
+            // or cwd when the buffer has no file path yet.
+            "file-browser" => {
+                let start = self
+                    .active_buffer()
+                    .file_path()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_default();
+                self.file_browser = Some(crate::FileBrowser::open(&start));
+                self.mode = Mode::FileBrowser;
+            }
             "recent-files" => self.set_status("Not yet implemented: recent-files"),
             "ai-prompt" => {
                 self.open_conversation_buffer();
@@ -615,8 +725,21 @@ impl Editor {
                 };
                 self.set_status(status);
             }
-            "describe-key" => self.set_status("Not yet implemented: describe-key"),
-            "describe-command" => self.set_status("Not yet implemented: describe-command"),
+            "describe-key" => {
+                // Arm the interactive "press a key to describe" flow.
+                // The binary's key handler intercepts subsequent keypresses
+                // while this flag is set, looks them up in the normal
+                // keymap, and opens the bound command's help page.
+                self.awaiting_key_description = true;
+                self.set_status("Describe key: press a key sequence (Esc to cancel)");
+            }
+            "describe-command" => {
+                // Reuse the command-palette overlay for fuzzy selection,
+                // but flag the purpose so Enter opens the help buffer
+                // instead of executing the command.
+                self.command_palette = Some(CommandPalette::for_describe(&self.commands));
+                self.mode = Mode::CommandPalette;
+            }
             "set-theme" => {
                 // Stub: in full implementation, opens command-line for theme name.
                 // For now, set status with available themes.
@@ -692,9 +815,25 @@ impl Editor {
                 Mode::Visual(VisualType::Char) => self.mode = Mode::Visual(VisualType::Line),
                 _ => self.enter_visual_mode(VisualType::Line),
             },
-            "visual-delete" => self.visual_delete(),
-            "visual-yank" => self.visual_yank(),
-            "visual-change" => self.visual_change(),
+            "visual-delete" => {
+                self.save_visual_state();
+                self.visual_delete();
+            }
+            "visual-yank" => {
+                self.save_visual_state();
+                self.visual_yank();
+            }
+            "visual-change" => {
+                self.save_visual_state();
+                self.visual_change();
+            }
+            "visual-indent" => self.visual_indent(),
+            "visual-dedent" => self.visual_dedent(),
+            "visual-join" => self.visual_join(),
+            "visual-paste" => self.visual_paste(),
+            "visual-swap-ends" => self.visual_swap_ends(),
+            "visual-uppercase" => self.visual_uppercase(),
+            "visual-lowercase" => self.visual_lowercase(),
 
             // Text object operators — set pending char command to await object char
             "delete-inner-object"
@@ -720,20 +859,86 @@ impl Editor {
                 self.mode = Mode::Search;
             }
             "search-next" => {
+                self.record_jump();
                 for _ in 0..n {
                     self.jump_to_next_match(true);
                 }
             }
             "search-prev" => {
+                self.record_jump();
                 for _ in 0..n {
                     self.jump_to_next_match(false);
                 }
             }
             "search-word-under-cursor" => {
+                self.record_jump();
                 self.search_word_at_cursor();
+            }
+            "search-word-under-cursor-backward" => {
+                self.record_jump();
+                self.search_word_at_cursor_backward();
             }
             "clear-search-highlight" => {
                 self.search_state.highlight_active = false;
+            }
+            // gn / gN — select next/previous match as a visual selection.
+            // Practical Vim tip 86: cursor inside a match selects that match;
+            // otherwise the next match in the given direction (wrapping).
+            "visual-select-next-match" => {
+                self.record_jump();
+                self.visual_select_match(true);
+            }
+            "visual-select-prev-match" => {
+                self.record_jump();
+                self.visual_select_match(false);
+            }
+            // Operator variants: d{gn,gN}, c{gn,gN}, y{gn,gN}.
+            // These first select the match, then apply the operator. `c`
+            // is recorded for dot-repeat so that `.` re-runs cgn from the
+            // new cursor position — enabling single-key global replace.
+            "delete-next-match" => {
+                self.record_jump();
+                if self.visual_select_match(true) {
+                    self.visual_delete();
+                    self.record_edit("delete-next-match");
+                }
+            }
+            "delete-prev-match" => {
+                self.record_jump();
+                if self.visual_select_match(false) {
+                    self.visual_delete();
+                    self.record_edit("delete-prev-match");
+                }
+            }
+            "change-next-match" => {
+                self.record_jump();
+                if self.visual_select_match(true) {
+                    self.visual_delete();
+                    self.enter_insert_for_change("change-next-match");
+                } else {
+                    self.enter_insert_for_change("change-next-match");
+                }
+            }
+            "change-prev-match" => {
+                self.record_jump();
+                if self.visual_select_match(false) {
+                    self.visual_delete();
+                    self.enter_insert_for_change("change-prev-match");
+                } else {
+                    self.enter_insert_for_change("change-prev-match");
+                }
+            }
+            "yank-next-match" => {
+                self.record_jump();
+                if self.visual_select_match(true) {
+                    self.visual_yank();
+                }
+            }
+            "yank-prev-match" => {
+                self.record_jump();
+                if self.visual_select_match(false) {
+                    self.visual_yank();
+                }
             }
 
             // Change operators — delete range, then enter insert mode
@@ -746,7 +951,7 @@ impl Editor {
                 if line_len > 0 {
                     let text = self.buffers[idx].text_range(line_start, line_start + line_len);
                     self.buffers[idx].delete_range(line_start, line_start + line_len);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                 }
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_col = 0;
@@ -760,7 +965,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.clamp_cursor(&self.buffers[idx]);
                 }
@@ -776,7 +981,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.clamp_cursor(&self.buffers[idx]);
                 }
@@ -790,7 +995,7 @@ impl Editor {
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
                     self.buffers[idx].delete_range(start, end);
-                    self.registers.insert('"', text);
+                    self.save_delete(text);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_col = 0;
                 }
@@ -800,6 +1005,45 @@ impl Editor {
             // Replace char (pending — next key replaces char under cursor)
             "replace-char-await" => {
                 self.pending_char_command = Some("replace-char".to_string());
+            }
+
+            // Substitute char (`s`) — delete N chars forward, enter insert.
+            // Practical Vim tip 2: a single key replaces `xi` / `cl`.
+            "substitute-char" => {
+                let idx = self.active_buffer_idx();
+                let win = self.window_mgr.focused_window();
+                let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
+                let start = line_start + win.cursor_col;
+                let line_end = line_start + self.buffers[idx].line_len(win.cursor_row);
+                let end = (start + n).min(line_end);
+                if end > start {
+                    let text = self.buffers[idx].text_range(start, end);
+                    self.buffers[idx].delete_range(start, end);
+                    self.save_delete(text);
+                    let win = self.window_mgr.focused_window_mut();
+                    win.clamp_cursor(&self.buffers[idx]);
+                }
+                self.enter_insert_for_change("substitute-char");
+            }
+            // Substitute line (`S`) — same as `cc`.
+            "substitute-line" => {
+                return self.dispatch_builtin("change-line");
+            }
+
+            // `gi` — re-enter insert mode at the last insert-exit position.
+            "reinsert-at-last-position" => {
+                if let Some((target_idx, row, col)) = self.last_insert_pos {
+                    // Same-buffer only. If the user switched buffers, gi
+                    // just enters insert at current position (vim parity).
+                    if target_idx == self.active_buffer_idx() {
+                        let idx = self.active_buffer_idx();
+                        let win = self.window_mgr.focused_window_mut();
+                        win.cursor_row = row;
+                        win.cursor_col = col;
+                        win.clamp_cursor(&self.buffers[idx]);
+                    }
+                }
+                self.enter_insert_for_change("reinsert-at-last-position");
             }
 
             // Marks: `m<letter>` sets, `'<letter>` jumps. Pending-char
@@ -907,7 +1151,10 @@ impl Editor {
             }
 
             // LSP navigation (Phase 4a M2)
-            "lsp-goto-definition" => self.lsp_request_definition(),
+            "lsp-goto-definition" => {
+                self.record_jump();
+                self.lsp_request_definition();
+            }
             "lsp-find-references" => self.lsp_request_references(),
             "lsp-hover" => self.lsp_request_hover(),
 
@@ -919,8 +1166,46 @@ impl Editor {
             "lsp-complete-prev" => self.lsp_complete_prev(),
 
             // LSP diagnostics (Phase 4a M3)
-            "lsp-next-diagnostic" => self.jump_next_diagnostic(),
-            "lsp-prev-diagnostic" => self.jump_prev_diagnostic(),
+            "lsp-next-diagnostic" => {
+                self.record_jump();
+                self.jump_next_diagnostic();
+            }
+            "lsp-prev-diagnostic" => {
+                self.record_jump();
+                self.jump_prev_diagnostic();
+            }
+
+            // Jump list (Practical Vim ch. 9)
+            "jump-backward" => self.jump_backward(n),
+            "jump-forward" => self.jump_forward(n),
+
+            // Change list (Practical Vim ch. 9)
+            "change-backward" => self.change_backward(n),
+            "change-forward" => self.change_forward(n),
+            "show-changes-buffer" => self.show_changes_buffer(),
+            "show-registers" => self.show_registers_buffer(),
+            "prompt-register" => {
+                self.pending_register_prompt = true;
+                self.set_status("\"");
+            }
+
+            // Surrounds: each arms `pending_char_command` for the char-await layer.
+            "delete-surround-await" => {
+                self.pending_char_command = Some("delete-surround".to_string());
+            }
+            "change-surround-await" => {
+                self.pending_char_command = Some("change-surround-1".to_string());
+            }
+            "surround-line-await" => {
+                self.pending_char_command = Some("surround-line".to_string());
+            }
+            "surround-visual-await" => {
+                self.pending_char_command = Some("surround-visual".to_string());
+            }
+
+            // gf — open file under cursor
+            "goto-file-under-cursor" => self.goto_file_under_cursor(),
+
             "lsp-show-diagnostics" => self.show_diagnostics_buffer(),
 
             // Tree-sitter structural editing (Phase 4b M3)
@@ -968,6 +1253,12 @@ impl Editor {
                     self.set_status("No macro to repeat");
                 }
             }
+
+            // Scheme REPL (lisp machine)
+            "eval-line" => self.eval_current_line(),
+            "eval-region" => self.eval_visual_region(),
+            "eval-buffer" => self.eval_current_buffer(),
+            "open-scheme-repl" => self.open_scheme_repl(),
 
             _ => return false,
         }

@@ -24,6 +24,18 @@ struct SharedState {
     status_message: Option<String>,
     /// Theme name requested by Scheme code via `(set-theme "name")`
     theme_request: Option<String>,
+
+    // --- Write-side primitives (applied after eval) ---
+    /// Text to insert at the cursor via `(buffer-insert TEXT)`.
+    pending_insert: Option<String>,
+    /// Cursor repositioning via `(cursor-goto ROW COL)`.
+    pending_cursor: Option<(usize, usize)>,
+    /// File to open via `(open-file PATH)`.
+    pending_open_file: Option<String>,
+    /// Commands to dispatch via `(run-command NAME)`.
+    pending_commands: Vec<String>,
+    /// Messages to append to the message log via `(message TEXT)`.
+    pending_messages: Vec<String>,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -112,6 +124,43 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        // --- Live editing primitives ---
+
+        // (buffer-insert TEXT) — insert text at the cursor position.
+        let s = shared.clone();
+        engine.register_fn("buffer-insert", move |text: String| {
+            s.lock().unwrap().pending_insert = Some(text);
+            SteelVal::Void
+        });
+
+        // (cursor-goto ROW COL) — move cursor to absolute position (0-indexed).
+        let s = shared.clone();
+        engine.register_fn("cursor-goto", move |row: isize, col: isize| {
+            s.lock().unwrap().pending_cursor = Some((row.max(0) as usize, col.max(0) as usize));
+            SteelVal::Void
+        });
+
+        // (open-file PATH) — open a file in a new buffer.
+        let s = shared.clone();
+        engine.register_fn("open-file", move |path: String| {
+            s.lock().unwrap().pending_open_file = Some(path);
+            SteelVal::Void
+        });
+
+        // (run-command NAME) — dispatch a registered command by name.
+        let s = shared.clone();
+        engine.register_fn("run-command", move |name: String| {
+            s.lock().unwrap().pending_commands.push(name);
+            SteelVal::Void
+        });
+
+        // (message TEXT) — append to the *Messages* log.
+        let s = shared.clone();
+        engine.register_fn("message", move |text: String| {
+            s.lock().unwrap().pending_messages.push(text);
+            SteelVal::Void
+        });
+
         Ok(SchemeRuntime {
             engine,
             shared,
@@ -171,6 +220,8 @@ impl SchemeRuntime {
     pub fn inject_editor_state(&mut self, editor: &Editor) {
         let buf = editor.active_buffer();
         let win = editor.window_mgr.focused_window();
+
+        // Scalar state
         self.engine
             .register_value("*buffer-name*", SteelVal::StringV(buf.name.clone().into()));
         self.engine
@@ -183,6 +234,42 @@ impl SchemeRuntime {
             .register_value("*cursor-row*", SteelVal::IntV(win.cursor_row as isize));
         self.engine
             .register_value("*cursor-col*", SteelVal::IntV(win.cursor_col as isize));
+
+        // Full buffer text — accessible as `*buffer-text*`
+        let text = buf.text();
+        self.engine
+            .register_value("*buffer-text*", SteelVal::StringV(text.into()));
+
+        // Number of open buffers
+        self.engine.register_value(
+            "*buffer-count*",
+            SteelVal::IntV(editor.buffers.len() as isize),
+        );
+
+        // Current mode as a string
+        let mode_str = match editor.mode {
+            mae_core::Mode::Normal => "normal",
+            mae_core::Mode::Insert => "insert",
+            mae_core::Mode::Visual(_) => "visual",
+            mae_core::Mode::Command => "command",
+            mae_core::Mode::ConversationInput => "conversation",
+            mae_core::Mode::Search => "search",
+            mae_core::Mode::FilePicker => "file-picker",
+            mae_core::Mode::FileBrowser => "file-browser",
+            mae_core::Mode::CommandPalette => "command-palette",
+        };
+        self.engine
+            .register_value("*mode*", SteelVal::StringV(mode_str.into()));
+
+        // (buffer-line N) — read a specific line (0-indexed). Capture
+        // a snapshot of all lines so the closure is self-contained.
+        let lines: Vec<String> = (0..buf.line_count())
+            .map(|i| buf.line_text(i).to_string())
+            .collect();
+        let lines = std::sync::Arc::new(lines);
+        self.engine.register_fn("buffer-line", move |n: isize| {
+            lines.get(n.max(0) as usize).cloned().unwrap_or_default()
+        });
     }
 
     /// Apply accumulated config changes to the editor.
@@ -220,6 +307,56 @@ impl SchemeRuntime {
         if let Some(theme_name) = state.theme_request.take() {
             info!(theme = %theme_name, "applying scheme theme request");
             editor.set_theme_by_name(&theme_name);
+        }
+
+        // --- Live editing primitives ---
+
+        // (buffer-insert TEXT)
+        if let Some(text) = state.pending_insert.take() {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window();
+            let offset = editor.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+            editor.buffers[idx].insert_text_at(offset, &text);
+            // Advance cursor past inserted text.
+            let end = offset + text.chars().count();
+            let rope = editor.buffers[idx].rope();
+            let new_row = rope.char_to_line(end.min(rope.len_chars()));
+            let line_start = rope.line_to_char(new_row);
+            let win = editor.window_mgr.focused_window_mut();
+            win.cursor_row = new_row;
+            win.cursor_col = end.saturating_sub(line_start);
+        }
+
+        // (cursor-goto ROW COL)
+        if let Some((row, col)) = state.pending_cursor.take() {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            win.cursor_row = row;
+            win.cursor_col = col;
+            win.clamp_cursor(&editor.buffers[idx]);
+        }
+
+        // (open-file PATH)
+        if let Some(path) = state.pending_open_file.take() {
+            editor.open_file(&path);
+        }
+
+        // (run-command NAME) — dispatch each queued command.
+        // We drain them outside the lock since dispatch_builtin
+        // may re-enter shared state.
+        let commands: Vec<String> = state.pending_commands.drain(..).collect();
+
+        // (message TEXT) — append to message log
+        for msg in state.pending_messages.drain(..) {
+            info!("[scheme] {}", msg);
+        }
+
+        // Drop the lock before dispatching commands (which may call
+        // back into Scheme via user-defined commands).
+        drop(state);
+
+        for name in commands {
+            editor.dispatch_builtin(&name);
         }
 
         if binding_count > 0 || cmd_count > 0 {
@@ -260,6 +397,25 @@ impl SchemeRuntime {
     /// Same as `eval` but intended for debugger inspect/watch expressions.
     pub fn eval_for_debug(&mut self, expr: &str) -> Result<String, SchemeError> {
         self.eval(expr)
+    }
+
+    /// Evaluate code and append input + result to a REPL output string.
+    /// Returns the formatted output (prompt + result or error) suitable
+    /// for appending to the `*Scheme*` buffer.
+    pub fn eval_for_repl(&mut self, code: &str, editor: &mut Editor) -> String {
+        self.inject_editor_state(editor);
+        let result = match self.eval(code) {
+            Ok(val) => {
+                self.apply_to_editor(editor);
+                if val.is_empty() {
+                    "; => (void)".to_string()
+                } else {
+                    format!("; => {}", val)
+                }
+            }
+            Err(e) => format!("; error: {}", e),
+        };
+        format!("> {}\n{}\n", code.trim(), result)
     }
 }
 
@@ -460,6 +616,105 @@ mod tests {
         let mut rt = SchemeRuntime::new().unwrap();
         let result = rt.eval_for_debug("(+ 10 20)").unwrap();
         assert_eq!(result, "30");
+    }
+
+    // --- New API surface tests ---
+
+    #[test]
+    fn buffer_text_global_available() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        {
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[0].insert_char(win, 'A');
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[0].insert_char(win, 'B');
+        }
+        rt.inject_editor_state(&editor);
+        let result = rt.eval("*buffer-text*").unwrap();
+        assert_eq!(result, "AB");
+    }
+
+    #[test]
+    fn mode_global_available() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let editor = Editor::new();
+        rt.inject_editor_state(&editor);
+        assert_eq!(rt.eval("*mode*").unwrap(), "normal");
+    }
+
+    #[test]
+    fn buffer_line_function_works() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        {
+            let win = editor.window_mgr.focused_window_mut();
+            for ch in "hello\nworld".chars() {
+                editor.buffers[0].insert_char(win, ch);
+            }
+        }
+        rt.inject_editor_state(&editor);
+        let line0 = rt.eval("(buffer-line 0)").unwrap();
+        assert!(line0.contains("hello"));
+        let line1 = rt.eval("(buffer-line 1)").unwrap();
+        assert!(line1.contains("world"));
+        // Out-of-range returns empty string
+        let line99 = rt.eval("(buffer-line 99)").unwrap();
+        assert_eq!(line99, "");
+    }
+
+    #[test]
+    fn buffer_insert_from_scheme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        rt.eval(r#"(buffer-insert "hello")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.buffers[0].text(), "hello");
+    }
+
+    #[test]
+    fn cursor_goto_from_scheme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        {
+            let win = editor.window_mgr.focused_window_mut();
+            for ch in "abc\ndef\nghi".chars() {
+                editor.buffers[0].insert_char(win, ch);
+            }
+        }
+        rt.eval("(cursor-goto 1 2)").unwrap();
+        rt.apply_to_editor(&mut editor);
+        let win = editor.window_mgr.focused_window();
+        assert_eq!(win.cursor_row, 1);
+        assert_eq!(win.cursor_col, 2);
+    }
+
+    #[test]
+    fn run_command_from_scheme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        // search-forward-start switches to Search mode.
+        rt.eval(r#"(run-command "search-forward-start")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.mode, mae_core::Mode::Search);
+    }
+
+    #[test]
+    fn eval_for_repl_formats_output() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        let output = rt.eval_for_repl("(+ 1 2)", &mut editor);
+        assert!(output.contains("> (+ 1 2)"));
+        assert!(output.contains("; => 3"));
+    }
+
+    #[test]
+    fn eval_for_repl_formats_error() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        let output = rt.eval_for_repl("(undefined-fn)", &mut editor);
+        assert!(output.contains("> (undefined-fn)"));
+        assert!(output.contains("; error:"));
     }
 
     #[test]

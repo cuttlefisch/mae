@@ -335,17 +335,32 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
     let lower = token.to_lowercase();
 
     // Modifier prefixes: C-M-, M-C-, C-, M-
-    if let Some(rest) = lower.strip_prefix("c-m-").or_else(|| lower.strip_prefix("m-c-")) {
+    if let Some(rest) = lower
+        .strip_prefix("c-m-")
+        .or_else(|| lower.strip_prefix("m-c-"))
+    {
         let ch = rest.chars().next()?;
-        return Some(KeyPress { key: Key::Char(ch), ctrl: true, alt: true });
+        return Some(KeyPress {
+            key: Key::Char(ch),
+            ctrl: true,
+            alt: true,
+        });
     }
     if let Some(rest) = lower.strip_prefix("c-") {
         let ch = rest.chars().next()?;
-        return Some(KeyPress { key: Key::Char(ch), ctrl: true, alt: false });
+        return Some(KeyPress {
+            key: Key::Char(ch),
+            ctrl: true,
+            alt: false,
+        });
     }
     if let Some(rest) = lower.strip_prefix("m-") {
         let ch = rest.chars().next()?;
-        return Some(KeyPress { key: Key::Char(ch), ctrl: false, alt: true });
+        return Some(KeyPress {
+            key: Key::Char(ch),
+            ctrl: false,
+            alt: true,
+        });
     }
 
     // Named specials (case-insensitive)
@@ -708,7 +723,10 @@ mod tests {
     fn serialize_special_keys() {
         assert_eq!(serialize_keypress(&KeyPress::special(Key::Escape)), "<Esc>");
         assert_eq!(serialize_keypress(&KeyPress::special(Key::Enter)), "<CR>");
-        assert_eq!(serialize_keypress(&KeyPress::special(Key::Backspace)), "<BS>");
+        assert_eq!(
+            serialize_keypress(&KeyPress::special(Key::Backspace)),
+            "<BS>"
+        );
         assert_eq!(serialize_keypress(&KeyPress::special(Key::Tab)), "<Tab>");
         assert_eq!(serialize_keypress(&KeyPress::special(Key::F(1))), "<F1>");
         assert_eq!(serialize_keypress(&KeyPress::special(Key::F(12))), "<F12>");
@@ -721,7 +739,11 @@ mod tests {
 
     #[test]
     fn serialize_alt() {
-        let kp = KeyPress { key: Key::Char('x'), ctrl: false, alt: true };
+        let kp = KeyPress {
+            key: Key::Char('x'),
+            ctrl: false,
+            alt: true,
+        };
         assert_eq!(serialize_keypress(&kp), "<M-x>");
     }
 
@@ -739,11 +761,14 @@ mod tests {
     #[test]
     fn deserialize_plain_chars() {
         let keys = deserialize_macro("ddj");
-        assert_eq!(keys, vec![
-            KeyPress::char('d'),
-            KeyPress::char('d'),
-            KeyPress::char('j'),
-        ]);
+        assert_eq!(
+            keys,
+            vec![
+                KeyPress::char('d'),
+                KeyPress::char('d'),
+                KeyPress::char('j'),
+            ]
+        );
     }
 
     #[test]

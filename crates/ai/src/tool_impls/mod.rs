@@ -2,6 +2,8 @@ mod buffer;
 mod dap;
 mod editor_tools;
 mod file;
+mod help;
+mod kb;
 mod lsp;
 mod project;
 mod syntax;
@@ -19,6 +21,11 @@ pub use editor_tools::{
 };
 pub use file::{
     execute_close_buffer, execute_create_file, execute_open_file, execute_switch_buffer,
+};
+pub use help::execute_help_open;
+pub use kb::{
+    execute_kb_get, execute_kb_graph, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
+    execute_kb_search,
 };
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{execute_project_files, execute_project_search};

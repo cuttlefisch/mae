@@ -7,9 +7,10 @@ use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
     execute_create_file, execute_cursor_info, execute_dap_continue, execute_dap_inspect_variable,
     execute_dap_set_breakpoint, execute_dap_start, execute_dap_step, execute_debug_state,
-    execute_editor_state, execute_file_read, execute_list_buffers, execute_lsp_diagnostics,
-    execute_open_file, execute_project_files, execute_project_search, execute_switch_buffer,
-    execute_syntax_tree, execute_window_layout,
+    execute_editor_state, execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph,
+    execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
+    execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
+    execute_project_search, execute_switch_buffer, execute_syntax_tree, execute_window_layout,
 };
 
 /// Execute a tool call against editor state.
@@ -67,6 +68,13 @@ pub fn execute_tool(
         "dap_continue",
         "dap_step",
         "dap_inspect_variable",
+        "kb_get",
+        "kb_search",
+        "kb_list",
+        "kb_links_from",
+        "kb_links_to",
+        "kb_graph",
+        "help_open",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -116,6 +124,13 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "dap_continue" => execute_dap_continue(editor),
         "dap_step" => execute_dap_step(editor, &call.arguments),
         "dap_inspect_variable" => execute_dap_inspect_variable(editor, &call.arguments),
+        "kb_get" => execute_kb_get(editor, &call.arguments),
+        "kb_search" => execute_kb_search(editor, &call.arguments),
+        "kb_list" => execute_kb_list(editor, &call.arguments),
+        "kb_links_from" => execute_kb_links_from(editor, &call.arguments),
+        "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
+        "kb_graph" => execute_kb_graph(editor, &call.arguments),
+        "help_open" => execute_help_open(editor, &call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
@@ -836,7 +851,11 @@ mod tests {
             &all_tools(),
             &PermissionPolicy::default(),
         );
-        assert!(result.success, "dap_set_breakpoint failed: {}", result.output);
+        assert!(
+            result.success,
+            "dap_set_breakpoint failed: {}",
+            result.output
+        );
         let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(v["source"], "/a.rs");
         assert_eq!(v["line"], 42);
@@ -863,10 +882,7 @@ mod tests {
             adapter_name: "lldb".into(),
             program: "/bin/ls".into(),
         }));
-        let call = make_call(
-            "dap_step",
-            serde_json::json!({"direction": "sideways"}),
-        );
+        let call = make_call("dap_step", serde_json::json!({"direction": "sideways"}));
         let result = execute_tool(
             &mut editor,
             &call,

@@ -435,7 +435,10 @@ impl Editor {
         if self.command_cursor >= self.command_line.len() {
             return;
         }
-        let ch = self.command_line[self.command_cursor..].chars().next().unwrap();
+        let ch = self.command_line[self.command_cursor..]
+            .chars()
+            .next()
+            .unwrap();
         self.command_cursor += ch.len_utf8();
     }
 
@@ -474,13 +477,12 @@ impl Editor {
         &self.command_line
     }
 
-    pub fn open_file(&mut self, path: &str) {
-        match Buffer::from_file(Path::new(path)) {
+    pub fn open_file(&mut self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        match Buffer::from_file(path) {
             Ok(buf) => {
                 let name = buf.name.clone();
-                let detected_lang = buf
-                    .file_path()
-                    .and_then(crate::syntax::language_for_path);
+                let detected_lang = buf.file_path().and_then(crate::syntax::language_for_path);
                 let prev_idx = self.active_buffer_idx();
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
@@ -498,6 +500,107 @@ impl Editor {
             }
         }
     }
+
+    /// `gf` — open the filename under the cursor.
+    ///
+    /// Extracts a filename-like run via [`filename_at_offset`] and tries
+    /// to open it.  `~/...` is expanded via `$HOME`. Resolution order:
+    ///   1. As-is (absolute path, or relative to cwd).
+    ///   2. Relative to the active buffer's parent directory.
+    ///
+    /// Pushes a jump before opening so `Ctrl-o` returns to the reference.
+    pub fn goto_file_under_cursor(&mut self) {
+        let idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let rope = self.buffers[idx].rope();
+        let Some(raw) = filename_at_offset(rope, offset) else {
+            self.set_status("gf: no filename under cursor");
+            return;
+        };
+
+        // Expand ~ to $HOME.
+        let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+            match std::env::var("HOME") {
+                Ok(home) => Path::new(&home).join(rest),
+                Err(_) => Path::new(&raw).to_path_buf(),
+            }
+        } else if raw == "~" {
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| Path::new(&raw).to_path_buf())
+        } else {
+            Path::new(&raw).to_path_buf()
+        };
+
+        // Try the literal path first, then relative to the buffer's dir.
+        let candidate = if expanded.exists() {
+            Some(expanded)
+        } else if !expanded.is_absolute() {
+            self.buffers[idx]
+                .file_path()
+                .and_then(|p| p.parent())
+                .map(|dir| dir.join(&expanded))
+                .filter(|p| p.exists())
+        } else {
+            None
+        };
+
+        match candidate {
+            Some(path) => {
+                self.record_jump();
+                self.open_file(&path);
+            }
+            None => self.set_status(format!("gf: file not found: {}", raw)),
+        }
+    }
+}
+
+/// Extract the filename/path-like run containing `pos`. Used by `gf`
+/// (go-to-file-under-cursor).
+///
+/// "Filename chars" here are a superset of vi's `isfname`: alphanumerics,
+/// `_`, `-`, `.`, `/`, `~`, `+`, `:`, `@`. Wide enough to catch absolute
+/// paths, URL-ish strings, and `mod::path` references, but narrow enough
+/// to terminate at whitespace, quotes, and most punctuation so we don't
+/// swallow trailing commas or parentheses.
+///
+/// Uses streaming char iteration (`chars_at`) rather than indexed
+/// `rope.char(i)` access to avoid O(log N) per-char cost on long
+/// buffers — same tradeoff `word::first_non_blank_col` documents.
+///
+/// Returns `None` if `pos` is past-EOF or not on a filename char.
+pub fn filename_at_offset(rope: &ropey::Rope, pos: usize) -> Option<String> {
+    let len = rope.len_chars();
+    if len == 0 || pos >= len {
+        return None;
+    }
+    let is_filename_char =
+        |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '~' | '+' | ':' | '@');
+    if !is_filename_char(rope.char(pos)) {
+        return None;
+    }
+    // Backward scan: step the cursor back through chars_at, stopping at
+    // the first non-filename char or buffer start.
+    let mut start = pos;
+    let mut back_iter = rope.chars_at(pos);
+    while start > 0 {
+        match back_iter.prev() {
+            Some(c) if is_filename_char(c) => start -= 1,
+            _ => break,
+        }
+    }
+    // Forward scan: step through chars_at(pos + 1) until a non-filename
+    // char is found.
+    let mut end = pos + 1;
+    let mut fwd_iter = rope.chars_at(end);
+    while end < len {
+        match fwd_iter.next() {
+            Some(c) if is_filename_char(c) => end += 1,
+            _ => break,
+        }
+    }
+    Some(rope.slice(start..end).to_string())
 }
 
 #[cfg(test)]
@@ -623,5 +726,44 @@ mod tests {
         e.command_history_next();
         assert_eq!(e.command_line, "");
         assert_eq!(e.command_cursor, 0);
+    }
+
+    #[test]
+    fn filename_at_offset_extracts_simple_word() {
+        let rope = ropey::Rope::from_str("see main.rs for details");
+        assert_eq!(filename_at_offset(&rope, 4).as_deref(), Some("main.rs"));
+    }
+
+    #[test]
+    fn filename_at_offset_extracts_absolute_path() {
+        let rope = ropey::Rope::from_str("open /usr/local/bin/foo now");
+        assert_eq!(
+            filename_at_offset(&rope, 8).as_deref(),
+            Some("/usr/local/bin/foo")
+        );
+    }
+
+    #[test]
+    fn filename_at_offset_returns_none_on_whitespace() {
+        let rope = ropey::Rope::from_str("a b");
+        assert_eq!(filename_at_offset(&rope, 1), None);
+    }
+
+    #[test]
+    fn filename_at_offset_returns_none_past_eof() {
+        let rope = ropey::Rope::from_str("abc");
+        assert_eq!(filename_at_offset(&rope, 3), None);
+        assert_eq!(filename_at_offset(&rope, 100), None);
+    }
+
+    #[test]
+    fn filename_at_offset_stops_at_quotes_and_parens() {
+        let rope = ropey::Rope::from_str("include(\"foo/bar.h\")");
+        // Offset inside "foo/bar.h" — should not include the quote.
+        let offset = "include(\"".len() + 2; // inside "foo"
+        assert_eq!(
+            filename_at_offset(&rope, offset).as_deref(),
+            Some("foo/bar.h")
+        );
     }
 }

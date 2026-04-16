@@ -18,9 +18,7 @@
 //! inscrutable 3000-line file.
 
 use crate::dap_intent::{DapIntent, DapSpawnConfig, StepKind};
-use crate::debug::{
-    DebugState, DebugTarget, DebugThread, Scope, StackFrame, Variable,
-};
+use crate::debug::{DebugState, DebugTarget, DebugThread, Scope, StackFrame, Variable};
 
 use super::Editor;
 
@@ -233,8 +231,11 @@ impl Editor {
 
     /// Resume execution on the active thread. No-op if no session.
     pub fn dap_continue(&mut self) {
-        let Some(tid) = self.dap_active_thread_id() else { return };
-        self.pending_dap_intents.push(DapIntent::Continue { thread_id: tid });
+        let Some(tid) = self.dap_active_thread_id() else {
+            return;
+        };
+        self.pending_dap_intents
+            .push(DapIntent::Continue { thread_id: tid });
         self.set_status("[DAP] continue");
     }
 
@@ -243,7 +244,9 @@ impl Editor {
     /// AI tool, the `:debug-step-*` commands, and any future Scheme
     /// caller share the same dispatch.
     pub fn dap_step(&mut self, kind: StepKind) {
-        let Some(tid) = self.dap_active_thread_id() else { return };
+        let Some(tid) = self.dap_active_thread_id() else {
+            return;
+        };
         let intent = match kind {
             StepKind::Over => DapIntent::Next { thread_id: tid },
             StepKind::In => DapIntent::StepIn { thread_id: tid },
@@ -282,9 +285,8 @@ impl Editor {
 
     /// Disconnect — kills the adapter process.
     pub fn dap_disconnect(&mut self, terminate_debuggee: bool) {
-        self.pending_dap_intents.push(DapIntent::Disconnect {
-            terminate_debuggee,
-        });
+        self.pending_dap_intents
+            .push(DapIntent::Disconnect { terminate_debuggee });
         self.debug_state = None;
         self.set_status("[DAP] disconnected");
     }
@@ -385,11 +387,8 @@ impl Editor {
             return;
         };
         // Preserve stopped flags for threads that already existed.
-        let prior: std::collections::HashMap<i64, bool> = state
-            .threads
-            .iter()
-            .map(|t| (t.id, t.stopped))
-            .collect();
+        let prior: std::collections::HashMap<i64, bool> =
+            state.threads.iter().map(|t| (t.id, t.stopped)).collect();
         let new_threads = threads
             .into_iter()
             .map(|(id, name)| DebugThread {
@@ -492,7 +491,11 @@ impl Editor {
     /// our breakpoints. Replace the core-side list with verified status.
     /// Entries are `(id, verified, line)` tuples; `id` is the adapter-
     /// assigned id (may differ from the local id we had).
-    pub fn apply_dap_breakpoints_set(&mut self, source_path: String, entries: Vec<(i64, bool, i64)>) {
+    pub fn apply_dap_breakpoints_set(
+        &mut self,
+        source_path: String,
+        entries: Vec<(i64, bool, i64)>,
+    ) {
         let Some(state) = self.debug_state.as_mut() else {
             return;
         };
@@ -680,10 +683,22 @@ mod tests {
         ed.dap_step(StepKind::In);
         ed.dap_step(StepKind::Out);
         assert_eq!(ed.pending_dap_intents.len(), 4);
-        assert!(matches!(ed.pending_dap_intents[0], DapIntent::Continue { thread_id: 7 }));
-        assert!(matches!(ed.pending_dap_intents[1], DapIntent::Next { thread_id: 7 }));
-        assert!(matches!(ed.pending_dap_intents[2], DapIntent::StepIn { thread_id: 7 }));
-        assert!(matches!(ed.pending_dap_intents[3], DapIntent::StepOut { thread_id: 7 }));
+        assert!(matches!(
+            ed.pending_dap_intents[0],
+            DapIntent::Continue { thread_id: 7 }
+        ));
+        assert!(matches!(
+            ed.pending_dap_intents[1],
+            DapIntent::Next { thread_id: 7 }
+        ));
+        assert!(matches!(
+            ed.pending_dap_intents[2],
+            DapIntent::StepIn { thread_id: 7 }
+        ));
+        assert!(matches!(
+            ed.pending_dap_intents[3],
+            DapIntent::StepOut { thread_id: 7 }
+        ));
     }
 
     #[test]
@@ -845,10 +860,7 @@ mod tests {
         });
         state.add_breakpoint("/a.rs", 1);
         ed.debug_state = Some(state);
-        ed.apply_dap_breakpoints_set(
-            "/a.rs".into(),
-            vec![(99, true, 1), (100, false, 5)],
-        );
+        ed.apply_dap_breakpoints_set("/a.rs".into(), vec![(99, true, 1), (100, false, 5)]);
         let state = ed.debug_state.as_ref().unwrap();
         let bps = state.breakpoints.get("/a.rs").unwrap();
         assert_eq!(bps.len(), 2);
@@ -919,7 +931,9 @@ mod tests {
         assert!(ed.debug_state.is_none());
         assert!(matches!(
             ed.pending_dap_intents[0],
-            DapIntent::Disconnect { terminate_debuggee: false }
+            DapIntent::Disconnect {
+                terminate_debuggee: false
+            }
         ));
     }
 

@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M4 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (825 tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M4 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE, Phase 3h M1-M8 COMPLETE, AI prompt UX QoL COMPLETE (1158+ tests). All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -16,7 +16,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 | Category | Features |
 |----------|----------|
-| **Modes** | Normal, Insert, Visual (char/line), Command, ConversationInput, Search, FilePicker |
+| **Modes** | Normal, Insert, Visual (char/line), Command, ConversationInput, Search, FilePicker, FileBrowser |
 | **Movement** | hjkl, 0/$, gg/G, w/b/e/W/B/E, f/F/t/T, %, {/}, H/M/L |
 | **Search** | /pattern, ?pattern, n/N, *, :s///g, :%s///g, :noh, highlights |
 | **Editing** | i/a/A/o/O, x, dd/dw/d$/d0, cc/cw/C/c0, r, J, >>/<\<, ~, gUU/guu, `.` repeat, u/Ctrl-r |
@@ -48,7 +48,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 | # | Feature | Phase |
 |---|---------|-------|
-| 5 | System clipboard (`"+y`, `"+p`) | 3e M7 |
+| 5 | System clipboard (`"+y`, `"+p`) | 3h M5 ✅ |
 | 6 | Auto-reload on external change | future |
 | 7 | `:set` options | future |
 | 8 | Mouse support | future |
@@ -169,52 +169,111 @@ and Doom Emacs–style discoverability. The guiding principles:
   and command modes should honour C-a/C-e/C-w/C-u/C-k/C-d so muscle memory
   from bash, zsh, and readline transfers directly.
 
-### M1: Terminal Keybinds in Insert Mode
+### M0: AI Prompt UX QoL ✅
+First-class editor behavior in the AI conversation prompt. The input field
+must match the readline/Evil editing experience users get everywhere else.
+
+- [x] `input_cursor: usize` — byte-offset cursor tracking in `Conversation.input_line`
+- [x] `scroll: usize` — conversation history scroll state (0 = auto-follow bottom)
+- [x] `C-a` / `Home` — move to start of input
+- [x] `C-e` / `End` — move to end of input
+- [x] `C-b` / `Left` — move cursor one char backward
+- [x] `C-f` / `Right` — move cursor one char forward
+- [x] `Backspace` / `C-h` — delete char before cursor
+- [x] `Delete` / `C-d` — delete char at cursor
+- [x] `C-w` — delete word backward (bash-style: to last whitespace)
+- [x] `C-u` — kill to start of input
+- [x] `C-k` — kill to end of input
+- [x] `PageUp` / `PageDown` — scroll conversation history (stay in input mode)
+- [x] Normal-mode `j` / `k` — scroll conversation when focused (j=down, k=up)
+- [x] Normal-mode `G` — jump to bottom of conversation
+- [x] Normal-mode `i` / `a` — re-enter ConversationInput mode
+- [x] Enter — submit prompt, reset cursor, scroll to bottom
+- [x] Cursor rendered at correct column (char count to `input_cursor`, not `.len()`)
+- [x] Cursor hidden when scrolled up (prompt not visible)
+- [x] 27 new tests (852 total)
+
+### M1: Terminal Keybinds in Insert Mode ✅
 Standard readline/Emacs editing bindings that users expect from any Unix program.
 
-- [ ] `C-a` — move to beginning of line (mirrors readline)
-- [ ] `C-e` — move to end of line
-- [ ] `C-w` — delete word backward (bash behaviour: delete to last whitespace)
-- [ ] `C-u` — delete to beginning of line
-- [ ] `C-k` — delete to end of line (kill-line)
-- [ ] `C-d` — delete char forward (equiv. `x` in normal mode)
-- [ ] `C-h` — backspace (already works; verify and document)
-- [ ] `C-j` / `C-m` — newline (alternative to Enter; muscle memory from readline)
-- [ ] `C-r {register}` — paste from named register while in insert mode
-       (from *Practical Vim* ch. 15 — "use registers in insert mode")
+- [x] `C-a` — move to beginning of line (mirrors readline)
+- [x] `C-e` — move to end of line
+- [x] `C-w` — delete word backward (bash behaviour: delete to last whitespace)
+- [x] `C-u` — delete to beginning of line
+- [x] `C-k` — delete to end of line (kill-line)
+- [x] `C-d` — delete char forward (equiv. `x` in normal mode)
+- [x] `C-h` — backspace alias
+- [x] `C-j` — newline (alternative to Enter; muscle memory from readline)
+- [x] `C-r {register}` — paste from named register while in insert mode
+       (from *Practical Vim* ch. 15 — "use registers in insert mode").
+       Implemented in M5 via `pending_insert_register` + `insert_from_register`.
 - [ ] `C-o` — execute one normal-mode command then return to insert
        (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode")
 
-### M2: Terminal Keybinds in Command Mode
+### M2: Terminal Keybinds in Command Mode ✅
 Command line (`:` prompt) should behave like a readline/zsh command line.
 
-- [ ] `C-a` / `C-e` — home / end of command line
-- [ ] `C-w` — delete word backward
-- [ ] `C-u` — clear command line
-- [ ] `C-k` — delete to end
-- [ ] `C-b` / `C-f` — move cursor left / right one char
-- [ ] `C-p` / `C-n` — already done via up/down; verify and add these aliases
-- [ ] `C-d` — delete char forward in command line
-- [ ] `C-h` — backspace in command line (should already work)
+- [x] `C-a` / `C-e` — home / end of command line
+- [x] `C-w` — delete word backward
+- [x] `C-u` — clear command line
+- [x] `C-k` — delete to end
+- [x] `C-b` / `C-f` — move cursor left / right one char
+- [x] `C-p` / `C-n` — history cycle aliases
+- [x] `C-d` — delete char forward in command line
+- [x] `C-h` — backspace in command line
 
 ### M3: Normal Mode Gaps (Practical Vim)
 Motions and operators that Vim users rely on but we haven't implemented.
 
-- [ ] `s` / `S` — substitute char (`cl`) / line (`cc`) shortcuts
+- [x] `s` / `S` — substitute char (`cl`) / line (`cc`) shortcuts
        (*Practical Vim* tip 2: "Think in terms of repeatable units")
-- [ ] `^` — first non-blank char of line (complement to `0` / `$`)
-- [ ] `+` / `-` — first non-blank of next / previous line
-- [ ] `_` — first non-blank of current line (useful with operators: `d_`)
-- [ ] `ge` / `gE` — backward word-end (complement to `e`/`E`)
-- [ ] `gf` — go to file under cursor (open in new buffer)
-- [ ] `gi` — re-enter insert mode at last insert position
-- [ ] `g;` / `g,` — jump backward/forward through change list
-- [ ] `Ctrl-o` / `Ctrl-i` — jump list backward / forward
+- [x] `^` — first non-blank char of line (complement to `0` / `$`)
+- [x] `+` / `-` — first non-blank of next / previous line
+- [x] `_` — first non-blank of current line (useful with operators: `d_`)
+- [x] `ge` / `gE` — backward word-end (complement to `e`/`E`)
+- [x] `gf` — go to file under cursor (open in new buffer). Uses a
+       filename-char classifier (alphanumerics + `_-./~+:@`) wider than
+       word chars. Resolution: literal path first (absolute or relative
+       to cwd), fall back to active buffer's parent dir. `~/…` expanded
+       via `$HOME`. Pushes a jump before opening so `Ctrl-o` returns.
+- [x] `gi` — re-enter insert mode at last insert position
+- [x] `g;` / `g,` — jump backward/forward through change list
+       (*Practical Vim* ch. 9 — "Traverse the Change List").
+       Each edit (via `record_edit` / `record_edit_with_count` /
+       `finalize_insert_for_repeat`) pushes the cursor position onto a
+       bounded 100-entry list. `g;` walks backward (pushing the current
+       position on first step so `g,` can return); `g,` walks forward.
+       Dedupes consecutive entries; new edit truncates forward history.
+       Cross-buffer via path-resolve with clamp-past-EOF on restore.
+       Module mirrors `jumps.rs` pattern.
+- [x] `Ctrl-o` / `Ctrl-i` — jump list backward / forward
        (*Practical Vim* ch. 9 — "Navigate the Jump List")
-- [ ] `@:` — repeat last ex command
-- [ ] `gn` / `gN` — visual select next/prev search match
-       (*Practical Vim* tip 86 — `cgn` as a one-key global replace with `.`)
-- [ ] `:changes` command — display change list
+       Push sites: `gg`/`G`, `%`, `{`/`}`, `n`/`N`/`*`, `'<mark>`, `gd`, `]d`/`[d`.
+       Bounded at 100 entries; dedupes consecutive pushes; truncates forward
+       history on new push. Cross-buffer navigation via path-resolve.
+- [x] `@:` — repeat last ex command. Rides the existing `replay-macro`
+       await channel: when the register char is `:`, pulls the last entry
+       off `command_history` and re-runs it through `execute_command`.
+       Count-prefixed (`3@:` re-runs 3 times). Empty-history case
+       surfaces "No previous command line" status.
+- [x] `gn` / `gN` — visual select next/prev search match (737 tests)
+       (*Practical Vim* tip 86 — `cgn<text><Esc>` + `.` as one-key global replace).
+       Operator variants: `dgn`/`dgN`, `cgn`/`cgN`, `ygn`/`ygN`. `cgn` is
+       dot-repeatable so `.` re-runs the whole select-delete-insert cycle
+       from the new cursor position. Primitive lives in
+       `search::find_match_at_or_adjacent` (cursor inside a match selects
+       that match — i.e. "at or after/before the cursor"), with wrap-around.
+- [x] `:changes` command — display change list (newest-first, marks
+       current index with `>`). Dispatched via `show-changes-buffer`
+       builtin; opens/replaces `*Changes*` scratch buffer.
+- [x] Ranger/dired-style directory browser (`SPC f d`) — spatial
+       traversal complement to the fuzzy `SPC f f` picker. New
+       `Mode::FileBrowser` backed by `mae_core::FileBrowser`; single-pane
+       listing with dirs sorted first, Enter/`l` to descend or open,
+       `h`/Backspace to ascend (re-selecting the child you came from),
+       incremental filter as you type, cleared on descent. Hidden and
+       skip-dirs (`.git`/`target`/…) are pruned. 11 unit + 3 integration
+       tests. (751 total.)
 
 ### M4: Leader Key Command Palette (Doom Emacs-style SPC SPC)
 The current which-key shows a key-sequence tree. Users also need a fuzzy
@@ -230,35 +289,131 @@ Key UX targets from Doom Emacs:
 - All existing SPC bindings get meaningful which-key group names with docs
 
 Implementation:
-- [ ] `CommandPalette` overlay — reuse `FilePicker` infrastructure (same
+- [x] `CommandPalette` overlay — reuse `FilePicker` infrastructure (same
       fuzzy-match + scrollable list pattern)
-- [ ] Source: `CommandRegistry::all()` → `(name, doc)` pairs, fuzzy-ranked
-- [ ] Accept with Enter executes the command; Esc dismisses
-- [ ] `SPC SPC` binding in normal keymap
-- [ ] `SPC h k` / `SPC h c` → describe commands via status bar or *Help* buffer
-- [ ] Audit all `SPC *` group names in which-key for completeness
+- [x] Source: `CommandRegistry::list_commands()` → `(name, doc)` pairs, fuzzy-ranked
+- [x] Accept with Enter executes the command; Esc dismisses
+- [x] `SPC SPC` binding in normal keymap
+- [x] `SPC h k` → describe-key; arms an `awaiting_key_description` flag,
+      intercepts the next key sequence in `handle_normal_mode`, looks it
+      up in the normal keymap, and opens the bound command's `cmd:<name>`
+      help page on Exact (or reports "Key not bound" on None). Esc/Ctrl-C
+      cancel.
+- [x] `SPC h c` → describe-command; opens the command palette with
+      `PalettePurpose::Describe`. Same fuzzy-selection UI as `SPC SPC`,
+      but Enter opens the selected command's `cmd:<name>` help page
+      instead of executing it.
+- [x] Audit all `SPC *` group names in which-key — all 9 current
+      prefixes (+buffer, +file, +window, +ai, +theme, +debug, +help,
+      +quit, +syntax) have group labels; pinned by a test that walks
+      `which_key_entries(SPC)` and fails if any group renders as the
+      fallback "+...".
 
-### M5: Registers & Clipboard (Practical Vim ch. 10)
+### M5: Registers & Clipboard ✅ (Practical Vim ch. 10)
 Named registers are central to Vim's cut/copy/paste model. *Practical Vim*
 devotes a full chapter to them as a core feature, not an edge case.
 
-- [ ] `"a`–`"z` — yank/delete/paste to/from named registers (`"ayy`, `"ap`)
-- [ ] `"A`–`"Z` — append to named registers (uppercase = append)
-- [ ] `"0` — yank register (always the last yank; unaffected by delete)
-- [ ] `"_` — black-hole register (discard without clobbering `"`)
-- [ ] `"+` / `"*` — system clipboard integration (X11/Wayland via xclip/wl-copy)
-- [ ] `:reg` / `:registers` command — display all non-empty registers
-- [ ] `Ctrl-r {register}` in insert mode (see M1)
+- [x] `"a`–`"z` — yank/delete/paste to/from named registers (`"ayy`, `"ap`).
+      All yank/delete/paste call sites centralized through `save_yank` /
+      `save_delete` / `paste_text` in `register_ops.rs`. `"<char>` prefix
+      captured via `pending_register_prompt` → `active_register`.
+- [x] `"A`–`"Z` — append to named registers (uppercase = append).
+      `write_named_register` detects uppercase, lowercases the key,
+      and appends to the existing entry.
+- [x] `"0` — yank register (always the last yank; `save_yank` writes `"0`,
+      `save_delete` skips it — so deletes don't clobber yank history)
+- [x] `"_` — black-hole register (early return in save_yank/save_delete/paste_text)
+- [x] `"+` / `"*` — system clipboard integration. Shell-out shim in
+      `clipboard.rs`: tries `wl-copy`/`wl-paste` (Wayland), `xclip` (X11),
+      `pbcopy`/`pbpaste` (macOS). Falls back to local mirror on failure.
+- [x] `:reg` / `:registers` / `:display-registers` — opens `*Registers*`
+      scratch buffer with all non-empty registers, ordered deterministically.
+      Newlines rendered as `↵`, tabs as `⇥`.
+- [x] `Ctrl-r {register}` in insert mode — `pending_insert_register` flag
+      captures the register char, `insert_from_register` inserts its
+      contents at the cursor. Clipboard registers query the live clipboard.
+- [x] 8 unit tests in `register_ops.rs` + 6 integration tests in `tests.rs`
 
-### M6: Surrounds & Advanced Text Objects (vim-surround)
+### M6: Surrounds ✅ (vim-surround)
 `vim-surround` is one of the most-installed Vim plugins because it fills a
 genuine gap. The operations are composable with operators and dot-repeat.
 
-- [ ] `ys{motion}{char}` — surround motion with `char` (e.g. `ysiw"`)
-- [ ] `cs{from}{to}` — change surrounding delimiter
-- [ ] `ds{char}` — delete surrounding delimiter
-- [ ] `S{char}` in Visual mode — surround selection
-- [ ] Integrates with existing text-object infrastructure
+- [x] `ds{char}` — delete surrounding delimiter. Uses the existing
+      `text_object_range` (around) to find the pair, then removes the
+      two delimiter chars. Cursor positioned at the old open position.
+- [x] `cs{from}{to}` — change surrounding delimiter. Two-char await
+      via `pending_surround_from` + `change-surround-1`/`change-surround-2`
+      chain through `pending_char_command`. `surround_pair()` maps target
+      chars (including `b`→`(`, `B`→`{`, symmetric quotes) to
+      `(open, close)`.
+- [x] `yss{char}` — surround current line content with char (excludes
+      trailing newline). Close inserted at end, open at start.
+- [x] `S{char}` in Visual mode — surround selection with char. Works
+      with both charwise and linewise selections.
+- [x] Integrates with existing text-object infrastructure —
+      `text_object_range` provides the range, `surround_pair` maps aliases.
+      All four commands are dot-repeatable via `record_edit`.
+- [x] 10 unit tests in `surround.rs`
+
+### M7: Vim Quick Wins Batch ✅
+Batch of high-value muscle-memory features that fill remaining vim parity gaps.
+
+- [x] `D` → delete-to-line-end (alias for d$)
+- [x] `Y` → yank-line (alias for yy, standard vim behavior)
+- [x] `X` → delete-char-backward (command existed, wasn't bound)
+- [x] `;` / `,` — repeat last f/F/t/T motion / reverse. Tracks
+      `last_find_char: Option<(char, String)>` in editor state. Direction
+      flipping: forward↔backward, till/find preserved.
+- [x] `#` — search word under cursor backward (mirror of `*`)
+- [x] `gv` — reselect last visual selection. Saves
+      `(anchor_row, anchor_col, cursor_row, cursor_col, VisualType)` on
+      every visual exit.
+- [x] Visual `>` / `<` — indent/dedent selection by 4 spaces
+- [x] Visual `J` — join all lines in selection
+- [x] Visual `p` / `P` — paste replacing selection (saves paste text
+      before deleting; deleted text goes to black-hole register so paste
+      register isn't clobbered)
+- [x] Visual `o` — swap cursor and anchor (other end of selection)
+- [x] Visual `u` / `U` — lowercase/uppercase selection
+- [x] 7 new tests
+
+### M8: Scheme REPL & Lisp Machine ✅
+The defining feature: MAE is a lisp machine. Every editor operation is
+callable from Scheme, and users can live-evaluate and redefine behavior
+while the editor runs — the same property that makes Emacs irreplaceable.
+
+**New Scheme API surface** (registered in `SchemeRuntime::new`):
+- [x] `(buffer-insert TEXT)` — insert text at cursor (write-side, applied
+      after eval via SharedState pattern)
+- [x] `(cursor-goto ROW COL)` — move cursor to absolute position
+- [x] `(open-file PATH)` — open a file in a new buffer
+- [x] `(run-command NAME)` — dispatch any registered command by name
+- [x] `(message TEXT)` — append to *Messages* log
+- [x] `(buffer-line N)` — read a specific line (0-indexed; captured as
+      a closure over a snapshot of all lines at inject time)
+- [x] `*buffer-text*` — full buffer text (new global)
+- [x] `*buffer-count*` — number of open buffers (new global)
+- [x] `*mode*` — current mode name as string (new global)
+
+**REPL buffer + eval commands:**
+- [x] `*Scheme*` output buffer — accumulates prompt/result history.
+      Created on first use; `SPC e o` to open/switch.
+- [x] `SPC e l` → eval-line (eval current line as Scheme)
+- [x] `SPC e r` → eval-region (eval visual selection as Scheme)
+- [x] `SPC e b` → eval-buffer (eval entire buffer as Scheme)
+- [x] `:eval <code>` — existing inline eval (unchanged)
+- [x] +eval which-key group for discoverability
+- [x] `eval_for_repl` method — formats `> code\n; => result\n` for
+      REPL output; errors formatted as `; error: <msg>`
+- [x] Binary drains `pending_scheme_eval` after every key dispatch
+      (same intent-queue pattern as LSP/DAP)
+- [x] Short results → status bar; all results → appended to `*Scheme*`
+
+**init.scm enriched** with documented API reference, example custom
+commands (`insert-timestamp`, `buffer-info`), and example keybinding
+customization.
+
+- [x] 8 new scheme runtime tests + 6 scheme_ops tests
 
 ---
 
@@ -325,6 +480,13 @@ concurrently with LSP.
 - [x] tree-sitter dependency, grammar loading (Rust, TOML, Markdown)
 - [x] Parse buffer on edit (full reparse — incremental deferred)
 - [x] Syntax tree + highlight spans stored per-buffer in `SyntaxMap`
+- [x] Expanded language set: Python, JavaScript, TypeScript/TSX, Go,
+      JSON, Bash, Scheme, YAML
+- [x] Markdown block highlights working end-to-end — capture names
+      like `@text.title`, `@text.literal`, `@text.uri` routed to
+      `markup.heading` / `markup.literal` / `markup.link` theme keys
+- [x] Org-mode fallback highlighter (regex-based) — tree-sitter-org
+      1.3.3 is incompatible with tree-sitter 0.25; swap when fixed
 
 ### M2: Highlight ✅
 - [x] Theme-aware syntax highlighting — reuses existing bare theme keys
@@ -397,26 +559,133 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 
 ---
 
-## Phase 5: Knowledge Base
+## Phase 4d: Knowledge Base Foundation + Help System ✅
 
-SQLite-backed graph store with org-mode parser.
+Built first as an in-memory graph store that powers the built-in help
+system. Human (`:help`) and AI (`kb_*` tools) read the same nodes — the
+"AI as peer" design point at its most literal.
 
-### M1: Storage
-- [ ] SQLite database (rusqlite)
-- [ ] Node CRUD operations
-- [ ] Link (edge) CRUD operations
-- [ ] Full-text search via FTS5
+### M1: In-Memory KB ✅
+- [x] `mae-kb` crate with `Node`, `KnowledgeBase`, `NodeKind`
+- [x] `[[target]]` / `[[target|display]]` link parsing
+- [x] Reverse index (`links_in`) so `links_to()` is O(1) — even for dangling targets
+- [x] 20 unit tests
 
-### M2: Org-Mode Parser
-- [ ] tree-sitter-org grammar integration
-- [ ] Parse org files to extract: headings, links, properties, tags
-- [ ] Bidirectional link extraction (`[[id:...]]` style)
+### M2: Help Buffer ✅
+- [x] `BufferKind::Help` + `HelpView` (current + back/forward stacks + scroll + focused_link)
+- [x] `cmd:<name>` nodes auto-seeded from `CommandRegistry` on startup
+- [x] Hand-authored `concept:*`, `key:*`, and `index` nodes
+- [x] `:help [topic]` with namespace fallback (literal → `cmd:<topic>` → `concept:<topic>`)
+- [x] `:describe-command <name>` opens `cmd:<name>`
+- [x] Help buffer keys: Enter=follow, Tab=next link, Shift-Tab=prev, q=close, C-o=back, C-i=forward, j/k=scroll
+- [x] Renderer: title header + body with styled `[[link]]` segments + focus highlight
 
-### M3: Editor Integration
-- [ ] `:kb-search` command
-- [ ] Backlink buffer (show what links to current file)
-- [ ] AI tool: `kb_search`, `kb_backlinks`
-- [ ] Scheme functions: `(kb-search)`, `(kb-insert-link)`
+### M3: AI KB Tools ✅
+- [x] `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to` (all ReadOnly)
+- [x] `kb_graph` (BFS up to 3-hop neighborhood) + `help_open` (peer navigation)
+- [x] 30 AI-specific tools total
+
+### M4: Local Graph Navigation ✅
+- [x] Help buffer neighborhood footer: outgoing + incoming links with titles, missing targets flagged
+- [x] Tab cycles through unified list of outgoing + incoming links
+- [x] `kb_graph` AI tool returns `{root, depth, nodes, edges}` JSON
+- [x] `help_open` AI tool + system prompt guidance so the agent steers the user into help pages
+
+### M5: Performance Quick Wins ✅
+- [x] Pre-lowercased title/body/tags cached at insert time (search scales to 2k nodes in <50ms)
+- [x] Perf regression test guarding against O(n²) regressions
+
+---
+
+## Phase 5: Knowledge Base (persistent, org-roam style) ✅
+
+Build on the in-memory KB from Phase 4d. SQLite-backed graph store,
+org-mode parser, user-authored notes.
+
+### M1: Storage ✅
+- [x] SQLite + FTS5 via `rusqlite` (bundled)
+- [x] Schema: `nodes`, `links`, `nodes_fts` virtual table (porter + unicode61)
+- [x] `save_to_sqlite` / `load_from_sqlite` — atomic transactions, idempotent
+- [x] `fts_search(path, query, limit)` — BM25-ranked, prefix queries (`word*`)
+- [x] `probe_sqlite` for schema version detection
+- [x] `:kb-save <path>` and `:kb-load <path>` commands
+
+### M2: Org-Mode Parser + Watcher ✅
+- [x] Hand-rolled org-roam parser — `:PROPERTIES: :ID:`, `#+title:`, `#+filetags:`, `[[id:UUID][display]]` rewriting
+- [x] `parse_org_multi` supports file-level AND per-heading `:ID:` drawers (multi-node files)
+- [x] Inline heading tags merged with file-level tags
+- [x] External `[[url][display]]` links flattened to `display (url)` to avoid scanner collisions
+- [x] `ingest_org_dir` walks recursively via `walkdir`, returns `IngestReport`
+- [x] `OrgDirWatcher` (notify-based) emits `OrgChange::Upserted(path)` / `Removed(ids)` events
+- [x] `:kb-ingest <dir>` command
+
+### M3: Editor Integration ✅
+- [x] `:kb-save`, `:kb-load`, `:kb-ingest` commands
+- [x] In-memory KB continues to serve `:help` and `kb_*` AI tools — SQLite is the persistence + FTS layer, not a query rewrite
+- [ ] Backlink buffer (show what links to current file) — deferred
+- [ ] User-authored note workflow (`:kb-new`, `:kb-link`) — deferred
+- [ ] Scheme functions: `(kb-search)`, `(kb-insert-link)` — deferred
+
+### M4: GUI Graph View (blocked on GUI backend)
+- [ ] Org-roam-ui style force-directed graph of KB nodes and links
+- [ ] Pan/zoom, click-to-navigate to help/note buffer
+- [ ] Filter by namespace (show only `cmd:*`, only user notes, etc.)
+- [ ] Terminal fallback stays as neighborhood adjacency list from 4d M4
+- Blocked on: GUI renderer (wgpu or similar); terminal backend can't render graphs well
+
+---
+
+## Phase 6: Embedded Shell
+
+The editor should be the user's primary interface to their shell — not a
+terminal multiplexer wrapper, but a first-class shell buffer where the AI
+agent can observe, suggest, and execute commands alongside the user.
+
+### M1: Shell Buffer
+- [ ] PTY-backed `*Shell*` buffer (`portable-pty` or `rustix` + forkpty)
+- [ ] Shell buffer mode with raw-mode passthrough (keyboard → PTY)
+- [ ] Scrollback ring buffer (bounded, same pattern as conversation entries)
+- [ ] `:shell` command to open/switch; `SPC !` binding
+
+### M2: AI Integration
+- [ ] AI tool: `shell_run` — execute a command in the PTY, stream output
+- [ ] AI tool: `shell_read` — read last N lines of shell buffer
+- [ ] Permission tier: Shell (same as existing shell-escape)
+- [ ] AI can observe shell output to diagnose errors, suggest next commands
+
+### M3: Scheme Exposure
+- [ ] `(shell-send CMD)` — send text to PTY
+- [ ] `(shell-output N)` — read last N lines from shell buffer
+- [ ] `(shell-cwd)` — current working directory of the shell process
+
+### M4: Send-to-Shell
+- [ ] `SPC e s` — eval-line sends current line to shell (like Emacs `C-c C-c`)
+- [ ] `SPC e S` — eval-region sends visual selection to shell
+- [ ] Shell-aware completion (optional, future)
+
+---
+
+## Phase 7: Embedded Documentation System
+
+Users must be able to discover, read, and navigate all editor documentation
+from within the editor — and the AI peer must have native access to the same
+docs to help users effectively. Builds on the existing KB + help buffer.
+
+### M1: Comprehensive Help Content
+- [ ] Auto-generate help pages for ALL registered commands (not just hand-authored)
+- [ ] Auto-generate help pages for ALL keybindings (keymap → command → doc)
+- [ ] Help pages for all Scheme primitives (`buffer-insert`, `define-key`, etc.)
+- [ ] Tutorial/onboarding node: `concept:getting-started`
+
+### M2: Contextual Help
+- [ ] Hover-help for keybindings in which-key popup (expand doc inline)
+- [ ] `:help` fuzzy completion (FTS5 search as you type)
+- [ ] AI proactively references help nodes when answering user questions
+
+### M3: Documentation Authoring
+- [ ] `:help-edit <topic>` — edit a help node inline (user-authored overrides)
+- [ ] User help nodes persisted to `~/.config/mae/help/` directory
+- [ ] Org-mode format for user-authored help (parsed by existing org parser)
 
 ---
 
@@ -440,34 +709,44 @@ Xi, and other editor projects. Not scheduled yet.
 ```
 Phase 3e (editor essentials) ✅ COMPLETE
     │
-    ├─→ Phase 3f (AI multi-file) ← needed for self-hosting
+    ├─→ Phase 3f (AI multi-file) ✅ ← needed for self-hosting
     │       │
-    │       └─→ Phase 3g (hardening) ← before codebase grows further
+    │       └─→ Phase 3g (hardening) ✅ ← before codebase grows further
     │
-    ├─→ Phase 4b (syntax highlighting) ← high visual impact, concurrent with LSP
+    ├─→ Phase 3h (vim/emacs parity) ✅
     │
-    └─→ Phase 4a (LSP) ← biggest unlock for self-hosting
-            │
-            └─→ Phase 4c (DAP) ← depends on LSP patterns
-                    │
-                    └─→ Phase 5 (KB) ← lowest priority
+    ├─→ Phase 4b (syntax highlighting) ✅
+    │
+    ├─→ Phase 4a (LSP) ✅ M1-M4 ← biggest unlock for self-hosting
+    │       │
+    │       └─→ Phase 4c (DAP) M1/M2/M4 ✅
+    │
+    ├─→ Phase 4d + 5 (KB + help + SQLite) ✅
+    │
+    ├─→ Phase 6 (embedded shell) ← next high-value target
+    │
+    └─→ Phase 7 (embedded docs) ← parallel with Phase 6
 ```
 
-Phases 3f, 3g, and 4b can be interleaved. LSP (4a) is the biggest single
-unlock for self-hosting — once the AI has semantic understanding, it can
-navigate and refactor effectively.
+**Next priority order:**
+1. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
+2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
+3. **Phase 4a M5** (LSP async AI tools) — AI gains semantic code understanding
+4. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
+5. **C-o in insert mode** (M1 remaining item) — quick win
 
 ---
 
 ## Test Targets
 
-| Phase | Current | Target |
-|-------|---------|--------|
-| 3e    | 506     | 506 ✅ (search, visual, change, count, scroll, text objects, M6, M7) |
-| 3f    | 521     | 521 ✅ M1/M2/M4 (multi-file AI tools, project search) — M3 remaining |
-| 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
-| 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
-| 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
-| 4c    | 80      | +40 done (client 12 + manager 10 + AI debug tools 19 + StepKind/find_variable 5 + renderer gutter 10); M3 state-inspection UI still pending |
-| 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **764** | **~790** |
+| Phase | Tests | Notes |
+|-------|-------|-------|
+| 3e    | 506 ✅ | search, visual, change, count, scroll, text objects |
+| 3f    | 521 ✅ | multi-file AI tools, project search, conversation persistence |
+| 3g    | — ✅ | refactor only, preserved existing tests |
+| 3h    | 1158 ✅ | registers, surrounds, vim quick wins, Scheme REPL, AI prompt UX |
+| 4a    | 67 ✅ | LSP connection, navigation, diagnostics, completion (M1-M4) |
+| 4b    | 29 ✅ | tree-sitter + syntax highlighting + structural ops |
+| 4c    | 80 ✅ | DAP client, manager, AI debug tools, gutter rendering |
+| 4d+5  | 70+ ✅ | KB in-memory + SQLite + org parser + help buffer + AI KB tools |
+| **Total** | **~1,148** | All passing, 0 failures |

@@ -21,6 +21,10 @@ impl Editor {
         normal.bind(vec![KeyPress::special(Key::Right)], "move-right");
         normal.bind(parse_key_seq("0"), "move-to-line-start");
         normal.bind(parse_key_seq("$"), "move-to-line-end");
+        normal.bind(parse_key_seq("^"), "move-to-first-non-blank");
+        normal.bind(parse_key_seq("_"), "move-to-first-non-blank");
+        normal.bind(parse_key_seq("+"), "move-line-next-non-blank");
+        normal.bind(parse_key_seq("-"), "move-line-prev-non-blank");
         normal.bind(parse_key_seq("G"), "move-to-last-line");
         normal.bind(parse_key_seq("gg"), "move-to-first-line");
         // Word motions
@@ -30,6 +34,8 @@ impl Editor {
         normal.bind(parse_key_seq("W"), "move-big-word-forward");
         normal.bind(parse_key_seq("B"), "move-big-word-backward");
         normal.bind(parse_key_seq("E"), "move-big-word-end");
+        normal.bind(parse_key_seq("ge"), "move-word-end-backward");
+        normal.bind(parse_key_seq("gE"), "move-big-word-end-backward");
         normal.bind(parse_key_seq("%"), "move-matching-bracket");
         normal.bind(parse_key_seq("{"), "move-paragraph-backward");
         normal.bind(parse_key_seq("}"), "move-paragraph-forward");
@@ -49,12 +55,33 @@ impl Editor {
         normal.bind(parse_key_seq("H"), "move-screen-top");
         normal.bind(parse_key_seq("M"), "move-screen-middle");
         normal.bind(parse_key_seq("L"), "move-screen-bottom");
+        // Aliases (D/Y/X)
+        normal.bind(parse_key_seq("D"), "delete-to-line-end");
+        normal.bind(parse_key_seq("Y"), "yank-line");
+        normal.bind(parse_key_seq("X"), "delete-char-backward");
+        // Repeat find (;/,)
+        normal.bind(parse_key_seq(";"), "repeat-find");
+        normal.bind(parse_key_seq(","), "repeat-find-reverse");
+        // Reselect visual (gv)
+        normal.bind(parse_key_seq("gv"), "reselect-visual");
         // Search
         normal.bind(parse_key_seq("/"), "search-forward-start");
         normal.bind(parse_key_seq("?"), "search-backward-start");
         normal.bind(parse_key_seq("n"), "search-next");
         normal.bind(parse_key_seq("N"), "search-prev");
         normal.bind(parse_key_seq("*"), "search-word-under-cursor");
+        normal.bind(parse_key_seq("#"), "search-word-under-cursor-backward");
+        // gn / gN — select next/prev search match as visual selection.
+        // Operator variants: dgn, cgn, ygn (and capital-N backward equivalents).
+        // Practical Vim tip 86: `cgn<text><Esc>` + `.` for single-key global replace.
+        normal.bind(parse_key_seq("gn"), "visual-select-next-match");
+        normal.bind(parse_key_seq("gN"), "visual-select-prev-match");
+        normal.bind(parse_key_seq("dgn"), "delete-next-match");
+        normal.bind(parse_key_seq("dgN"), "delete-prev-match");
+        normal.bind(parse_key_seq("cgn"), "change-next-match");
+        normal.bind(parse_key_seq("cgN"), "change-prev-match");
+        normal.bind(parse_key_seq("ygn"), "yank-next-match");
+        normal.bind(parse_key_seq("ygN"), "yank-prev-match");
         // Editing
         normal.bind(parse_key_seq("x"), "delete-char-forward");
         normal.bind(parse_key_seq("dd"), "delete-line");
@@ -76,6 +103,26 @@ impl Editor {
         normal.bind(parse_key_seq("c0"), "change-to-line-start");
         // Replace
         normal.bind(parse_key_seq("r"), "replace-char-await");
+        // Substitute (Practical Vim tip 2 — single-key `xi` / `cc` shortcuts)
+        normal.bind(parse_key_seq("s"), "substitute-char");
+        normal.bind(parse_key_seq("S"), "substitute-line");
+        // Re-enter insert at last insert-exit position
+        normal.bind(parse_key_seq("gi"), "reinsert-at-last-position");
+        // Jump list (Practical Vim ch. 9).
+        // NOTE: when the focused buffer is a Help buffer, key_handling.rs
+        // intercepts C-o / C-i before keymap lookup and routes them to
+        // help-back / help-forward. Everywhere else these drive the
+        // vim-style jump list.
+        normal.bind(parse_key_seq("C-o"), "jump-backward");
+        normal.bind(parse_key_seq("C-i"), "jump-forward");
+        // Change list (Practical Vim ch. 9): g; walks back through edit
+        // positions, g, walks forward. Symmetric to Ctrl-o / Ctrl-i but
+        // scoped to edit locations, not motion targets.
+        normal.bind(parse_key_seq("g;"), "change-backward");
+        normal.bind(parse_key_seq("g,"), "change-forward");
+        // gf — open file under cursor. Resolves absolute paths, relative
+        // paths (cwd first, then buffer's dir), and ~-expanded home paths.
+        normal.bind(parse_key_seq("gf"), "goto-file-under-cursor");
         // Marks (m<letter> sets, '<letter> jumps)
         normal.bind(parse_key_seq("m"), "set-mark-await");
         normal.bind(parse_key_seq("'"), "jump-mark-await");
@@ -111,6 +158,14 @@ impl Editor {
         normal.bind(parse_key_seq("y0"), "yank-to-line-start");
         normal.bind(parse_key_seq("p"), "paste-after");
         normal.bind(parse_key_seq("P"), "paste-before");
+        // Register prompt: `"<char>` selects the register for the next
+        // yank/delete/paste. Resolved by the key-handling layer via
+        // `pending_register_prompt` — dispatch just arms the flag.
+        normal.bind(parse_key_seq("\""), "prompt-register");
+        // Surrounds (vim-surround)
+        normal.bind(parse_key_seq("ds"), "delete-surround-await");
+        normal.bind(parse_key_seq("cs"), "change-surround-await");
+        normal.bind(parse_key_seq("yss"), "surround-line-await");
         // Undo/Redo
         normal.bind(parse_key_seq("u"), "undo");
         normal.bind(parse_key_seq("C-r"), "redo");
@@ -140,6 +195,11 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
         // +file
         normal.bind(parse_key_seq_spaced("SPC f f"), "find-file");
+        // Ranger/dired-style directory browser: spatial traversal
+        // complement to the fuzzy `SPC f f` picker. (`-` would be the
+        // vim/dirvish convention, but it's already bound to
+        // `move-line-prev-non-blank` — keep the motion primitive.)
+        normal.bind(parse_key_seq_spaced("SPC f d"), "file-browser");
         normal.bind(parse_key_seq_spaced("SPC f s"), "save");
         // +window
         normal.bind(parse_key_seq_spaced("SPC w v"), "split-vertical");
@@ -175,6 +235,10 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC s s"), "syntax-select-node");
         normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
+        // +eval (Scheme REPL / lisp machine)
+        normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
+        normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
+        normal.bind(parse_key_seq_spaced("SPC e o"), "open-scheme-repl");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
@@ -186,6 +250,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC h"), "+help");
         normal.set_group_name(parse_key_seq_spaced("SPC q"), "+quit");
         normal.set_group_name(parse_key_seq_spaced("SPC s"), "+syntax");
+        normal.set_group_name(parse_key_seq_spaced("SPC e"), "+eval");
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -219,6 +284,10 @@ impl Editor {
         visual.bind(vec![KeyPress::special(Key::Right)], "move-right");
         visual.bind(parse_key_seq("0"), "move-to-line-start");
         visual.bind(parse_key_seq("$"), "move-to-line-end");
+        visual.bind(parse_key_seq("^"), "move-to-first-non-blank");
+        visual.bind(parse_key_seq("_"), "move-to-first-non-blank");
+        visual.bind(parse_key_seq("+"), "move-line-next-non-blank");
+        visual.bind(parse_key_seq("-"), "move-line-prev-non-blank");
         visual.bind(parse_key_seq("G"), "move-to-last-line");
         visual.bind(parse_key_seq("gg"), "move-to-first-line");
         visual.bind(parse_key_seq("w"), "move-word-forward");
@@ -227,6 +296,8 @@ impl Editor {
         visual.bind(parse_key_seq("W"), "move-big-word-forward");
         visual.bind(parse_key_seq("B"), "move-big-word-backward");
         visual.bind(parse_key_seq("E"), "move-big-word-end");
+        visual.bind(parse_key_seq("ge"), "move-word-end-backward");
+        visual.bind(parse_key_seq("gE"), "move-big-word-end-backward");
         visual.bind(parse_key_seq("%"), "move-matching-bracket");
         visual.bind(parse_key_seq("{"), "move-paragraph-backward");
         visual.bind(parse_key_seq("}"), "move-paragraph-forward");
@@ -254,6 +325,21 @@ impl Editor {
         visual.bind(parse_key_seq("x"), "visual-delete");
         visual.bind(parse_key_seq("y"), "visual-yank");
         visual.bind(parse_key_seq("c"), "visual-change");
+        visual.bind(parse_key_seq(">"), "visual-indent");
+        visual.bind(parse_key_seq("<"), "visual-dedent");
+        visual.bind(parse_key_seq("J"), "visual-join");
+        visual.bind(parse_key_seq("p"), "visual-paste");
+        visual.bind(parse_key_seq("P"), "visual-paste");
+        visual.bind(parse_key_seq("o"), "visual-swap-ends");
+        visual.bind(parse_key_seq("u"), "visual-lowercase");
+        visual.bind(parse_key_seq("U"), "visual-uppercase");
+        // Repeat find in visual mode
+        visual.bind(parse_key_seq(";"), "repeat-find");
+        visual.bind(parse_key_seq(","), "repeat-find-reverse");
+        // Register prompt (same as Normal: `"<char>` routes the next op).
+        visual.bind(parse_key_seq("\""), "prompt-register");
+        // Surround visual selection: `S<char>`.
+        visual.bind(parse_key_seq("S"), "surround-visual-await");
         // Text objects in visual mode
         visual.bind(parse_key_seq("i"), "visual-inner-object");
         visual.bind(parse_key_seq("a"), "visual-around-object");
@@ -264,6 +350,8 @@ impl Editor {
         // Tree-sitter structural expansion (Phase 4b M3)
         visual.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         visual.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
+        // Scheme eval region
+        visual.bind(parse_key_seq_spaced("SPC e r"), "eval-region");
 
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);

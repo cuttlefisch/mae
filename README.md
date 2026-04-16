@@ -69,27 +69,30 @@ MAE makes the AI a peer, not a plugin:
 
 ## Current Status
 
-**Phase 3e — Editor Essentials** (426 tests passing)
+**Phase 3h + Phase 4a–4c — Keybinding parity, LSP completion, AI prompt UX** (852 tests passing)
 
 | Feature | Status |
 |---------|--------|
-| Vi modal editing (Normal/Insert/Visual/Command) | Done |
-| Motions: hjkl, w/b/e/W/B/E, f/F/t/T, %, {/}, 0/$ | Done |
-| Operators: delete, change, yank, replace, dot repeat | Done |
-| Count prefix (5j, 3dd, 2dw) | Done |
-| Search: /pattern, ?pattern, n/N, *, :s///g | Done |
-| Visual mode: v (charwise), V (linewise) + operators | Done |
-| Scroll: Ctrl-U/D/F/B, zz/zt/zb, H/M/L | Done |
-| File management: :e, :w, :wq, :q, :q! + tab completion | Done |
-| Fuzzy file picker (SPC f f) | Done |
-| AI integration: Claude + OpenAI tool-calling, streaming | Done |
-| Scheme runtime: Steel, init.scm, define-key, eval REPL | Done |
-| 7 bundled themes (TOML-based, hot-switchable) | Done |
-| Window splits (vertical/horizontal, binary tree layout) | Done |
-| Line join, indent/dedent, text objects, marks, macros | Planned |
-| LSP client | Planned |
-| DAP client (protocol types done) | Planned |
-| Tree-sitter syntax highlighting | Planned |
+| Vi modal editing (Normal/Insert/Visual/Command) | ✓ |
+| Motions: hjkl, w/b/e/W/B/E, f/F/t/T, %, {/}, 0/$ | ✓ |
+| Operators: delete, change, yank, replace, dot repeat | ✓ |
+| Count prefix (5j, 3dd, 2dw), marks, macros | ✓ |
+| Search: /pattern, ?pattern, n/N, *, :s///g, :%s | ✓ |
+| Visual mode: v (charwise), V (linewise) + operators | ✓ |
+| Scroll: Ctrl-U/D/F/B, zz/zt/zb, H/M/L | ✓ |
+| File management: :e, :w, :wq, :q, :q! + tab completion | ✓ |
+| Fuzzy file picker (SPC f f) | ✓ |
+| AI integration: Claude + OpenAI tool-calling, streaming | ✓ |
+| AI conversation prompt: full readline + scroll + cursor | ✓ |
+| Scheme runtime: Steel, init.scm, define-key, eval REPL | ✓ |
+| 7 bundled themes (TOML-based, hot-switchable) | ✓ |
+| Window splits (vertical/horizontal, binary tree layout) | ✓ |
+| Readline keybinds in Insert and Command modes | ✓ |
+| LSP completion popup (textDocument/completion) | ✓ |
+| LSP go-to-definition, references, hover, diagnostics | ✓ |
+| DAP client (protocol types + transport done) | ✓ |
+| Tree-sitter syntax highlighting | ✓ |
+| Full register system, vim-surround | Planned |
 | Knowledge base (SQLite graph store + org-mode parser) | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for the full milestone plan.
@@ -145,6 +148,26 @@ MAE uses vi-like modal editing:
 :theme name     Switch theme
 :eval (expr)    Evaluate Scheme expression
 ```
+
+## Terminology
+
+MAE uses some terms that overlap with Vim and Emacs but mean slightly different
+things, and introduces a few new concepts. The short version:
+
+- **Buffer** — in-memory content (text, AI conversation, or message log). May or
+  may not be backed by a file. One buffer can be viewed in multiple windows.
+- **Window** — a viewport onto a buffer, owning cursor and scroll state. Not an
+  OS window. Splitting gives you more windows, not more buffers.
+- **WindowManager** — owns the binary split tree that maps windows to screen areas.
+- **Conversation buffer** — a buffer whose content is a structured AI chat session,
+  not a rope. Rendered directly from structured data, not from text.
+- **Mode** — Normal / Insert / Visual / Command / ConversationInput / Search / FilePicker.
+  All input is routed through the active mode.
+- **LspIntent queue** — how the synchronous editor core issues async LSP requests
+  without touching async code directly.
+
+See [docs/terminology.md](docs/terminology.md) for the full reference, including
+comparisons with Vim, Emacs, and VSCode and a data-model walkthrough.
 
 ## Project Structure
 

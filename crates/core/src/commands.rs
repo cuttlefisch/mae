@@ -132,6 +132,26 @@ impl CommandRegistry {
             "Move to start of previous WORD (B)",
         );
         reg.register_builtin("move-big-word-end", "Move to end of WORD (E)");
+        reg.register_builtin(
+            "move-word-end-backward",
+            "Move to end of previous word (ge)",
+        );
+        reg.register_builtin(
+            "move-big-word-end-backward",
+            "Move to end of previous WORD (gE)",
+        );
+        reg.register_builtin(
+            "move-to-first-non-blank",
+            "Move to first non-blank char of line (^)",
+        );
+        reg.register_builtin(
+            "move-line-next-non-blank",
+            "Move to first non-blank of next line (+)",
+        );
+        reg.register_builtin(
+            "move-line-prev-non-blank",
+            "Move to first non-blank of previous line (-)",
+        );
         reg.register_builtin("move-matching-bracket", "Jump to matching bracket (%)");
         reg.register_builtin("move-paragraph-forward", "Move to next paragraph (})");
         reg.register_builtin("move-paragraph-backward", "Move to previous paragraph ({)");
@@ -182,12 +202,52 @@ impl CommandRegistry {
         reg.register_builtin("change-to-line-start", "Change to start of line (c0)");
         // Replace
         reg.register_builtin("replace-char-await", "Replace char under cursor (r)");
+        // Substitute
+        reg.register_builtin("substitute-char", "Substitute char under cursor (s)");
+        reg.register_builtin("substitute-line", "Substitute entire line (S)");
+        // Re-enter insert at last position
+        reg.register_builtin(
+            "reinsert-at-last-position",
+            "Re-enter insert mode at last insert-exit position (gi)",
+        );
+        // Jump list (Practical Vim ch. 9)
+        reg.register_builtin(
+            "jump-backward",
+            "Navigate backward through the jump list (Ctrl-o)",
+        );
+        reg.register_builtin(
+            "jump-forward",
+            "Navigate forward through the jump list (Ctrl-i)",
+        );
+        // Change list (Practical Vim ch. 9)
+        reg.register_builtin(
+            "change-backward",
+            "Navigate backward through the change list (g;)",
+        );
+        reg.register_builtin(
+            "change-forward",
+            "Navigate forward through the change list (g,)",
+        );
+        reg.register_builtin(
+            "show-changes-buffer",
+            "Open the *Changes* scratch buffer listing recorded edits (:changes)",
+        );
+        reg.register_builtin(
+            "goto-file-under-cursor",
+            "Open the filename under the cursor (gf)",
+        );
         // Marks
         reg.register_builtin("set-mark-await", "Set mark at next-typed letter (m)");
         reg.register_builtin("jump-mark-await", "Jump to mark at next-typed letter (')");
         // Macros
-        reg.register_builtin("start-recording-await", "Start recording macro to next-typed register (q)");
-        reg.register_builtin("replay-macro-await", "Replay macro from next-typed register (@)");
+        reg.register_builtin(
+            "start-recording-await",
+            "Start recording macro to next-typed register (q)",
+        );
+        reg.register_builtin(
+            "replay-macro-await",
+            "Replay macro from next-typed register (@)",
+        );
         reg.register_builtin("replay-last-macro", "Replay the last-used macro (@@)");
         // Join, indent, dedent
         reg.register_builtin("join-lines", "Join current line with next line (J)");
@@ -249,14 +309,60 @@ impl CommandRegistry {
         reg.register_builtin("next-buffer", "Cycle to next buffer");
         reg.register_builtin("prev-buffer", "Cycle to previous buffer");
         reg.register_builtin("find-file", "Open a file");
+        reg.register_builtin(
+            "file-browser",
+            "Open directory browser (ranger-style traversal)",
+        );
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("describe-key", "Show what a key does");
         reg.register_builtin("describe-command", "Show command documentation");
+        reg.register_builtin(
+            "show-registers",
+            "Open the *Registers* buffer (:reg / :registers)",
+        );
+        reg.register_builtin(
+            "prompt-register",
+            "Prompt for a register letter (\" + <char>)",
+        );
+
+        // Surrounds (vim-surround ports)
+        reg.register_builtin(
+            "delete-surround-await",
+            "Delete surrounding delimiter (ds<char>)",
+        );
+        reg.register_builtin(
+            "change-surround-await",
+            "Change surrounding delimiter (cs<from><to>)",
+        );
+        reg.register_builtin(
+            "surround-line-await",
+            "Surround current line with char (yss<char>)",
+        );
+        reg.register_builtin(
+            "surround-visual-await",
+            "Surround visual selection with char (S<char>)",
+        );
         reg.register_builtin("set-theme", "Set editor color theme");
         reg.register_builtin("cycle-theme", "Cycle to next color theme");
+
+        // Scheme REPL (lisp machine primitives)
+        reg.register_builtin("eval-line", "Evaluate current line as Scheme (SPC e l)");
+        reg.register_builtin(
+            "eval-region",
+            "Evaluate visual selection as Scheme (SPC e r)",
+        );
+        reg.register_builtin("eval-buffer", "Evaluate entire buffer as Scheme (SPC e b)");
+        reg.register_builtin("open-scheme-repl", "Open *Scheme* REPL buffer (SPC e o)");
+
+        // Repeat find (;/,)
+        reg.register_builtin("repeat-find", "Repeat last f/F/t/T in same direction (;)");
+        reg.register_builtin(
+            "repeat-find-reverse",
+            "Repeat last f/F/t/T in opposite direction (,)",
+        );
 
         // Visual mode
         reg.register_builtin("enter-visual-char", "Enter charwise visual mode (v)");
@@ -264,6 +370,23 @@ impl CommandRegistry {
         reg.register_builtin("visual-delete", "Delete visual selection (d)");
         reg.register_builtin("visual-yank", "Yank visual selection (y)");
         reg.register_builtin("visual-change", "Change visual selection (c)");
+        reg.register_builtin("visual-indent", "Indent visual selection by 4 spaces (>)");
+        reg.register_builtin(
+            "visual-dedent",
+            "Dedent visual selection by up to 4 spaces (<)",
+        );
+        reg.register_builtin("visual-join", "Join lines in visual selection (J)");
+        reg.register_builtin(
+            "visual-paste",
+            "Replace visual selection with register contents (p/P)",
+        );
+        reg.register_builtin(
+            "visual-swap-ends",
+            "Swap cursor and anchor in visual mode (o)",
+        );
+        reg.register_builtin("visual-uppercase", "Uppercase visual selection (U)");
+        reg.register_builtin("visual-lowercase", "Lowercase visual selection (u)");
+        reg.register_builtin("reselect-visual", "Reselect last visual selection (gv)");
 
         // Search
         reg.register_builtin("search-forward-start", "Search forward (/)");
@@ -271,7 +394,25 @@ impl CommandRegistry {
         reg.register_builtin("search-next", "Jump to next match (n)");
         reg.register_builtin("search-prev", "Jump to previous match (N)");
         reg.register_builtin("search-word-under-cursor", "Search word under cursor (*)");
+        reg.register_builtin(
+            "search-word-under-cursor-backward",
+            "Search word under cursor backward (#)",
+        );
         reg.register_builtin("clear-search-highlight", "Clear search highlights (:noh)");
+        reg.register_builtin(
+            "visual-select-next-match",
+            "Visually select next search match (gn)",
+        );
+        reg.register_builtin(
+            "visual-select-prev-match",
+            "Visually select previous search match (gN)",
+        );
+        reg.register_builtin("delete-next-match", "Delete next search match (dgn)");
+        reg.register_builtin("delete-prev-match", "Delete previous search match (dgN)");
+        reg.register_builtin("change-next-match", "Change next search match (cgn)");
+        reg.register_builtin("change-prev-match", "Change previous search match (cgN)");
+        reg.register_builtin("yank-next-match", "Yank next search match (ygn)");
+        reg.register_builtin("yank-prev-match", "Yank previous search match (ygN)");
 
         // Text objects
         reg.register_builtin(
@@ -352,10 +493,7 @@ impl CommandRegistry {
             "lsp-dismiss-completion",
             "Dismiss the completion popup (Esc already exits insert mode)",
         );
-        reg.register_builtin(
-            "lsp-complete-next",
-            "Select next completion item (Ctrl-n)",
-        );
+        reg.register_builtin("lsp-complete-next", "Select next completion item (Ctrl-n)");
         reg.register_builtin(
             "lsp-complete-prev",
             "Select previous completion item (Ctrl-p)",
@@ -373,6 +511,27 @@ impl CommandRegistry {
         reg.register_builtin(
             "syntax-contract-selection",
             "Contract Visual selection to the previous syntax node (SPC s c)",
+        );
+
+        // Help / KB navigation
+        reg.register_builtin("help", "Open the *Help* buffer at the knowledge-base index");
+        reg.register_builtin(
+            "help-follow-link",
+            "Follow the focused link in the *Help* buffer",
+        );
+        reg.register_builtin("help-back", "Navigate back in help history (C-o)");
+        reg.register_builtin("help-forward", "Navigate forward in help history (C-i)");
+        reg.register_builtin(
+            "help-next-link",
+            "Focus the next link in the current help page",
+        );
+        reg.register_builtin(
+            "help-prev-link",
+            "Focus the previous link in the current help page",
+        );
+        reg.register_builtin(
+            "help-close",
+            "Kill the *Help* buffer and return to the previous",
         );
 
         reg

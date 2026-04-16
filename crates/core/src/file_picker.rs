@@ -111,71 +111,164 @@ impl FilePicker {
         let idx = self.filtered[self.selected];
         Some(&self.candidates[idx])
     }
+
+    /// Doom-style Tab completion: expand the query to the longest
+    /// common prefix shared by all currently filtered candidates.
+    ///
+    /// Returns `true` if the query was extended (i.e. the prefix was
+    /// strictly longer than the current query), `false` otherwise. In
+    /// the latter case the caller can fall back to a different action
+    /// (e.g. descend into the selected directory in a future extension).
+    ///
+    /// This effectively narrows the picker to a single sub-tree without
+    /// having to type every path component: typing `ed` then Tab jumps
+    /// to `crates/core/src/editor/` when all matches live there.
+    pub fn complete_longest_prefix(&mut self) -> bool {
+        if self.filtered.is_empty() {
+            return false;
+        }
+        // Compute the longest common byte-prefix across all filtered
+        // candidates. Paths are UTF-8; we need to snap back to a char
+        // boundary before using the prefix as a string.
+        let first = &self.candidates[self.filtered[0]];
+        let mut prefix_bytes = first.len();
+        for &idx in &self.filtered[1..] {
+            let other = &self.candidates[idx];
+            prefix_bytes = common_prefix_bytes(first, other).min(prefix_bytes);
+            if prefix_bytes == 0 {
+                return false;
+            }
+        }
+        // Snap to the last char boundary at or below prefix_bytes.
+        while prefix_bytes > 0 && !first.is_char_boundary(prefix_bytes) {
+            prefix_bytes -= 1;
+        }
+        let prefix = &first[..prefix_bytes];
+        // Only commit if the prefix is strictly longer than what the
+        // user already typed. Matching is case-insensitive, so we can't
+        // just compare strings; instead check prefix_bytes > query.len().
+        if prefix_bytes > self.query.len() {
+            self.query = prefix.to_string();
+            self.update_filter();
+            true
+        } else {
+            false
+        }
+    }
 }
 
-/// Fuzzy subsequence scoring. Returns None if no match.
-/// Higher score = better match.
-fn score_match(path: &str, query: &[char]) -> Option<i64> {
+/// Byte length of the longest common ASCII/UTF-8 byte prefix of two strings.
+fn common_prefix_bytes(a: &str, b: &str) -> usize {
+    a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
+}
+
+/// Tiered match scoring. Returns `None` if the query fails to match at all,
+/// otherwise a score where higher = better. Tiers (roughly):
+///
+/// 1. **Exact equality** — `path == query`. Top tier, always wins.
+/// 2. **Boundary-aligned suffix** — query equals the tail of the path and
+///    the preceding char is `/` (path segment boundary). This is the
+///    "typing a relative path works" case: `editor/mod.rs` →
+///    `crates/core/src/editor/mod.rs` is a #1 hit.
+/// 3. **Plain suffix** — query equals the tail of the path without
+///    boundary alignment (e.g. `ain.rs` → `main.rs`).
+/// 4. **Contiguous substring** — query appears as a continuous substring.
+///    Boundary-aligned hits (after `/._-` or start) beat mid-word hits.
+/// 5. **Fuzzy subsequence** — the legacy scoring with word-boundary
+///    bonuses. Still useful for commands like `sb` → `switch-buffer`.
+///
+/// Each higher tier is biased several orders of magnitude above the next
+/// so tier collisions can't happen: a substring match always outranks
+/// any fuzzy-subsequence hit. Within a tier we subtract a length
+/// penalty so shorter matches win on ties.
+///
+/// Shared by the file picker and the command palette — the fuzzy fallback
+/// still serves commands where the query is a short abbreviation.
+pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     if query.is_empty() {
         return Some(0);
     }
 
-    let path_lower: Vec<char> = path.to_lowercase().chars().collect();
+    let path_lower = path.to_lowercase();
+    let query_str: String = query.iter().collect();
+    let path_len = path.len() as i64;
+
+    // ---- Tier 1: exact equality ----
+    if path_lower == query_str {
+        return Some(1_000_000);
+    }
+
+    // ---- Tier 2/3: suffix match ----
+    if path_lower.ends_with(&query_str) && path_lower.len() > query_str.len() {
+        let rest_len = path_lower.len() - query_str.len();
+        let boundary_aligned = path_lower.as_bytes()[rest_len - 1] == b'/';
+        let base = if boundary_aligned { 500_000 } else { 100_000 };
+        return Some(base - path_len);
+    }
+
+    // ---- Tier 4: contiguous substring ----
+    if let Some(pos) = path_lower.find(&query_str) {
+        let boundary_aligned = pos == 0
+            || matches!(
+                path_lower.as_bytes().get(pos - 1),
+                Some(b'/' | b'.' | b'_' | b'-')
+            );
+        let base = if boundary_aligned { 50_000 } else { 10_000 };
+        // Tie-breaker: matches earlier in the filename portion rank above
+        // the same substring appearing deep inside a parent dir name.
+        let last_slash = path_lower.rfind('/').map(|p| p + 1).unwrap_or(0);
+        let filename_bonus = if pos >= last_slash { 1_000 } else { 0 };
+        return Some(base + filename_bonus - path_len);
+    }
+
+    // ---- Tier 5: fuzzy subsequence (legacy) ----
+    let path_chars: Vec<char> = path_lower.chars().collect();
     let mut qi = 0;
     let mut score: i64 = 0;
     let mut last_match_pos: Option<usize> = None;
     let mut first_match_pos: Option<usize> = None;
 
-    for (pi, &pc) in path_lower.iter().enumerate() {
+    for (pi, &pc) in path_chars.iter().enumerate() {
         if qi < query.len() && pc == query[qi] {
             if first_match_pos.is_none() {
                 first_match_pos = Some(pi);
             }
-
-            // Bonus for consecutive matches
             if let Some(last) = last_match_pos {
                 if pi == last + 1 {
                     score += 10;
                 }
             }
-
-            // Bonus for matching at word boundaries (after / or . or _ or -)
             if pi == 0
                 || matches!(
-                    path_lower.get(pi.saturating_sub(1)),
+                    path_chars.get(pi.saturating_sub(1)),
                     Some('/' | '.' | '_' | '-')
                 )
             {
                 score += 8;
             }
-
-            // Bonus for matching filename (after last /)
-            let last_slash = path_lower.iter().rposition(|c| *c == '/').unwrap_or(0);
+            let last_slash = path_chars.iter().rposition(|c| *c == '/').unwrap_or(0);
             if pi >= last_slash {
                 score += 5;
             }
-
             last_match_pos = Some(pi);
             qi += 1;
         }
     }
 
     if qi < query.len() {
-        return None; // Not all query chars matched
+        return None;
     }
 
-    // Penalty for longer paths (prefer shorter matches)
-    score -= path.len() as i64 / 4;
+    score -= path_len / 4;
 
-    // Bonus for prefix match of filename
     if let Some(fp) = first_match_pos {
-        let last_slash = path_lower
+        let last_slash = path_chars
             .iter()
             .rposition(|c| *c == '/')
             .map(|p| p + 1)
             .unwrap_or(0);
         if fp == last_slash {
-            score += 15; // Query starts matching at filename start
+            score += 15;
         }
     }
 
@@ -462,5 +555,128 @@ mod tests {
         let matches = complete_path(&format!("{}/src/ma", tmp.path().display()));
         assert!(matches.iter().any(|m| m.contains("main.rs")));
         assert!(!matches.iter().any(|m| m.contains("lib.rs")));
+    }
+
+    fn q(s: &str) -> Vec<char> {
+        s.to_lowercase().chars().collect()
+    }
+
+    #[test]
+    fn score_tier1_exact_match_wins() {
+        let exact = score_match("src/main.rs", &q("src/main.rs")).unwrap();
+        let suffix = score_match("crates/core/src/main.rs", &q("src/main.rs")).unwrap();
+        assert!(exact > suffix, "exact should outrank suffix");
+        assert_eq!(exact, 1_000_000);
+    }
+
+    #[test]
+    fn score_tier2_boundary_suffix_beats_inner_substring() {
+        // Typing a relative path should make that file the top hit.
+        let query = q("editor/mod.rs");
+        let target = score_match("crates/core/src/editor/mod.rs", &query).unwrap();
+        let other = score_match("crates/core/src/editor/dispatch.rs", &query);
+        // The other doesn't even match (no "editor/mod.rs" substring).
+        assert!(other.is_none());
+        // Confirm boundary-suffix tier base (500_000 - path_len).
+        assert!(
+            target > 400_000,
+            "boundary suffix should be tier 2: {}",
+            target
+        );
+    }
+
+    #[test]
+    fn score_tier2_outranks_tier4_substring() {
+        // Path A contains "main.rs" as a suffix after a /.  Path B contains
+        // it mid-word ("remain.rs"). A must win by a landslide.
+        let a = score_match("src/main.rs", &q("main.rs")).unwrap();
+        let b = score_match("src/remain.rs", &q("main.rs")).unwrap();
+        assert!(a > b, "boundary-suffix {} should beat substring {}", a, b);
+    }
+
+    #[test]
+    fn score_tier3_plain_suffix() {
+        // "ain.rs" ends the path but the preceding char is 'm', not '/'.
+        let s = score_match("src/main.rs", &q("ain.rs")).unwrap();
+        assert!((90_000..500_000).contains(&s), "plain suffix tier: {}", s);
+    }
+
+    #[test]
+    fn score_tier4_substring_boundary_beats_midword() {
+        let boundary = score_match("src/main.rs", &q("main")).unwrap();
+        let midword = score_match("src/remainder.rs", &q("main")).unwrap();
+        assert!(boundary > midword);
+    }
+
+    #[test]
+    fn score_tier5_fuzzy_still_works_for_abbreviations() {
+        // Commands need "sb" -> "switch-buffer" to still match via tier 5.
+        let hit = score_match("switch-buffer", &q("sb"));
+        assert!(hit.is_some());
+        let miss = score_match("switch-buffer", &q("xyz"));
+        assert!(miss.is_none());
+    }
+
+    #[test]
+    fn tab_completes_to_longest_common_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("crates/core/src/editor")).unwrap();
+        fs::write(tmp.path().join("crates/core/src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("crates/core/src/editor/dispatch.rs"), "").unwrap();
+        fs::write(tmp.path().join("crates/core/src/editor/macros.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "editor/".to_string();
+        picker.update_filter();
+        let expanded = picker.complete_longest_prefix();
+        assert!(expanded, "should extend query when prefix is shared");
+        assert_eq!(picker.query, "crates/core/src/editor/");
+    }
+
+    #[test]
+    fn tab_completion_returns_false_when_no_shared_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("a")).unwrap();
+        fs::create_dir_all(tmp.path().join("b")).unwrap();
+        fs::write(tmp.path().join("a/foo.rs"), "").unwrap();
+        fs::write(tmp.path().join("b/foo.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        // Fuzzy match both on "f" — common prefix is "", so no extension.
+        picker.query = "f".to_string();
+        picker.update_filter();
+        assert!(!picker.complete_longest_prefix());
+    }
+
+    #[test]
+    fn tab_completion_is_idempotent_on_single_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("single.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "si".to_string();
+        picker.update_filter();
+        assert!(picker.complete_longest_prefix(), "single match extends");
+        assert_eq!(picker.query, "single.rs");
+        // Second press: nothing left to complete.
+        assert!(!picker.complete_longest_prefix());
+    }
+
+    #[test]
+    fn filter_typing_path_promotes_exact_file() {
+        // Regression: "too fuzzy" search. Typing `editor/mod.rs` should
+        // place `crates/core/src/editor/mod.rs` at position 0.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("crates/core/src/editor")).unwrap();
+        fs::create_dir_all(tmp.path().join("crates/mae/src")).unwrap();
+        fs::write(tmp.path().join("crates/core/src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("crates/core/src/editor/dispatch.rs"), "").unwrap();
+        fs::write(tmp.path().join("crates/mae/src/main.rs"), "").unwrap();
+        // Decoys that share many letters via fuzzy subsequence but aren't
+        // the path the user typed.
+        fs::write(tmp.path().join("crates/core/src/commands.rs"), "").unwrap();
+
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "editor/mod.rs".to_string();
+        picker.update_filter();
+        let top = picker.candidates[picker.filtered[0]].as_str();
+        assert_eq!(top, "crates/core/src/editor/mod.rs");
     }
 }

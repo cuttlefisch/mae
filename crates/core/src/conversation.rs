@@ -52,6 +52,10 @@ pub struct RenderedLine {
 pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
     pub input_line: String,
+    /// Byte offset of the editing cursor within `input_line`.
+    pub input_cursor: usize,
+    /// Lines scrolled upward from the bottom (0 = auto-scroll to newest content).
+    pub scroll: usize,
     pub streaming: bool,
     /// When streaming started, used to display elapsed time in the UI.
     pub streaming_start: Option<std::time::Instant>,
@@ -69,6 +73,8 @@ impl Conversation {
         Conversation {
             entries: Vec::new(),
             input_line: String::new(),
+            input_cursor: 0,
+            scroll: 0,
             streaming: false,
             streaming_start: None,
             version: 0,
@@ -315,6 +321,122 @@ impl Conversation {
     pub fn line_count(&self) -> usize {
         self.rendered_lines().len()
     }
+
+    // -----------------------------------------------------------------------
+    // Input readline editing
+    // -----------------------------------------------------------------------
+
+    /// Insert `ch` at `input_cursor`, advancing the cursor.
+    pub fn input_insert_char(&mut self, ch: char) {
+        self.input_line.insert(self.input_cursor, ch);
+        self.input_cursor += ch.len_utf8();
+    }
+
+    /// Delete the char immediately before the cursor (Backspace / C-h).
+    pub fn input_backspace(&mut self) {
+        if self.input_cursor == 0 {
+            return;
+        }
+        let before = &self.input_line[..self.input_cursor];
+        let (prev_start, _) = before.char_indices().next_back().unwrap();
+        let removed_len = self.input_cursor - prev_start;
+        self.input_line.remove(prev_start);
+        self.input_cursor -= removed_len;
+    }
+
+    /// Delete the char at the cursor (C-d / Delete).
+    pub fn input_delete_forward(&mut self) {
+        if self.input_cursor >= self.input_line.len() {
+            return;
+        }
+        self.input_line.remove(self.input_cursor);
+        // cursor stays at same byte offset (now pointing to the next char)
+    }
+
+    /// Move cursor to start of input (C-a / Home).
+    pub fn input_move_home(&mut self) {
+        self.input_cursor = 0;
+    }
+
+    /// Move cursor to end of input (C-e / End).
+    pub fn input_move_end(&mut self) {
+        self.input_cursor = self.input_line.len();
+    }
+
+    /// Move cursor one char backward (C-b / Left).
+    pub fn input_move_backward(&mut self) {
+        if self.input_cursor == 0 {
+            return;
+        }
+        let before = &self.input_line[..self.input_cursor];
+        let (prev_start, _) = before.char_indices().next_back().unwrap();
+        self.input_cursor = prev_start;
+    }
+
+    /// Move cursor one char forward (C-f / Right).
+    pub fn input_move_forward(&mut self) {
+        if self.input_cursor >= self.input_line.len() {
+            return;
+        }
+        let ch = self.input_line[self.input_cursor..].chars().next().unwrap();
+        self.input_cursor += ch.len_utf8();
+    }
+
+    /// Delete backward to the last whitespace boundary (C-w, bash-style).
+    pub fn input_kill_word_backward(&mut self) {
+        if self.input_cursor == 0 {
+            return;
+        }
+        let before = &self.input_line[..self.input_cursor];
+        // Strip trailing whitespace, then find last whitespace before the word.
+        let trimmed_end = before.trim_end().len();
+        let word_start = if trimmed_end == 0 {
+            0
+        } else {
+            self.input_line[..trimmed_end]
+                .rfind(|c: char| c.is_whitespace())
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        };
+        self.input_line.drain(word_start..self.input_cursor);
+        self.input_cursor = word_start;
+    }
+
+    /// Delete from start of input to cursor (C-u).
+    pub fn input_kill_to_start(&mut self) {
+        self.input_line.drain(..self.input_cursor);
+        self.input_cursor = 0;
+    }
+
+    /// Delete from cursor to end of input (C-k).
+    pub fn input_kill_to_end(&mut self) {
+        self.input_line.truncate(self.input_cursor);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scroll control
+    // -----------------------------------------------------------------------
+
+    /// Scroll conversation history up by `n` lines (toward older content).
+    pub fn scroll_up(&mut self, n: usize) {
+        self.scroll = self.scroll.saturating_add(n);
+    }
+
+    /// Scroll conversation history down by `n` lines (toward newer content).
+    pub fn scroll_down(&mut self, n: usize) {
+        self.scroll = self.scroll.saturating_sub(n);
+    }
+
+    /// Jump to the bottom of the conversation (re-enables auto-scroll).
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll = 0;
+    }
+
+    /// Jump to the top of the conversation history.
+    pub fn scroll_to_top(&mut self) {
+        // Clamped to the actual line count in the renderer; set a large value.
+        self.scroll = usize::MAX / 2;
+    }
 }
 
 #[cfg(test)]
@@ -326,8 +448,107 @@ mod tests {
         let conv = Conversation::new();
         assert!(conv.entries.is_empty());
         assert!(conv.input_line.is_empty());
+        assert_eq!(conv.input_cursor, 0);
+        assert_eq!(conv.scroll, 0);
         assert!(!conv.streaming);
         assert_eq!(conv.version(), 0);
+    }
+
+    #[test]
+    fn input_insert_and_move() {
+        let mut conv = Conversation::new();
+        conv.input_insert_char('h');
+        conv.input_insert_char('i');
+        assert_eq!(conv.input_line, "hi");
+        assert_eq!(conv.input_cursor, 2);
+
+        conv.input_move_home();
+        assert_eq!(conv.input_cursor, 0);
+        conv.input_insert_char('!');
+        assert_eq!(conv.input_line, "!hi");
+        assert_eq!(conv.input_cursor, 1);
+    }
+
+    #[test]
+    fn input_backspace_moves_cursor() {
+        let mut conv = Conversation::new();
+        conv.input_insert_char('a');
+        conv.input_insert_char('b');
+        conv.input_insert_char('c');
+        conv.input_backspace();
+        assert_eq!(conv.input_line, "ab");
+        assert_eq!(conv.input_cursor, 2);
+
+        conv.input_move_home();
+        conv.input_backspace(); // no-op at start
+        assert_eq!(conv.input_line, "ab");
+        assert_eq!(conv.input_cursor, 0);
+    }
+
+    #[test]
+    fn input_delete_forward() {
+        let mut conv = Conversation::new();
+        conv.input_insert_char('a');
+        conv.input_insert_char('b');
+        conv.input_move_home();
+        conv.input_delete_forward();
+        assert_eq!(conv.input_line, "b");
+        assert_eq!(conv.input_cursor, 0);
+    }
+
+    #[test]
+    fn input_kill_word_backward() {
+        let mut conv = Conversation::new();
+        for ch in "hello world".chars() {
+            conv.input_insert_char(ch);
+        }
+        conv.input_kill_word_backward();
+        assert_eq!(conv.input_line, "hello ");
+        assert_eq!(conv.input_cursor, 6);
+
+        // Kill with trailing spaces
+        for ch in "  ".chars() {
+            conv.input_insert_char(ch);
+        }
+        conv.input_kill_word_backward();
+        assert_eq!(conv.input_line, "");
+    }
+
+    #[test]
+    fn input_kill_to_start_and_end() {
+        let mut conv = Conversation::new();
+        for ch in "abcdef".chars() {
+            conv.input_insert_char(ch);
+        }
+        conv.input_move_home();
+        conv.input_move_forward();
+        conv.input_move_forward();
+        conv.input_move_forward(); // cursor at 3
+        assert_eq!(conv.input_cursor, 3);
+
+        conv.input_kill_to_end();
+        assert_eq!(conv.input_line, "abc");
+
+        conv.input_move_forward(); // still at end, no-op
+        conv.input_move_home();
+        conv.input_move_forward(); // cursor at 1
+        conv.input_kill_to_start();
+        assert_eq!(conv.input_line, "bc");
+        assert_eq!(conv.input_cursor, 0);
+    }
+
+    #[test]
+    fn scroll_up_down_clamps() {
+        let mut conv = Conversation::new();
+        assert_eq!(conv.scroll, 0);
+        conv.scroll_up(5);
+        assert_eq!(conv.scroll, 5);
+        conv.scroll_down(3);
+        assert_eq!(conv.scroll, 2);
+        conv.scroll_down(100);
+        assert_eq!(conv.scroll, 0);
+        conv.scroll_to_bottom();
+        assert_eq!(conv.scroll, 0);
     }
 
     #[test]

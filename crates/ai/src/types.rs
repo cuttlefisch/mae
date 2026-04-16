@@ -105,6 +105,32 @@ pub enum AiEvent {
     SessionComplete(String),
     /// An error occurred in the AI transport.
     Error(String),
+    /// Incremental cost tally after a successful provider round. The
+    /// main thread uses this to keep the status-line spend counter
+    /// fresh without having to inspect the provider response itself.
+    /// A `None` price means the model isn't in the pricing table
+    /// (e.g. local Ollama) — callers should still surface token counts
+    /// but treat the session cost as effectively zero.
+    CostUpdate {
+        session_usd: f64,
+        last_call_usd: f64,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
+    /// Fired once the first time cumulative session cost crosses the
+    /// configured warning threshold. The editor posts this to
+    /// *Messages* so users see a heads-up while they still have budget
+    /// to act on.
+    BudgetWarning {
+        session_usd: f64,
+        threshold_usd: f64,
+    },
+    /// Fired when the session would exceed its configured hard cap.
+    /// The session aborts the in-flight prompt after emitting this.
+    /// Separate from `Error` so consumers can treat cost-refusal
+    /// distinctly from transport/API errors (e.g. for telemetry or
+    /// retry policies).
+    BudgetExceeded { session_usd: f64, cap_usd: f64 },
 }
 
 /// Commands sent from the main thread to the AI task.

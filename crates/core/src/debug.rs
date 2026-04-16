@@ -327,7 +327,9 @@ impl DebugState {
             // A scope with no populated variables yet just means "skip
             // this scope" — not "abort the search". `?` would incorrectly
             // bail out of the whole loop.
-            let Some(vars) = self.variables.get(&scope.name) else { continue };
+            let Some(vars) = self.variables.get(&scope.name) else {
+                continue;
+            };
             if let Some(var) = vars.iter().find(|v| v.name == name) {
                 return Some((scope, var));
             }
@@ -338,11 +340,7 @@ impl DebugState {
     /// Toggle a breakpoint at `(source, line)` — add if missing, remove
     /// (by line match) if present. Returns the remaining line set for that
     /// source, so callers can forward it to the adapter via setBreakpoints.
-    pub fn toggle_breakpoint_at(
-        &mut self,
-        source_path: impl Into<String>,
-        line: i64,
-    ) -> Vec<i64> {
+    pub fn toggle_breakpoint_at(&mut self, source_path: impl Into<String>, line: i64) -> Vec<i64> {
         let src = source_path.into();
         let list = self.breakpoints.entry(src.clone()).or_default();
         if let Some(pos) = list.iter().position(|b| b.line == line) {

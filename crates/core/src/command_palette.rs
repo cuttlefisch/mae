@@ -1,0 +1,273 @@
+//! Fuzzy command palette overlay (SPC SPC).
+//!
+//! Mirrors `FilePicker` in shape so the renderer and key handler can
+//! reuse the same mental model: `query` drives `filtered` via
+//! `update_filter`, Up/Down move `selected`, Enter executes the
+//! selection. The source is `CommandRegistry`, which means every
+//! registered command — including `help`, `describe-key`, and
+//! `describe-command` — is automatically searchable.
+
+use crate::commands::CommandRegistry;
+use crate::file_picker::score_match;
+
+/// One entry in the palette: command name plus its one-line doc.
+#[derive(Debug, Clone)]
+pub struct PaletteEntry {
+    pub name: String,
+    pub doc: String,
+}
+
+/// What to do with the selected entry when the user presses Enter.
+///
+/// The palette UI is the same in both cases — the only difference is
+/// what the key handler does on `Enter`. `Execute` runs the command
+/// (SPC SPC), `Describe` opens the `cmd:<name>` help node (SPC h c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PalettePurpose {
+    Execute,
+    Describe,
+}
+
+/// State for the command palette overlay.
+pub struct CommandPalette {
+    /// User's query string.
+    pub query: String,
+    /// All registered commands, sorted alphabetically.
+    pub entries: Vec<PaletteEntry>,
+    /// Indices into `entries` matching the current query, ranked by score.
+    pub filtered: Vec<usize>,
+    /// Currently selected index within `filtered`.
+    pub selected: usize,
+    /// What to do with the selection on Enter.
+    pub purpose: PalettePurpose,
+}
+
+impl CommandPalette {
+    /// Snapshot the registry into an execute-purpose palette. Commands
+    /// are sorted by name up front so the "empty query" view is
+    /// predictable.
+    pub fn from_registry(reg: &CommandRegistry) -> Self {
+        Self::with_purpose(reg, PalettePurpose::Execute)
+    }
+
+    /// Same fuzzy-search overlay but Enter opens the help node for the
+    /// selected command instead of executing it. Used by `SPC h c` /
+    /// `describe-command`.
+    pub fn for_describe(reg: &CommandRegistry) -> Self {
+        Self::with_purpose(reg, PalettePurpose::Describe)
+    }
+
+    fn with_purpose(reg: &CommandRegistry, purpose: PalettePurpose) -> Self {
+        let mut entries: Vec<PaletteEntry> = reg
+            .list_commands()
+            .into_iter()
+            .map(|c| PaletteEntry {
+                name: c.name.clone(),
+                doc: c.doc.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose,
+        }
+    }
+
+    /// Re-score and re-rank entries against the current query.
+    pub fn update_filter(&mut self) {
+        if self.query.is_empty() {
+            self.filtered = (0..self.entries.len()).collect();
+        } else {
+            let q: Vec<char> = self.query.to_lowercase().chars().collect();
+            let mut scored: Vec<(usize, i64)> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, e)| score_match(&e.name, &q).map(|s| (idx, s)))
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
+        }
+        self.selected = 0;
+    }
+
+    pub fn move_down(&mut self) {
+        if !self.filtered.is_empty() {
+            self.selected = (self.selected + 1) % self.filtered.len();
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if !self.filtered.is_empty() {
+            if self.selected == 0 {
+                self.selected = self.filtered.len() - 1;
+            } else {
+                self.selected -= 1;
+            }
+        }
+    }
+
+    /// Name of the currently selected command, if any.
+    pub fn selected_name(&self) -> Option<&str> {
+        if self.filtered.is_empty() {
+            return None;
+        }
+        let idx = self.filtered[self.selected];
+        Some(&self.entries[idx].name)
+    }
+
+    /// The entry at position `pos` in the filtered list.
+    pub fn entry_at(&self, pos: usize) -> Option<&PaletteEntry> {
+        let &idx = self.filtered.get(pos)?;
+        self.entries.get(idx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_registry_sorts_alphabetically() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("quit", "Quit editor");
+        reg.register_builtin("alpha", "First");
+        reg.register_builtin("middle", "Middle");
+        let palette = CommandPalette::from_registry(&reg);
+        let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "middle", "quit"]);
+    }
+
+    #[test]
+    fn empty_query_returns_all() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("a", "A");
+        reg.register_builtin("b", "B");
+        let palette = CommandPalette::from_registry(&reg);
+        assert_eq!(palette.filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_subsequence_match() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("switch-buffer", "Switch buffer");
+        reg.register_builtin("save-and-quit", "Save and quit");
+        reg.register_builtin("quit", "Quit");
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.query = "sb".into();
+        palette.update_filter();
+        let names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"switch-buffer"),
+            "switch-buffer should match sb (s+b on word boundaries), got {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn help_commands_are_searchable() {
+        // Guard the primary motivation for this overlay: help and
+        // describe-* commands ship in the registry and therefore must
+        // appear in the palette. Each family has to be reachable via a
+        // plausible query.
+        let reg = CommandRegistry::with_builtins();
+
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.query = "help".into();
+        palette.update_filter();
+        let help_names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert!(
+            help_names.contains(&"help"),
+            "'help' not found via query 'help'"
+        );
+        assert!(
+            help_names.iter().any(|n| n.starts_with("help-")),
+            "help-* commands should be reachable via 'help' query"
+        );
+
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.query = "describe".into();
+        palette.update_filter();
+        let desc_names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert!(desc_names.contains(&"describe-key"));
+        assert!(desc_names.contains(&"describe-command"));
+    }
+
+    #[test]
+    fn no_match_leaves_filtered_empty() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("save", "Save");
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.query = "zzzzzz".into();
+        palette.update_filter();
+        assert!(palette.filtered.is_empty());
+        assert_eq!(palette.selected_name(), None);
+    }
+
+    #[test]
+    fn filter_prefers_exact_prefix() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("save", "Save current buffer");
+        reg.register_builtin("save-and-quit", "Save and quit");
+        reg.register_builtin("force-quit", "Quit without saving");
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.query = "save".into();
+        palette.update_filter();
+        assert_eq!(
+            palette.entries[palette.filtered[0]].name, "save",
+            "exact prefix match should come first"
+        );
+    }
+
+    #[test]
+    fn selected_wraps_around() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("a", "a");
+        reg.register_builtin("b", "b");
+        reg.register_builtin("c", "c");
+        let mut palette = CommandPalette::from_registry(&reg);
+        assert_eq!(palette.selected, 0);
+        palette.move_up(); // wraps to last
+        assert_eq!(palette.selected, 2);
+        palette.move_down(); // wraps back to 0
+        assert_eq!(palette.selected, 0);
+    }
+
+    #[test]
+    fn selected_name_returns_current_entry() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("a", "a");
+        reg.register_builtin("b", "b");
+        let palette = CommandPalette::from_registry(&reg);
+        assert_eq!(palette.selected_name(), Some("a"));
+    }
+
+    #[test]
+    fn selection_resets_after_filter() {
+        let mut reg = CommandRegistry::new();
+        reg.register_builtin("aaa", "");
+        reg.register_builtin("aab", "");
+        reg.register_builtin("aac", "");
+        let mut palette = CommandPalette::from_registry(&reg);
+        palette.selected = 2;
+        palette.query = "a".into();
+        palette.update_filter();
+        assert_eq!(palette.selected, 0, "selection must reset on filter");
+    }
+}
