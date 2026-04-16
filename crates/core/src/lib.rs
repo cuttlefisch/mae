@@ -6,6 +6,7 @@ pub mod editor;
 pub mod file_picker;
 pub mod grapheme;
 pub mod keymap;
+pub mod lsp_intent;
 pub mod messages;
 pub mod search;
 pub mod theme;
@@ -18,11 +19,12 @@ pub use conversation::Conversation;
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };
-pub use editor::{EditRecord, Editor};
+pub use editor::{EditRecord, Editor, LspLocation, LspRange};
 pub use file_picker::FilePicker;
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };
+pub use lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub use theme::{

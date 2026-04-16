@@ -3,6 +3,7 @@ pub mod executor;
 pub mod openai;
 pub mod provider;
 pub mod session;
+mod tool_impls;
 pub mod tools;
 pub mod types;
 

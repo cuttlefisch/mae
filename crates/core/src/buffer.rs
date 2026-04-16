@@ -203,6 +203,18 @@ impl Buffer {
         line_start + col
     }
 
+    /// Maximum number of undo entries to retain.
+    const MAX_UNDO_ENTRIES: usize = 1000;
+
+    /// Push an edit action onto the undo stack, trimming if it exceeds the bound.
+    fn push_undo(&mut self, action: EditAction) {
+        self.undo_stack.push(action);
+        if self.undo_stack.len() > Self::MAX_UNDO_ENTRIES {
+            let excess = self.undo_stack.len() - Self::MAX_UNDO_ENTRIES;
+            self.undo_stack.drain(..excess);
+        }
+    }
+
     // --- Editing operations ---
     // Each records an EditAction for undo and clears the redo stack.
     // Cursor state is on Window, passed as parameter.
@@ -210,7 +222,7 @@ impl Buffer {
     pub fn insert_char(&mut self, win: &mut Window, ch: char) {
         let pos = self.char_offset_at(win.cursor_row, win.cursor_col);
         self.rope.insert_char(pos, ch);
-        self.undo_stack.push(EditAction::InsertChar { pos, ch });
+        self.push_undo(EditAction::InsertChar { pos, ch });
         self.redo_stack.clear();
         if ch == '\n' {
             win.cursor_row += 1;
@@ -255,7 +267,7 @@ impl Buffer {
         }
         let ch = self.rope.char(pos);
         self.rope.remove(pos..pos + 1);
-        self.undo_stack.push(EditAction::DeleteChar { pos, ch });
+        self.push_undo(EditAction::DeleteChar { pos, ch });
         self.redo_stack.clear();
         self.modified = true;
         win.clamp_cursor(self);
@@ -275,7 +287,7 @@ impl Buffer {
         }
         let text: String = self.rope.slice(line_start..line_start + line_chars).into();
         self.rope.remove(line_start..line_start + line_chars);
-        self.undo_stack.push(EditAction::DeleteRange {
+        self.push_undo(EditAction::DeleteRange {
             pos: line_start,
             text: text.clone(),
         });
@@ -289,7 +301,7 @@ impl Buffer {
     pub fn insert_text_at(&mut self, char_offset: usize, text: &str) {
         let offset = char_offset.min(self.rope.len_chars());
         self.rope.insert(offset, text);
-        self.undo_stack.push(EditAction::InsertRange {
+        self.push_undo(EditAction::InsertRange {
             pos: offset,
             text: text.to_string(),
         });
@@ -319,7 +331,7 @@ impl Buffer {
 
         let insert_pos = line_start + line_chars;
         self.rope.insert_char(insert_pos, '\n');
-        self.undo_stack.push(EditAction::InsertChar {
+        self.push_undo(EditAction::InsertChar {
             pos: insert_pos,
             ch: '\n',
         });
@@ -332,7 +344,7 @@ impl Buffer {
     pub fn open_line_above(&mut self, win: &mut Window) {
         let line_start = self.rope.line_to_char(win.cursor_row);
         self.rope.insert_char(line_start, '\n');
-        self.undo_stack.push(EditAction::InsertChar {
+        self.push_undo(EditAction::InsertChar {
             pos: line_start,
             ch: '\n',
         });
@@ -395,7 +407,7 @@ impl Buffer {
                 Self::set_cursor_from_char_pos(&self.rope, win, *pos);
             }
         }
-        self.undo_stack.push(action);
+        self.push_undo(action);
         self.modified = true;
         win.clamp_cursor(self);
     }

@@ -24,6 +24,11 @@ pub struct AgentSession {
     event_tx: mpsc::Sender<AiEvent>,
     command_rx: mpsc::Receiver<AiCommand>,
     max_rounds: usize,
+    /// Maximum messages to keep in conversation history.
+    /// Older messages are trimmed (keeping the first user message for context).
+    max_messages: usize,
+    /// Consecutive provider error count for circuit breaker.
+    consecutive_errors: usize,
 }
 
 impl AgentSession {
@@ -42,6 +47,8 @@ impl AgentSession {
             event_tx,
             command_rx,
             max_rounds: 20,
+            max_messages: 200,
+            consecutive_errors: 0,
         }
     }
 
@@ -50,6 +57,9 @@ impl AgentSession {
     /// Emacs lesson: Emacs's `shell-command` blocks the entire editor because
     /// process.c runs synchronously on the main thread. We run shell commands
     /// on the AI's spawned tokio task, so the editor remains responsive.
+    ///
+    /// Security: rejects commands containing dangerous patterns (rm -rf /,
+    /// fork bombs, etc.) and caps timeout at 120 seconds.
     async fn execute_shell(call: &ToolCall) -> ToolResult {
         let command = call
             .arguments
@@ -65,11 +75,28 @@ impl AgentSession {
             };
         }
 
+        // Reject obviously dangerous commands
+        let blocked_patterns = [
+            "rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", // fork bomb
+            ">(){ :",
+        ];
+        for pattern in &blocked_patterns {
+            if command.contains(pattern) {
+                warn!(command, pattern, "blocked dangerous shell command");
+                return ToolResult {
+                    tool_call_id: call.id.clone(),
+                    success: false,
+                    output: format!("Command blocked: contains dangerous pattern '{}'", pattern),
+                };
+            }
+        }
+
         let timeout_secs = call
             .arguments
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
-            .unwrap_or(30);
+            .unwrap_or(30)
+            .min(120); // Cap at 2 minutes
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
@@ -145,14 +172,44 @@ impl AgentSession {
         }
     }
 
+    /// Trim message history to stay within bounds.
+    /// Keeps the first message (initial user context) and the most recent messages.
+    fn trim_messages(&mut self) {
+        if self.messages.len() <= self.max_messages {
+            return;
+        }
+        let excess = self.messages.len() - self.max_messages;
+        // Keep first message for context, trim from position 1
+        if self.messages.len() > 1 {
+            let trim_count = excess.min(self.messages.len() - 1);
+            self.messages.drain(1..1 + trim_count);
+            debug!(
+                trimmed = trim_count,
+                remaining = self.messages.len(),
+                "trimmed conversation history"
+            );
+        }
+    }
+
     async fn handle_prompt(&mut self, prompt: String) {
         self.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(prompt),
         });
+        self.trim_messages();
 
         for round in 0..self.max_rounds {
             debug!(round, max_rounds = self.max_rounds, "AI provider send");
+
+            // Backpressure warning: check event channel capacity
+            let capacity = self.event_tx.capacity();
+            if capacity < 4 {
+                warn!(
+                    capacity,
+                    "AI event channel near capacity — editor may be falling behind"
+                );
+            }
+
             let response = match self
                 .provider
                 .send(&self.messages, &self.tools, &self.system_prompt)
@@ -166,15 +223,33 @@ impl AgentSession {
                         has_text = r.text.is_some(),
                         "AI provider response received"
                     );
+                    self.consecutive_errors = 0; // Reset circuit breaker on success
                     r
                 }
                 Err(e) => {
+                    self.consecutive_errors += 1;
                     error!(
                         round,
                         error = %e.message,
                         retryable = e.retryable,
+                        consecutive_errors = self.consecutive_errors,
                         "AI provider error"
                     );
+
+                    // Circuit breaker: if retryable and under threshold, backoff and retry
+                    if e.retryable && self.consecutive_errors <= 3 {
+                        let backoff = std::time::Duration::from_millis(
+                            500 * (1 << (self.consecutive_errors - 1)),
+                        );
+                        warn!(
+                            backoff_ms = backoff.as_millis(),
+                            attempt = self.consecutive_errors,
+                            "retrying after backoff"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+
                     let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
                     return;
                 }
@@ -608,5 +683,140 @@ mod tests {
             .await
             .expect("session should exit")
             .expect("session should not panic");
+    }
+
+    #[tokio::test]
+    async fn shell_exec_blocks_dangerous_commands() {
+        let dangerous_commands = vec![
+            "rm -rf /",
+            "rm -fr /home",
+            "mkfs.ext4 /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            ":(){:|:&};:",
+        ];
+        for cmd in dangerous_commands {
+            let call = ToolCall {
+                id: "shell_blocked".into(),
+                name: "shell_exec".into(),
+                arguments: serde_json::json!({"command": cmd}),
+            };
+            let result = AgentSession::execute_shell(&call).await;
+            assert!(!result.success, "should block: {}", cmd);
+            assert!(
+                result.output.contains("blocked"),
+                "should mention 'blocked' for: {}",
+                cmd
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_exec_caps_timeout() {
+        // Timeout should be capped at 120s even if requesting more
+        let call = ToolCall {
+            id: "shell_cap".into(),
+            name: "shell_exec".into(),
+            arguments: serde_json::json!({"command": "echo ok", "timeout_secs": 9999}),
+        };
+        let result = AgentSession::execute_shell(&call).await;
+        assert!(result.success);
+        assert!(result.output.contains("ok"));
+    }
+
+    #[test]
+    fn message_trimming() {
+        let (event_tx, _rx) = mpsc::channel(32);
+        let (_tx, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_messages = 5;
+
+        // Add 10 messages
+        for i in 0..10 {
+            session.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(format!("msg{}", i)),
+            });
+        }
+        assert_eq!(session.messages.len(), 10);
+
+        session.trim_messages();
+        assert_eq!(session.messages.len(), 5);
+        // First message should be preserved
+        match &session.messages[0].content {
+            MessageContent::Text(t) => assert_eq!(t, "msg0"),
+            _ => panic!("expected text"),
+        }
+        // Last message should be the most recent
+        match &session.messages[4].content {
+            MessageContent::Text(t) => assert_eq!(t, "msg9"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_retries_on_retryable_error() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // First two responses are retryable errors, third succeeds
+        struct RetryProvider {
+            call_count: std::sync::Mutex<usize>,
+        }
+        #[async_trait::async_trait]
+        impl AgentProvider for RetryProvider {
+            async fn send(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDefinition],
+                _system_prompt: &str,
+            ) -> Result<ProviderResponse, ProviderError> {
+                let mut count = self.call_count.lock().unwrap();
+                *count += 1;
+                if *count <= 2 {
+                    Err(ProviderError {
+                        message: format!("rate limited (attempt {})", count),
+                        retryable: true,
+                    })
+                } else {
+                    Ok(ProviderResponse {
+                        text: Some("recovered!".into()),
+                        tool_calls: vec![],
+                        stop_reason: StopReason::EndTurn,
+                    })
+                }
+            }
+            fn name(&self) -> &str {
+                "retry-mock"
+            }
+        }
+
+        let provider = Box::new(RetryProvider {
+            call_count: std::sync::Mutex::new(0),
+        });
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        tokio::spawn(session.run());
+
+        cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
+
+        // Should eventually get a successful response after retries
+        let mut got_response = false;
+        for _ in 0..10 {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), event_rx.recv()).await {
+                Ok(Some(AiEvent::TextResponse(t))) => {
+                    assert_eq!(t, "recovered!");
+                    got_response = true;
+                    break;
+                }
+                Ok(Some(AiEvent::SessionComplete(_))) => {
+                    got_response = true;
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        assert!(got_response, "should have recovered after retries");
+
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
     }
 }

@@ -78,7 +78,7 @@ pub fn find_next(
                 return Some(*m);
             }
             if wrap {
-                return Some(*matches.last().unwrap());
+                return matches.last().copied();
             }
             None
         }

@@ -308,6 +308,20 @@ impl CommandRegistry {
         );
         reg.register_builtin("debug-inspect", "Inspect variable or evaluate expression");
 
+        // LSP (Phase 4a)
+        reg.register_builtin(
+            "lsp-goto-definition",
+            "Jump to definition of symbol under cursor (gd)",
+        );
+        reg.register_builtin(
+            "lsp-find-references",
+            "Find references to symbol under cursor (gr)",
+        );
+        reg.register_builtin(
+            "lsp-hover",
+            "Show hover information for symbol under cursor (K)",
+        );
+
         reg
     }
 }
@@ -378,5 +392,13 @@ mod tests {
         assert!(reg.contains("enter-insert-mode"));
         assert!(reg.contains("enter-normal-mode"));
         assert!(reg.len() >= 30); // at least 30 built-in commands
+    }
+
+    #[test]
+    fn with_builtins_has_lsp_commands() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("lsp-goto-definition"));
+        assert!(reg.contains("lsp-find-references"));
+        assert!(reg.contains("lsp-hover"));
     }
 }

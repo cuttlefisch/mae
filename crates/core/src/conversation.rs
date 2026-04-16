@@ -73,8 +73,19 @@ impl Conversation {
         }
     }
 
+    /// Maximum conversation entries to retain.
+    const MAX_ENTRIES: usize = 5000;
+
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// Trim oldest entries if the conversation exceeds the bound.
+    fn trim_entries(&mut self) {
+        if self.entries.len() > Self::MAX_ENTRIES {
+            let excess = self.entries.len() - Self::MAX_ENTRIES;
+            self.entries.drain(..excess);
+        }
     }
 
     pub fn push_user(&mut self, text: impl Into<String>) {
@@ -84,6 +95,7 @@ impl Conversation {
             collapsed: false,
         });
         self.version += 1;
+        self.trim_entries();
     }
 
     pub fn push_assistant(&mut self, text: impl Into<String>) {
@@ -93,6 +105,7 @@ impl Conversation {
             collapsed: false,
         });
         self.version += 1;
+        self.trim_entries();
     }
 
     pub fn push_tool_call(&mut self, name: impl Into<String>) {
@@ -102,6 +115,7 @@ impl Conversation {
             collapsed: true,
         });
         self.version += 1;
+        self.trim_entries();
     }
 
     pub fn push_tool_result(&mut self, success: bool, output: impl Into<String>) {
@@ -111,6 +125,7 @@ impl Conversation {
             collapsed: true,
         });
         self.version += 1;
+        self.trim_entries();
     }
 
     pub fn push_system(&mut self, text: impl Into<String>) {
@@ -120,6 +135,7 @@ impl Conversation {
             collapsed: false,
         });
         self.version += 1;
+        self.trim_entries();
     }
 
     /// Append a streaming chunk to the last assistant entry.
