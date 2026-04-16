@@ -635,11 +635,28 @@ impl Editor {
             "debug-self" => {
                 self.start_self_debug();
             }
-            "debug-start" => self.set_status("Not yet implemented: debug-start (DAP)"),
+            "debug-start" => {
+                // Concrete `dap_start_session(...)` is called from the
+                // command-line handler (`:debug-start <adapter> <program>`)
+                // or from the AI agent tool. Hitting this bare key-bound
+                // command without args just prompts for them.
+                self.set_status(
+                    "Usage: :debug-start <adapter> <program> — or use AI to start a DAP session",
+                );
+            }
             "debug-stop" => {
                 if self.debug_state.is_some() {
-                    self.debug_state = None;
-                    self.set_status("Debug session ended");
+                    // If it's a live DAP session, queue a disconnect.
+                    let is_dap = matches!(
+                        self.debug_state.as_ref().map(|s| &s.target),
+                        Some(crate::debug::DebugTarget::Dap { .. })
+                    );
+                    if is_dap {
+                        self.dap_disconnect(true);
+                    } else {
+                        self.debug_state = None;
+                        self.set_status("Debug session ended");
+                    }
                 } else {
                     self.set_status("No active debug session");
                 }
@@ -648,29 +665,17 @@ impl Editor {
                 if self.debug_state.is_none() {
                     self.set_status("No active debug session");
                 } else {
-                    self.set_status(format!("Not yet implemented: {}", name));
+                    match name {
+                        "debug-continue" => self.dap_continue(),
+                        "debug-step-over" => self.dap_step_over(),
+                        "debug-step-into" => self.dap_step_into(),
+                        "debug-step-out" => self.dap_step_out(),
+                        _ => unreachable!(),
+                    }
                 }
             }
             "debug-toggle-breakpoint" => {
-                let buf_idx = self.active_buffer_idx();
-                let line = self.window_mgr.focused_window().cursor_row as i64 + 1;
-                let source = self.buffers[buf_idx].name.clone();
-                if let Some(state) = self.debug_state.as_mut() {
-                    // Toggle: remove if exists at this line, else add
-                    let existing = state
-                        .breakpoints
-                        .get(&source)
-                        .and_then(|bps| bps.iter().find(|b| b.line == line).map(|b| b.id));
-                    if let Some(id) = existing {
-                        state.remove_breakpoint(id);
-                        self.set_status(format!("Breakpoint removed: {}:{}", source, line));
-                    } else {
-                        state.add_breakpoint(&source, line);
-                        self.set_status(format!("Breakpoint set: {}:{}", source, line));
-                    }
-                } else {
-                    self.set_status("No active debug session");
-                }
+                self.dap_toggle_breakpoint_at_cursor();
             }
             "debug-inspect" => {
                 if self.debug_state.is_some() {

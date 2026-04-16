@@ -8,15 +8,20 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use mae_ai::{ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent};
 use mae_core::{
-    Buffer, Diagnostic as CoreDiagnostic, DiagnosticSeverity as CoreSeverity, Editor, KeyPress,
-    LspIntent, LspLocation, LspRange,
+    Buffer, DapIntent, Diagnostic as CoreDiagnostic, DiagnosticSeverity as CoreSeverity, Editor,
+    KeyPress, LspIntent, LspLocation, LspRange,
+};
+use mae_dap::{
+    DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint,
 };
 use mae_lsp::{Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position};
 use mae_renderer::TerminalRenderer;
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
-use bootstrap::{find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_lsp};
+use bootstrap::{
+    find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_dap, setup_lsp,
+};
 use key_handling::handle_key;
 
 /// Async event loop for the MAE editor.
@@ -95,6 +100,10 @@ async fn main() -> io::Result<()> {
     let (mut lsp_event_rx, lsp_command_tx) = setup_lsp();
     info!("LSP task spawned");
 
+    // Initialize DAP coordinator task.
+    let (mut dap_event_rx, dap_command_tx) = setup_dap();
+    info!("DAP task spawned");
+
     // Build tool list for AI executor (used when handling tool call requests)
     let all_tools = {
         let mut tools = tools_from_registry(&editor.commands);
@@ -153,11 +162,16 @@ async fn main() -> io::Result<()> {
             if lsp_command_tx.try_send(LspCommand::Shutdown).is_err() {
                 warn!("failed to send shutdown to LSP task (channel closed)");
             }
+            // Best-effort DAP shutdown so the adapter process gets killed.
+            if dap_command_tx.try_send(DapCommand::Shutdown).is_err() {
+                warn!("failed to send shutdown to DAP task (channel closed)");
+            }
             break;
         }
 
-        // Drain any LSP intents queued by the last command dispatch.
+        // Drain any LSP / DAP intents queued by the last command dispatch.
         drain_lsp_intents(&mut editor, &lsp_command_tx);
+        drain_dap_intents(&mut editor, &dap_command_tx);
 
         // Async event loop: select! over keyboard + AI channels
         tokio::select! {
@@ -241,6 +255,9 @@ async fn main() -> io::Result<()> {
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
+            }
+            Some(dap_event) = dap_event_rx.recv() => {
+                handle_dap_event(&mut editor, dap_event);
             }
         }
     }
@@ -468,6 +485,185 @@ fn open_location(
         target_row + 1,
         target_col + 1
     ));
+}
+
+/// Drain all pending DAP intents from the editor and forward them to the DAP task.
+/// Safe to call every loop iteration — the Vec is cleared in place.
+fn drain_dap_intents(editor: &mut Editor, dap_tx: &tokio::sync::mpsc::Sender<DapCommand>) {
+    if editor.pending_dap_intents.is_empty() {
+        return;
+    }
+    let intents = std::mem::take(&mut editor.pending_dap_intents);
+    for intent in intents {
+        let cmd = intent_to_dap_command(intent);
+        let kind = dap_command_name(&cmd);
+        if dap_tx.try_send(cmd).is_err() {
+            warn!(kind, "DAP command channel full or closed — intent dropped");
+        }
+    }
+}
+
+/// Short name of a DAP command for logging — used only for diagnostics so
+/// a dropped intent is attributable to a specific operation.
+fn dap_command_name(cmd: &DapCommand) -> &'static str {
+    match cmd {
+        DapCommand::StartSession { .. } => "start-session",
+        DapCommand::SetBreakpoints { .. } => "set-breakpoints",
+        DapCommand::Continue { .. } => "continue",
+        DapCommand::Next { .. } => "next",
+        DapCommand::StepIn { .. } => "step-in",
+        DapCommand::StepOut { .. } => "step-out",
+        DapCommand::RefreshThreadsAndStack { .. } => "refresh-threads-and-stack",
+        DapCommand::RequestScopes { .. } => "request-scopes",
+        DapCommand::RequestVariables { .. } => "request-variables",
+        DapCommand::Terminate => "terminate",
+        DapCommand::Disconnect { .. } => "disconnect",
+        DapCommand::Shutdown => "shutdown",
+    }
+}
+
+/// Translate an editor-side `DapIntent` into a transport-layer `DapCommand`.
+/// The core crate has no `mae-dap` dependency, so the binary performs the crosswalk.
+fn intent_to_dap_command(intent: DapIntent) -> DapCommand {
+    match intent {
+        DapIntent::StartSession {
+            spawn,
+            launch_args,
+            attach,
+        } => DapCommand::StartSession {
+            config: DapServerConfig {
+                command: spawn.command,
+                args: spawn.args,
+                adapter_id: spawn.adapter_id,
+            },
+            launch_args,
+            attach,
+        },
+        DapIntent::SetBreakpoints { source_path, lines } => DapCommand::SetBreakpoints {
+            source_path,
+            breakpoints: lines
+                .into_iter()
+                .map(|line| SourceBreakpoint {
+                    line,
+                    condition: None,
+                    hit_condition: None,
+                })
+                .collect(),
+        },
+        DapIntent::Continue { thread_id } => DapCommand::Continue { thread_id },
+        DapIntent::Next { thread_id } => DapCommand::Next { thread_id },
+        DapIntent::StepIn { thread_id } => DapCommand::StepIn { thread_id },
+        DapIntent::StepOut { thread_id } => DapCommand::StepOut { thread_id },
+        DapIntent::RefreshThreadsAndStack { thread_id } => {
+            DapCommand::RefreshThreadsAndStack { thread_id }
+        }
+        DapIntent::RequestScopes { frame_id } => DapCommand::RequestScopes { frame_id },
+        DapIntent::RequestVariables {
+            scope_name,
+            variables_reference,
+        } => DapCommand::RequestVariables {
+            scope_name,
+            variables_reference,
+        },
+        DapIntent::Terminate => DapCommand::Terminate,
+        DapIntent::Disconnect { terminate_debuggee } => {
+            DapCommand::Disconnect { terminate_debuggee }
+        }
+    }
+}
+
+/// Handle an event from the DAP task — update editor state via `apply_dap_*`.
+fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
+    match event {
+        DapTaskEvent::SessionStarted {
+            adapter_id,
+            capabilities: _,
+        } => {
+            info!(adapter = %adapter_id, "DAP session started");
+            editor.apply_dap_session_started(adapter_id);
+        }
+        DapTaskEvent::SessionStartFailed { error } => {
+            warn!(error = %error, "DAP session start failed");
+            editor.apply_dap_session_start_failed(error);
+        }
+        DapTaskEvent::Stopped {
+            reason,
+            thread_id,
+            text,
+        } => {
+            debug!(reason = %reason, thread_id = ?thread_id, "DAP stopped");
+            editor.apply_dap_stopped(reason, thread_id, text);
+        }
+        DapTaskEvent::Continued {
+            thread_id,
+            all_threads,
+        } => {
+            editor.apply_dap_continued(thread_id, all_threads);
+        }
+        DapTaskEvent::ThreadEvent {
+            reason: _,
+            thread_id: _,
+        } => {
+            // Drive a thread-list refresh on any thread start/exit so the UI
+            // stays in sync with reality.
+            editor.dap_refresh();
+        }
+        DapTaskEvent::Output { category, output } => {
+            editor.apply_dap_output(category, output);
+        }
+        DapTaskEvent::Terminated => {
+            editor.apply_dap_terminated();
+        }
+        DapTaskEvent::AdapterExited => {
+            editor.apply_dap_adapter_exited();
+        }
+        DapTaskEvent::Error { message } => {
+            warn!(error = %message, "DAP error");
+            editor.apply_dap_error(message);
+        }
+        DapTaskEvent::ThreadsResult { threads } => {
+            let core_threads: Vec<(i64, String)> =
+                threads.into_iter().map(|t| (t.id, t.name)).collect();
+            editor.apply_dap_threads(core_threads);
+        }
+        DapTaskEvent::StackTraceResult { thread_id, frames } => {
+            let core_frames: Vec<(i64, String, Option<String>, i64, i64)> = frames
+                .into_iter()
+                .map(|f| {
+                    let src = f.source.and_then(|s| s.path.or(s.name));
+                    (f.id, f.name, src, f.line, f.column)
+                })
+                .collect();
+            editor.apply_dap_stack_trace(thread_id, core_frames);
+        }
+        DapTaskEvent::ScopesResult { frame_id, scopes } => {
+            let core_scopes: Vec<(String, i64, bool)> = scopes
+                .into_iter()
+                .map(|s| (s.name, s.variables_reference, s.expensive))
+                .collect();
+            editor.apply_dap_scopes(frame_id, core_scopes);
+        }
+        DapTaskEvent::VariablesResult {
+            scope_name,
+            variables,
+        } => {
+            let core_vars: Vec<(String, String, Option<String>, i64)> = variables
+                .into_iter()
+                .map(|v| (v.name, v.value, v.type_field, v.variables_reference))
+                .collect();
+            editor.apply_dap_variables(scope_name, core_vars);
+        }
+        DapTaskEvent::BreakpointsSet {
+            source_path,
+            breakpoints,
+        } => {
+            let entries: Vec<(i64, bool, i64)> = breakpoints
+                .into_iter()
+                .filter_map(|b| b.line.map(|line| (b.id.unwrap_or(0), b.verified, line)))
+                .collect();
+            editor.apply_dap_breakpoints_set(source_path, entries);
+        }
+    }
 }
 
 /// Translate an `mae_lsp::Diagnostic` into the core representation.

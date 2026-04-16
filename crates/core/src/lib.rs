@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod commands;
 pub mod conversation;
+pub mod dap_intent;
 pub mod debug;
 pub mod editor;
 pub mod file_picker;
@@ -17,6 +18,7 @@ pub mod word;
 pub use buffer::{Buffer, BufferKind};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
+pub use dap_intent::{DapIntent, DapSpawnConfig};
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };

@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 
+/// Cap the debug output log to avoid unbounded memory growth from chatty
+/// DAP adapters (lldb + logpoint-heavy sessions can emit hundreds of lines
+/// per second). When full, older entries are dropped from the front.
+const OUTPUT_LOG_CAP: usize = 10_000;
+
 // ---------------------------------------------------------------------------
 // Shared debug types
 //
@@ -106,6 +111,9 @@ pub struct DebugState {
     pub output_log: Vec<String>,
     /// Scheme eval errors (self-debug only, but included for uniformity).
     pub scheme_errors: Vec<SchemeErrorEntry>,
+    /// Monotonic counter for locally-assigned breakpoint ids (avoids an
+    /// O(N²) scan over all breakpoints on every add/toggle).
+    pub next_bp_id: i64,
 }
 
 impl DebugState {
@@ -122,6 +130,7 @@ impl DebugState {
             stopped_location: None,
             output_log: Vec::new(),
             scheme_errors: Vec::new(),
+            next_bp_id: 1,
         }
     }
 
@@ -185,13 +194,8 @@ impl DebugState {
 
     /// Add a breakpoint. Returns the assigned id.
     pub fn add_breakpoint(&mut self, source: &str, line: i64) -> i64 {
-        let id = self
-            .breakpoints
-            .values()
-            .flat_map(|bps| bps.iter().map(|b| b.id))
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let id = self.next_bp_id;
+        self.next_bp_id += 1;
         let bp = Breakpoint {
             id,
             verified: true,
@@ -216,8 +220,15 @@ impl DebugState {
         false
     }
 
-    /// Append a line to the debug output log.
+    /// Append a line to the debug output log. Caps at `OUTPUT_LOG_CAP`
+    /// entries by dropping the oldest — DAP adapters can be very chatty.
     pub fn log(&mut self, line: impl Into<String>) {
+        if self.output_log.len() >= OUTPUT_LOG_CAP {
+            // Drop the oldest quarter in one shot rather than a per-line
+            // `remove(0)` (which is O(N)).
+            let drop_n = OUTPUT_LOG_CAP / 4;
+            self.output_log.drain(..drop_n);
+        }
         self.output_log.push(line.into());
     }
 
@@ -229,6 +240,96 @@ impl DebugState {
     /// Total number of breakpoints across all sources.
     pub fn breakpoint_count(&self) -> usize {
         self.breakpoints.values().map(|v| v.len()).sum()
+    }
+
+    // ---------- DAP event-driven setters ----------
+    //
+    // Called from the binary's `DapTaskEvent` handler to keep the unified
+    // `DebugState` in sync with the adapter. Keeping the setters on core
+    // means the renderer + AI tools read from one model whether the source
+    // is self-debug or DAP.
+
+    /// Replace the full thread list.
+    pub fn set_threads(&mut self, threads: Vec<DebugThread>) {
+        self.threads = threads;
+        // If the currently active thread no longer exists, fall back to
+        // the first available (or 0 if none).
+        if !self.threads.iter().any(|t| t.id == self.active_thread_id) {
+            self.active_thread_id = self.threads.first().map(|t| t.id).unwrap_or(0);
+        }
+    }
+
+    /// Replace the stack-frame list. Typically paired with the latest
+    /// stopped event so the UI shows the frames for the stopped thread.
+    pub fn set_stack_frames(&mut self, frames: Vec<StackFrame>) {
+        self.stack_frames = frames;
+    }
+
+    /// Replace the scope list for the current frame.
+    pub fn set_scopes(&mut self, scopes: Vec<Scope>) {
+        self.scopes = scopes;
+    }
+
+    /// Replace the variable list for a scope (keyed by scope name).
+    pub fn set_variables_for_scope(&mut self, scope_name: impl Into<String>, vars: Vec<Variable>) {
+        self.variables.insert(scope_name.into(), vars);
+    }
+
+    /// Mark the session stopped at (source, line). `line` is 1-based (DAP convention).
+    pub fn set_stopped_location(&mut self, source: impl Into<String>, line: i64) {
+        self.stopped_location = Some((source.into(), line));
+    }
+
+    /// Clear the stopped marker (on continued / terminated / adapter-exited).
+    pub fn clear_stopped_location(&mut self) {
+        self.stopped_location = None;
+    }
+
+    /// Replace all breakpoints for a source with a DAP-verified set.
+    /// `entries` is a list of `(id, verified, line)` tuples — matches the
+    /// `DapBreakpoint` → `Breakpoint` conversion shape without adding a
+    /// cross-crate dep.
+    pub fn apply_verified_breakpoints(
+        &mut self,
+        source_path: impl Into<String>,
+        entries: Vec<(i64, bool, i64)>,
+    ) {
+        let src = source_path.into();
+        let mut bps = Vec::with_capacity(entries.len());
+        for (id, verified, line) in entries {
+            bps.push(Breakpoint {
+                id,
+                verified,
+                source: src.clone(),
+                line,
+            });
+        }
+        self.breakpoints.insert(src, bps);
+    }
+
+    /// Toggle a breakpoint at `(source, line)` — add if missing, remove
+    /// (by line match) if present. Returns the remaining line set for that
+    /// source, so callers can forward it to the adapter via setBreakpoints.
+    pub fn toggle_breakpoint_at(
+        &mut self,
+        source_path: impl Into<String>,
+        line: i64,
+    ) -> Vec<i64> {
+        let src = source_path.into();
+        let list = self.breakpoints.entry(src.clone()).or_default();
+        if let Some(pos) = list.iter().position(|b| b.line == line) {
+            list.remove(pos);
+        } else {
+            let id = self.next_bp_id;
+            self.next_bp_id += 1;
+            list.push(Breakpoint {
+                id,
+                verified: false,
+                source: src,
+                line,
+            });
+        }
+        list.iter().map(|b| b.line).collect()
     }
 }
 

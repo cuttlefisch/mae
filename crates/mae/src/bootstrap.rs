@@ -7,6 +7,7 @@ use mae_ai::{
     OpenAiProvider, ProviderConfig,
 };
 use mae_core::Editor;
+use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
 use mae_lsp::{run_lsp_task, LspCommand, LspServerConfig, LspTaskEvent};
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info};
@@ -336,6 +337,21 @@ fn insert_if_set(
             root_uri: None,
         },
     );
+}
+
+/// Spawn the DAP coordinator task and return (event_rx, command_tx).
+///
+/// Unlike LSP, DAP sessions are one-at-a-time: you're debugging one
+/// program. The task sits idle until it gets a `StartSession` command.
+pub fn setup_dap() -> (
+    tokio::sync::mpsc::Receiver<DapTaskEvent>,
+    tokio::sync::mpsc::Sender<DapCommand>,
+) {
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<DapCommand>(32);
+    let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<DapTaskEvent>(64);
+    info!("starting DAP task");
+    tokio::spawn(run_dap_task(cmd_rx, evt_tx));
+    (evt_rx, cmd_tx)
 }
 
 pub fn dirs_candidate(rel: &str) -> Option<PathBuf> {

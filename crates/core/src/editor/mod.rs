@@ -1,4 +1,5 @@
 mod command;
+mod dap_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 
 use crate::buffer::Buffer;
 use crate::commands::CommandRegistry;
+use crate::dap_intent::DapIntent;
 use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
 use crate::keymap::{KeyPress, Keymap};
@@ -105,6 +107,11 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// Queue of pending DAP requests for the binary to drain each event-loop tick.
+    /// Same pattern as `pending_lsp_requests`: core cannot call async DAP code
+    /// directly; commands push intents here and `main.rs` forwards them to
+    /// `run_dap_task`.
+    pub pending_dap_intents: Vec<DapIntent>,
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
@@ -157,6 +164,7 @@ impl Editor {
             command_history: Vec::new(),
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
+            pending_dap_intents: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_selection_stack: Vec::new(),
@@ -197,6 +205,7 @@ impl Editor {
             command_history: Vec::new(),
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
+            pending_dap_intents: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             syntax: {
                 let mut m = crate::syntax::SyntaxMap::new();
