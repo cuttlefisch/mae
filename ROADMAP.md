@@ -179,22 +179,26 @@ Language server integration. AI gets semantic code intelligence.
 - [x] Configurable servers via env (MAE_LSP_RUST, MAE_LSP_PYTHON, etc.)
 - [ ] Expose to AI: `lsp_definition`, `lsp_references`, `lsp_hover` tools (M5)
 
-### M3: Diagnostics ✅ (626 tests)
+### M3: Diagnostics ✅ (633 tests)
 - [x] `textDocument/publishDiagnostics` → editor diagnostic store
 - [x] Gutter markers (error/warning indicators)
 - [x] `:diagnostics` buffer listing every diagnostic grouped by file
 - [x] Jump to next/prev diagnostic (`]d` / `[d`)
-- [ ] AI tool: `lsp_diagnostics` — read current file diagnostics (deferred to M5)
+- [x] AI tool: `lsp_diagnostics` — structured JSON, scope=buffer|all
 
 ### M4: Completion
 - [ ] `textDocument/completion` triggered on input
 - [ ] Completion popup in renderer
 - [ ] Tab/Enter to accept, Esc to dismiss
 
-### M5: Scheme + AI Exposure
+### M5: Scheme + AI Exposure (partial)
+- [x] AI tool: `lsp_diagnostics` (structured JSON, done as part of M3)
+- [ ] AI tools: `lsp_definition`, `lsp_references`, `lsp_hover` — blocked on async
+      request/response plumbing through the tool executor (results currently
+      flow back to the status bar only; nav commands are reachable via
+      `command_lsp_goto_definition` etc. but don't return structured data).
 - [ ] Scheme functions: `(lsp-definition)`, `(lsp-references)`, `(lsp-hover)`
 - [ ] AI system prompt updated with LSP tool descriptions
-- [ ] AI can query "what type is this variable?" via LSP
 
 ---
 

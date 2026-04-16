@@ -1,6 +1,7 @@
 mod buffer;
 mod editor_tools;
 mod file;
+mod lsp;
 mod project;
 
 pub use buffer::{
@@ -13,6 +14,7 @@ pub use editor_tools::{
 pub use file::{
     execute_close_buffer, execute_create_file, execute_open_file, execute_switch_buffer,
 };
+pub use lsp::execute_lsp_diagnostics;
 pub use project::{execute_project_files, execute_project_search};
 
 use mae_core::Editor;
