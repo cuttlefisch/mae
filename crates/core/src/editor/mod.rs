@@ -6,6 +6,7 @@ mod edit_ops;
 mod file_ops;
 mod keymaps;
 mod lsp_ops;
+mod marks;
 mod search_ops;
 mod syntax_ops;
 mod text_objects;
@@ -13,6 +14,7 @@ mod visual;
 
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use lsp_ops::{LspLocation, LspRange};
+pub use marks::Mark;
 
 #[cfg(test)]
 mod tests;
@@ -122,6 +124,9 @@ pub struct Editor {
     /// `syntax_expand_selection` — lets `syntax_contract_selection` walk
     /// back down the node tree. Cleared on `syntax_select_node`.
     pub syntax_selection_stack: Vec<(usize, usize)>,
+    /// Named cursor marks, keyed by mark letter (`m`+letter to set,
+    /// `'`+letter to jump). Paths make marks survive buffer switches.
+    pub marks: HashMap<char, Mark>,
 }
 
 impl Default for Editor {
@@ -168,6 +173,7 @@ impl Editor {
             diagnostics: DiagnosticStore::default(),
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_selection_stack: Vec::new(),
+            marks: HashMap::new(),
         }
     }
 
@@ -220,6 +226,7 @@ impl Editor {
                 m
             },
             syntax_selection_stack: Vec::new(),
+            marks: HashMap::new(),
         }
     }
 

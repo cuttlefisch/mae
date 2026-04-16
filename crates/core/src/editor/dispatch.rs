@@ -806,6 +806,15 @@ impl Editor {
                 self.pending_char_command = Some("replace-char".to_string());
             }
 
+            // Marks: `m<letter>` sets, `'<letter>` jumps. Pending-char
+            // pattern — the next keypress is consumed by dispatch_char_motion.
+            "set-mark-await" => {
+                self.pending_char_command = Some("set-mark".to_string());
+            }
+            "jump-mark-await" => {
+                self.pending_char_command = Some("jump-mark".to_string());
+            }
+
             // Dot repeat
             "dot-repeat" => {
                 self.replay_last_edit();

@@ -182,6 +182,9 @@ impl CommandRegistry {
         reg.register_builtin("change-to-line-start", "Change to start of line (c0)");
         // Replace
         reg.register_builtin("replace-char-await", "Replace char under cursor (r)");
+        // Marks
+        reg.register_builtin("set-mark-await", "Set mark at next-typed letter (m)");
+        reg.register_builtin("jump-mark-await", "Jump to mark at next-typed letter (')");
         // Join, indent, dedent
         reg.register_builtin("join-lines", "Join current line with next line (J)");
         reg.register_builtin("indent-line", "Indent current line by 4 spaces (>>)");

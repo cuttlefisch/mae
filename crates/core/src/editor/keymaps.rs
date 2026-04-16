@@ -76,6 +76,9 @@ impl Editor {
         normal.bind(parse_key_seq("c0"), "change-to-line-start");
         // Replace
         normal.bind(parse_key_seq("r"), "replace-char-await");
+        // Marks (m<letter> sets, '<letter> jumps)
+        normal.bind(parse_key_seq("m"), "set-mark-await");
+        normal.bind(parse_key_seq("'"), "jump-mark-await");
         // Join, indent, dedent
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
@@ -219,6 +222,9 @@ impl Editor {
         visual.bind(parse_key_seq("F"), "find-char-backward-await");
         visual.bind(parse_key_seq("t"), "till-char-forward-await");
         visual.bind(parse_key_seq("T"), "till-char-backward-await");
+        // Marks
+        visual.bind(parse_key_seq("m"), "set-mark-await");
+        visual.bind(parse_key_seq("'"), "jump-mark-await");
         // Scroll
         visual.bind(parse_key_seq("C-u"), "scroll-half-up");
         visual.bind(parse_key_seq("C-d"), "scroll-half-down");

@@ -25,6 +25,25 @@ impl Editor {
             return true;
         }
 
+        // Marks: `m<letter>` sets a mark, `'<letter>` jumps to it.
+        // Errors surface through the status bar so the user sees why
+        // a jump didn't happen (unset name, closed file, etc.).
+        if command == "set-mark" {
+            match self.set_mark(ch) {
+                Ok(()) => self.set_status(format!("Mark '{}' set", ch)),
+                Err(e) => self.set_status(e),
+            }
+            self.pending_char_count = 1;
+            return true;
+        }
+        if command == "jump-mark" {
+            if let Err(e) = self.jump_to_mark(ch) {
+                self.set_status(e);
+            }
+            self.pending_char_count = 1;
+            return true;
+        }
+
         let repeat = self.pending_char_count;
         self.pending_char_count = 1;
         let buf = &self.buffers[self.active_buffer_idx()];
