@@ -55,7 +55,7 @@ impl Editor {
         self.save_delete(text);
         // Move cursor to start of deleted range
         let rope = self.buffers[idx].rope();
-        let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1).max(0)));
+        let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
         let line_start = rope.line_to_char(new_row);
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = new_row;
