@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (764 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (560 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -41,7 +41,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 |---|---------|-------|--------|
 | 1 | Multi-buffer AI tools (open_file, buffer by name) | 3f M1 | **DONE** |
 | 2 | Project search (AI: grep across project) | 3f M4 | **DONE** |
-| 3 | Marks (`m`+letter, `'`+letter) | 3e M6 | Deferred |
+| 3 | Marks (`m`+letter, `'`+letter) | 3e M6 | **DONE** |
 | 4 | Macros (`q` record, `@` playback) | 3e M6 | Deferred |
 
 ### Tier 2: Quality of Life
@@ -99,10 +99,11 @@ Required for self-hosting (AI needs to edit multiple crate files).
 - [x] `create_file` tool — AI creates new file + buffer
 - [ ] Undo per-buffer (already works, just verify with AI)
 
-### M3: Conversation Persistence
-- [ ] Save conversation to file (`:ai-save`)
-- [ ] Load conversation from file (`:ai-load`)
-- [ ] Conversation history survives buffer kill + reopen
+### M3: Conversation Persistence ✅ (560 tests)
+- [x] Save conversation to file (`:ai-save <path>`)
+- [x] Load conversation from file (`:ai-load <path>`)
+- [x] Wire struct pattern with version=1 schema; rejects unknown versions loudly
+- [x] Editor::conversation()/conversation_mut() accessors; consolidated callers
 
 ### M4: Project Awareness ✅
 - [x] `project_files` tool — list files in project (git ls-files)
