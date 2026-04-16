@@ -9,6 +9,7 @@ pub mod keymap;
 pub mod lsp_intent;
 pub mod messages;
 pub mod search;
+pub mod syntax;
 pub mod theme;
 pub mod window;
 pub mod word;
@@ -29,6 +30,7 @@ pub use keymap::{
 pub use lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use search::{SearchDirection, SearchMatch, SearchState};
+pub use syntax::{language_for_path, HighlightSpan, Language, SyntaxMap};
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,
     ThemeResolver, ThemeStyle,

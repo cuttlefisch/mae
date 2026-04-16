@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE (626 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b M1/M2 COMPLETE (648 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -208,16 +208,19 @@ Tree-sitter integration for structural editing and display. Moved up in
 priority — proven killer feature in Helix and Zed. Can be developed
 concurrently with LSP.
 
-### M1: Tree-sitter Core
-- [ ] tree-sitter dependency, grammar loading (Rust, Scheme, TOML, Markdown)
-- [ ] Parse buffer on change (incremental)
-- [ ] Syntax tree stored per-buffer
+### M1: Tree-sitter Core ✅ (648 tests)
+- [x] tree-sitter dependency, grammar loading (Rust, TOML, Markdown)
+- [x] Parse buffer on edit (full reparse — incremental deferred)
+- [x] Syntax tree + highlight spans stored per-buffer in `SyntaxMap`
 
-### M2: Highlight
-- [ ] Theme-aware syntax highlighting (theme keys: `syntax.keyword`,
-      `syntax.string`, `syntax.comment`, etc.)
-- [ ] Incremental re-highlight on edit
-- [ ] Language detection from file extension
+### M2: Highlight ✅
+- [x] Theme-aware syntax highlighting — reuses existing bare theme keys
+      (`keyword`, `string`, `comment`, `function`, `type`, etc.)
+- [x] Re-highlight on edit via `SyntaxMap::invalidate` wired into
+      `record_edit`, `record_edit_with_count`, and `finalize_insert_for_repeat`
+- [x] Language detection from file extension (auto-attached on `open_file`
+      and `with_buffer`)
+- [x] Selection/search highlights correctly override syntax colors
 
 ### M3: Structural Operations
 - [ ] Select syntax node at cursor
@@ -328,7 +331,7 @@ navigate and refactor effectively.
 | 3f    | 521     | 521 ✅ M1/M2/M4 (multi-file AI tools, project search) — M3 remaining |
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
-| 4b    | —       | +10 (tree-sitter parse, highlight) |
+| 4b    | 15      | +10 (tree-sitter parse ✅, highlight ✅ — 9 syntax + 6 editor wiring) |
 | 4c    | 8       | +20 (DAP lifecycle, breakpoints, state) |
 | 5     | —       | +15 (SQLite, org parser, search) |
 | **Total** | **603** | **~640** |

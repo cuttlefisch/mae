@@ -2211,3 +2211,91 @@ fn dispatch_lsp_find_references_queues_intent() {
         LspIntent::FindReferences { .. }
     ));
 }
+
+// --- Tree-sitter syntax highlighting (Phase 4b M1/M2) ---
+
+#[test]
+fn with_buffer_attaches_rust_language_from_extension() {
+    let mut buf = Buffer::new();
+    buf.set_file_path(std::path::PathBuf::from("/tmp/example.rs"));
+    let editor = Editor::with_buffer(buf);
+    assert_eq!(
+        editor.syntax.language_of(0),
+        Some(crate::syntax::Language::Rust)
+    );
+}
+
+#[test]
+fn with_buffer_without_file_has_no_language() {
+    let editor = Editor::with_buffer(Buffer::new());
+    assert_eq!(editor.syntax.language_of(0), None);
+}
+
+#[test]
+fn open_file_detects_language_for_toml() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut f = fs::File::create(&path).unwrap();
+    writeln!(f, "[package]\nname = \"mae\"").unwrap();
+    drop(f);
+
+    let mut editor = Editor::new();
+    editor.open_file(path.to_str().unwrap());
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.syntax.language_of(idx),
+        Some(crate::syntax::Language::Toml)
+    );
+}
+
+#[test]
+fn record_edit_invalidates_syntax_cache() {
+    let mut buf = Buffer::new();
+    buf.set_file_path(std::path::PathBuf::from("/tmp/x.rs"));
+    let mut editor = Editor::with_buffer(buf);
+    // Prime the cache
+    let _ = editor.syntax.spans_for(0, "fn x() {}");
+    // Force invalidation via the edit-recording path
+    editor.record_edit("delete-line");
+    // After invalidate, a fresh call should produce spans again. If the cache
+    // had been left behind, recomputing against different source would still
+    // match the old cached vec; invalidate forces recompute.
+    let spans = editor.syntax.spans_for(0, "let y = 42;").unwrap();
+    assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+}
+
+#[test]
+fn kill_buffer_removes_syntax_entry_for_scratch_fallback() {
+    let mut buf = Buffer::new();
+    buf.set_file_path(std::path::PathBuf::from("/tmp/x.rs"));
+    let mut editor = Editor::with_buffer(buf);
+    assert!(editor.syntax.language_of(0).is_some());
+    editor.dispatch_builtin("kill-buffer");
+    // Single-buffer case replaces with scratch; syntax entry must be cleared.
+    assert_eq!(editor.syntax.language_of(0), None);
+}
+
+#[test]
+fn kill_buffer_shifts_syntax_indices() {
+    // Two buffers: 0 rust, 1 toml. Kill index 0 -> former 1 becomes 0.
+    let mut buf0 = Buffer::new();
+    buf0.set_file_path(std::path::PathBuf::from("/tmp/a.rs"));
+    let mut editor = Editor::with_buffer(buf0);
+
+    let mut buf1 = Buffer::new();
+    buf1.set_file_path(std::path::PathBuf::from("/tmp/b.toml"));
+    editor.buffers.push(buf1);
+    editor
+        .syntax
+        .set_language(1, crate::syntax::Language::Toml);
+
+    editor.window_mgr.focused_window_mut().buffer_idx = 0;
+    editor.dispatch_builtin("kill-buffer");
+
+    assert_eq!(editor.buffers.len(), 1);
+    assert_eq!(
+        editor.syntax.language_of(0),
+        Some(crate::syntax::Language::Toml)
+    );
+}

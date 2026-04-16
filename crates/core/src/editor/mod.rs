@@ -107,6 +107,9 @@ pub struct Editor {
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
+    /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
+    /// Buffers without a detected language simply have no entry.
+    pub syntax: crate::syntax::SyntaxMap,
 }
 
 impl Default for Editor {
@@ -150,10 +153,12 @@ impl Editor {
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
             diagnostics: DiagnosticStore::default(),
+            syntax: crate::syntax::SyntaxMap::new(),
         }
     }
 
     pub fn with_buffer(buf: Buffer) -> Self {
+        let buf_file_path_snapshot = buf.file_path().map(|p| p.to_path_buf());
         Editor {
             buffers: vec![buf],
             window_mgr: WindowManager::new(0),
@@ -187,6 +192,18 @@ impl Editor {
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
             diagnostics: DiagnosticStore::default(),
+            syntax: {
+                let mut m = crate::syntax::SyntaxMap::new();
+                // If the buffer was opened with a file path, attach the
+                // matching language immediately so the first render shows
+                // syntax highlighting.
+                if let Some(path) = buf_file_path_snapshot {
+                    if let Some(lang) = crate::syntax::language_for_path(&path) {
+                        m.set_language(0, lang);
+                    }
+                }
+                m
+            },
         }
     }
 

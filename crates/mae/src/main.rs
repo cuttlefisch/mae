@@ -140,7 +140,7 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        renderer.render(&editor)?;
+        renderer.render(&mut editor)?;
 
         if !editor.running {
             info!("editor shutting down");

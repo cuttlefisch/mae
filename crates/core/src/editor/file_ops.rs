@@ -341,11 +341,17 @@ impl Editor {
         match Buffer::from_file(Path::new(path)) {
             Ok(buf) => {
                 let name = buf.name.clone();
+                let detected_lang = buf
+                    .file_path()
+                    .and_then(crate::syntax::language_for_path);
                 let prev_idx = self.active_buffer_idx();
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
                 self.alternate_buffer_idx = Some(prev_idx);
                 self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+                if let Some(lang) = detected_lang {
+                    self.syntax.set_language(new_idx, lang);
+                }
                 self.set_status(format!("\"{}\" opened", name));
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();

@@ -548,6 +548,7 @@ impl Editor {
                     self.lsp_notify_did_close_for_buffer(0);
                     // Replace with empty scratch — never have 0 buffers
                     self.buffers[0] = Buffer::new();
+                    self.syntax.remove(0);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = 0;
                     win.cursor_col = 0;
@@ -556,6 +557,7 @@ impl Editor {
                     // Notify LSP before removing the buffer.
                     self.lsp_notify_did_close_for_buffer(idx);
                     self.buffers.remove(idx);
+                    self.syntax.shift_after_remove(idx);
                     // Fix all window buffer_idx references
                     for win in self.window_mgr.iter_windows_mut() {
                         if win.buffer_idx == idx {

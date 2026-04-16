@@ -103,6 +103,9 @@ impl Editor {
             // Notify LSP of the full insert-session content so queries during
             // the next idle tick reflect typed text.
             self.lsp_notify_did_change();
+            // Invalidate tree-sitter cache so the next render reparses.
+            let buf_idx = self.active_buffer_idx();
+            self.syntax.invalidate(buf_idx);
         }
     }
 
@@ -119,6 +122,8 @@ impl Editor {
             count: None,
         });
         self.lsp_notify_did_change();
+        let buf_idx = self.active_buffer_idx();
+        self.syntax.invalidate(buf_idx);
     }
 
     /// Record a non-insert edit with count for dot-repeat.
@@ -133,6 +138,8 @@ impl Editor {
             count,
         });
         self.lsp_notify_did_change();
+        let buf_idx = self.active_buffer_idx();
+        self.syntax.invalidate(buf_idx);
     }
 
     /// Replay the last recorded edit (dot-repeat).

@@ -5,9 +5,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mae_core::{
-    grapheme, DiagnosticSeverity, Editor, Key, Mode, NamedColor, ThemeColor, ThemeStyle,
-    VisualType, Window,
+    grapheme, DiagnosticSeverity, Editor, HighlightSpan, Key, Mode, NamedColor, ThemeColor,
+    ThemeStyle, VisualType, Window,
 };
+use std::collections::HashMap;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
@@ -35,7 +36,7 @@ impl TerminalRenderer {
         Ok(TerminalRenderer { terminal })
     }
 
-    pub fn render(&mut self, editor: &Editor) -> io::Result<()> {
+    pub fn render(&mut self, editor: &mut Editor) -> io::Result<()> {
         self.terminal.draw(|frame| {
             render_frame(frame, editor);
         })?;
@@ -122,8 +123,14 @@ fn ts(editor: &Editor, key: &str) -> Style {
 
 /// Pure rendering function: Editor state in, frame out.
 /// No side effects, no global state. Emacs lesson: this is the anti-xdisp.c.
-fn render_frame(frame: &mut Frame, editor: &Editor) {
+fn render_frame(frame: &mut Frame, editor: &mut Editor) {
     let area = frame.area();
+
+    // Pre-compute syntax-highlight spans for every visible text buffer.
+    // Done up front so the rest of the render pipeline can borrow editor
+    // immutably.
+    let syntax_spans = compute_visible_syntax_spans(editor);
+    let editor: &Editor = editor;
 
     if editor.file_picker.is_some() {
         // File picker overlay on top of normal layout
@@ -134,7 +141,7 @@ fn render_frame(frame: &mut Frame, editor: &Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor);
+        render_window_area(frame, chunks[0], editor, &syntax_spans);
         render_status_bar(frame, chunks[1], editor);
         render_command_line(frame, chunks[2], editor);
         render_file_picker(frame, area, editor);
@@ -153,7 +160,7 @@ fn render_frame(frame: &mut Frame, editor: &Editor) {
         let chunks =
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);
 
-        render_window_area(frame, chunks[0], editor);
+        render_window_area(frame, chunks[0], editor, &syntax_spans);
         render_which_key_popup(frame, chunks[1], editor, &entries);
     } else {
         // Normal layout: [window area | status bar | command line]
@@ -164,18 +171,60 @@ fn render_frame(frame: &mut Frame, editor: &Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor);
+        render_window_area(frame, chunks[0], editor, &syntax_spans);
         render_status_bar(frame, chunks[1], editor);
         render_command_line(frame, chunks[2], editor);
         set_cursor(frame, editor, chunks[0], chunks[2]);
     }
 }
 
+/// Compute tree-sitter highlight spans for every text buffer visible in the
+/// current window layout. Other buffer kinds (Conversation, Messages) skip
+/// syntax highlighting. Each buffer is parsed at most once per frame; the
+/// `SyntaxMap` cache hands back `Vec<HighlightSpan>` directly on subsequent
+/// renders until an edit invalidates it.
+fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
+    // Collect (buf_idx, source_string) for each visible, text-kind buffer,
+    // deduped. We snapshot the source to release the immutable borrow on
+    // editor before calling `syntax.spans_for` (which needs &mut).
+    let mut targets: Vec<(usize, String)> = Vec::new();
+    for win in editor.window_mgr.iter_windows() {
+        let idx = win.buffer_idx;
+        if targets.iter().any(|(i, _)| *i == idx) {
+            continue;
+        }
+        let Some(buf) = editor.buffers.get(idx) else {
+            continue;
+        };
+        if !matches!(buf.kind, mae_core::BufferKind::Text) {
+            continue;
+        }
+        if editor.syntax.language_of(idx).is_none() {
+            continue;
+        }
+        let source: String = buf.rope().chars().collect();
+        targets.push((idx, source));
+    }
+
+    let mut out = HashMap::new();
+    for (idx, src) in targets {
+        if let Some(spans) = editor.syntax.spans_for(idx, &src) {
+            out.insert(idx, spans.to_vec());
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Window area
 // ---------------------------------------------------------------------------
 
-fn render_window_area(frame: &mut Frame, area: Rect, editor: &Editor) {
+fn render_window_area(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &Editor,
+    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+) {
     let window_area = mae_core::WinRect {
         x: area.x,
         y: area.y,
@@ -198,7 +247,8 @@ fn render_window_area(frame: &mut Frame, area: Rect, editor: &Editor) {
                     render_messages_window(frame, ratatui_rect, win, is_focused, editor);
                 }
                 _ => {
-                    render_window(frame, ratatui_rect, buf, win, is_focused, editor);
+                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
+                    render_window(frame, ratatui_rect, buf, win, is_focused, editor, spans);
                 }
             }
         }
@@ -278,6 +328,7 @@ fn render_window(
     win: &Window,
     focused: bool,
     editor: &Editor,
+    syntax_spans: Option<&[HighlightSpan]>,
 ) {
     let border_style = if focused {
         ts(editor, "ui.window.border.active")
@@ -296,7 +347,7 @@ fn render_window(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    render_buffer(frame, inner, buf, win, editor);
+    render_buffer(frame, inner, buf, win, editor, syntax_spans);
 }
 
 fn inner_rect(area: Rect) -> Rect {
@@ -314,6 +365,7 @@ fn render_buffer(
     buf: &mae_core::Buffer,
     win: &Window,
     editor: &Editor,
+    syntax_spans: Option<&[HighlightSpan]>,
 ) {
     let viewport_height = area.height as usize;
     let gutter_w = gutter_width(buf.line_count());
@@ -329,7 +381,8 @@ fn render_buffer(
     } else {
         (0, 0)
     };
-    let needs_spans = highlight_search || highlight_selection;
+    let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
+    let needs_spans = highlight_search || highlight_selection || has_syntax;
 
     // Per-line worst-severity diagnostic for gutter markers. We only need
     // the highest severity per line (Error > Warning > Information > Hint).
@@ -380,7 +433,38 @@ fn render_buffer(
                 // Build a per-char style array over the full line
                 let mut styles: Vec<Style> = vec![text_style; full_count];
 
-                // Apply selection highlight (lower priority)
+                // Apply tree-sitter syntax highlights first (lowest priority —
+                // everything else overwrites these). Spans are byte-based;
+                // convert each intersecting span to the current line's char
+                // coordinate space using the rope's byte_to_char mapping.
+                if let Some(spans) = syntax_spans {
+                    let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                    let line_byte_end = buf.rope().char_to_byte(line_char_end);
+                    for span in spans {
+                        if span.byte_end <= line_byte_start
+                            || span.byte_start >= line_byte_end
+                        {
+                            continue;
+                        }
+                        let sb = span.byte_start.max(line_byte_start);
+                        let eb = span.byte_end.min(line_byte_end);
+                        let sc = buf
+                            .rope()
+                            .byte_to_char(sb)
+                            .saturating_sub(line_char_start);
+                        let ec = buf
+                            .rope()
+                            .byte_to_char(eb)
+                            .saturating_sub(line_char_start)
+                            .min(full_count);
+                        let style = ts(editor, span.theme_key);
+                        for s in styles[sc..ec].iter_mut() {
+                            *s = style;
+                        }
+                    }
+                }
+
+                // Apply selection highlight (overrides syntax)
                 if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
                     let s = sel_start.saturating_sub(line_char_start);
                     let e = (sel_end - line_char_start).min(full_count);
