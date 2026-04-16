@@ -66,15 +66,19 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Conversation buffer with streaming, tool call display
 - Permission tiers (ReadOnly/Write/Shell/Privileged)
 
-### Phase 3d-f: Dogfooding + Editor Essentials + AI Multi-File — IN PROGRESS
-- See ROADMAP.md for granular milestones
+### Phases 3d–3g: Editor Essentials + AI Multi-File + Hardening — COMPLETE (589 tests)
+- Full vi modal editing: visual mode, text objects, marks, macros, count prefix, search, dot-repeat
+- Multi-file AI tools: open_file, switch_buffer, project_search, create_file
+- Conversation persistence: :ai-save / :ai-load with versioned JSON schema
+- Architecture hardened: editor.rs split into 9 submodules, all growth bounded,
+  AI security (blocklist, circuit breaker, backpressure), error handling audited
 
-### Phase 4: LSP + DAP + Syntax Highlighting
-- LSP client connecting to language servers
-- Expose LSP results to both Scheme and AI tool calls
-- DAP client connecting to debug adapters (protocol types done)
-- Expose DAP state to both Scheme and AI tool calls
-- Tree-sitter syntax highlighting
+### Phase 4: LSP + DAP — IN PROGRESS
+- LSP client: connection, navigation (gd/gr/K), diagnostics, AI lsp_diagnostics tool ✅
+- DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
+- Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
+- **Next: LSP completion popup (M4), async LSP AI tools (M5), debug panel UI (4c M3)**
+- Tree-sitter syntax highlighting — planned
 
 ### Phase 5: Knowledge Base
 - SQLite-backed graph store
