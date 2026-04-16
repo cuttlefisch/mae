@@ -3,6 +3,7 @@ mod editor_tools;
 mod file;
 mod lsp;
 mod project;
+mod syntax;
 
 pub use buffer::{
     execute_buffer_read, execute_buffer_write, execute_cursor_info, execute_file_read,
@@ -16,6 +17,7 @@ pub use file::{
 };
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{execute_project_files, execute_project_search};
+pub use syntax::execute_syntax_tree;
 
 use mae_core::Editor;
 

@@ -6,6 +6,7 @@ mod file_ops;
 mod keymaps;
 mod lsp_ops;
 mod search_ops;
+mod syntax_ops;
 mod text_objects;
 mod visual;
 
@@ -110,6 +111,10 @@ pub struct Editor {
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
+    /// Stack of prior char-offset visual selections created by
+    /// `syntax_expand_selection` — lets `syntax_contract_selection` walk
+    /// back down the node tree. Cleared on `syntax_select_node`.
+    pub syntax_selection_stack: Vec<(usize, usize)>,
 }
 
 impl Default for Editor {
@@ -154,6 +159,7 @@ impl Editor {
             pending_lsp_requests: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             syntax: crate::syntax::SyntaxMap::new(),
+            syntax_selection_stack: Vec::new(),
         }
     }
 
@@ -204,6 +210,7 @@ impl Editor {
                 }
                 m
             },
+            syntax_selection_stack: Vec::new(),
         }
     }
 

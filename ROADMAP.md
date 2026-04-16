@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b M1/M2 COMPLETE (648 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE (662 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -222,10 +222,12 @@ concurrently with LSP.
       and `with_buffer`)
 - [x] Selection/search highlights correctly override syntax colors
 
-### M3: Structural Operations
-- [ ] Select syntax node at cursor
-- [ ] Expand/contract selection by tree level
-- [ ] AI tool: `syntax_tree` — read syntax tree for current selection
+### M3: Structural Operations ✅
+- [x] Select syntax node at cursor (`SPC s s`)
+- [x] Expand/contract selection by tree level (`SPC s e` / `SPC s c`,
+      also bound inside Visual mode)
+- [x] AI tool: `syntax_tree` — returns full S-expression or just the
+      node kind at cursor; 18 AI tools total
 
 ---
 
@@ -331,7 +333,7 @@ navigate and refactor effectively.
 | 3f    | 521     | 521 ✅ M1/M2/M4 (multi-file AI tools, project search) — M3 remaining |
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
-| 4b    | 15      | +10 (tree-sitter parse ✅, highlight ✅ — 9 syntax + 6 editor wiring) |
+| 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
 | 4c    | 8       | +20 (DAP lifecycle, breakpoints, state) |
 | 5     | —       | +15 (SQLite, org parser, search) |
 | **Total** | **603** | **~640** |

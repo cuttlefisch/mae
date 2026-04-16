@@ -334,6 +334,20 @@ impl CommandRegistry {
             "Show all diagnostics in a list buffer",
         );
 
+        // Tree-sitter structural editing (Phase 4b M3)
+        reg.register_builtin(
+            "syntax-select-node",
+            "Select the tree-sitter node at the cursor (SPC s s)",
+        );
+        reg.register_builtin(
+            "syntax-expand-selection",
+            "Expand Visual selection to the parent syntax node (SPC s e)",
+        );
+        reg.register_builtin(
+            "syntax-contract-selection",
+            "Contract Visual selection to the previous syntax node (SPC s c)",
+        );
+
         reg
     }
 }

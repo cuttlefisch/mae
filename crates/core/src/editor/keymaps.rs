@@ -162,6 +162,10 @@ impl Editor {
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
+        // +syntax (tree-sitter structural selection)
+        normal.bind(parse_key_seq_spaced("SPC s s"), "syntax-select-node");
+        normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
+        normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
@@ -172,6 +176,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC d"), "+debug");
         normal.set_group_name(parse_key_seq_spaced("SPC h"), "+help");
         normal.set_group_name(parse_key_seq_spaced("SPC q"), "+quit");
+        normal.set_group_name(parse_key_seq_spaced("SPC s"), "+syntax");
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -238,6 +243,9 @@ impl Editor {
         visual.bind(parse_key_seq("v"), "enter-visual-char");
         visual.bind(parse_key_seq("V"), "enter-visual-line");
         visual.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
+        // Tree-sitter structural expansion (Phase 4b M3)
+        visual.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
+        visual.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
 
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);

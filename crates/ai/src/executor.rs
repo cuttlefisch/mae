@@ -7,7 +7,8 @@ use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
     execute_create_file, execute_cursor_info, execute_debug_state, execute_editor_state,
     execute_file_read, execute_list_buffers, execute_lsp_diagnostics, execute_open_file,
-    execute_project_files, execute_project_search, execute_switch_buffer, execute_window_layout,
+    execute_project_files, execute_project_search, execute_switch_buffer, execute_syntax_tree,
+    execute_window_layout,
 };
 
 /// Execute a tool call against editor state.
@@ -59,6 +60,7 @@ pub fn execute_tool(
         "project_files",
         "project_search",
         "lsp_diagnostics",
+        "syntax_tree",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -102,6 +104,7 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "project_files" => execute_project_files(&call.arguments),
         "project_search" => execute_project_search(&call.arguments),
         "lsp_diagnostics" => execute_lsp_diagnostics(editor, &call.arguments),
+        "syntax_tree" => execute_syntax_tree(editor, &call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
@@ -727,6 +730,33 @@ mod tests {
         assert_eq!(v["counts"]["error"], 1);
         assert_eq!(v["files"][0]["diagnostics"][0]["line"], 3);
         assert_eq!(v["files"][0]["diagnostics"][0]["code"], "E0001");
+    }
+
+    #[test]
+    fn syntax_tree_tool_returns_sexp() {
+        use mae_core::Buffer;
+        use std::path::PathBuf;
+        let mut b = Buffer::new();
+        b.set_file_path(PathBuf::from("/tmp/x.rs"));
+        let mut editor = Editor::with_buffer(b);
+        // Populate buffer with some Rust code.
+        for ch in "fn main() {}".chars() {
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[0].insert_char(win, ch);
+        }
+        editor.syntax.invalidate(0);
+
+        let call = make_call("syntax_tree", serde_json::json!({}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "syntax_tree failed: {}", result.output);
+        let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(v["language"], "rust");
+        assert!(v["sexp"].as_str().unwrap().contains("function_item"));
     }
 
     #[test]

@@ -215,6 +215,16 @@ impl SyntaxMap {
         }
         state.spans.as_deref()
     }
+
+    /// Return a cached (or freshly parsed) tree for the buffer.
+    /// Returns `None` if the buffer has no associated language or parsing failed.
+    pub fn tree_for(&mut self, buf_idx: usize, source: &str) -> Option<&Tree> {
+        let state = self.entries.get_mut(&buf_idx)?;
+        if state.tree.is_none() {
+            state.tree = parse_once(state.language, source);
+        }
+        state.tree.as_ref()
+    }
 }
 
 fn compute_spans(language: Language, source: &str) -> Vec<HighlightSpan> {
@@ -350,6 +360,24 @@ mod tests {
     fn parse_once_returns_tree() {
         let tree = parse_once(Language::Rust, "fn main() {}");
         assert!(tree.is_some());
+    }
+
+    #[test]
+    fn tree_for_caches_tree() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let tree = map.tree_for(0, "fn x() {}").unwrap();
+        assert_eq!(tree.root_node().kind(), "source_file");
+    }
+
+    #[test]
+    fn tree_for_invalidated_reparses() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let _ = map.tree_for(0, "fn x() {}");
+        map.invalidate(0);
+        let tree = map.tree_for(0, "let y = 42;").unwrap();
+        assert_eq!(tree.root_node().kind(), "source_file");
     }
 
     #[test]

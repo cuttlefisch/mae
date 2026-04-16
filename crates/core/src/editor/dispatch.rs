@@ -906,6 +906,17 @@ impl Editor {
             "lsp-prev-diagnostic" => self.jump_prev_diagnostic(),
             "lsp-show-diagnostics" => self.show_diagnostics_buffer(),
 
+            // Tree-sitter structural editing (Phase 4b M3)
+            "syntax-select-node" => {
+                self.syntax_select_node();
+            }
+            "syntax-expand-selection" => {
+                self.syntax_expand_selection();
+            }
+            "syntax-contract-selection" => {
+                self.syntax_contract_selection();
+            }
+
             // File operations
             "save" => self.save_current_buffer(),
             "quit" => {

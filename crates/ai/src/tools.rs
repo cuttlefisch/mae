@@ -322,6 +322,33 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "syntax_tree".into(),
+            description: "Return the tree-sitter syntax tree for a buffer. Useful for understanding code structure before editing. `scope='buffer'` returns the full root S-expression; `scope='cursor'` returns only the named-node kind at the current cursor position.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "'buffer' (default) returns the full tree; 'cursor' returns the node at the cursor.".into(),
+                            enum_values: Some(vec!["buffer".into(), "cursor".into()]),
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Override the active buffer by name.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "project_search".into(),
             description: "Search across project files using a regex pattern. Returns matching lines with file paths and line numbers.".into(),
             parameters: ToolParameters {
@@ -453,7 +480,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -472,6 +499,7 @@ mod tests {
         assert!(names.contains(&"project_files"));
         assert!(names.contains(&"project_search"));
         assert!(names.contains(&"lsp_diagnostics"));
+        assert!(names.contains(&"syntax_tree"));
     }
 
     #[test]
