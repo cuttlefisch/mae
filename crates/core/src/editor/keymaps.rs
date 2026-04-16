@@ -79,6 +79,12 @@ impl Editor {
         // Marks (m<letter> sets, '<letter> jumps)
         normal.bind(parse_key_seq("m"), "set-mark-await");
         normal.bind(parse_key_seq("'"), "jump-mark-await");
+        // Macros (q<letter> records, @<letter> replays, @@ repeats last).
+        // @@ is handled by dispatch_char_motion: if the register char is '@',
+        // last_macro_register is used. This avoids the keymap prefix conflict
+        // that would arise from binding both "@" (exact) and "@@" (longer).
+        normal.bind(parse_key_seq("q"), "start-recording-await");
+        normal.bind(parse_key_seq("@"), "replay-macro-await");
         // Join, indent, dedent
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");

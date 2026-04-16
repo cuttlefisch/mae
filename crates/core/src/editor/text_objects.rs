@@ -44,6 +44,33 @@ impl Editor {
             return true;
         }
 
+        if command == "start-recording" {
+            if let Err(e) = self.start_recording(ch) {
+                self.set_status(e);
+            }
+            return true;
+        }
+
+        if command == "replay-macro" {
+            let count = self.pending_char_count;
+            self.pending_char_count = 1;
+            // `@@` arrives as ch == '@': use the last-replayed register.
+            let target = if ch == '@' {
+                self.last_macro_register
+            } else {
+                Some(ch)
+            };
+            match target {
+                Some(reg) => {
+                    if let Err(e) = self.replay_macro(reg, count) {
+                        self.set_status(e);
+                    }
+                }
+                None => self.set_status("No macro to repeat"),
+            }
+            return true;
+        }
+
         let repeat = self.pending_char_count;
         self.pending_char_count = 1;
         let buf = &self.buffers[self.active_buffer_idx()];

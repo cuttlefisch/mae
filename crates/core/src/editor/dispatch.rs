@@ -938,6 +938,29 @@ impl Editor {
                 self.execute_command("wq");
             }
 
+            // Macros
+            "start-recording-await" => {
+                // q<letter>: await the register char via pending_char_command.
+                // The binary's key-handling intercept already stops recording
+                // when `q` arrives while macro_recording is true — so this arm
+                // is only reached when NOT currently recording.
+                self.pending_char_command = Some("start-recording".to_string());
+            }
+            "replay-macro-await" => {
+                // @<letter>: stash the count and await the register char.
+                self.pending_char_count = n;
+                self.pending_char_command = Some("replay-macro".to_string());
+            }
+            "replay-last-macro" => {
+                if let Some(ch) = self.last_macro_register {
+                    if let Err(e) = self.replay_macro(ch, n) {
+                        self.set_status(e);
+                    }
+                } else {
+                    self.set_status("No macro to repeat");
+                }
+            }
+
             _ => return false,
         }
         true

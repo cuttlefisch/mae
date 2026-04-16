@@ -185,6 +185,10 @@ impl CommandRegistry {
         // Marks
         reg.register_builtin("set-mark-await", "Set mark at next-typed letter (m)");
         reg.register_builtin("jump-mark-await", "Jump to mark at next-typed letter (')");
+        // Macros
+        reg.register_builtin("start-recording-await", "Start recording macro to next-typed register (q)");
+        reg.register_builtin("replay-macro-await", "Replay macro from next-typed register (@)");
+        reg.register_builtin("replay-last-macro", "Replay the last-used macro (@@)");
         // Join, indent, dedent
         reg.register_builtin("join-lines", "Join current line with next line (J)");
         reg.register_builtin("indent-line", "Indent current line by 4 spaces (>>)");

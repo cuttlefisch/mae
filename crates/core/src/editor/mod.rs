@@ -6,6 +6,7 @@ mod edit_ops;
 mod file_ops;
 mod keymaps;
 mod lsp_ops;
+mod macros;
 mod marks;
 mod search_ops;
 mod syntax_ops;
@@ -127,6 +128,16 @@ pub struct Editor {
     /// Named cursor marks, keyed by mark letter (`m`+letter to set,
     /// `'`+letter to jump). Paths make marks survive buffer switches.
     pub marks: HashMap<char, Mark>,
+    /// True while a macro is being recorded into `macro_register`.
+    pub macro_recording: bool,
+    /// Register letter being recorded into (a-z).
+    pub macro_register: Option<char>,
+    /// Raw keystroke log for the active recording session.
+    pub macro_log: Vec<crate::keymap::KeyPress>,
+    /// Register letter of the last-replayed macro (for `@@`).
+    pub last_macro_register: Option<char>,
+    /// Recursion depth guard during macro replay (max 10).
+    pub macro_replay_depth: usize,
 }
 
 impl Default for Editor {
@@ -174,6 +185,11 @@ impl Editor {
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
+            macro_recording: false,
+            macro_register: None,
+            macro_log: Vec::new(),
+            last_macro_register: None,
+            macro_replay_depth: 0,
         }
     }
 
@@ -227,6 +243,11 @@ impl Editor {
             },
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
+            macro_recording: false,
+            macro_register: None,
+            macro_log: Vec::new(),
+            last_macro_register: None,
+            macro_replay_depth: 0,
         }
     }
 

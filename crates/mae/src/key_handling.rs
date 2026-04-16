@@ -50,6 +50,25 @@ pub fn handle_key(
 
     let mode_before = editor.mode;
 
+    // --- Macro recording intercept ---
+    // While recording, capture every keystroke into macro_log before dispatch.
+    // Exception: a bare `q` in Normal mode with no pending prefix stops recording.
+    if editor.macro_recording {
+        let is_stop_key = matches!(key.code, KeyCode::Char('q'))
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && editor.mode == Mode::Normal
+            && pending_keys.is_empty()
+            && editor.pending_char_command.is_none();
+        if is_stop_key {
+            editor.stop_recording();
+            return;
+        }
+        if let Some(kp) = crossterm_to_keypress(&key) {
+            editor.macro_log.push(kp);
+        }
+    }
+
     match editor.mode {
         Mode::Normal => handle_normal_mode(editor, scheme, key, pending_keys),
         Mode::Insert => handle_insert_mode(editor, scheme, key, pending_keys),

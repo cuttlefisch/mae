@@ -588,15 +588,25 @@ fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
     let win = editor.window_mgr.focused_window();
     let buf = &editor.buffers[win.buffer_idx];
 
-    let mode_str = match editor.mode {
-        Mode::Normal => " NORMAL ",
-        Mode::Insert => " INSERT ",
-        Mode::Visual(VisualType::Char) => " VISUAL ",
-        Mode::Visual(VisualType::Line) => " V-LINE ",
-        Mode::Command => " COMMAND ",
-        Mode::ConversationInput => " AI INPUT ",
-        Mode::Search => " SEARCH ",
-        Mode::FilePicker => " FIND FILE ",
+    // Recording indicator takes priority over the normal mode label.
+    let recording_label: String;
+    let mode_str = if editor.macro_recording {
+        recording_label = format!(
+            " REC @{} ",
+            editor.macro_register.unwrap_or('?')
+        );
+        recording_label.as_str()
+    } else {
+        match editor.mode {
+            Mode::Normal => " NORMAL ",
+            Mode::Insert => " INSERT ",
+            Mode::Visual(VisualType::Char) => " VISUAL ",
+            Mode::Visual(VisualType::Line) => " V-LINE ",
+            Mode::Command => " COMMAND ",
+            Mode::ConversationInput => " AI INPUT ",
+            Mode::Search => " SEARCH ",
+            Mode::FilePicker => " FIND FILE ",
+        }
     };
     let mode_style = match editor.mode {
         Mode::Normal => ts(editor, "ui.statusline.mode.normal"),

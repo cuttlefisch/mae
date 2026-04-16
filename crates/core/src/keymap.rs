@@ -273,6 +273,110 @@ pub fn parse_key_seq_spaced(s: &str) -> Vec<KeyPress> {
     s.split_whitespace().flat_map(parse_key_seq).collect()
 }
 
+/// Serialize one `KeyPress` to the macro string format.
+/// Plain printable chars (except `<` and space) map to themselves.
+/// Everything else uses `<Token>` notation.
+pub fn serialize_keypress(kp: &KeyPress) -> String {
+    match (&kp.key, kp.ctrl, kp.alt) {
+        (Key::Char(ch), false, false) if *ch == ' ' => "<Space>".to_string(),
+        (Key::Char(ch), false, false) if *ch == '<' => "<lt>".to_string(),
+        (Key::Char(ch), false, false) => ch.to_string(),
+        (Key::Char(ch), true, false) => format!("<C-{}>", ch),
+        (Key::Char(ch), false, true) => format!("<M-{}>", ch),
+        (Key::Char(ch), true, true) => format!("<C-M-{}>", ch),
+        (Key::Escape, false, false) => "<Esc>".to_string(),
+        (Key::Enter, false, false) => "<CR>".to_string(),
+        (Key::Backspace, false, false) => "<BS>".to_string(),
+        (Key::Tab, false, false) => "<Tab>".to_string(),
+        (Key::Up, false, false) => "<Up>".to_string(),
+        (Key::Down, false, false) => "<Down>".to_string(),
+        (Key::Left, false, false) => "<Left>".to_string(),
+        (Key::Right, false, false) => "<Right>".to_string(),
+        (Key::Home, false, false) => "<Home>".to_string(),
+        (Key::End, false, false) => "<End>".to_string(),
+        (Key::PageUp, false, false) => "<PageUp>".to_string(),
+        (Key::PageDown, false, false) => "<PageDown>".to_string(),
+        (Key::Delete, false, false) => "<Del>".to_string(),
+        (Key::F(n), false, false) => format!("<F{}>", n),
+        // Special keys with modifiers (rare; emit as best-effort)
+        (Key::Escape, true, _) => "<C-Esc>".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Serialize a key sequence (macro body) to a compact string.
+pub fn serialize_macro(keys: &[KeyPress]) -> String {
+    keys.iter().map(serialize_keypress).collect()
+}
+
+/// Deserialize a macro string back to a `Vec<KeyPress>`.
+///
+/// Format: bare printable chars plus `<Token>` bracketed specials.
+/// Unknown tokens are silently skipped.
+pub fn deserialize_macro(s: &str) -> Vec<KeyPress> {
+    let mut result = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&ch) = chars.peek() {
+        if ch == '<' {
+            chars.next(); // consume '<'
+            let token: String = chars.by_ref().take_while(|&c| c != '>').collect();
+            if let Some(kp) = parse_macro_token(&token) {
+                result.push(kp);
+            }
+        } else {
+            chars.next();
+            result.push(KeyPress::char(ch));
+        }
+    }
+    result
+}
+
+fn parse_macro_token(token: &str) -> Option<KeyPress> {
+    let lower = token.to_lowercase();
+
+    // Modifier prefixes: C-M-, M-C-, C-, M-
+    if let Some(rest) = lower.strip_prefix("c-m-").or_else(|| lower.strip_prefix("m-c-")) {
+        let ch = rest.chars().next()?;
+        return Some(KeyPress { key: Key::Char(ch), ctrl: true, alt: true });
+    }
+    if let Some(rest) = lower.strip_prefix("c-") {
+        let ch = rest.chars().next()?;
+        return Some(KeyPress { key: Key::Char(ch), ctrl: true, alt: false });
+    }
+    if let Some(rest) = lower.strip_prefix("m-") {
+        let ch = rest.chars().next()?;
+        return Some(KeyPress { key: Key::Char(ch), ctrl: false, alt: true });
+    }
+
+    // Named specials (case-insensitive)
+    match lower.as_str() {
+        "esc" | "escape" => Some(KeyPress::special(Key::Escape)),
+        "cr" | "enter" | "return" => Some(KeyPress::special(Key::Enter)),
+        "bs" | "backspace" => Some(KeyPress::special(Key::Backspace)),
+        "tab" => Some(KeyPress::special(Key::Tab)),
+        "up" => Some(KeyPress::special(Key::Up)),
+        "down" => Some(KeyPress::special(Key::Down)),
+        "left" => Some(KeyPress::special(Key::Left)),
+        "right" => Some(KeyPress::special(Key::Right)),
+        "home" => Some(KeyPress::special(Key::Home)),
+        "end" => Some(KeyPress::special(Key::End)),
+        "pageup" => Some(KeyPress::special(Key::PageUp)),
+        "pagedown" => Some(KeyPress::special(Key::PageDown)),
+        "del" | "delete" => Some(KeyPress::special(Key::Delete)),
+        "space" => Some(KeyPress::char(' ')),
+        "lt" => Some(KeyPress::char('<')),
+        _ => {
+            // F-keys: "f1", "f12"
+            if let Some(n_str) = lower.strip_prefix('f') {
+                if let Ok(n) = n_str.parse::<u8>() {
+                    return Some(KeyPress::special(Key::F(n)));
+                }
+            }
+            None
+        }
+    }
+}
+
 fn match_named_key(s: &str) -> Option<(Key, usize)> {
     // Only match named keys at the start of the string
     // SPC must come before longer names to avoid being shadowed
@@ -579,5 +683,111 @@ mod tests {
         assert_eq!(km.lookup(&parse_key_seq("g")), LookupResult::Prefix);
         // 'x' is nothing
         assert_eq!(km.lookup(&parse_key_seq("x")), LookupResult::None);
+    }
+
+    // --- Macro serialization ---
+
+    #[test]
+    fn serialize_plain_char() {
+        assert_eq!(serialize_keypress(&KeyPress::char('j')), "j");
+        assert_eq!(serialize_keypress(&KeyPress::char('$')), "$");
+        assert_eq!(serialize_keypress(&KeyPress::char('0')), "0");
+    }
+
+    #[test]
+    fn serialize_space() {
+        assert_eq!(serialize_keypress(&KeyPress::char(' ')), "<Space>");
+    }
+
+    #[test]
+    fn serialize_lt() {
+        assert_eq!(serialize_keypress(&KeyPress::char('<')), "<lt>");
+    }
+
+    #[test]
+    fn serialize_special_keys() {
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::Escape)), "<Esc>");
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::Enter)), "<CR>");
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::Backspace)), "<BS>");
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::Tab)), "<Tab>");
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::F(1))), "<F1>");
+        assert_eq!(serialize_keypress(&KeyPress::special(Key::F(12))), "<F12>");
+    }
+
+    #[test]
+    fn serialize_ctrl() {
+        assert_eq!(serialize_keypress(&KeyPress::ctrl('r')), "<C-r>");
+    }
+
+    #[test]
+    fn serialize_alt() {
+        let kp = KeyPress { key: Key::Char('x'), ctrl: false, alt: true };
+        assert_eq!(serialize_keypress(&kp), "<M-x>");
+    }
+
+    #[test]
+    fn serialize_macro_sequence() {
+        let keys = vec![
+            KeyPress::char('d'),
+            KeyPress::char('d'),
+            KeyPress::char('j'),
+            KeyPress::special(Key::Escape),
+        ];
+        assert_eq!(serialize_macro(&keys), "ddj<Esc>");
+    }
+
+    #[test]
+    fn deserialize_plain_chars() {
+        let keys = deserialize_macro("ddj");
+        assert_eq!(keys, vec![
+            KeyPress::char('d'),
+            KeyPress::char('d'),
+            KeyPress::char('j'),
+        ]);
+    }
+
+    #[test]
+    fn deserialize_special_tokens() {
+        let keys = deserialize_macro("<Esc><CR><BS>");
+        assert_eq!(keys[0].key, Key::Escape);
+        assert_eq!(keys[1].key, Key::Enter);
+        assert_eq!(keys[2].key, Key::Backspace);
+    }
+
+    #[test]
+    fn deserialize_space_token() {
+        let keys = deserialize_macro("<Space>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Char(' '));
+    }
+
+    #[test]
+    fn deserialize_ctrl_token() {
+        let keys = deserialize_macro("<C-r>");
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].ctrl);
+        assert_eq!(keys[0].key, Key::Char('r'));
+    }
+
+    #[test]
+    fn serialize_deserialize_roundtrip() {
+        let keys = vec![
+            KeyPress::char('d'),
+            KeyPress::char('d'),
+            KeyPress::special(Key::Escape),
+            KeyPress::ctrl('r'),
+            KeyPress::char(' '),
+            KeyPress::char('<'),
+        ];
+        let s = serialize_macro(&keys);
+        let back = deserialize_macro(&s);
+        assert_eq!(back, keys);
+    }
+
+    #[test]
+    fn deserialize_unknown_token_skipped() {
+        let keys = deserialize_macro("<bogus>j");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Char('j'));
     }
 }
