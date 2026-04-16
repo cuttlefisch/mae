@@ -199,15 +199,14 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Down => {
             picker.move_down();
         }
-        KeyCode::Tab => {
+        KeyCode::Tab if !picker.complete_longest_prefix() => {
             // Doom-style: complete to longest shared prefix of filtered
             // matches. If the prefix is already exhausted (single match or
             // no common ground), fall back to moving the selection down —
             // preserves the previous Tab = next candidate behavior.
-            if !picker.complete_longest_prefix() {
-                picker.move_down();
-            }
+            picker.move_down();
         }
+        KeyCode::Tab => {}
         KeyCode::Backspace => {
             if picker.query.is_empty() {
                 editor.file_picker = None;
@@ -1203,24 +1202,23 @@ pub fn handle_command_mode(
                 editor.execute_command(&cmd);
             }
         }
-        KeyCode::Tab => {
+        KeyCode::Tab if editor.command_line.starts_with("e ") => {
             // Tab completion for :e <path>
-            if editor.command_line.starts_with("e ") {
-                let path_part = &editor.command_line[2..];
-                if editor.tab_completions.is_empty() {
-                    editor.tab_completions = mae_core::file_picker::complete_path(path_part);
-                    editor.tab_completion_idx = 0;
-                } else {
-                    editor.tab_completion_idx =
-                        (editor.tab_completion_idx + 1) % editor.tab_completions.len();
-                }
-                if !editor.tab_completions.is_empty() {
-                    let completion = editor.tab_completions[editor.tab_completion_idx].clone();
-                    editor.command_line = format!("e {}", completion);
-                    editor.command_cursor = editor.command_line.len();
-                }
+            let path_part = &editor.command_line[2..];
+            if editor.tab_completions.is_empty() {
+                editor.tab_completions = mae_core::file_picker::complete_path(path_part);
+                editor.tab_completion_idx = 0;
+            } else {
+                editor.tab_completion_idx =
+                    (editor.tab_completion_idx + 1) % editor.tab_completions.len();
+            }
+            if !editor.tab_completions.is_empty() {
+                let completion = editor.tab_completions[editor.tab_completion_idx].clone();
+                editor.command_line = format!("e {}", completion);
+                editor.command_cursor = editor.command_line.len();
             }
         }
+        KeyCode::Tab => {}
         KeyCode::Up => {
             editor.command_history_prev();
         }

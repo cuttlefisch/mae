@@ -1,0 +1,97 @@
+name: Version Bump
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  bump:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version bump type
+        id: bump-type
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          # PR labels take precedence over commit message scanning.
+          # Use release:major, release:minor, or release:patch labels.
+          if echo "$PR_LABELS" | grep -q 'release:major'; then
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+            echo "Bump type: major (from PR label)"
+          elif echo "$PR_LABELS" | grep -q 'release:minor'; then
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+            echo "Bump type: minor (from PR label)"
+          elif echo "$PR_LABELS" | grep -q 'release:patch'; then
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+            echo "Bump type: patch (from PR label)"
+          else
+            # Fall back to conventional commit analysis
+            COMMITS=$(git log --format="%s" \
+              ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.merge_commit_sha }})
+
+            if echo "$COMMITS" | grep -qiE '^(feat|feature)(\(.+\))?!:'; then
+              echo "bump=major" >> "$GITHUB_OUTPUT"
+              echo "Bump type: major (from commit: breaking change)"
+            elif echo "$COMMITS" | grep -qiE '^feat(\(.+\))?:'; then
+              echo "bump=minor" >> "$GITHUB_OUTPUT"
+              echo "Bump type: minor (from commit: feat)"
+            else
+              echo "bump=patch" >> "$GITHUB_OUTPUT"
+              echo "Bump type: patch (from commit: default)"
+            fi
+          fi
+
+      - name: Bump version
+        id: version
+        run: |
+          if [ -f VERSION ]; then
+            CURRENT=$(cat VERSION)
+          else
+            CURRENT="0.1.0"
+          fi
+
+          IFS='.' read -r major minor patch <<< "$CURRENT"
+
+          case "${{ steps.bump-type.outputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          NEW="${major}.${minor}.${patch}"
+          echo "$NEW" > VERSION
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Bumped: $CURRENT -> $NEW"
+
+      - name: Update Cargo.toml versions
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Update version in all workspace crate Cargo.toml files
+          for toml in crates/*/Cargo.toml; do
+            sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" "$toml"
+            echo "Updated $toml to $VERSION"
+          done
+
+      - name: Generate changelog
+        run: |
+          cargo install git-cliff
+          git cliff --output CHANGELOG.md
+          echo "Generated CHANGELOG.md"
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION CHANGELOG.md crates/*/Cargo.toml
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin main --tags

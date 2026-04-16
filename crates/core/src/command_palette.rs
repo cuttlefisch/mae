@@ -89,7 +89,7 @@ impl CommandPalette {
                 .enumerate()
                 .filter_map(|(idx, e)| score_match(&e.name, &q).map(|s| (idx, s)))
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|b| std::cmp::Reverse(b.1));
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected = 0;

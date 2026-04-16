@@ -70,7 +70,7 @@ impl FilePicker {
                 .filter_map(|(idx, path)| score_match(path, &query_lower).map(|s| (idx, s)))
                 .collect();
             // Higher score = better match, sort descending
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|b| std::cmp::Reverse(b.1));
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected = 0;
