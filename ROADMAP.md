@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE (662 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1 COMPLETE (674 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -234,13 +234,21 @@ concurrently with LSP.
 ## Phase 4c: DAP Client
 
 Debug adapter integration. Wires existing protocol types to live debuggers.
+Also the substrate for AI-agent driven E2E testing of the editor itself.
 
-### M1: Connection & Lifecycle
-- [ ] Spawn debug adapter subprocess from config
-- [ ] Wire `DapTransport` to async event loop (tokio::select!)
-- [ ] Initialize → configurationDone handshake
-- [ ] Launch/attach request support
-- [ ] Terminate/disconnect cleanup
+### M1: Connection & Lifecycle ✅ (674 tests)
+- [x] Spawn debug adapter subprocess from config (`DapServerConfig`)
+- [x] Async reader/writer tasks — reader routes responses by `request_seq`
+- [x] Initialize handshake — parses `Capabilities` from adapter
+- [x] Launch/attach request support (adapter-specific JSON pass-through)
+- [x] `configurationDone` flow gated on `initialized` event
+- [x] setBreakpoints / threads / stackTrace / scopes / variables
+- [x] continue / next / stepIn / stepOut
+- [x] terminate / disconnect (with `terminateDebuggee` flag)
+- [x] Event channel surfaces `stopped`, `output`, `terminated`, `exited`, etc.
+- [x] Request timeout cleans up pending-response map
+- [x] 12 client tests using in-memory duplex streams + mock adapter script
+- [ ] Editor integration: `DapManager`, CLI commands, `:debug` buffer (M1.5)
 
 ### M2: Breakpoints & Execution
 - [ ] `setBreakpoints` request wired to editor breakpoints
@@ -334,6 +342,6 @@ navigate and refactor effectively.
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
 | 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
-| 4c    | 8       | +20 (DAP lifecycle, breakpoints, state) |
+| 4c    | 20      | +12 done (DAP client ✅); +editor integration still pending |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **603** | **~640** |
+| **Total** | **674** | **~700** |
