@@ -40,6 +40,7 @@ yellow = "#f1fa8c"
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "orange" }
 "diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "purple" }
 "diagnostic.debug" = { fg = "comment" }
 "diagnostic.trace" = { fg = "comment", dim = true }
 "diagnostic.target" = { fg = "cyan" }

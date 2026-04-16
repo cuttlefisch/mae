@@ -52,6 +52,7 @@ bright_orange = "#fe8019"
 "diagnostic.error" = { fg = "bright_red", bold = true }
 "diagnostic.warn" = { fg = "bright_yellow" }
 "diagnostic.info" = { fg = "bright_green" }
+"diagnostic.hint" = { fg = "bright_blue" }
 "diagnostic.debug" = { fg = "gray" }
 "diagnostic.trace" = { fg = "bg3", dim = true }
 "diagnostic.target" = { fg = "bright_aqua" }

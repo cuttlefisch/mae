@@ -1,4 +1,5 @@
 mod command;
+mod diagnostics;
 mod dispatch;
 mod edit_ops;
 mod file_ops;
@@ -8,6 +9,7 @@ mod search_ops;
 mod text_objects;
 mod visual;
 
+pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use lsp_ops::{LspLocation, LspRange};
 
 #[cfg(test)]
@@ -102,6 +104,9 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// LSP diagnostics keyed by file URI. Replaced wholesale on each
+    /// `publishDiagnostics` notification (the LSP contract).
+    pub diagnostics: DiagnosticStore,
 }
 
 impl Default for Editor {
@@ -144,6 +149,7 @@ impl Editor {
             command_history: Vec::new(),
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
+            diagnostics: DiagnosticStore::default(),
         }
     }
 
@@ -180,6 +186,7 @@ impl Editor {
             command_history: Vec::new(),
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
+            diagnostics: DiagnosticStore::default(),
         }
     }
 

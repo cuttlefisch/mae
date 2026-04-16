@@ -5,7 +5,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mae_core::{
-    grapheme, Editor, Key, Mode, NamedColor, ThemeColor, ThemeStyle, VisualType, Window,
+    grapheme, DiagnosticSeverity, Editor, Key, Mode, NamedColor, ThemeColor, ThemeStyle,
+    VisualType, Window,
 };
 use ratatui::{
     prelude::*,
@@ -330,6 +331,25 @@ fn render_buffer(
     };
     let needs_spans = highlight_search || highlight_selection;
 
+    // Per-line worst-severity diagnostic for gutter markers. We only need
+    // the highest severity per line (Error > Warning > Information > Hint).
+    let line_severities: std::collections::HashMap<u32, DiagnosticSeverity> = {
+        let mut map: std::collections::HashMap<u32, DiagnosticSeverity> =
+            std::collections::HashMap::new();
+        if let Some(path) = buf.file_path() {
+            let uri = mae_core::path_to_uri(path);
+            if let Some(diags) = editor.diagnostics.get(&uri) {
+                for d in diags {
+                    let cur = map.get(&d.line).copied();
+                    if severity_higher(cur, Some(d.severity)) {
+                        map.insert(d.line, d.severity);
+                    }
+                }
+            }
+        }
+        map
+    };
+
     let mut lines = Vec::with_capacity(viewport_height);
 
     let col_offset = win.col_offset;
@@ -343,7 +363,13 @@ fn render_buffer(
                 .filter(|c| *c != '\n' && *c != '\r')
                 .collect();
 
-            let line_num = format!("{:>width$} ", line_idx + 1, width = gutter_w - 1);
+            // Gutter layout: "{line_num_padded}{severity_marker_or_space}"
+            // total width = gutter_w.
+            let line_num = format!("{:>width$}", line_idx + 1, width = gutter_w - 1);
+            let (marker_char, marker_style) = match line_severities.get(&(line_idx as u32)) {
+                Some(sev) => (sev.gutter_char(), ts(editor, sev.theme_key())),
+                None => (' ', gutter_style),
+            };
 
             if needs_spans {
                 let line_char_start = buf.rope().line_to_char(line_idx);
@@ -383,7 +409,10 @@ fn render_buffer(
                 let visible_styles = &styles[visible_start..];
 
                 // Coalesce consecutive chars with same style into spans
-                let mut spans = vec![Span::styled(line_num, gutter_style)];
+                let mut spans = vec![
+                    Span::styled(line_num, gutter_style),
+                    Span::styled(marker_char.to_string(), marker_style),
+                ];
                 if !display_chars.is_empty() {
                     let mut run_start = 0;
                     let mut run_style = visible_styles[0];
@@ -405,11 +434,12 @@ fn render_buffer(
                 let display: String = full_display.chars().skip(col_offset).collect();
                 lines.push(Line::from(vec![
                     Span::styled(line_num, gutter_style),
+                    Span::styled(marker_char.to_string(), marker_style),
                     Span::styled(display, text_style),
                 ]));
             }
         } else {
-            let padding = " ".repeat(gutter_w - 1);
+            let padding = " ".repeat(gutter_w.saturating_sub(1));
             lines.push(Line::from(vec![Span::styled(
                 format!("{}~", padding),
                 gutter_style,
@@ -861,6 +891,21 @@ fn render_messages_window(
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
+
+/// Is `new` a higher-priority diagnostic severity than `cur`?
+/// Ordering: Error > Warning > Information > Hint > None.
+fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeverity>) -> bool {
+    fn rank(s: Option<DiagnosticSeverity>) -> u8 {
+        match s {
+            Some(DiagnosticSeverity::Error) => 4,
+            Some(DiagnosticSeverity::Warning) => 3,
+            Some(DiagnosticSeverity::Information) => 2,
+            Some(DiagnosticSeverity::Hint) => 1,
+            None => 0,
+        }
+    }
+    rank(new) > rank(cur)
+}
 
 pub fn gutter_width(line_count: usize) -> usize {
     let digits = if line_count == 0 {

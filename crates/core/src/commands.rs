@@ -321,6 +321,18 @@ impl CommandRegistry {
             "lsp-hover",
             "Show hover information for symbol under cursor (K)",
         );
+        reg.register_builtin(
+            "lsp-next-diagnostic",
+            "Jump to next diagnostic in buffer (]d)",
+        );
+        reg.register_builtin(
+            "lsp-prev-diagnostic",
+            "Jump to previous diagnostic in buffer ([d)",
+        );
+        reg.register_builtin(
+            "lsp-show-diagnostics",
+            "Show all diagnostics in a list buffer",
+        );
 
         reg
     }

@@ -88,6 +88,9 @@ impl Editor {
         normal.bind(parse_key_seq("gd"), "lsp-goto-definition");
         normal.bind(parse_key_seq("gr"), "lsp-find-references");
         normal.bind(parse_key_seq("K"), "lsp-hover");
+        // LSP diagnostics (Phase 4a M3)
+        normal.bind(parse_key_seq("]d"), "lsp-next-diagnostic");
+        normal.bind(parse_key_seq("[d"), "lsp-prev-diagnostic");
         // Alternate file
         normal.bind(vec![KeyPress::ctrl('6')], "alternate-file");
         // Dot repeat

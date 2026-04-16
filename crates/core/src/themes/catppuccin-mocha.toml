@@ -54,6 +54,7 @@ crust = "#11111b"
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }
 "diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "sky" }
 "diagnostic.debug" = { fg = "overlay1" }
 "diagnostic.trace" = { fg = "overlay0", dim = true }
 "diagnostic.target" = { fg = "teal" }

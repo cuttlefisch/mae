@@ -63,6 +63,10 @@ impl Editor {
                 self.dispatch_builtin("view-messages");
                 true
             }
+            "diagnostics" | "diag" => {
+                self.dispatch_builtin("lsp-show-diagnostics");
+                true
+            }
             "theme" => {
                 if let Some(name) = args {
                     self.set_theme_by_name(name);

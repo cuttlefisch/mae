@@ -899,6 +899,11 @@ impl Editor {
             "lsp-find-references" => self.lsp_request_references(),
             "lsp-hover" => self.lsp_request_hover(),
 
+            // LSP diagnostics (Phase 4a M3)
+            "lsp-next-diagnostic" => self.jump_next_diagnostic(),
+            "lsp-prev-diagnostic" => self.jump_prev_diagnostic(),
+            "lsp-show-diagnostics" => self.show_diagnostics_buffer(),
+
             // File operations
             "save" => self.save_current_buffer(),
             "quit" => {

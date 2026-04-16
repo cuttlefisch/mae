@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::client::{LspClient, LspEvent, LspServerConfig};
-use crate::protocol::{Location, Notification, Position, Range};
+use crate::protocol::{Diagnostic, Location, Notification, Position, PublishDiagnosticsParams, Range};
 
 /// Commands the editor sends to the LSP task.
 #[derive(Debug)]
@@ -86,7 +86,13 @@ pub enum LspTaskEvent {
         contents: String,
         range: Option<Range>,
     },
-    /// A server sent us a notification (diagnostics, log, etc.).
+    /// Diagnostics published for a URI — replaces any prior diagnostics for
+    /// that URI (LSP contract).
+    DiagnosticsPublished {
+        uri: String,
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// A server sent us a notification (non-diagnostic: log, progress, etc.).
     ServerNotification {
         language_id: String,
         notification: Notification,
@@ -265,10 +271,30 @@ pub async fn run_lsp_task(
             maybe_event = merged_rx.recv() => {
                 let Some((language_id, event)) = maybe_event else { continue };
                 let out = match event {
-                    LspEvent::ServerNotification(notif) => LspTaskEvent::ServerNotification {
-                        language_id,
-                        notification: notif,
-                    },
+                    LspEvent::ServerNotification(notif) => {
+                        // Intercept publishDiagnostics so the editor can
+                        // update its diagnostic store directly.
+                        if notif.method == "textDocument/publishDiagnostics" {
+                            if let Some(params) = notif
+                                .params
+                                .as_ref()
+                                .and_then(PublishDiagnosticsParams::from_value)
+                            {
+                                LspTaskEvent::DiagnosticsPublished {
+                                    uri: params.uri,
+                                    diagnostics: params.diagnostics,
+                                }
+                            } else {
+                                // Malformed — drop silently.
+                                continue;
+                            }
+                        } else {
+                            LspTaskEvent::ServerNotification {
+                                language_id,
+                                notification: notif,
+                            }
+                        }
+                    }
                     LspEvent::ServerExited => {
                         // Drop the dead client so the next request for this
                         // language triggers a fresh `ensure_client` → restart.

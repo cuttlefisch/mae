@@ -2123,6 +2123,53 @@ fn normal_keymap_has_lsp_bindings() {
         normal.lookup(&parse_key_seq("K")),
         LookupResult::Exact("lsp-hover")
     );
+    assert_eq!(
+        normal.lookup(&parse_key_seq("]d")),
+        LookupResult::Exact("lsp-next-diagnostic")
+    );
+    assert_eq!(
+        normal.lookup(&parse_key_seq("[d")),
+        LookupResult::Exact("lsp-prev-diagnostic")
+    );
+}
+
+#[test]
+fn dispatch_lsp_next_diagnostic_moves_cursor() {
+    use crate::editor::DiagnosticSeverity;
+    let mut buf = Buffer::new();
+    buf.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
+    buf.insert_text_at(0, "line0\nline1\nline2\n");
+    let mut editor = Editor::with_buffer(buf);
+    editor.diagnostics.set(
+        "file:///tmp/test.rs".into(),
+        vec![crate::editor::Diagnostic {
+            line: 2,
+            col_start: 1,
+            col_end: 3,
+            end_line: 2,
+            severity: DiagnosticSeverity::Error,
+            message: "boom".into(),
+            source: None,
+            code: None,
+        }],
+    );
+    editor.dispatch_builtin("lsp-next-diagnostic");
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
+    assert_eq!(editor.window_mgr.focused_window().cursor_col, 1);
+}
+
+#[test]
+fn dispatch_lsp_show_diagnostics_opens_buffer() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("lsp-show-diagnostics");
+    assert_eq!(editor.active_buffer().name, "*Diagnostics*");
+}
+
+#[test]
+fn colon_diagnostics_opens_buffer() {
+    let mut editor = Editor::new();
+    editor.execute_command("diagnostics");
+    assert_eq!(editor.active_buffer().name, "*Diagnostics*");
 }
 
 #[test]

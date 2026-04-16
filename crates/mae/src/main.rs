@@ -7,8 +7,11 @@ use std::panic;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use mae_ai::{ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent};
-use mae_core::{Buffer, Editor, KeyPress, LspIntent, LspLocation, LspRange};
-use mae_lsp::{LspCommand, LspTaskEvent, Position};
+use mae_core::{
+    Buffer, Diagnostic as CoreDiagnostic, DiagnosticSeverity as CoreSeverity, Editor, KeyPress,
+    LspIntent, LspLocation, LspRange,
+};
+use mae_lsp::{Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position};
 use mae_renderer::TerminalRenderer;
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
@@ -383,6 +386,19 @@ fn handle_lsp_event(
         LspTaskEvent::HoverResult { contents, .. } => {
             editor.apply_hover_result(contents);
         }
+        LspTaskEvent::DiagnosticsPublished { uri, diagnostics } => {
+            let count = diagnostics.len();
+            let core_diags: Vec<CoreDiagnostic> =
+                diagnostics.into_iter().map(lsp_diag_to_core).collect();
+            editor.diagnostics.set(uri.clone(), core_diags);
+            debug!(uri = %uri, count, "diagnostics published");
+            // Surface a summary in the status line so users notice new
+            // problems without having to open the diagnostics buffer.
+            let (e, w, _, _) = editor.diagnostics.severity_counts();
+            if e + w > 0 {
+                editor.set_status(format!("[LSP] {} errors, {} warnings", e, w));
+            }
+        }
         LspTaskEvent::ServerNotification {
             language_id,
             notification,
@@ -392,7 +408,6 @@ fn handle_lsp_event(
                 method = %notification.method,
                 "LSP server notification"
             );
-            // Phase 4a M3 will handle publishDiagnostics here.
         }
         LspTaskEvent::Error { message } => {
             warn!(error = %message, "LSP error");
@@ -453,4 +468,24 @@ fn open_location(
         target_row + 1,
         target_col + 1
     ));
+}
+
+/// Translate an `mae_lsp::Diagnostic` into the core representation.
+/// The core crate has no LSP dependency, so the binary performs the crosswalk.
+fn lsp_diag_to_core(d: LspDiagnostic) -> CoreDiagnostic {
+    CoreDiagnostic {
+        line: d.range.start.line,
+        col_start: d.range.start.character,
+        col_end: d.range.end.character,
+        end_line: d.range.end.line,
+        severity: match d.severity {
+            DiagnosticSeverity::Error => CoreSeverity::Error,
+            DiagnosticSeverity::Warning => CoreSeverity::Warning,
+            DiagnosticSeverity::Information => CoreSeverity::Information,
+            DiagnosticSeverity::Hint => CoreSeverity::Hint,
+        },
+        message: d.message,
+        source: d.source,
+        code: d.code,
+    }
 }

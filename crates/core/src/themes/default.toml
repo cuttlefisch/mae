@@ -27,6 +27,7 @@
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }
 "diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "blue" }
 "diagnostic.debug" = { fg = "dark_gray" }
 "diagnostic.trace" = { fg = "dark_gray", dim = true }
 "diagnostic.target" = { fg = "cyan" }

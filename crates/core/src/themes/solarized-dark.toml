@@ -44,6 +44,7 @@ green = "#859900"
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }
 "diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "blue" }
 "diagnostic.debug" = { fg = "base01" }
 "diagnostic.target" = { fg = "cyan" }
 

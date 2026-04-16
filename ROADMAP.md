@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M2 COMPLETE (603 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE (626 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -179,12 +179,12 @@ Language server integration. AI gets semantic code intelligence.
 - [x] Configurable servers via env (MAE_LSP_RUST, MAE_LSP_PYTHON, etc.)
 - [ ] Expose to AI: `lsp_definition`, `lsp_references`, `lsp_hover` tools (M5)
 
-### M3: Diagnostics
-- [ ] `textDocument/publishDiagnostics` → editor diagnostic store
-- [ ] Gutter markers (error/warning indicators)
-- [ ] `SPC d l` diagnostic list buffer
-- [ ] AI tool: `lsp_diagnostics` — read current file diagnostics
-- [ ] Jump to next/prev diagnostic
+### M3: Diagnostics ✅ (626 tests)
+- [x] `textDocument/publishDiagnostics` → editor diagnostic store
+- [x] Gutter markers (error/warning indicators)
+- [x] `:diagnostics` buffer listing every diagnostic grouped by file
+- [x] Jump to next/prev diagnostic (`]d` / `[d`)
+- [ ] AI tool: `lsp_diagnostics` — read current file diagnostics (deferred to M5)
 
 ### M4: Completion
 - [ ] `textDocument/completion` triggered on input

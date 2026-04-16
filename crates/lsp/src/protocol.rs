@@ -423,6 +423,117 @@ fn flatten_hover_contents(v: &serde_json::Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostics (textDocument/publishDiagnostics)
+// ---------------------------------------------------------------------------
+
+/// LSP diagnostic severity (1=Error, 2=Warning, 3=Information, 4=Hint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error = 1,
+    Warning = 2,
+    Information = 3,
+    Hint = 4,
+}
+
+impl DiagnosticSeverity {
+    pub fn from_i64(n: i64) -> Self {
+        match n {
+            1 => DiagnosticSeverity::Error,
+            2 => DiagnosticSeverity::Warning,
+            3 => DiagnosticSeverity::Information,
+            4 => DiagnosticSeverity::Hint,
+            // Some servers omit severity or send weird values — treat as warning.
+            _ => DiagnosticSeverity::Warning,
+        }
+    }
+}
+
+/// A single diagnostic as produced by a language server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub range: Range,
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+    pub source: Option<String>,
+    pub code: Option<String>,
+}
+
+/// `textDocument/publishDiagnostics` notification params.
+/// We do lenient parsing so missing severity / code fields don't fail the whole batch.
+#[derive(Debug, Clone)]
+pub struct PublishDiagnosticsParams {
+    pub uri: String,
+    pub diagnostics: Vec<Diagnostic>,
+    pub version: Option<i64>,
+}
+
+impl PublishDiagnosticsParams {
+    /// Parse `publishDiagnostics` params from the raw JSON.
+    /// Unknown / malformed entries are skipped rather than erroring.
+    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        let uri = obj.get("uri")?.as_str()?.to_string();
+        let version = obj.get("version").and_then(|v| v.as_i64());
+        let diagnostics = obj
+            .get("diagnostics")
+            .and_then(|d| d.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(parse_diagnostic)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Some(PublishDiagnosticsParams {
+            uri,
+            diagnostics,
+            version,
+        })
+    }
+}
+
+fn parse_diagnostic(v: &serde_json::Value) -> Option<Diagnostic> {
+    let obj = v.as_object()?;
+    let range = obj.get("range").and_then(parse_range)?;
+    let message = obj.get("message")?.as_str()?.to_string();
+    let severity = obj
+        .get("severity")
+        .and_then(|s| s.as_i64())
+        .map(DiagnosticSeverity::from_i64)
+        .unwrap_or(DiagnosticSeverity::Warning);
+    let source = obj
+        .get("source")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    // `code` can be a string or integer per the spec — render either as a String.
+    let code = obj.get("code").and_then(|c| {
+        c.as_str()
+            .map(String::from)
+            .or_else(|| c.as_i64().map(|n| n.to_string()))
+    });
+    Some(Diagnostic {
+        range,
+        severity,
+        message,
+        source,
+        code,
+    })
+}
+
+fn parse_range(v: &serde_json::Value) -> Option<Range> {
+    let obj = v.as_object()?;
+    let start = parse_position(obj.get("start")?)?;
+    let end = parse_position(obj.get("end")?)?;
+    Some(Range { start, end })
+}
+
+fn parse_position(v: &serde_json::Value) -> Option<Position> {
+    let obj = v.as_object()?;
+    let line = obj.get("line")?.as_u64()? as u32;
+    let character = obj.get("character")?.as_u64()? as u32;
+    Some(Position { line, character })
+}
+
+// ---------------------------------------------------------------------------
 // Text document sync kind (from server capabilities)
 // ---------------------------------------------------------------------------
 
@@ -709,6 +820,93 @@ mod tests {
         let json = serde_json::to_string(&params).unwrap();
         assert!(json.contains("textDocument"));
         assert!(json.contains("includeDeclaration"));
+    }
+
+    #[test]
+    fn publish_diagnostics_basic() {
+        let v = serde_json::json!({
+            "uri": "file:///a.rs",
+            "diagnostics": [
+                {
+                    "range": {
+                        "start": {"line": 3, "character": 4},
+                        "end": {"line": 3, "character": 10}
+                    },
+                    "severity": 1,
+                    "message": "unresolved import",
+                    "source": "rustc",
+                    "code": "E0432"
+                }
+            ]
+        });
+        let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
+        assert_eq!(parsed.uri, "file:///a.rs");
+        assert_eq!(parsed.diagnostics.len(), 1);
+        let d = &parsed.diagnostics[0];
+        assert_eq!(d.severity, DiagnosticSeverity::Error);
+        assert_eq!(d.message, "unresolved import");
+        assert_eq!(d.source.as_deref(), Some("rustc"));
+        assert_eq!(d.code.as_deref(), Some("E0432"));
+        assert_eq!(d.range.start.line, 3);
+    }
+
+    #[test]
+    fn publish_diagnostics_missing_severity_defaults_to_warning() {
+        let v = serde_json::json!({
+            "uri": "file:///a.rs",
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                "message": "hmm"
+            }]
+        });
+        let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
+        assert_eq!(
+            parsed.diagnostics[0].severity,
+            DiagnosticSeverity::Warning
+        );
+    }
+
+    #[test]
+    fn publish_diagnostics_integer_code() {
+        let v = serde_json::json!({
+            "uri": "file:///a.py",
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                "severity": 2,
+                "message": "style",
+                "code": 42
+            }]
+        });
+        let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
+        assert_eq!(parsed.diagnostics[0].code.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn publish_diagnostics_empty_clears() {
+        let v = serde_json::json!({
+            "uri": "file:///a.rs",
+            "diagnostics": []
+        });
+        let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
+        assert!(parsed.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn publish_diagnostics_malformed_entry_skipped() {
+        let v = serde_json::json!({
+            "uri": "file:///a.rs",
+            "diagnostics": [
+                {"message": "missing range"},
+                {
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                    "message": "ok",
+                    "severity": 1
+                }
+            ]
+        });
+        let parsed = PublishDiagnosticsParams::from_value(&v).unwrap();
+        assert_eq!(parsed.diagnostics.len(), 1);
+        assert_eq!(parsed.diagnostics[0].message, "ok");
     }
 
     #[test]

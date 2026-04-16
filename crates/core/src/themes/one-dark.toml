@@ -41,6 +41,7 @@ gutter = "#4b5263"
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }
 "diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "blue" }
 "diagnostic.debug" = { fg = "fg_dark" }
 "diagnostic.trace" = { fg = "gutter", dim = true }
 "diagnostic.target" = { fg = "cyan" }

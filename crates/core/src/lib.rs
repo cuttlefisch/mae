@@ -19,7 +19,9 @@ pub use conversation::Conversation;
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };
-pub use editor::{EditRecord, Editor, LspLocation, LspRange};
+pub use editor::{
+    Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor, LspLocation, LspRange,
+};
 pub use file_picker::FilePicker;
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
