@@ -282,8 +282,12 @@ fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: R
         let gutter_w = gutter_width(focused_buf.line_count());
 
         if editor.mode == Mode::Command {
+            // command_cursor is a byte offset; count chars for display width.
+            let cursor_col = editor.command_line[..editor.command_cursor.min(editor.command_line.len())]
+                .chars()
+                .count() as u16;
             frame.set_cursor_position(Position::new(
-                cmd_area.x + 1 + editor.command_line.len() as u16,
+                cmd_area.x + 1 + cursor_col,
                 cmd_area.y,
             ));
         } else if editor.mode == Mode::Search {

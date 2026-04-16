@@ -331,7 +331,7 @@ impl Editor {
         self.command_history_idx = None;
     }
 
-    /// Recall previous command from history (Up arrow in command mode).
+    /// Recall previous command from history (Up arrow / C-p in command mode).
     pub fn command_history_prev(&mut self) {
         if self.command_history.is_empty() {
             return;
@@ -343,9 +343,10 @@ impl Editor {
         };
         self.command_history_idx = Some(idx);
         self.command_line = self.command_history[idx].clone();
+        self.command_cursor = self.command_line.len(); // end of recalled line
     }
 
-    /// Recall next command from history (Down arrow in command mode).
+    /// Recall next command from history (Down arrow / C-n in command mode).
     pub fn command_history_next(&mut self) {
         let idx = match self.command_history_idx {
             Some(i) => i + 1,
@@ -354,10 +355,123 @@ impl Editor {
         if idx >= self.command_history.len() {
             self.command_history_idx = None;
             self.command_line.clear();
+            self.command_cursor = 0;
         } else {
             self.command_history_idx = Some(idx);
             self.command_line = self.command_history[idx].clone();
+            self.command_cursor = self.command_line.len();
         }
+    }
+
+    // --- Readline-style command-line editing ---
+    //
+    // `command_cursor` is a *byte offset* into `command_line`. All mutating
+    // helpers keep it on a valid UTF-8 char boundary.
+
+    /// Insert `ch` at the current cursor position and advance the cursor.
+    pub fn cmdline_insert_char(&mut self, ch: char) {
+        let pos = self.command_cursor.min(self.command_line.len());
+        self.command_line.insert(pos, ch);
+        self.command_cursor = pos + ch.len_utf8();
+        self.command_history_idx = None;
+        self.tab_completions.clear();
+    }
+
+    /// Delete the char immediately before the cursor (Backspace / C-h).
+    pub fn cmdline_backspace(&mut self) {
+        if self.command_cursor == 0 {
+            return;
+        }
+        // Walk back to the previous char boundary.
+        let mut pos = self.command_cursor;
+        loop {
+            pos -= 1;
+            if self.command_line.is_char_boundary(pos) {
+                break;
+            }
+        }
+        self.command_line.remove(pos);
+        self.command_cursor = pos;
+        self.command_history_idx = None;
+        self.tab_completions.clear();
+    }
+
+    /// Delete the char at the cursor (C-d / DEL).
+    pub fn cmdline_delete_forward(&mut self) {
+        if self.command_cursor >= self.command_line.len() {
+            return;
+        }
+        self.command_line.remove(self.command_cursor);
+        self.tab_completions.clear();
+    }
+
+    /// Move cursor to beginning of line (C-a / Home).
+    pub fn cmdline_move_home(&mut self) {
+        self.command_cursor = 0;
+    }
+
+    /// Move cursor to end of line (C-e / End).
+    pub fn cmdline_move_end(&mut self) {
+        self.command_cursor = self.command_line.len();
+    }
+
+    /// Move cursor one character backward (C-b / Left).
+    pub fn cmdline_move_backward(&mut self) {
+        if self.command_cursor == 0 {
+            return;
+        }
+        let mut pos = self.command_cursor;
+        loop {
+            pos -= 1;
+            if self.command_line.is_char_boundary(pos) {
+                break;
+            }
+        }
+        self.command_cursor = pos;
+    }
+
+    /// Move cursor one character forward (C-f / Right).
+    pub fn cmdline_move_forward(&mut self) {
+        if self.command_cursor >= self.command_line.len() {
+            return;
+        }
+        let ch = self.command_line[self.command_cursor..].chars().next().unwrap();
+        self.command_cursor += ch.len_utf8();
+    }
+
+    /// Delete backward to the previous whitespace token boundary (C-w).
+    pub fn cmdline_delete_word_backward(&mut self) {
+        if self.command_cursor == 0 {
+            return;
+        }
+        let s = &self.command_line[..self.command_cursor];
+        // Strip trailing whitespace, then strip the word.
+        let trimmed = s.trim_end_matches(|c: char| c.is_whitespace());
+        let word_start = trimmed
+            .rfind(|c: char| c.is_whitespace())
+            .map(|i| i + 1) // byte after the space
+            .unwrap_or(0);
+        self.command_line.drain(word_start..self.command_cursor);
+        self.command_cursor = word_start;
+        self.tab_completions.clear();
+    }
+
+    /// Delete from cursor to beginning of line (C-u).
+    pub fn cmdline_kill_to_start(&mut self) {
+        self.command_line.drain(..self.command_cursor);
+        self.command_cursor = 0;
+        self.tab_completions.clear();
+    }
+
+    /// Delete from cursor to end of line (C-k).
+    pub fn cmdline_kill_to_end(&mut self) {
+        self.command_line.truncate(self.command_cursor);
+        self.tab_completions.clear();
+    }
+
+    #[cfg(test)]
+    pub fn cmdline_text(&self) -> &str {
+        &self.command_line
     }
 
     pub fn open_file(&mut self, path: &str) {
@@ -383,5 +497,131 @@ impl Editor {
                 self.set_status(format!("Error opening: {}", e));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ed() -> Editor {
+        let mut e = Editor::new();
+        // prime command line
+        e.command_line = "hello world".to_string();
+        e.command_cursor = e.command_line.len();
+        e
+    }
+
+    #[test]
+    fn cmdline_insert_char_at_end() {
+        let mut e = Editor::new();
+        e.cmdline_insert_char('a');
+        e.cmdline_insert_char('b');
+        assert_eq!(e.command_line, "ab");
+        assert_eq!(e.command_cursor, 2);
+    }
+
+    #[test]
+    fn cmdline_insert_char_in_middle() {
+        let mut e = ed();
+        e.command_cursor = 5; // after "hello"
+        e.cmdline_insert_char('!');
+        assert_eq!(e.command_line, "hello! world");
+        assert_eq!(e.command_cursor, 6);
+    }
+
+    #[test]
+    fn cmdline_backspace_removes_char() {
+        let mut e = ed();
+        e.cmdline_backspace(); // removes 'd'
+        assert_eq!(e.command_line, "hello worl");
+        assert_eq!(e.command_cursor, 10);
+    }
+
+    #[test]
+    fn cmdline_backspace_at_start_is_noop() {
+        let mut e = ed();
+        e.command_cursor = 0;
+        e.cmdline_backspace();
+        assert_eq!(e.command_line, "hello world");
+    }
+
+    #[test]
+    fn cmdline_delete_forward_removes_char_at_cursor() {
+        let mut e = ed();
+        e.command_cursor = 0;
+        e.cmdline_delete_forward(); // removes 'h'
+        assert_eq!(e.command_line, "ello world");
+    }
+
+    #[test]
+    fn cmdline_move_home_end() {
+        let mut e = ed();
+        e.cmdline_move_home();
+        assert_eq!(e.command_cursor, 0);
+        e.cmdline_move_end();
+        assert_eq!(e.command_cursor, 11);
+    }
+
+    #[test]
+    fn cmdline_move_backward_forward() {
+        let mut e = ed();
+        e.command_cursor = 5;
+        e.cmdline_move_backward();
+        assert_eq!(e.command_cursor, 4);
+        e.cmdline_move_forward();
+        assert_eq!(e.command_cursor, 5);
+    }
+
+    #[test]
+    fn cmdline_delete_word_backward() {
+        let mut e = ed();
+        e.cmdline_delete_word_backward(); // deletes "world"
+        assert_eq!(e.command_line, "hello ");
+        assert_eq!(e.command_cursor, 6);
+    }
+
+    #[test]
+    fn cmdline_kill_to_start() {
+        let mut e = ed();
+        e.command_cursor = 5; // after "hello"
+        e.cmdline_kill_to_start();
+        assert_eq!(e.command_line, " world");
+        assert_eq!(e.command_cursor, 0);
+    }
+
+    #[test]
+    fn cmdline_kill_to_end() {
+        let mut e = ed();
+        e.command_cursor = 5; // after "hello"
+        e.cmdline_kill_to_end();
+        assert_eq!(e.command_line, "hello");
+        assert_eq!(e.command_cursor, 5);
+    }
+
+    #[test]
+    fn cmdline_kill_to_end_at_end_is_noop() {
+        let mut e = ed();
+        e.cmdline_kill_to_end();
+        assert_eq!(e.command_line, "hello world");
+    }
+
+    #[test]
+    fn command_history_prev_sets_cursor_to_end() {
+        let mut e = Editor::new();
+        e.push_command_history("first");
+        e.command_history_prev();
+        assert_eq!(e.command_line, "first");
+        assert_eq!(e.command_cursor, 5);
+    }
+
+    #[test]
+    fn command_history_next_clears_cursor() {
+        let mut e = Editor::new();
+        e.push_command_history("first");
+        e.command_history_prev();
+        e.command_history_next();
+        assert_eq!(e.command_line, "");
+        assert_eq!(e.command_cursor, 0);
     }
 }

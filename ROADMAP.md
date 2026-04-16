@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (589 tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M4 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (825 tests). All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -153,6 +153,115 @@ xdisp.c monolith, Xi Editor's over-engineering, and Remacs's accumulated debt.
 
 ---
 
+## Phase 3h: Vim/Emacs Keybinding Parity & QoL
+
+Deep feature parity with Vim (as documented in *Practical Vim* by Drew Neil)
+and Doom Emacs–style discoverability. The guiding principles:
+
+- **Vim's composability**: operator + motion + text-object is the grammar.
+  Everything should compose. `cgn` (change-next-match + dot repeat) is as
+  powerful as a global replace. From *Practical Vim*: "prefer repeatable,
+  undoable units over one-shot commands."
+- **Doom's discoverability**: SPC SPC is a fuzzy command palette (M-x with
+  completion). Every command is findable without memorizing the binding.
+  Which-key annotates the tree with group names so the user learns naturally.
+- **Readline/terminal conventions**: users spend time in terminals; the insert
+  and command modes should honour C-a/C-e/C-w/C-u/C-k/C-d so muscle memory
+  from bash, zsh, and readline transfers directly.
+
+### M1: Terminal Keybinds in Insert Mode
+Standard readline/Emacs editing bindings that users expect from any Unix program.
+
+- [ ] `C-a` — move to beginning of line (mirrors readline)
+- [ ] `C-e` — move to end of line
+- [ ] `C-w` — delete word backward (bash behaviour: delete to last whitespace)
+- [ ] `C-u` — delete to beginning of line
+- [ ] `C-k` — delete to end of line (kill-line)
+- [ ] `C-d` — delete char forward (equiv. `x` in normal mode)
+- [ ] `C-h` — backspace (already works; verify and document)
+- [ ] `C-j` / `C-m` — newline (alternative to Enter; muscle memory from readline)
+- [ ] `C-r {register}` — paste from named register while in insert mode
+       (from *Practical Vim* ch. 15 — "use registers in insert mode")
+- [ ] `C-o` — execute one normal-mode command then return to insert
+       (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode")
+
+### M2: Terminal Keybinds in Command Mode
+Command line (`:` prompt) should behave like a readline/zsh command line.
+
+- [ ] `C-a` / `C-e` — home / end of command line
+- [ ] `C-w` — delete word backward
+- [ ] `C-u` — clear command line
+- [ ] `C-k` — delete to end
+- [ ] `C-b` / `C-f` — move cursor left / right one char
+- [ ] `C-p` / `C-n` — already done via up/down; verify and add these aliases
+- [ ] `C-d` — delete char forward in command line
+- [ ] `C-h` — backspace in command line (should already work)
+
+### M3: Normal Mode Gaps (Practical Vim)
+Motions and operators that Vim users rely on but we haven't implemented.
+
+- [ ] `s` / `S` — substitute char (`cl`) / line (`cc`) shortcuts
+       (*Practical Vim* tip 2: "Think in terms of repeatable units")
+- [ ] `^` — first non-blank char of line (complement to `0` / `$`)
+- [ ] `+` / `-` — first non-blank of next / previous line
+- [ ] `_` — first non-blank of current line (useful with operators: `d_`)
+- [ ] `ge` / `gE` — backward word-end (complement to `e`/`E`)
+- [ ] `gf` — go to file under cursor (open in new buffer)
+- [ ] `gi` — re-enter insert mode at last insert position
+- [ ] `g;` / `g,` — jump backward/forward through change list
+- [ ] `Ctrl-o` / `Ctrl-i` — jump list backward / forward
+       (*Practical Vim* ch. 9 — "Navigate the Jump List")
+- [ ] `@:` — repeat last ex command
+- [ ] `gn` / `gN` — visual select next/prev search match
+       (*Practical Vim* tip 86 — `cgn` as a one-key global replace with `.`)
+- [ ] `:changes` command — display change list
+
+### M4: Leader Key Command Palette (Doom Emacs-style SPC SPC)
+The current which-key shows a key-sequence tree. Users also need a fuzzy
+command launcher where they can type any substring of a command name or
+description and select from live candidates — the Emacs M-x experience.
+
+Key UX targets from Doom Emacs:
+- `SPC SPC` — open command palette (all registered commands, filterable)
+- `SPC :` — open command-line (`:` alias; muscle memory from Doom)
+- `SPC h k` — describe key binding (what does `gd` do?)
+- `SPC h c` — describe command by name (what does `lsp-hover` do?)
+- `SPC t t` — switch theme via palette (type "catppuccin", see candidates)
+- All existing SPC bindings get meaningful which-key group names with docs
+
+Implementation:
+- [ ] `CommandPalette` overlay — reuse `FilePicker` infrastructure (same
+      fuzzy-match + scrollable list pattern)
+- [ ] Source: `CommandRegistry::all()` → `(name, doc)` pairs, fuzzy-ranked
+- [ ] Accept with Enter executes the command; Esc dismisses
+- [ ] `SPC SPC` binding in normal keymap
+- [ ] `SPC h k` / `SPC h c` → describe commands via status bar or *Help* buffer
+- [ ] Audit all `SPC *` group names in which-key for completeness
+
+### M5: Registers & Clipboard (Practical Vim ch. 10)
+Named registers are central to Vim's cut/copy/paste model. *Practical Vim*
+devotes a full chapter to them as a core feature, not an edge case.
+
+- [ ] `"a`–`"z` — yank/delete/paste to/from named registers (`"ayy`, `"ap`)
+- [ ] `"A`–`"Z` — append to named registers (uppercase = append)
+- [ ] `"0` — yank register (always the last yank; unaffected by delete)
+- [ ] `"_` — black-hole register (discard without clobbering `"`)
+- [ ] `"+` / `"*` — system clipboard integration (X11/Wayland via xclip/wl-copy)
+- [ ] `:reg` / `:registers` command — display all non-empty registers
+- [ ] `Ctrl-r {register}` in insert mode (see M1)
+
+### M6: Surrounds & Advanced Text Objects (vim-surround)
+`vim-surround` is one of the most-installed Vim plugins because it fills a
+genuine gap. The operations are composable with operators and dot-repeat.
+
+- [ ] `ys{motion}{char}` — surround motion with `char` (e.g. `ysiw"`)
+- [ ] `cs{from}{to}` — change surrounding delimiter
+- [ ] `ds{char}` — delete surrounding delimiter
+- [ ] `S{char}` in Visual mode — surround selection
+- [ ] Integrates with existing text-object infrastructure
+
+---
+
 ## Phase 4a: LSP Client
 
 Language server integration. AI gets semantic code intelligence.
@@ -187,10 +296,13 @@ Language server integration. AI gets semantic code intelligence.
 - [x] Jump to next/prev diagnostic (`]d` / `[d`)
 - [x] AI tool: `lsp_diagnostics` — structured JSON, scope=buffer|all
 
-### M4: Completion
-- [ ] `textDocument/completion` triggered on input
-- [ ] Completion popup in renderer
-- [ ] Tab/Enter to accept, Esc to dismiss
+### M4: Completion ✅ (825 tests)
+- [x] `textDocument/completion` triggered on word-char input in insert mode
+- [x] `CompletionItem` / `CompletionResponse` with two LSP shapes (array + CompletionList)
+- [x] `textEdit` support for servers that send a replacement range
+- [x] Kind sigils (`f`=function, `v`=variable, `t`=type, `k`=keyword, `s`=snippet, `m`=module)
+- [x] Popup overlay below cursor: up to 10 items, selected item highlighted, flips above edge
+- [x] Tab=accept (replaces word prefix), Ctrl-n/Ctrl-p navigate, non-word chars dismiss
 
 ### M5: Scheme + AI Exposure (partial)
 - [x] AI tool: `lsp_diagnostics` (structured JSON, done as part of M3)

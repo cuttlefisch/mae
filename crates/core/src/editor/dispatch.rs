@@ -454,6 +454,7 @@ impl Editor {
             "enter-command-mode" => {
                 self.mode = Mode::Command;
                 self.command_line.clear();
+                self.command_cursor = 0;
             }
 
             // Window management

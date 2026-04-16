@@ -297,6 +297,93 @@ impl Buffer {
         text
     }
 
+    /// Delete backward to the start of the previous whitespace-delimited token
+    /// (readline/bash C-w behaviour). Does NOT cross line boundaries.
+    pub fn delete_word_backward(&mut self, win: &mut Window) {
+        let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
+        let line_start = self.rope.line_to_char(win.cursor_row);
+        if cursor <= line_start {
+            return;
+        }
+        // Walk back over trailing whitespace, then over the word.
+        let mut pos = cursor;
+        while pos > line_start && self.rope.char(pos - 1).is_whitespace() {
+            pos -= 1;
+        }
+        while pos > line_start && !self.rope.char(pos - 1).is_whitespace() {
+            pos -= 1;
+        }
+        if pos == cursor {
+            return;
+        }
+        let deleted: String = self.rope.slice(pos..cursor).into();
+        self.rope.remove(pos..cursor);
+        self.push_undo(EditAction::DeleteRange {
+            pos,
+            text: deleted,
+        });
+        self.redo_stack.clear();
+        self.modified = true;
+        win.cursor_col = pos - line_start;
+    }
+
+    /// Delete from the cursor to the beginning of the current line (C-u).
+    pub fn delete_to_line_start(&mut self, win: &mut Window) {
+        let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
+        let line_start = self.rope.line_to_char(win.cursor_row);
+        if cursor <= line_start {
+            return;
+        }
+        let deleted: String = self.rope.slice(line_start..cursor).into();
+        self.rope.remove(line_start..cursor);
+        self.push_undo(EditAction::DeleteRange {
+            pos: line_start,
+            text: deleted,
+        });
+        self.redo_stack.clear();
+        self.modified = true;
+        win.cursor_col = 0;
+    }
+
+    /// Delete from the cursor to the end of the current line (C-k / kill-line).
+    /// Deletes the newline itself only if the line is otherwise empty.
+    pub fn delete_to_line_end(&mut self, win: &mut Window) {
+        let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
+        let rope = &self.rope;
+        let line_end = {
+            let line_start = rope.line_to_char(win.cursor_row);
+            let line = rope.line(win.cursor_row);
+            let raw_end = line_start + line.len_chars();
+            // If the line ends with '\n', stop before it (don't kill the newline
+            // unless the cursor is already AT the newline).
+            if raw_end > line_start
+                && raw_end <= rope.len_chars()
+                && rope.char(raw_end - 1) == '\n'
+            {
+                if cursor == raw_end - 1 {
+                    // Cursor on the newline itself — kill it.
+                    raw_end
+                } else {
+                    raw_end - 1
+                }
+            } else {
+                raw_end
+            }
+        };
+        if cursor >= line_end {
+            return;
+        }
+        let deleted: String = self.rope.slice(cursor..line_end).into();
+        self.rope.remove(cursor..line_end);
+        self.push_undo(EditAction::DeleteRange {
+            pos: cursor,
+            text: deleted,
+        });
+        self.redo_stack.clear();
+        self.modified = true;
+        win.clamp_cursor(self);
+    }
+
     /// Insert text at an arbitrary character offset. Used by the AI agent.
     pub fn insert_text_at(&mut self, char_offset: usize, text: &str) {
         let offset = char_offset.min(self.rope.len_chars());
@@ -912,6 +999,98 @@ mod tests {
         assert_eq!(buf.kind, BufferKind::Conversation);
         assert!(buf.conversation.is_some());
         assert_eq!(buf.name, "[conversation]");
+    }
+
+    // --- delete_word_backward (C-w) ---
+
+    #[test]
+    fn delete_word_backward_basic() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello world");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 11; // end of "world"
+        buf.delete_word_backward(&mut win);
+        assert_eq!(buf.text(), "hello ");
+        assert_eq!(win.cursor_col, 6);
+    }
+
+    #[test]
+    fn delete_word_backward_strips_trailing_whitespace_first() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "foo   ");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 6;
+        buf.delete_word_backward(&mut win); // removes "foo   "
+        assert_eq!(buf.text(), "");
+        assert_eq!(win.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_word_backward_at_line_start_is_noop() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello\n");
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 1;
+        win.cursor_col = 0;
+        buf.delete_word_backward(&mut win);
+        assert_eq!(buf.text(), "hello\n"); // newline not crossed
+    }
+
+    // --- delete_to_line_start (C-u) ---
+
+    #[test]
+    fn delete_to_line_start_basic() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello world");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 5;
+        buf.delete_to_line_start(&mut win);
+        assert_eq!(buf.text(), " world");
+        assert_eq!(win.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_to_line_start_at_col0_is_noop() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 0;
+        buf.delete_to_line_start(&mut win);
+        assert_eq!(buf.text(), "hello");
+    }
+
+    // --- delete_to_line_end (C-k) ---
+
+    #[test]
+    fn delete_to_line_end_basic() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello world\n");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 5;
+        buf.delete_to_line_end(&mut win);
+        assert_eq!(buf.text(), "hello\n");
+    }
+
+    #[test]
+    fn delete_to_line_end_on_newline_kills_it() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello\nworld\n");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 5; // cursor on the '\n' of "hello\n"
+        buf.delete_to_line_end(&mut win);
+        // kills the newline, joining with next line
+        assert_eq!(buf.text(), "helloworld\n");
+    }
+
+    #[test]
+    fn delete_to_line_end_at_end_is_noop() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "hello\n");
+        let mut win = Window::new(0, 0);
+        win.cursor_col = 5; // already at '\n'
+        buf.delete_to_line_end(&mut win);
+        // '\n' is killed when cursor is on it
+        assert_eq!(buf.text(), "hello");
     }
 
     #[test]

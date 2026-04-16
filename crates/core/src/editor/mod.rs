@@ -119,6 +119,8 @@ pub struct Editor {
     pub command_history: Vec<String>,
     /// Current index into command_history when recalling (None = not recalling).
     pub command_history_idx: Option<usize>,
+    /// Cursor position (byte index) within `command_line` for readline-style editing.
+    pub command_cursor: usize,
     /// Queue of pending LSP requests for the binary to drain each event-loop tick.
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
@@ -196,6 +198,7 @@ impl Editor {
             alternate_buffer_idx: None,
             command_history: Vec::new(),
             command_history_idx: None,
+            command_cursor: 0,
             pending_lsp_requests: Vec::new(),
             pending_dap_intents: Vec::new(),
             diagnostics: DiagnosticStore::default(),
@@ -264,6 +267,7 @@ impl Editor {
             marks: HashMap::new(),
             completion_items: Vec::new(),
             completion_selected: 0,
+            command_cursor: 0,
             macro_recording: false,
             macro_register: None,
             macro_log: Vec::new(),

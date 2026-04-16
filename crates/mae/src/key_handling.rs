@@ -401,6 +401,14 @@ fn handle_insert_mode(
             }
             return;
         }
+        // C-j / Enter — newline
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].insert_char(win, '\n');
+            editor.lsp_dismiss_completion();
+            return;
+        }
         KeyCode::Enter => {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
@@ -408,14 +416,68 @@ fn handle_insert_mode(
             editor.lsp_dismiss_completion();
             return;
         }
+        // C-h / Backspace — delete backward
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].delete_char_backward(win);
+            editor.lsp_request_completion();
+            return;
+        }
         KeyCode::Backspace => {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
-            // Re-trigger completion after backspace (word may still be valid).
             editor.lsp_request_completion();
             return;
         }
+        // C-a: go to beginning of line
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let win = editor.window_mgr.focused_window_mut();
+            win.move_to_line_start();
+            return;
+        }
+        // C-e: go to end of line
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            win.move_to_line_end(&editor.buffers[idx]);
+            return;
+        }
+        // C-w: delete word backward (bash-style: back to whitespace)
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].delete_word_backward(win);
+            editor.lsp_dismiss_completion();
+            return;
+        }
+        // C-u: delete to beginning of line
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].delete_to_line_start(win);
+            editor.lsp_dismiss_completion();
+            return;
+        }
+        // C-k: delete to end of line (kill-line)
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].delete_to_line_end(win);
+            editor.lsp_dismiss_completion();
+            return;
+        }
+        // C-d: delete char forward
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let idx = editor.active_buffer_idx();
+            let win = editor.window_mgr.focused_window_mut();
+            editor.buffers[idx].delete_char_forward(win);
+            editor.lsp_dismiss_completion();
+            return;
+        }
+        // C-o: execute one normal-mode command, then return to insert
+        // (defer — requires saving/restoring insert mode; handled via keymap fallthrough for now)
         _ => {}
     }
     handle_keymap_mode(editor, scheme, key, pending_keys);
@@ -507,11 +569,13 @@ pub fn handle_command_mode(
         KeyCode::Esc => {
             editor.mode = Mode::Normal;
             editor.command_line.clear();
+            editor.command_cursor = 0;
         }
         KeyCode::Enter => {
             let cmd = editor.command_line.clone();
             editor.mode = Mode::Normal;
             editor.command_line.clear();
+            editor.command_cursor = 0;
 
             // Record in command history before executing
             editor.push_command_history(&cmd);
@@ -608,6 +672,7 @@ pub fn handle_command_mode(
                 if !editor.tab_completions.is_empty() {
                     let completion = editor.tab_completions[editor.tab_completion_idx].clone();
                     editor.command_line = format!("e {}", completion);
+                    editor.command_cursor = editor.command_line.len();
                 }
             }
         }
@@ -617,17 +682,69 @@ pub fn handle_command_mode(
         KeyCode::Down => {
             editor.command_history_next();
         }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.command_history_prev();
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.command_history_next();
+        }
+        KeyCode::Left => {
+            editor.cmdline_move_backward();
+        }
+        KeyCode::Right => {
+            editor.cmdline_move_forward();
+        }
+        KeyCode::Home => {
+            editor.cmdline_move_home();
+        }
+        KeyCode::End => {
+            editor.cmdline_move_end();
+        }
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_move_home();
+        }
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_move_end();
+        }
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_move_backward();
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_move_forward();
+        }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_delete_word_backward();
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_kill_to_start();
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_kill_to_end();
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if editor.command_line.is_empty() {
+                // C-d on empty line = abort (like in shells)
+                editor.mode = Mode::Normal;
+            } else {
+                editor.cmdline_delete_forward();
+            }
+        }
+        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if editor.command_line.is_empty() {
+                editor.mode = Mode::Normal;
+            } else {
+                editor.cmdline_backspace();
+            }
+        }
         KeyCode::Backspace => {
             if editor.command_line.is_empty() {
                 editor.mode = Mode::Normal;
             } else {
-                editor.command_line.pop();
-                editor.tab_completions.clear();
+                editor.cmdline_backspace();
             }
         }
-        KeyCode::Char(ch) => {
-            editor.command_line.push(ch);
-            editor.tab_completions.clear();
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.cmdline_insert_char(ch);
         }
         _ => {}
     }
