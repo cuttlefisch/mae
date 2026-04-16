@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M4 COMPLETE (754 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE (764 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -256,12 +256,14 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [ ] Editor wiring: main.rs event loop, `:debug-start` commands,
       `:debug` buffer with stack/variables panes (M1.5)
 
-### M2: Breakpoints & Execution
-- [ ] `setBreakpoints` request wired to editor breakpoints
-- [ ] `continue`, `next`, `stepIn`, `stepOut` commands
-- [ ] Stopped event → update editor debug_state
-- [ ] Gutter breakpoint indicators in renderer
-- [ ] Current execution line highlight
+### M2: Breakpoints & Execution ✅ (764 tests)
+- [x] `setBreakpoints` request wired to editor breakpoints (via `DapIntent` queue)
+- [x] `continue`, `next`, `stepIn`, `stepOut` commands
+- [x] Stopped event → update editor debug_state (`apply_dap_stopped` + auto-refresh)
+- [x] Gutter breakpoint indicators in renderer (`●` glyph, `debug.breakpoint` theme)
+- [x] Current execution line highlight (`▶` gutter + `debug.current_line` background)
+- [x] Marker priority: Stopped > Breakpoint > Diagnostic (`resolve_gutter_marker`)
+- [x] Stopped-line bg shows through syntax highlights (`Style::patch` merge)
 
 ### M3: State Inspection
 - [ ] `threads` → populate thread list
@@ -353,6 +355,6 @@ navigate and refactor effectively.
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
 | 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
-| 4c    | 70      | +30 done (client 12 + manager 10 + AI debug tools 19 + StepKind/find_variable 5); +editor integration still pending |
+| 4c    | 80      | +40 done (client 12 + manager 10 + AI debug tools 19 + StepKind/find_variable 5 + renderer gutter 10); M3 state-inspection UI still pending |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **754** | **~780** |
+| **Total** | **764** | **~790** |

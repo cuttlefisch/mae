@@ -386,9 +386,8 @@ fn render_buffer(
 
     // Per-line worst-severity diagnostic for gutter markers. We only need
     // the highest severity per line (Error > Warning > Information > Hint).
-    let line_severities: std::collections::HashMap<u32, DiagnosticSeverity> = {
-        let mut map: std::collections::HashMap<u32, DiagnosticSeverity> =
-            std::collections::HashMap::new();
+    let line_severities: HashMap<u32, DiagnosticSeverity> = {
+        let mut map: HashMap<u32, DiagnosticSeverity> = HashMap::new();
         if let Some(path) = buf.file_path() {
             let uri = mae_core::path_to_uri(path);
             if let Some(diags) = editor.diagnostics.get(&uri) {
@@ -403,6 +402,31 @@ fn render_buffer(
         map
     };
 
+    // Breakpoint lines + stopped line for the current buffer's source.
+    // DAP reports lines 1-indexed; the renderer's `line_idx` is 0-indexed,
+    // so we store 0-indexed values here to match the rendering loop.
+    let (breakpoint_lines, stopped_line): (std::collections::HashSet<u32>, Option<u32>) = {
+        let mut bps: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stopped: Option<u32> = None;
+        if let (Some(path), Some(state)) = (buf.file_path(), editor.debug_state.as_ref()) {
+            let path_str = path.to_string_lossy();
+            if let Some(list) = state.breakpoints.get(path_str.as_ref()) {
+                for bp in list {
+                    if bp.line >= 1 {
+                        bps.insert((bp.line - 1) as u32);
+                    }
+                }
+            }
+            if let Some((src, line)) = &state.stopped_location {
+                if src.as_str() == path_str.as_ref() && *line >= 1 {
+                    stopped = Some((*line - 1) as u32);
+                }
+            }
+        }
+        (bps, stopped)
+    };
+    let stopped_line_style = ts(editor, "debug.current_line");
+
     let mut lines = Vec::with_capacity(viewport_height);
 
     let col_offset = win.col_offset;
@@ -416,12 +440,28 @@ fn render_buffer(
                 .filter(|c| *c != '\n' && *c != '\r')
                 .collect();
 
-            // Gutter layout: "{line_num_padded}{severity_marker_or_space}"
-            // total width = gutter_w.
+            // Gutter layout: "{line_num_padded}{marker_or_space}"
+            // total width = gutter_w. Marker priority: stopped-line > breakpoint
+            // > diagnostic — DAP state is more ephemeral and thus more salient
+            // than LSP diagnostics; the user needs to see it first.
             let line_num = format!("{:>width$}", line_idx + 1, width = gutter_w - 1);
-            let (marker_char, marker_style) = match line_severities.get(&(line_idx as u32)) {
-                Some(sev) => (sev.gutter_char(), ts(editor, sev.theme_key())),
+            let line_idx_u32 = line_idx as u32;
+            let marker = resolve_gutter_marker(
+                stopped_line == Some(line_idx_u32),
+                breakpoint_lines.contains(&line_idx_u32),
+                line_severities.get(&line_idx_u32).copied(),
+            );
+            let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
+                Some((ch, key)) => (ch, ts(editor, key)),
                 None => (' ', gutter_style),
+            };
+            // Whole-line background cue for the stopped line. Falls through
+            // per-char overrides (selection, search) naturally because
+            // `line_text_style` is only the *base* style.
+            let line_text_style = if stopped_line == Some(line_idx_u32) {
+                stopped_line_style
+            } else {
+                text_style
             };
 
             if needs_spans {
@@ -430,13 +470,18 @@ fn render_buffer(
                 let full_count = full_chars.len();
                 let line_char_end = line_char_start + full_count;
 
-                // Build a per-char style array over the full line
-                let mut styles: Vec<Style> = vec![text_style; full_count];
+                // Build a per-char style array over the full line. Initialize
+                // with `line_text_style` so a stopped-line background survives
+                // under syntax highlights (which typically only set fg).
+                let mut styles: Vec<Style> = vec![line_text_style; full_count];
 
                 // Apply tree-sitter syntax highlights first (lowest priority —
                 // everything else overwrites these). Spans are byte-based;
                 // convert each intersecting span to the current line's char
                 // coordinate space using the rope's byte_to_char mapping.
+                //
+                // We `patch` rather than replace so the stopped-line bg shows
+                // through syntax fg overrides.
                 if let Some(spans) = syntax_spans {
                     let line_byte_start = buf.rope().char_to_byte(line_char_start);
                     let line_byte_end = buf.rope().char_to_byte(line_char_end);
@@ -459,7 +504,7 @@ fn render_buffer(
                             .min(full_count);
                         let style = ts(editor, span.theme_key);
                         for s in styles[sc..ec].iter_mut() {
-                            *s = style;
+                            *s = s.patch(style);
                         }
                     }
                 }
@@ -519,7 +564,7 @@ fn render_buffer(
                 lines.push(Line::from(vec![
                     Span::styled(line_num, gutter_style),
                     Span::styled(marker_char.to_string(), marker_style),
-                    Span::styled(display, text_style),
+                    Span::styled(display, line_text_style),
                 ]));
             }
         } else {
@@ -991,6 +1036,50 @@ fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeveri
     rank(new) > rank(cur)
 }
 
+/// A gutter marker for a single line. Variants are ordered by display
+/// priority — a Stopped line hides a Breakpoint marker, which in turn
+/// hides a Diagnostic marker. Only one glyph fits in the gutter column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GutterMarker {
+    None,
+    Diagnostic(DiagnosticSeverity),
+    Breakpoint,
+    Stopped,
+}
+
+impl GutterMarker {
+    /// Returns the glyph + theme key to render this marker with, or `None`
+    /// when the gutter column should stay blank.
+    fn glyph_and_theme_key(self) -> Option<(char, &'static str)> {
+        match self {
+            GutterMarker::None => None,
+            GutterMarker::Diagnostic(sev) => Some((sev.gutter_char(), sev.theme_key())),
+            // Filled circle is the ubiquitous breakpoint glyph (Helix, VSCode).
+            GutterMarker::Breakpoint => Some(('●', "debug.breakpoint")),
+            // Right-pointing triangle cues execution arrow.
+            GutterMarker::Stopped => Some(('▶', "debug.current_line")),
+        }
+    }
+}
+
+/// Pick the gutter marker for a line given all possible contributors.
+/// Priority: Stopped > Breakpoint > Diagnostic > None.
+fn resolve_gutter_marker(
+    is_stopped: bool,
+    has_breakpoint: bool,
+    diag_severity: Option<DiagnosticSeverity>,
+) -> GutterMarker {
+    if is_stopped {
+        GutterMarker::Stopped
+    } else if has_breakpoint {
+        GutterMarker::Breakpoint
+    } else if let Some(sev) = diag_severity {
+        GutterMarker::Diagnostic(sev)
+    } else {
+        GutterMarker::None
+    }
+}
+
 pub fn gutter_width(line_count: usize) -> usize {
     let digits = if line_count == 0 {
         1
@@ -998,4 +1087,88 @@ pub fn gutter_width(line_count: usize) -> usize {
         (line_count as f64).log10().floor() as usize + 1
     };
     digits.max(2) + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Gutter marker priority ----------------------------------------
+
+    #[test]
+    fn marker_priority_stopped_beats_breakpoint_and_diagnostic() {
+        let m = resolve_gutter_marker(true, true, Some(DiagnosticSeverity::Error));
+        assert_eq!(m, GutterMarker::Stopped);
+    }
+
+    #[test]
+    fn marker_priority_breakpoint_beats_diagnostic() {
+        let m = resolve_gutter_marker(false, true, Some(DiagnosticSeverity::Error));
+        assert_eq!(m, GutterMarker::Breakpoint);
+    }
+
+    #[test]
+    fn marker_priority_diagnostic_when_no_debug_state() {
+        let m = resolve_gutter_marker(false, false, Some(DiagnosticSeverity::Warning));
+        assert_eq!(m, GutterMarker::Diagnostic(DiagnosticSeverity::Warning));
+    }
+
+    #[test]
+    fn marker_none_when_nothing_present() {
+        let m = resolve_gutter_marker(false, false, None);
+        assert_eq!(m, GutterMarker::None);
+    }
+
+    // --- Marker glyph rendering ----------------------------------------
+
+    #[test]
+    fn stopped_glyph_uses_current_line_theme() {
+        let (ch, key) = GutterMarker::Stopped.glyph_and_theme_key().unwrap();
+        assert_eq!(ch, '▶');
+        assert_eq!(key, "debug.current_line");
+    }
+
+    #[test]
+    fn breakpoint_glyph_uses_debug_breakpoint_theme() {
+        let (ch, key) = GutterMarker::Breakpoint.glyph_and_theme_key().unwrap();
+        assert_eq!(ch, '●');
+        assert_eq!(key, "debug.breakpoint");
+    }
+
+    #[test]
+    fn diagnostic_glyph_matches_severity() {
+        let cases = [
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Information,
+            DiagnosticSeverity::Hint,
+        ];
+        for sev in cases {
+            let (ch, key) = GutterMarker::Diagnostic(sev).glyph_and_theme_key().unwrap();
+            assert_eq!(ch, sev.gutter_char());
+            assert_eq!(key, sev.theme_key());
+        }
+    }
+
+    #[test]
+    fn none_marker_has_no_glyph() {
+        assert!(GutterMarker::None.glyph_and_theme_key().is_none());
+    }
+
+    // --- gutter_width ---------------------------------------------------
+
+    #[test]
+    fn gutter_width_minimum_is_three() {
+        // 1 digit + 1 marker col, but min-padded to 2 digits + 1 = 3.
+        assert_eq!(gutter_width(0), 3);
+        assert_eq!(gutter_width(1), 3);
+        assert_eq!(gutter_width(99), 3);
+    }
+
+    #[test]
+    fn gutter_width_scales_with_digits() {
+        assert_eq!(gutter_width(100), 4);
+        assert_eq!(gutter_width(999), 4);
+        assert_eq!(gutter_width(1000), 5);
+    }
 }
