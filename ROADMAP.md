@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1 COMPLETE (674 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1 COMPLETE (684 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -236,7 +236,7 @@ concurrently with LSP.
 Debug adapter integration. Wires existing protocol types to live debuggers.
 Also the substrate for AI-agent driven E2E testing of the editor itself.
 
-### M1: Connection & Lifecycle ✅ (674 tests)
+### M1: Connection & Lifecycle ✅ (684 tests)
 - [x] Spawn debug adapter subprocess from config (`DapServerConfig`)
 - [x] Async reader/writer tasks — reader routes responses by `request_seq`
 - [x] Initialize handshake — parses `Capabilities` from adapter
@@ -248,7 +248,13 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [x] Event channel surfaces `stopped`, `output`, `terminated`, `exited`, etc.
 - [x] Request timeout cleans up pending-response map
 - [x] 12 client tests using in-memory duplex streams + mock adapter script
-- [ ] Editor integration: `DapManager`, CLI commands, `:debug` buffer (M1.5)
+- [x] `DapManager` (`DapCommand` / `DapTaskEvent` / `run_dap_task`) — mirrors
+      `LspManager` so the editor's event loop stays uniform. Translates raw
+      DAP events into editor-friendly variants (Stopped, Continued, Output,
+      Terminated, ThreadsResult, StackTraceResult, ScopesResult,
+      VariablesResult, BreakpointsSet). +10 manager tests.
+- [ ] Editor wiring: main.rs event loop, `:debug-start` commands,
+      `:debug` buffer with stack/variables panes (M1.5)
 
 ### M2: Breakpoints & Execution
 - [ ] `setBreakpoints` request wired to editor breakpoints
@@ -342,6 +348,6 @@ navigate and refactor effectively.
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
 | 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
-| 4c    | 20      | +12 done (DAP client ✅); +editor integration still pending |
+| 4c    | 30      | +22 done (client 12 + manager 10); +editor integration still pending |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **674** | **~700** |
+| **Total** | **684** | **~710** |
