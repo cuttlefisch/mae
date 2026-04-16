@@ -364,26 +364,61 @@ fn handle_insert_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // If the completion popup is visible, Tab/Ctrl-n/Ctrl-p navigate it.
+    // When the popup is not visible, Tab falls through to keymap (which will
+    // find no binding and do nothing, which is acceptable for now).
+    let popup_open = !editor.completion_items.is_empty();
+
     match key.code {
+        KeyCode::Tab if popup_open => {
+            editor.lsp_accept_completion();
+            return;
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) && popup_open => {
+            editor.lsp_complete_next();
+            return;
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) && popup_open => {
+            editor.lsp_complete_prev();
+            return;
+        }
+        KeyCode::Esc if popup_open => {
+            editor.lsp_dismiss_completion();
+            // Also exit insert mode (fall through to keymap which handles Esc).
+            handle_keymap_mode(editor, scheme, key, pending_keys);
+            return;
+        }
         KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, ch);
+            // Trigger completion after word characters.
+            if ch.is_alphanumeric() || ch == '_' {
+                editor.lsp_request_completion();
+            } else {
+                // Non-word character dismisses popup.
+                editor.lsp_dismiss_completion();
+            }
+            return;
         }
         KeyCode::Enter => {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, '\n');
+            editor.lsp_dismiss_completion();
+            return;
         }
         KeyCode::Backspace => {
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
+            // Re-trigger completion after backspace (word may still be valid).
+            editor.lsp_request_completion();
+            return;
         }
-        _ => {
-            handle_keymap_mode(editor, scheme, key, pending_keys);
-        }
+        _ => {}
     }
+    handle_keymap_mode(editor, scheme, key, pending_keys);
 }
 
 fn handle_conversation_input(

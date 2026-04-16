@@ -35,6 +35,19 @@ use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowManager};
 use crate::Mode;
 
+/// A single item in the LSP completion popup.
+#[derive(Debug, Clone)]
+pub struct CompletionItem {
+    /// Display label shown in the popup.
+    pub label: String,
+    /// Text to insert when accepted (falls back to `label`).
+    pub insert_text: String,
+    /// Brief detail (e.g. type signature).
+    pub detail: Option<String>,
+    /// Single-char sigil for the kind (f=function, v=variable, t=type, …).
+    pub kind_sigil: char,
+}
+
 /// Record of a repeatable edit for dot-repeat (`.`).
 #[derive(Clone, Debug)]
 pub struct EditRecord {
@@ -128,6 +141,10 @@ pub struct Editor {
     /// Named cursor marks, keyed by mark letter (`m`+letter to set,
     /// `'`+letter to jump). Paths make marks survive buffer switches.
     pub marks: HashMap<char, Mark>,
+    /// LSP completion popup state. Empty = no popup visible.
+    pub completion_items: Vec<CompletionItem>,
+    /// Index of the currently selected completion item.
+    pub completion_selected: usize,
     /// True while a macro is being recorded into `macro_register`.
     pub macro_recording: bool,
     /// Register letter being recorded into (a-z).
@@ -185,6 +202,8 @@ impl Editor {
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
+            completion_items: Vec::new(),
+            completion_selected: 0,
             macro_recording: false,
             macro_register: None,
             macro_log: Vec::new(),
@@ -243,6 +262,8 @@ impl Editor {
             },
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
+            completion_items: Vec::new(),
+            completion_selected: 0,
             macro_recording: false,
             macro_register: None,
             macro_log: Vec::new(),

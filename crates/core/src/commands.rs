@@ -340,6 +340,26 @@ impl CommandRegistry {
             "lsp-show-diagnostics",
             "Show all diagnostics in a list buffer",
         );
+        reg.register_builtin(
+            "lsp-complete",
+            "Trigger LSP completion at cursor (insert mode)",
+        );
+        reg.register_builtin(
+            "lsp-accept-completion",
+            "Accept the selected completion item (Tab)",
+        );
+        reg.register_builtin(
+            "lsp-dismiss-completion",
+            "Dismiss the completion popup (Esc already exits insert mode)",
+        );
+        reg.register_builtin(
+            "lsp-complete-next",
+            "Select next completion item (Ctrl-n)",
+        );
+        reg.register_builtin(
+            "lsp-complete-prev",
+            "Select previous completion item (Ctrl-p)",
+        );
 
         // Tree-sitter structural editing (Phase 4b M3)
         reg.register_builtin(

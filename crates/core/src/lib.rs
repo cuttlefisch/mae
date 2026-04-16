@@ -23,7 +23,8 @@ pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };
 pub use editor::{
-    Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor, LspLocation, LspRange,
+    CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor,
+    LspLocation, LspRange,
 };
 pub use file_picker::FilePicker;
 pub use keymap::{

@@ -175,6 +175,10 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         render_status_bar(frame, chunks[1], editor);
         render_command_line(frame, chunks[2], editor);
         set_cursor(frame, editor, chunks[0], chunks[2]);
+        // Completion popup rendered on top after cursor is set.
+        if !editor.completion_items.is_empty() {
+            render_completion_popup(frame, chunks[0], editor);
+        }
     }
 }
 
@@ -770,6 +774,106 @@ fn render_which_key_popup(
 // ---------------------------------------------------------------------------
 // Conversation window
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// LSP completion popup
+// ---------------------------------------------------------------------------
+
+/// Render a small completion popup just below the cursor position.
+/// Shows up to 10 items; the selected item is highlighted.
+fn render_completion_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let items = &editor.completion_items;
+    if items.is_empty() {
+        return;
+    }
+
+    // Find cursor screen position (row, col) within editor_area.
+    let win = editor.window_mgr.focused_window();
+    let scroll_row = win.scroll_offset;
+    let cursor_screen_row = win.cursor_row.saturating_sub(scroll_row) as u16;
+    let cursor_screen_col = win.cursor_col as u16;
+
+    // Popup dimensions: up to 10 items, width = longest label + detail + padding.
+    const MAX_ITEMS: usize = 10;
+    let visible_count = items.len().min(MAX_ITEMS) as u16;
+    let popup_width = items
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|i| {
+            let detail_len = i.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
+            i.label.len() + detail_len + 4 // sigil + spaces + padding
+        })
+        .max()
+        .unwrap_or(20)
+        .min(50) as u16;
+    let popup_height = visible_count + 2; // border top + bottom
+
+    // Position popup below cursor; flip above if too close to bottom edge.
+    let popup_top = if cursor_screen_row + 1 + popup_height < editor_area.height {
+        editor_area.y + cursor_screen_row + 1
+    } else {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = (editor_area.x + cursor_screen_col).min(
+        editor_area.x + editor_area.width.saturating_sub(popup_width),
+    );
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    // Style helpers.
+    let border_style = ts(editor, "ui.window.border");
+    let normal_style = ts(editor, "ui.popup.text");
+    let selected_style = ts(editor, "ui.popup.key"); // reuse highlighted key style
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .style(normal_style);
+    frame.render_widget(block, popup_area);
+
+    let inner = Rect {
+        x: popup_area.x + 1,
+        y: popup_area.y + 1,
+        width: popup_area.width.saturating_sub(2),
+        height: popup_area.height.saturating_sub(2),
+    };
+
+    let lines: Vec<Line> = items
+        .iter()
+        .take(MAX_ITEMS)
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == editor.completion_selected {
+                selected_style
+            } else {
+                normal_style
+            };
+            let sigil = item.kind_sigil;
+            let label = &item.label;
+            let detail_part = item
+                .detail
+                .as_deref()
+                .map(|d| {
+                    let truncated: String = d.chars().take(20).collect();
+                    format!("  {}", truncated)
+                })
+                .unwrap_or_default();
+            let text = format!("{} {}{}", sigil, label, detail_part);
+            // Truncate to inner width
+            let max_chars = inner.width as usize;
+            let display: String = text.chars().take(max_chars).collect();
+            Line::styled(display, style)
+        })
+        .collect();
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
 
 // ---------------------------------------------------------------------------
 // File picker popup

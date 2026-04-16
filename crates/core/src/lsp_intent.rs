@@ -56,6 +56,13 @@ pub enum LspIntent {
         line: u32,
         character: u32,
     },
+    /// Request `textDocument/completion`.
+    Completion {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+    },
 }
 
 /// Convert a filesystem path to a `file://` URI, matching `mae-lsp`'s

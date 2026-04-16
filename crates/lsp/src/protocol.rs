@@ -534,6 +534,153 @@ fn parse_position(v: &serde_json::Value) -> Option<Position> {
 }
 
 // ---------------------------------------------------------------------------
+// Completion (textDocument/completion)
+// ---------------------------------------------------------------------------
+
+/// LSP completion item kind (subset; numbers from the spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionItemKind {
+    Text = 1,
+    Method = 2,
+    Function = 3,
+    Constructor = 4,
+    Field = 5,
+    Variable = 6,
+    Class = 7,
+    Interface = 8,
+    Module = 9,
+    Property = 10,
+    Keyword = 14,
+    Snippet = 15,
+    EnumMember = 20,
+    Struct = 22,
+    Unknown = 0,
+}
+
+impl CompletionItemKind {
+    pub fn from_i64(n: i64) -> Self {
+        match n {
+            1 => Self::Text,
+            2 => Self::Method,
+            3 => Self::Function,
+            4 => Self::Constructor,
+            5 => Self::Field,
+            6 => Self::Variable,
+            7 => Self::Class,
+            8 => Self::Interface,
+            9 => Self::Module,
+            10 => Self::Property,
+            14 => Self::Keyword,
+            15 => Self::Snippet,
+            20 => Self::EnumMember,
+            22 => Self::Struct,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Single-character sigil used in the completion popup.
+    pub fn sigil(self) -> char {
+        match self {
+            Self::Method | Self::Function | Self::Constructor => 'f',
+            Self::Field | Self::Property | Self::EnumMember => 'f',
+            Self::Variable => 'v',
+            Self::Class | Self::Struct | Self::Interface => 't',
+            Self::Module => 'm',
+            Self::Keyword => 'k',
+            Self::Snippet => 's',
+            _ => ' ',
+        }
+    }
+}
+
+/// A single item returned from `textDocument/completion`.
+#[derive(Debug, Clone)]
+pub struct CompletionItem {
+    /// Display label shown in the popup.
+    pub label: String,
+    /// Text to insert when the item is accepted (falls back to `label`).
+    pub insert_text: Option<String>,
+    /// Brief detail (e.g. type signature) shown next to the label.
+    pub detail: Option<String>,
+    pub kind: CompletionItemKind,
+    /// The character range the insert_text should replace (for servers that
+    /// send a textEdit instead of insertText). None = insert at cursor.
+    pub text_edit: Option<(Position, Position, String)>,
+}
+
+/// Parsed `textDocument/completion` response.
+#[derive(Debug, Clone)]
+pub struct CompletionResponse {
+    pub items: Vec<CompletionItem>,
+    /// Whether the list was truncated by the server.
+    pub is_incomplete: bool,
+}
+
+impl CompletionResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return CompletionResponse { items: vec![], is_incomplete: false };
+        }
+        // Two shapes: CompletionList { isIncomplete, items } or just items[]
+        if let Some(arr) = v.as_array() {
+            return CompletionResponse {
+                items: arr.iter().filter_map(parse_completion_item).collect(),
+                is_incomplete: false,
+            };
+        }
+        if let Some(obj) = v.as_object() {
+            let is_incomplete = obj
+                .get("isIncomplete")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+            let items = obj
+                .get("items")
+                .and_then(|i| i.as_array())
+                .map(|arr| arr.iter().filter_map(parse_completion_item).collect())
+                .unwrap_or_default();
+            return CompletionResponse { items, is_incomplete };
+        }
+        CompletionResponse { items: vec![], is_incomplete: false }
+    }
+}
+
+fn parse_completion_item(v: &serde_json::Value) -> Option<CompletionItem> {
+    let obj = v.as_object()?;
+    let label = obj.get("label")?.as_str()?.to_string();
+    let insert_text = obj
+        .get("insertText")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    let detail = obj
+        .get("detail")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    let kind = obj
+        .get("kind")
+        .and_then(|k| k.as_i64())
+        .map(CompletionItemKind::from_i64)
+        .unwrap_or(CompletionItemKind::Unknown);
+    // Try to parse textEdit for servers that send a replacement range.
+    let text_edit = obj.get("textEdit").and_then(|te| {
+        let te_obj = te.as_object()?;
+        let new_text = te_obj.get("newText")?.as_str()?.to_string();
+        let range = te_obj.get("range")?;
+        let start = parse_position(range.get("start")?)?;
+        let end = parse_position(range.get("end")?)?;
+        Some((start, end, new_text))
+    });
+    Some(CompletionItem { label, insert_text, detail, kind, text_edit })
+}
+
+/// Params for `textDocument/completion`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompletionParams {
+    #[serde(rename = "textDocument")]
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+}
+
+// ---------------------------------------------------------------------------
 // Text document sync kind (from server capabilities)
 // ---------------------------------------------------------------------------
 
@@ -920,5 +1067,70 @@ mod tests {
 
         let json_str = serde_json::to_string(&str_id).unwrap();
         assert_eq!(json_str, "\"abc\"");
+    }
+
+    // --- CompletionResponse ---
+
+    #[test]
+    fn completion_response_array_form() {
+        let v = serde_json::json!([
+            {"label": "println", "kind": 3},
+            {"label": "print", "kind": 3, "detail": "macro"}
+        ]);
+        let resp = CompletionResponse::from_value(v);
+        assert_eq!(resp.items.len(), 2);
+        assert_eq!(resp.items[0].label, "println");
+        assert_eq!(resp.items[1].detail.as_deref(), Some("macro"));
+        assert!(!resp.is_incomplete);
+    }
+
+    #[test]
+    fn completion_response_list_form() {
+        let v = serde_json::json!({
+            "isIncomplete": true,
+            "items": [
+                {"label": "foo", "insertText": "foo()", "kind": 2}
+            ]
+        });
+        let resp = CompletionResponse::from_value(v);
+        assert!(resp.is_incomplete);
+        assert_eq!(resp.items.len(), 1);
+        assert_eq!(resp.items[0].insert_text.as_deref(), Some("foo()"));
+        assert_eq!(resp.items[0].kind, CompletionItemKind::Method);
+    }
+
+    #[test]
+    fn completion_response_null_is_empty() {
+        let resp = CompletionResponse::from_value(serde_json::Value::Null);
+        assert!(resp.items.is_empty());
+    }
+
+    #[test]
+    fn completion_item_kind_sigils() {
+        assert_eq!(CompletionItemKind::Function.sigil(), 'f');
+        assert_eq!(CompletionItemKind::Variable.sigil(), 'v');
+        assert_eq!(CompletionItemKind::Class.sigil(), 't');
+        assert_eq!(CompletionItemKind::Keyword.sigil(), 'k');
+        assert_eq!(CompletionItemKind::Snippet.sigil(), 's');
+        assert_eq!(CompletionItemKind::Module.sigil(), 'm');
+    }
+
+    #[test]
+    fn completion_item_text_edit_parsed() {
+        let v = serde_json::json!([{
+            "label": "main",
+            "textEdit": {
+                "range": {
+                    "start": {"line": 0, "character": 3},
+                    "end":   {"line": 0, "character": 6}
+                },
+                "newText": "main()"
+            }
+        }]);
+        let resp = CompletionResponse::from_value(v);
+        let item = &resp.items[0];
+        let (start, _end, text) = item.text_edit.as_ref().unwrap();
+        assert_eq!(start.character, 3);
+        assert_eq!(text, "main()");
     }
 }

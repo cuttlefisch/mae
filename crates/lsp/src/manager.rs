@@ -13,7 +13,10 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::client::{LspClient, LspEvent, LspServerConfig};
-use crate::protocol::{Diagnostic, Location, Notification, Position, PublishDiagnosticsParams, Range};
+use crate::protocol::{
+    CompletionItem, CompletionResponse, Diagnostic, Location, Notification, Position,
+    PublishDiagnosticsParams, Range,
+};
 
 /// Commands the editor sends to the LSP task.
 #[derive(Debug)]
@@ -57,6 +60,12 @@ pub enum LspCommand {
         language_id: String,
         position: Position,
     },
+    /// Request completion items at the given position.
+    Completion {
+        uri: String,
+        language_id: String,
+        position: Position,
+    },
     /// Shut down all clients.
     Shutdown,
 }
@@ -96,6 +105,12 @@ pub enum LspTaskEvent {
     ServerNotification {
         language_id: String,
         notification: Notification,
+    },
+    /// Completion response.
+    CompletionResult {
+        uri: String,
+        items: Vec<CompletionItem>,
+        is_incomplete: bool,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -229,6 +244,16 @@ impl LspManager {
         let client = self.ensure_client(language_id).await?;
         let resp = client.request_hover(uri, position).await?;
         Ok((resp.contents, resp.range))
+    }
+
+    pub async fn completion(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<CompletionResponse, String> {
+        let client = self.ensure_client(language_id).await?;
+        client.request_completion(uri, position).await
     }
 
     pub async fn shutdown_all(&mut self) {
@@ -409,6 +434,24 @@ async fn handle_command(
                         uri,
                         contents,
                         range,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::Completion {
+            uri,
+            language_id,
+            position,
+        } => match manager.completion(&language_id, &uri, position).await {
+            Ok(resp) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::CompletionResult {
+                        uri,
+                        items: resp.items,
+                        is_incomplete: resp.is_incomplete,
                     })
                     .await;
             }

@@ -910,6 +910,13 @@ impl Editor {
             "lsp-find-references" => self.lsp_request_references(),
             "lsp-hover" => self.lsp_request_hover(),
 
+            // LSP completion (Phase 4a M4)
+            "lsp-complete" => self.lsp_request_completion(),
+            "lsp-accept-completion" => self.lsp_accept_completion(),
+            "lsp-dismiss-completion" => self.lsp_dismiss_completion(),
+            "lsp-complete-next" => self.lsp_complete_next(),
+            "lsp-complete-prev" => self.lsp_complete_prev(),
+
             // LSP diagnostics (Phase 4a M3)
             "lsp-next-diagnostic" => self.jump_next_diagnostic(),
             "lsp-prev-diagnostic" => self.jump_prev_diagnostic(),

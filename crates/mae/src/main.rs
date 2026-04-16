@@ -8,8 +8,8 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use mae_ai::{ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent};
 use mae_core::{
-    Buffer, DapIntent, Diagnostic as CoreDiagnostic, DiagnosticSeverity as CoreSeverity, Editor,
-    KeyPress, LspIntent, LspLocation, LspRange,
+    Buffer, CompletionItem as CoreCompletionItem, DapIntent, Diagnostic as CoreDiagnostic,
+    DiagnosticSeverity as CoreSeverity, Editor, KeyPress, LspIntent, LspLocation, LspRange,
 };
 use mae_dap::{
     DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint,
@@ -345,6 +345,16 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             language_id,
             position: Position { line, character },
         },
+        LspIntent::Completion {
+            uri,
+            language_id,
+            line,
+            character,
+        } => LspCommand::Completion {
+            uri,
+            language_id,
+            position: Position { line, character },
+        },
     }
 }
 
@@ -425,6 +435,20 @@ fn handle_lsp_event(
                 method = %notification.method,
                 "LSP server notification"
             );
+        }
+        LspTaskEvent::CompletionResult { uri: _, items, .. } => {
+            let core_items: Vec<CoreCompletionItem> = items
+                .into_iter()
+                .map(|item| CoreCompletionItem {
+                    insert_text: item
+                        .insert_text
+                        .unwrap_or_else(|| item.label.clone()),
+                    label: item.label,
+                    detail: item.detail,
+                    kind_sigil: item.kind.sigil(),
+                })
+                .collect();
+            editor.apply_completion_result(core_items);
         }
         LspTaskEvent::Error { message } => {
             warn!(error = %message, "LSP error");
