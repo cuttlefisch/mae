@@ -667,9 +667,9 @@ impl Editor {
                 } else {
                     match name {
                         "debug-continue" => self.dap_continue(),
-                        "debug-step-over" => self.dap_step_over(),
-                        "debug-step-into" => self.dap_step_into(),
-                        "debug-step-out" => self.dap_step_out(),
+                        "debug-step-over" => self.dap_step(crate::StepKind::Over),
+                        "debug-step-into" => self.dap_step(crate::StepKind::In),
+                        "debug-step-out" => self.dap_step(crate::StepKind::Out),
                         _ => unreachable!(),
                     }
                 }

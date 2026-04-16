@@ -1,4 +1,5 @@
 mod buffer;
+mod dap;
 mod editor_tools;
 mod file;
 mod lsp;
@@ -8,6 +9,10 @@ mod syntax;
 pub use buffer::{
     execute_buffer_read, execute_buffer_write, execute_cursor_info, execute_file_read,
     execute_list_buffers,
+};
+pub use dap::{
+    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
     execute_command_list, execute_debug_state, execute_editor_state, execute_window_layout,

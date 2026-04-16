@@ -18,7 +18,7 @@ pub mod word;
 pub use buffer::{Buffer, BufferKind};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
-pub use dap_intent::{DapIntent, DapSpawnConfig};
+pub use dap_intent::{DapIntent, DapSpawnConfig, StepKind};
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };

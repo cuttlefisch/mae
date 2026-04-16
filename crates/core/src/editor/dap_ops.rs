@@ -17,7 +17,7 @@
 //! state updates here — three small, testable modules instead of one
 //! inscrutable 3000-line file.
 
-use crate::dap_intent::{DapIntent, DapSpawnConfig};
+use crate::dap_intent::{DapIntent, DapSpawnConfig, StepKind};
 use crate::debug::{
     DebugState, DebugTarget, DebugThread, Scope, StackFrame, Variable,
 };
@@ -44,9 +44,11 @@ impl Editor {
         launch_args: serde_json::Value,
         attach: bool,
     ) {
-        let adapter_name = spawn.adapter_id.clone();
+        // Format the status before moving `spawn.adapter_id` into the state,
+        // so we can do a single clone instead of two.
+        self.set_status(format!("[DAP] starting {}...", spawn.adapter_id));
         self.debug_state = Some(DebugState::new(DebugTarget::Dap {
-            adapter_name: adapter_name.clone(),
+            adapter_name: spawn.adapter_id.clone(),
             program,
         }));
         self.pending_dap_intents.push(DapIntent::StartSession {
@@ -54,7 +56,34 @@ impl Editor {
             launch_args,
             attach,
         });
-        self.set_status(format!("[DAP] starting {}...", adapter_name));
+    }
+
+    /// Start a DAP session using a named adapter preset (e.g. `"lldb"`,
+    /// `"debugpy"`, `"codelldb"`). Looks up the `DapSpawnConfig` and
+    /// launch args for the preset, then delegates to `dap_start_session`.
+    ///
+    /// Returns `Err(msg)` if the adapter name is unknown or if a debug
+    /// session is already active. Both `:debug-start` and the AI
+    /// `dap_start` tool go through this so the preconditions are checked
+    /// in one place and both surfaces refuse to stack sessions.
+    pub fn dap_start_with_adapter(
+        &mut self,
+        adapter: &str,
+        program: &str,
+        extra_args: &[String],
+    ) -> Result<(), String> {
+        if self.debug_state.is_some() {
+            return Err("A debug session is already active".into());
+        }
+        let spawn = default_spawn_for_adapter(adapter).ok_or_else(|| {
+            format!(
+                "Unknown adapter: {} (known: lldb, debugpy, codelldb)",
+                adapter
+            )
+        })?;
+        let launch_args = default_launch_args(adapter, program, extra_args);
+        self.dap_start_session(spawn, program.to_string(), launch_args, false);
+        Ok(())
     }
 
     /// Toggle a breakpoint at the cursor's current line in the active
@@ -96,19 +125,91 @@ impl Editor {
             .debug_state
             .get_or_insert_with(|| DebugState::new(DebugTarget::SelfDebug));
         let remaining_lines = state.toggle_breakpoint_at(source_path.clone(), line);
+        let was_set = remaining_lines.contains(&line);
 
-        // Only forward to adapter if we're actually in a DAP session.
+        // Status uses borrowed `source_path` before moving into the intent.
+        let status = if was_set {
+            format!("Breakpoint set: {}:{}", source_path, line)
+        } else {
+            format!("Breakpoint removed: {}:{}", source_path, line)
+        };
+
         if is_dap {
             self.pending_dap_intents.push(DapIntent::SetBreakpoints {
-                source_path: source_path.clone(),
-                lines: remaining_lines.clone(),
+                source_path,
+                lines: remaining_lines,
             });
         }
+        self.set_status(status);
+    }
 
-        if remaining_lines.contains(&line) {
-            self.set_status(format!("Breakpoint set: {}:{}", source_path, line));
-        } else {
-            self.set_status(format!("Breakpoint removed: {}:{}", source_path, line));
+    /// Idempotently set a breakpoint at `(source_path, line)`. Returns
+    /// the full line set for that source after the operation.
+    ///
+    /// - No-op if a breakpoint already exists at that line (does not
+    ///   duplicate, does not re-notify the adapter).
+    /// - Works without an active session (lazy state creation).
+    /// - In a DAP session, pushes a `SetBreakpoints` intent with the
+    ///   new full line set.
+    ///
+    /// This is the programmatic entry point used by the AI tool and by
+    /// Scheme callers that need deterministic "ensure breakpoint is set"
+    /// semantics, as opposed to the cursor-driven toggle.
+    pub fn dap_set_breakpoint(&mut self, source_path: String, line: i64) -> Vec<i64> {
+        // Lazy-create state so breakpoints can be recorded before a session.
+        self.debug_state
+            .get_or_insert_with(|| DebugState::new(DebugTarget::SelfDebug));
+        self.mutate_breakpoint(source_path, line, /* ensure_present = */ true)
+    }
+
+    /// Idempotently remove the breakpoint at `(source_path, line)`.
+    /// Returns the remaining line set for that source. No-op if absent
+    /// or if no `debug_state` exists.
+    pub fn dap_remove_breakpoint(&mut self, source_path: String, line: i64) -> Vec<i64> {
+        if self.debug_state.is_none() {
+            return Vec::new();
+        }
+        self.mutate_breakpoint(source_path, line, /* ensure_present = */ false)
+    }
+
+    /// Shared body for `dap_set_breakpoint`/`dap_remove_breakpoint`.
+    /// Precondition: `self.debug_state` is `Some`. Returns the full
+    /// line set for the source after the op (idempotent — unchanged if
+    /// the breakpoint was already in the requested state).
+    fn mutate_breakpoint(
+        &mut self,
+        source_path: String,
+        line: i64,
+        ensure_present: bool,
+    ) -> Vec<i64> {
+        let state = self
+            .debug_state
+            .as_mut()
+            .expect("mutate_breakpoint called without debug_state");
+        let current: Vec<i64> = state
+            .breakpoints
+            .get(&source_path)
+            .map(|bps| bps.iter().map(|b| b.line).collect())
+            .unwrap_or_default();
+        if current.contains(&line) == ensure_present {
+            // Already in the desired state — no mutation, no adapter notify.
+            return current;
+        }
+        let lines = state.toggle_breakpoint_at(source_path.clone(), line);
+        self.push_set_breakpoints_if_dap(source_path, lines.clone());
+        lines
+    }
+
+    /// Push a `SetBreakpoints` intent iff the current session is DAP.
+    /// Extracted so set/remove share one place to decide whether the
+    /// adapter needs to hear about a breakpoint change.
+    fn push_set_breakpoints_if_dap(&mut self, source_path: String, lines: Vec<i64>) {
+        if matches!(
+            self.debug_state.as_ref().map(|s| &s.target),
+            Some(DebugTarget::Dap { .. })
+        ) {
+            self.pending_dap_intents
+                .push(DapIntent::SetBreakpoints { source_path, lines });
         }
     }
 
@@ -130,32 +231,26 @@ impl Editor {
         }
     }
 
-    /// Resume execution on the active thread.
+    /// Resume execution on the active thread. No-op if no session.
     pub fn dap_continue(&mut self) {
-        let tid = self.dap_active_thread_id();
+        let Some(tid) = self.dap_active_thread_id() else { return };
         self.pending_dap_intents.push(DapIntent::Continue { thread_id: tid });
         self.set_status("[DAP] continue");
     }
 
-    /// Step over on the active thread.
-    pub fn dap_step_over(&mut self) {
-        let tid = self.dap_active_thread_id();
-        self.pending_dap_intents.push(DapIntent::Next { thread_id: tid });
-        self.set_status("[DAP] step over");
-    }
-
-    /// Step into on the active thread.
-    pub fn dap_step_into(&mut self) {
-        let tid = self.dap_active_thread_id();
-        self.pending_dap_intents.push(DapIntent::StepIn { thread_id: tid });
-        self.set_status("[DAP] step into");
-    }
-
-    /// Step out on the active thread.
-    pub fn dap_step_out(&mut self) {
-        let tid = self.dap_active_thread_id();
-        self.pending_dap_intents.push(DapIntent::StepOut { thread_id: tid });
-        self.set_status("[DAP] step out");
+    /// Step on the active thread with the given step kind. No-op if no
+    /// session. One method replaces three near-identical helpers so the
+    /// AI tool, the `:debug-step-*` commands, and any future Scheme
+    /// caller share the same dispatch.
+    pub fn dap_step(&mut self, kind: StepKind) {
+        let Some(tid) = self.dap_active_thread_id() else { return };
+        let intent = match kind {
+            StepKind::Over => DapIntent::Next { thread_id: tid },
+            StepKind::In => DapIntent::StepIn { thread_id: tid },
+            StepKind::Out => DapIntent::StepOut { thread_id: tid },
+        };
+        self.pending_dap_intents.push(intent);
+        self.set_status(format!("[DAP] step {}", kind.as_str()));
     }
 
     /// Pull fresh threads + top-of-stack for the active thread.
@@ -194,9 +289,11 @@ impl Editor {
         self.set_status("[DAP] disconnected");
     }
 
-    /// The thread id the UI is currently focused on, or 0 if no session.
-    fn dap_active_thread_id(&self) -> i64 {
-        self.debug_state.as_ref().map(|s| s.active_thread_id).unwrap_or(0)
+    /// The thread id the UI is currently focused on, or `None` if there
+    /// is no active session. Callers must early-out on `None` rather than
+    /// forwarding a sentinel thread id to the adapter.
+    fn dap_active_thread_id(&self) -> Option<i64> {
+        self.debug_state.as_ref().map(|s| s.active_thread_id)
     }
 
     // ------------------------------------------------------------------
@@ -248,15 +345,9 @@ impl Editor {
     pub fn apply_dap_continued(&mut self, thread_id: i64, all_threads: bool) {
         if let Some(state) = self.debug_state.as_mut() {
             state.clear_stopped_location();
-            if all_threads {
-                for t in state.threads.iter_mut() {
+            for t in state.threads.iter_mut() {
+                if all_threads || t.id == thread_id {
                     t.stopped = false;
-                }
-            } else {
-                for t in state.threads.iter_mut() {
-                    if t.id == thread_id {
-                        t.stopped = false;
-                    }
                 }
             }
         }
@@ -323,7 +414,11 @@ impl Editor {
             return;
         };
         state.active_thread_id = thread_id;
-        let top_frame = frames.first().cloned();
+        // Peek the fields we need from the top frame before consuming `frames`.
+        // Cloning just the source string avoids two clones of the full 5-tuple.
+        let top = frames
+            .first()
+            .map(|(id, _name, src, line, _col)| (*id, src.clone(), *line));
         let stack = frames
             .into_iter()
             .map(|(id, name, source, line, column)| StackFrame {
@@ -336,13 +431,10 @@ impl Editor {
             .collect();
         state.set_stack_frames(stack);
 
-        // Update stopped_location from the top frame (if it has a source).
-        if let Some((_, _, Some(src), line, _)) = top_frame.clone() {
-            state.set_stopped_location(src, line);
-        }
-
-        // Queue a scopes request for the top frame.
-        if let Some((frame_id, _, _, _, _)) = top_frame {
+        if let Some((frame_id, src, line)) = top {
+            if let Some(src) = src {
+                state.set_stopped_location(src, line);
+            }
             self.dap_request_scopes(frame_id);
         }
     }
@@ -410,6 +502,58 @@ impl Editor {
     /// Handle a DAP error — surface in status line.
     pub fn apply_dap_error(&mut self, message: String) {
         self.set_status(format!("[DAP] {}", message));
+    }
+}
+
+/// Read an env var, falling back to a default string. Keeps the adapter
+/// preset table below compact and overridable without touching source.
+fn env_or(var: &str, default: &str) -> String {
+    std::env::var(var).unwrap_or_else(|_| default.into())
+}
+
+/// Default adapter spawn config for a short adapter name. Returns None
+/// for unknown adapters. Callers can override the preset binary via
+/// environment variable if the preset doesn't match the user's setup.
+fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
+    match adapter {
+        "lldb" | "lldb-dap" => Some(DapSpawnConfig {
+            command: env_or("MAE_DAP_LLDB", "lldb-dap"),
+            args: vec![],
+            adapter_id: "lldb".into(),
+        }),
+        "codelldb" => Some(DapSpawnConfig {
+            command: env_or("MAE_DAP_CODELLDB", "codelldb"),
+            args: vec!["--port".into(), "0".into()],
+            adapter_id: "codelldb".into(),
+        }),
+        "debugpy" | "python" => Some(DapSpawnConfig {
+            command: env_or("MAE_DAP_DEBUGPY", "python"),
+            args: vec!["-m".into(), "debugpy.adapter".into()],
+            adapter_id: "debugpy".into(),
+        }),
+        _ => None,
+    }
+}
+
+/// Build the adapter-specific launch args JSON for a `program` path.
+/// Keeps the preset minimal so most real programs just work.
+fn default_launch_args(adapter: &str, program: &str, extra: &[String]) -> serde_json::Value {
+    let base_args: Vec<String> = extra.to_vec();
+    match adapter {
+        "debugpy" | "python" => serde_json::json!({
+            "request": "launch",
+            "type": "python",
+            "program": program,
+            "args": base_args,
+            "console": "internalConsole",
+            "stopOnEntry": false,
+        }),
+        _ => serde_json::json!({
+            "request": "launch",
+            "program": program,
+            "args": base_args,
+            "stopOnEntry": false,
+        }),
     }
 }
 
@@ -532,9 +676,9 @@ mod tests {
         }));
         ed.debug_state.as_mut().unwrap().active_thread_id = 7;
         ed.dap_continue();
-        ed.dap_step_over();
-        ed.dap_step_into();
-        ed.dap_step_out();
+        ed.dap_step(StepKind::Over);
+        ed.dap_step(StepKind::In);
+        ed.dap_step(StepKind::Out);
         assert_eq!(ed.pending_dap_intents.len(), 4);
         assert!(matches!(ed.pending_dap_intents[0], DapIntent::Continue { thread_id: 7 }));
         assert!(matches!(ed.pending_dap_intents[1], DapIntent::Next { thread_id: 7 }));
@@ -777,5 +921,143 @@ mod tests {
             ed.pending_dap_intents[0],
             DapIntent::Disconnect { terminate_debuggee: false }
         ));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_adds_and_is_idempotent() {
+        let mut ed = Editor::new();
+        let lines = ed.dap_set_breakpoint("/a.rs".into(), 10);
+        assert_eq!(lines, vec![10]);
+        // Idempotent — calling again does not duplicate or re-queue.
+        let intents_before = ed.pending_dap_intents.len();
+        let lines2 = ed.dap_set_breakpoint("/a.rs".into(), 10);
+        assert_eq!(lines2, vec![10]);
+        assert_eq!(ed.pending_dap_intents.len(), intents_before);
+        assert_eq!(
+            ed.debug_state.as_ref().unwrap().breakpoints["/a.rs"].len(),
+            1
+        );
+    }
+
+    #[test]
+    fn dap_set_breakpoint_queues_intent_in_dap_session() {
+        let mut ed = Editor::new();
+        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+            adapter_name: "lldb".into(),
+            program: "/bin/ls".into(),
+        }));
+        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        assert!(matches!(
+            ed.pending_dap_intents[0],
+            DapIntent::SetBreakpoints { .. }
+        ));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_multiple_lines_same_source() {
+        let mut ed = Editor::new();
+        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        ed.dap_set_breakpoint("/a.rs".into(), 20);
+        let lines = ed.dap_set_breakpoint("/a.rs".into(), 30);
+        assert_eq!(lines.len(), 3);
+        assert!(lines.contains(&10));
+        assert!(lines.contains(&20));
+        assert!(lines.contains(&30));
+    }
+
+    #[test]
+    fn dap_remove_breakpoint_removes_and_is_idempotent() {
+        let mut ed = Editor::new();
+        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        ed.dap_set_breakpoint("/a.rs".into(), 20);
+        let lines = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        assert_eq!(lines, vec![20]);
+        // Removing again is a no-op.
+        let lines2 = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        assert_eq!(lines2, vec![20]);
+    }
+
+    #[test]
+    fn dap_remove_breakpoint_no_state_is_noop() {
+        let mut ed = Editor::new();
+        let lines = ed.dap_remove_breakpoint("/a.rs".into(), 10);
+        assert!(lines.is_empty());
+        assert!(ed.debug_state.is_none());
+    }
+
+    #[test]
+    fn dap_continue_without_session_is_noop() {
+        let mut ed = Editor::new();
+        ed.dap_continue();
+        assert!(ed.pending_dap_intents.is_empty());
+    }
+
+    #[test]
+    fn dap_step_without_session_is_noop() {
+        let mut ed = Editor::new();
+        ed.dap_step(StepKind::Over);
+        ed.dap_step(StepKind::In);
+        ed.dap_step(StepKind::Out);
+        assert!(ed.pending_dap_intents.is_empty());
+    }
+
+    #[test]
+    fn default_spawn_for_lldb() {
+        let spawn = default_spawn_for_adapter("lldb").unwrap();
+        assert_eq!(spawn.adapter_id, "lldb");
+    }
+
+    #[test]
+    fn default_spawn_unknown_adapter() {
+        assert!(default_spawn_for_adapter("nonexistent").is_none());
+    }
+
+    #[test]
+    fn default_launch_args_python_shape() {
+        let v = default_launch_args("debugpy", "/tmp/x.py", &[]);
+        assert_eq!(v["type"], "python");
+        assert_eq!(v["program"], "/tmp/x.py");
+    }
+
+    #[test]
+    fn default_launch_args_lldb_shape() {
+        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()]);
+        assert_eq!(v["program"], "/bin/ls");
+        assert_eq!(v["args"][0], "--help");
+    }
+
+    #[test]
+    fn dap_start_with_adapter_queues_intent() {
+        let mut ed = Editor::new();
+        ed.dap_start_with_adapter("lldb", "/bin/ls", &[]).unwrap();
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert!(matches!(
+            ed.pending_dap_intents[0],
+            DapIntent::StartSession { attach: false, .. }
+        ));
+    }
+
+    #[test]
+    fn dap_start_with_adapter_unknown_returns_err() {
+        let mut ed = Editor::new();
+        let err = ed
+            .dap_start_with_adapter("bogus", "/bin/ls", &[])
+            .unwrap_err();
+        assert!(err.contains("Unknown adapter"));
+        assert!(ed.pending_dap_intents.is_empty());
+        assert!(ed.debug_state.is_none());
+    }
+
+    #[test]
+    fn dap_start_with_adapter_rejects_concurrent_session() {
+        let mut ed = Editor::new();
+        ed.dap_start_with_adapter("lldb", "/bin/ls", &[]).unwrap();
+        let intents_before = ed.pending_dap_intents.len();
+        let err = ed
+            .dap_start_with_adapter("lldb", "/bin/sh", &[])
+            .unwrap_err();
+        assert!(err.contains("already active"));
+        // No extra intent should have been queued by the rejected call.
+        assert_eq!(ed.pending_dap_intents.len(), intents_before);
     }
 }

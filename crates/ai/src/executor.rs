@@ -5,10 +5,11 @@ use crate::types::*;
 
 use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
-    execute_create_file, execute_cursor_info, execute_debug_state, execute_editor_state,
-    execute_file_read, execute_list_buffers, execute_lsp_diagnostics, execute_open_file,
-    execute_project_files, execute_project_search, execute_switch_buffer, execute_syntax_tree,
-    execute_window_layout,
+    execute_create_file, execute_cursor_info, execute_dap_continue, execute_dap_inspect_variable,
+    execute_dap_set_breakpoint, execute_dap_start, execute_dap_step, execute_debug_state,
+    execute_editor_state, execute_file_read, execute_list_buffers, execute_lsp_diagnostics,
+    execute_open_file, execute_project_files, execute_project_search, execute_switch_buffer,
+    execute_syntax_tree, execute_window_layout,
 };
 
 /// Execute a tool call against editor state.
@@ -61,6 +62,11 @@ pub fn execute_tool(
         "project_search",
         "lsp_diagnostics",
         "syntax_tree",
+        "dap_start",
+        "dap_set_breakpoint",
+        "dap_continue",
+        "dap_step",
+        "dap_inspect_variable",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -105,6 +111,11 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "project_search" => execute_project_search(&call.arguments),
         "lsp_diagnostics" => execute_lsp_diagnostics(editor, &call.arguments),
         "syntax_tree" => execute_syntax_tree(editor, &call.arguments),
+        "dap_start" => execute_dap_start(editor, &call.arguments),
+        "dap_set_breakpoint" => execute_dap_set_breakpoint(editor, &call.arguments),
+        "dap_continue" => execute_dap_continue(editor),
+        "dap_step" => execute_dap_step(editor, &call.arguments),
+        "dap_inspect_variable" => execute_dap_inspect_variable(editor, &call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
@@ -769,5 +780,114 @@ mod tests {
         editor.switch_to_buffer(1);
         assert_eq!(editor.active_buffer_idx(), 1);
         assert_eq!(editor.alternate_buffer_idx, Some(0));
+    }
+
+    // --- Phase 4c M4: AI DAP tools ---
+
+    /// Policy that allows Privileged tier — needed for `dap_start` since
+    /// it launches arbitrary programs under a debug adapter.
+    fn privileged_policy() -> PermissionPolicy {
+        PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Privileged,
+        }
+    }
+
+    #[test]
+    fn dap_start_tool_queues_intent() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "dap_start",
+            serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
+        );
+        let result = execute_tool(&mut editor, &call, &all_tools(), &privileged_policy());
+        assert!(result.success, "dap_start failed: {}", result.output);
+        assert_eq!(editor.pending_dap_intents.len(), 1);
+        assert!(editor.debug_state.is_some());
+    }
+
+    #[test]
+    fn dap_start_tool_requires_privileged_tier() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "dap_start",
+            serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
+        );
+        // Default policy allows up to Shell — should be denied.
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("Permission denied"));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_tool_returns_json() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "dap_set_breakpoint",
+            serde_json::json!({"source": "/a.rs", "line": 42}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(result.success, "dap_set_breakpoint failed: {}", result.output);
+        let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(v["source"], "/a.rs");
+        assert_eq!(v["line"], 42);
+    }
+
+    #[test]
+    fn dap_continue_tool_errors_without_session() {
+        let mut editor = Editor::new();
+        let call = make_call("dap_continue", serde_json::json!({}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("No active"));
+    }
+
+    #[test]
+    fn dap_step_tool_rejects_unknown_direction() {
+        let mut editor = Editor::new();
+        editor.debug_state = Some(mae_core::DebugState::new(mae_core::DebugTarget::Dap {
+            adapter_name: "lldb".into(),
+            program: "/bin/ls".into(),
+        }));
+        let call = make_call(
+            "dap_step",
+            serde_json::json!({"direction": "sideways"}),
+        );
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("Unknown step"));
+    }
+
+    #[test]
+    fn dap_inspect_variable_tool_errors_without_session() {
+        let mut editor = Editor::new();
+        let call = make_call("dap_inspect_variable", serde_json::json!({"name": "x"}));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(!result.success);
+        assert!(result.output.contains("No active"));
     }
 }

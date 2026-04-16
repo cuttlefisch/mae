@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1 COMPLETE (684 tests).
+Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1/M2/M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M3 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M4 COMPLETE (754 tests).
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -270,10 +270,15 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [ ] Variable hover (show value at cursor)
 - [ ] Watch expressions
 
-### M4: AI Debug Tools
-- [ ] AI tools: `dap_continue`, `dap_step`, `dap_inspect_variable`
-- [ ] AI can set breakpoints, inspect state, suggest fixes
-- [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)`
+### M4: AI Debug Tools ✅ (754 tests)
+- [x] AI tools: `dap_start`, `dap_set_breakpoint`, `dap_continue`, `dap_step`, `dap_inspect_variable`
+- [x] Action-oriented design — read-side view already covered by `debug_state`
+- [x] Permission tiers: `dap_start` Privileged, breakpoint/continue/step Write, inspect ReadOnly
+- [x] Idempotent breakpoint set; explicit errors (not no-ops) on stale-state calls
+- [x] Shared `dap_start_with_adapter` entry point — command & AI tool agree on preconditions
+- [x] `StepKind` enum replaces stringly-typed step dispatch
+- [x] `DebugState::find_variable` encapsulates scope iteration (no leak to tool layer)
+- [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)` — deferred
 
 ---
 
@@ -348,6 +353,6 @@ navigate and refactor effectively.
 | 3g    | —       | +0 (refactor, no new features — preserve existing 521+) |
 | 4a    | 67      | +10 (LSP connection ✅, navigation ✅, diagnostics, completion) |
 | 4b    | 29      | +10 (tree-sitter parse ✅, highlight ✅, structural ops ✅ — 11 syntax + 12 editor + 5 AI tool) |
-| 4c    | 30      | +22 done (client 12 + manager 10); +editor integration still pending |
+| 4c    | 70      | +30 done (client 12 + manager 10 + AI debug tools 19 + StepKind/find_variable 5); +editor integration still pending |
 | 5     | —       | +15 (SQLite, org parser, search) |
-| **Total** | **684** | **~710** |
+| **Total** | **754** | **~780** |

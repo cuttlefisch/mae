@@ -383,6 +383,124 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "dap_start".into(),
+            description: "Start a debug session against a program using an adapter preset. Pair with `dap_set_breakpoint` and `dap_continue`/`dap_step` to drive execution. Use `debug_state` to see threads/frames/variables.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "adapter".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Adapter preset: 'lldb' (C/C++/Rust), 'debugpy' (Python), 'codelldb' (C/C++/Rust alt)".into(),
+                            enum_values: Some(vec!["lldb".into(), "debugpy".into(), "codelldb".into()]),
+                        },
+                    ),
+                    (
+                        "program".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Path to the binary or script to debug".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "args".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "Program arguments (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["adapter".into(), "program".into()],
+            },
+            // Privileged because launching arbitrary programs under a
+            // debug adapter is roughly equivalent to shell exec.
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
+            name: "dap_set_breakpoint".into(),
+            description: "Set a breakpoint at source:line. Idempotent — no-op if already set. Works before or during a session; pending breakpoints are synced to the adapter on session start. Lines are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "source".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Source file path (matches the adapter's view — typically the same path the debugger sees)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["source".into(), "line".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_continue".into(),
+            description: "Resume execution on the active thread. Errors if no debug session is active.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_step".into(),
+            description: "Step execution on the active thread. `direction`: 'over' (next line, skip calls), 'in' (step into calls), 'out' (step out of current frame). Errors if no session is active.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "direction".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "'over', 'in', or 'out'".into(),
+                        enum_values: Some(vec!["over".into(), "in".into(), "out".into()]),
+                    },
+                )]),
+                required: vec!["direction".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_inspect_variable".into(),
+            description: "Look up a single variable by name in the stopped frame's scopes. Returns JSON with name/value/type/scope/variables_reference. Use `debug_state` for the full variable tree. `variables_reference` > 0 means expandable children.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Variable name to find".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional scope name to restrict search (e.g. 'Locals', 'Globals'). Default: all scopes.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
 
@@ -480,7 +598,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 23);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -500,6 +618,11 @@ mod tests {
         assert!(names.contains(&"project_search"));
         assert!(names.contains(&"lsp_diagnostics"));
         assert!(names.contains(&"syntax_tree"));
+        assert!(names.contains(&"dap_start"));
+        assert!(names.contains(&"dap_set_breakpoint"));
+        assert!(names.contains(&"dap_continue"));
+        assert!(names.contains(&"dap_step"));
+        assert!(names.contains(&"dap_inspect_variable"));
     }
 
     #[test]

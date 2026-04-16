@@ -22,6 +22,46 @@ pub struct DapSpawnConfig {
     pub adapter_id: String,
 }
 
+/// Step direction. Distinct from the `DapIntent` `Next`/`StepIn`/`StepOut`
+/// variants so the editor API and AI/Scheme surfaces can describe "step"
+/// as a single operation with a typed argument rather than three near-
+/// identical methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    /// Step to the next line in the current frame, skipping calls.
+    Over,
+    /// Step into the next call.
+    In,
+    /// Step out of the current frame.
+    Out,
+}
+
+impl StepKind {
+    /// Parse a short string form used by AI tools and commands.
+    /// Returns `None` for unknown values; callers decide whether to
+    /// surface the error to the user or just ignore it.
+    ///
+    /// Named `parse` rather than `from_str` so it doesn't shadow the
+    /// `FromStr` trait (which requires `Result`, not `Option`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "over" => Some(StepKind::Over),
+            "in" => Some(StepKind::In),
+            "out" => Some(StepKind::Out),
+            _ => None,
+        }
+    }
+
+    /// Short name, suitable for status messages and tool output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StepKind::Over => "over",
+            StepKind::In => "in",
+            StepKind::Out => "out",
+        }
+    }
+}
+
 /// A debug-adapter request pending dispatch.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DapIntent {
@@ -109,5 +149,18 @@ mod tests {
             }
             other => panic!("expected SetBreakpoints, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn step_kind_parse_round_trip() {
+        for kind in [StepKind::Over, StepKind::In, StepKind::Out] {
+            assert_eq!(StepKind::parse(kind.as_str()), Some(kind));
+        }
+    }
+
+    #[test]
+    fn step_kind_parse_rejects_unknown() {
+        assert!(StepKind::parse("sideways").is_none());
+        assert!(StepKind::parse("").is_none());
     }
 }

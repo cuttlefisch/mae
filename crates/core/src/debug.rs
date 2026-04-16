@@ -307,6 +307,34 @@ impl DebugState {
         self.breakpoints.insert(src, bps);
     }
 
+    /// Find a variable by name, optionally restricted to a named scope.
+    /// Iterates scopes in their defined order so multiple matches return
+    /// the first-defined scope's copy deterministically.
+    ///
+    /// Returns `Some((scope, variable))` on hit so callers can report
+    /// which scope owns the match without a second lookup.
+    pub fn find_variable(
+        &self,
+        name: &str,
+        scope_filter: Option<&str>,
+    ) -> Option<(&Scope, &Variable)> {
+        for scope in &self.scopes {
+            if let Some(s) = scope_filter {
+                if scope.name != s {
+                    continue;
+                }
+            }
+            // A scope with no populated variables yet just means "skip
+            // this scope" — not "abort the search". `?` would incorrectly
+            // bail out of the whole loop.
+            let Some(vars) = self.variables.get(&scope.name) else { continue };
+            if let Some(var) = vars.iter().find(|v| v.name == name) {
+                return Some((scope, var));
+            }
+        }
+        None
+    }
+
     /// Toggle a breakpoint at `(source, line)` — add if missing, remove
     /// (by line match) if present. Returns the remaining line set for that
     /// source, so callers can forward it to the adapter via setBreakpoints.
@@ -452,6 +480,101 @@ mod tests {
             assert_eq!(adapter_name, "codelldb");
             assert_eq!(program, "./target/debug/myapp");
         }
+    }
+
+    #[test]
+    fn find_variable_by_name() {
+        let mut state = DebugState::new(DebugTarget::SelfDebug);
+        state.scopes.push(Scope {
+            name: "Locals".into(),
+            variables_reference: 1,
+            expensive: false,
+        });
+        state.variables.insert(
+            "Locals".into(),
+            vec![Variable {
+                name: "x".into(),
+                value: "42".into(),
+                var_type: Some("i32".into()),
+                variables_reference: 0,
+            }],
+        );
+        let (scope, var) = state.find_variable("x", None).unwrap();
+        assert_eq!(scope.name, "Locals");
+        assert_eq!(var.value, "42");
+
+        assert!(state.find_variable("ghost", None).is_none());
+    }
+
+    #[test]
+    fn find_variable_scope_filter() {
+        let mut state = DebugState::new(DebugTarget::SelfDebug);
+        state.scopes.push(Scope {
+            name: "Locals".into(),
+            variables_reference: 1,
+            expensive: false,
+        });
+        state.scopes.push(Scope {
+            name: "Globals".into(),
+            variables_reference: 2,
+            expensive: false,
+        });
+        state.variables.insert(
+            "Locals".into(),
+            vec![Variable {
+                name: "x".into(),
+                value: "local".into(),
+                var_type: None,
+                variables_reference: 0,
+            }],
+        );
+        state.variables.insert(
+            "Globals".into(),
+            vec![Variable {
+                name: "x".into(),
+                value: "global".into(),
+                var_type: None,
+                variables_reference: 0,
+            }],
+        );
+
+        // Unfiltered search returns the first-defined scope's copy.
+        let (scope, var) = state.find_variable("x", None).unwrap();
+        assert_eq!(scope.name, "Locals");
+        assert_eq!(var.value, "local");
+
+        // Filtered search walks past Locals to find Globals' copy.
+        let (scope, var) = state.find_variable("x", Some("Globals")).unwrap();
+        assert_eq!(scope.name, "Globals");
+        assert_eq!(var.value, "global");
+    }
+
+    #[test]
+    fn find_variable_skips_unpopulated_scopes() {
+        let mut state = DebugState::new(DebugTarget::SelfDebug);
+        // First scope exists but has no variables collected yet —
+        // find_variable must continue searching instead of aborting.
+        state.scopes.push(Scope {
+            name: "Registers".into(),
+            variables_reference: 1,
+            expensive: true,
+        });
+        state.scopes.push(Scope {
+            name: "Locals".into(),
+            variables_reference: 2,
+            expensive: false,
+        });
+        state.variables.insert(
+            "Locals".into(),
+            vec![Variable {
+                name: "x".into(),
+                value: "42".into(),
+                var_type: None,
+                variables_reference: 0,
+            }],
+        );
+        let (scope, _) = state.find_variable("x", None).unwrap();
+        assert_eq!(scope.name, "Locals");
     }
 
     #[test]

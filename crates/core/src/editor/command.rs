@@ -1,4 +1,3 @@
-use crate::dap_intent::DapSpawnConfig;
 use crate::theme::bundled_theme_names;
 
 use super::Editor;
@@ -89,22 +88,10 @@ impl Editor {
                 let extra_args: Vec<String> = parts.map(|s| s.to_string()).collect();
                 match (adapter, program) {
                     (Some(adapter), Some(program)) => {
-                        match default_spawn_for_adapter(adapter) {
-                            Some(spawn) => {
-                                let launch_args = default_launch_args(adapter, program, &extra_args);
-                                self.dap_start_session(
-                                    spawn,
-                                    program.to_string(),
-                                    launch_args,
-                                    false,
-                                );
-                            }
-                            None => {
-                                self.set_status(format!(
-                                    "Unknown adapter: {} (known: lldb, debugpy, codelldb)",
-                                    adapter
-                                ));
-                            }
+                        if let Err(msg) =
+                            self.dap_start_with_adapter(adapter, program, &extra_args)
+                        {
+                            self.set_status(msg);
                         }
                     }
                     _ => {
@@ -165,86 +152,9 @@ impl Editor {
     }
 }
 
-/// Read an env var, falling back to a default string. Exists to keep the
-/// adapter table below compact and self-documenting.
-fn env_or(var: &str, default: &str) -> String {
-    std::env::var(var).unwrap_or_else(|_| default.into())
-}
-
-/// Default adapter spawn config for a short name.
-/// Returns None for unknown adapters. Callers can override the command
-/// via environment variable if the preset binary name doesn't match.
-fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
-    match adapter {
-        "lldb" | "lldb-dap" => Some(DapSpawnConfig {
-            command: env_or("MAE_DAP_LLDB", "lldb-dap"),
-            args: vec![],
-            adapter_id: "lldb".into(),
-        }),
-        "codelldb" => Some(DapSpawnConfig {
-            command: env_or("MAE_DAP_CODELLDB", "codelldb"),
-            args: vec!["--port".into(), "0".into()],
-            adapter_id: "codelldb".into(),
-        }),
-        "debugpy" | "python" => Some(DapSpawnConfig {
-            command: env_or("MAE_DAP_DEBUGPY", "python"),
-            args: vec!["-m".into(), "debugpy.adapter".into()],
-            adapter_id: "debugpy".into(),
-        }),
-        _ => None,
-    }
-}
-
-/// Build the adapter-specific launch args JSON for a `program` path.
-/// Keeps the preset minimal so most real programs just work.
-fn default_launch_args(adapter: &str, program: &str, extra: &[String]) -> serde_json::Value {
-    let base_args: Vec<String> = extra.to_vec();
-    match adapter {
-        "debugpy" | "python" => serde_json::json!({
-            "request": "launch",
-            "type": "python",
-            "program": program,
-            "args": base_args,
-            "console": "internalConsole",
-            "stopOnEntry": false,
-        }),
-        _ => serde_json::json!({
-            "request": "launch",
-            "program": program,
-            "args": base_args,
-            "stopOnEntry": false,
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_spawn_for_lldb() {
-        let spawn = default_spawn_for_adapter("lldb").unwrap();
-        assert_eq!(spawn.adapter_id, "lldb");
-    }
-
-    #[test]
-    fn default_spawn_unknown_adapter() {
-        assert!(default_spawn_for_adapter("nonexistent").is_none());
-    }
-
-    #[test]
-    fn default_launch_args_python_shape() {
-        let v = default_launch_args("debugpy", "/tmp/x.py", &[]);
-        assert_eq!(v["type"], "python");
-        assert_eq!(v["program"], "/tmp/x.py");
-    }
-
-    #[test]
-    fn default_launch_args_lldb_shape() {
-        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()]);
-        assert_eq!(v["program"], "/bin/ls");
-        assert_eq!(v["args"][0], "--help");
-    }
 
     #[test]
     fn debug_start_command_without_args_shows_usage() {
