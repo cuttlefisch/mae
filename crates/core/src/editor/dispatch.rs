@@ -602,22 +602,17 @@ impl Editor {
             "ai-cancel" => {
                 // Mark streaming as stopped in conversation buffer.
                 // Actual channel cancel is handled by the binary (AiCommand::Cancel).
-                if let Some(conv) = self
-                    .buffers
-                    .iter_mut()
-                    .find_map(|b| b.conversation.as_mut())
-                {
-                    if conv.streaming {
+                let status = match self.conversation_mut() {
+                    Some(conv) if conv.streaming => {
                         conv.streaming = false;
                         conv.streaming_start = None;
                         conv.push_system("[cancelled]");
-                        self.set_status("[AI] Cancelled");
-                    } else {
-                        self.set_status("No active AI request to cancel");
+                        "[AI] Cancelled"
                     }
-                } else {
-                    self.set_status("No AI conversation active");
-                }
+                    Some(_) => "No active AI request to cancel",
+                    None => "No AI conversation active",
+                };
+                self.set_status(status);
             }
             "describe-key" => self.set_status("Not yet implemented: describe-key"),
             "describe-command" => self.set_status("Not yet implemented: describe-command"),

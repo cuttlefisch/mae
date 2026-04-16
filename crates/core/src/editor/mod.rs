@@ -260,6 +260,33 @@ impl Editor {
         self.buffers.iter().position(|b| b.name == name)
     }
 
+    /// First conversation attached to any buffer, if any.
+    pub fn conversation(&self) -> Option<&crate::conversation::Conversation> {
+        self.buffers.iter().find_map(|b| b.conversation.as_ref())
+    }
+
+    /// Mutable view of the first conversation attached to any buffer.
+    pub fn conversation_mut(&mut self) -> Option<&mut crate::conversation::Conversation> {
+        self.buffers
+            .iter_mut()
+            .find_map(|b| b.conversation.as_mut())
+    }
+
+    /// Index of the conversation buffer, creating `*AI*` if none exists.
+    /// Used by both interactive open and programmatic load to keep the
+    /// "find or create by kind" logic in one place.
+    pub(crate) fn ensure_conversation_buffer_idx(&mut self) -> usize {
+        if let Some(i) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Conversation)
+        {
+            return i;
+        }
+        self.buffers.push(Buffer::new_conversation("*AI*"));
+        self.buffers.len() - 1
+    }
+
     /// Switch the focused window to the buffer at the given index.
     /// Returns false if index is out of bounds.
     pub fn switch_to_buffer(&mut self, idx: usize) -> bool {

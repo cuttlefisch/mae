@@ -1,15 +1,17 @@
-/// Conversation buffer: structured AI interaction history.
-///
-/// This is NOT backed by a rope. The conversation entries are the single
-/// source of truth. Rendering happens directly from structured data,
-/// avoiding the sync problem of keeping a rope and entry list coherent.
-///
-/// Emacs lesson: don't try to shoehorn structured data into a flat text
-/// buffer. Conversation is inherently structured (roles, tool calls,
-/// results). Render it directly.
+//! Conversation buffer: structured AI interaction history.
+//!
+//! This is NOT backed by a rope. The conversation entries are the single
+//! source of truth. Rendering happens directly from structured data,
+//! avoiding the sync problem of keeping a rope and entry list coherent.
+//!
+//! Emacs lesson: don't try to shoehorn structured data into a flat text
+//! buffer. Conversation is inherently structured (roles, tool calls,
+//! results). Render it directly.
+
+use serde::{Deserialize, Serialize};
 
 // Role of a conversation entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConversationRole {
     User,
     Assistant,
@@ -19,7 +21,7 @@ pub enum ConversationRole {
 }
 
 /// A single entry in the conversation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationEntry {
     pub role: ConversationRole,
     pub content: String,
@@ -158,6 +160,44 @@ impl Conversation {
             entry.collapsed = !entry.collapsed;
             self.version += 1;
         }
+    }
+
+    /// Serialize the conversation's entries to pretty-printed JSON. Only
+    /// entries are persisted; transient state (streaming, input buffer,
+    /// version counter) is intentionally not serialized since it has no
+    /// meaning across sessions.
+    pub fn to_json(&self) -> Result<String, String> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            version: u32,
+            entries: &'a [ConversationEntry],
+        }
+        serde_json::to_string_pretty(&Wire {
+            version: 1,
+            entries: &self.entries,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    /// Replace entries with those loaded from JSON. Rejects unknown
+    /// schema versions so future format changes fail loudly.
+    pub fn load_json(&mut self, json: &str) -> Result<(), String> {
+        #[derive(Deserialize)]
+        struct Wire {
+            version: u32,
+            entries: Vec<ConversationEntry>,
+        }
+        let wire: Wire = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        if wire.version != 1 {
+            return Err(format!(
+                "Unsupported conversation format version: {}",
+                wire.version
+            ));
+        }
+        self.entries = wire.entries;
+        self.trim_entries();
+        self.version += 1;
+        Ok(())
     }
 
     /// Render all entries + input line into display lines.
@@ -390,5 +430,71 @@ mod tests {
         assert_eq!(conv.version(), 2);
         conv.append_streaming_chunk(" there");
         assert_eq!(conv.version(), 3);
+    }
+
+    #[test]
+    fn to_json_round_trip_preserves_entries() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("hi there");
+        conv.push_tool_call("buffer_read");
+        conv.push_tool_result(true, "the file contents");
+        conv.push_system("system note");
+
+        let json = conv.to_json().unwrap();
+        let mut restored = Conversation::new();
+        restored.load_json(&json).unwrap();
+
+        assert_eq!(restored.entries.len(), 5);
+        assert_eq!(restored.entries[0].content, "hello");
+        assert_eq!(restored.entries[1].content, "hi there");
+        assert!(matches!(
+            restored.entries[2].role,
+            ConversationRole::ToolCall { ref name } if name == "buffer_read"
+        ));
+        assert!(matches!(
+            restored.entries[3].role,
+            ConversationRole::ToolResult { success: true }
+        ));
+        assert_eq!(restored.entries[4].role, ConversationRole::System);
+    }
+
+    #[test]
+    fn load_json_replaces_existing_entries() {
+        let mut conv = Conversation::new();
+        conv.push_user("original");
+        let saved = conv.to_json().unwrap();
+
+        let mut other = Conversation::new();
+        other.push_user("to be replaced");
+        other.push_assistant("also replaced");
+        other.load_json(&saved).unwrap();
+
+        assert_eq!(other.entries.len(), 1);
+        assert_eq!(other.entries[0].content, "original");
+    }
+
+    #[test]
+    fn load_json_rejects_unknown_version() {
+        let bad = r#"{"version": 99, "entries": []}"#;
+        let mut conv = Conversation::new();
+        let err = conv.load_json(bad).unwrap_err();
+        assert!(err.contains("Unsupported"));
+    }
+
+    #[test]
+    fn load_json_rejects_garbage() {
+        let mut conv = Conversation::new();
+        assert!(conv.load_json("not valid json").is_err());
+    }
+
+    #[test]
+    fn to_json_produces_stable_schema() {
+        let mut conv = Conversation::new();
+        conv.push_user("hi");
+        let json = conv.to_json().unwrap();
+        assert!(json.contains("\"version\""));
+        assert!(json.contains("\"entries\""));
+        assert!(json.contains("\"User\""));
     }
 }

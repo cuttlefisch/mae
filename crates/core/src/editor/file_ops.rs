@@ -71,18 +71,41 @@ impl Editor {
 
     /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.
     pub fn open_conversation_buffer(&mut self) {
-        let conv_idx = self
-            .buffers
-            .iter()
-            .position(|b| b.kind == crate::buffer::BufferKind::Conversation);
-        let idx = if let Some(i) = conv_idx {
-            i
-        } else {
-            self.buffers.push(Buffer::new_conversation("*AI*"));
-            self.buffers.len() - 1
-        };
+        let idx = self.ensure_conversation_buffer_idx();
         self.window_mgr.focused_window_mut().buffer_idx = idx;
         self.mode = crate::Mode::ConversationInput;
+    }
+
+    /// Persist the AI conversation to a JSON file (`:ai-save <path>`).
+    /// Errors if no conversation buffer exists yet — the user hasn't
+    /// started an AI session, so there's nothing to save.
+    pub fn ai_save(&self, path: &Path) -> Result<usize, String> {
+        let conv = self
+            .conversation()
+            .ok_or_else(|| "No conversation buffer to save".to_string())?;
+        let json = conv.to_json()?;
+        std::fs::write(path, &json)
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+        Ok(conv.entries.len())
+    }
+
+    /// Load a JSON conversation transcript (`:ai-load <path>`). Creates
+    /// the conversation buffer if it doesn't exist yet; replaces the
+    /// existing entries otherwise. Unlike `open_conversation_buffer`,
+    /// loading is an I/O operation, not a UX one — we don't switch focus
+    /// or change mode.
+    pub fn ai_load(&mut self, path: &Path) -> Result<usize, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let idx = self.ensure_conversation_buffer_idx();
+        // Conversation buffers always carry a Conversation (invariant of
+        // `Buffer::new_conversation`), so unwrap here is sound.
+        let conv = self.buffers[idx]
+            .conversation
+            .as_mut()
+            .expect("conversation buffer missing its Conversation");
+        conv.load_json(&contents)?;
+        Ok(conv.entries.len())
     }
 
     /// Start a self-debug session, populating DebugState with the editor's

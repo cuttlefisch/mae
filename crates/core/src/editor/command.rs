@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::theme::bundled_theme_names;
 
 use super::Editor;
@@ -80,6 +82,14 @@ impl Editor {
                 self.search_state.highlight_active = false;
                 true
             }
+            "ai-save" => {
+                self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
+                true
+            }
+            "ai-load" => {
+                self.dispatch_path_op(args, "ai-load", |ed, p| ed.ai_load(p), "Loaded", "from");
+                true
+            }
             "debug-start" => {
                 let arg_str = args.unwrap_or("");
                 let mut parts = arg_str.split_whitespace();
@@ -150,6 +160,36 @@ impl Editor {
             }
         }
     }
+
+    /// Shared handler for `:<cmd> <path>` style commands backed by a
+    /// `Result<usize, String>`-returning operation. Extracts the path
+    /// argument, surfaces usage on empty input, and formats a uniform
+    /// success/error status message (e.g. "Saved 42 entries to foo.json").
+    fn dispatch_path_op(
+        &mut self,
+        args: Option<&str>,
+        cmd: &str,
+        op: impl FnOnce(&mut Editor, &Path) -> Result<usize, String>,
+        verb: &str,
+        preposition: &str,
+    ) {
+        let path_str = args.unwrap_or("").trim();
+        if path_str.is_empty() {
+            self.set_status(format!("Usage: :{} <path>", cmd));
+            return;
+        }
+        let path = Path::new(path_str);
+        match op(self, path) {
+            Ok(n) => self.set_status(format!(
+                "{} {} entries {} {}",
+                verb,
+                n,
+                preposition,
+                path.display()
+            )),
+            Err(e) => self.set_status(e),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +217,51 @@ mod tests {
         ed.execute_command("debug-start bogus /bin/ls");
         assert!(ed.status_msg.contains("Unknown adapter"));
         assert!(ed.pending_dap_intents.is_empty());
+    }
+
+    #[test]
+    fn ai_save_without_args_shows_usage() {
+        let mut ed = Editor::new();
+        ed.execute_command("ai-save");
+        assert!(ed.status_msg.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn ai_save_without_conversation_sets_error() {
+        let mut ed = Editor::new();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        ed.execute_command(&format!("ai-save {}", tmp.path().display()));
+        assert!(ed.status_msg.contains("No conversation"));
+    }
+
+    #[test]
+    fn ai_load_without_args_shows_usage() {
+        let mut ed = Editor::new();
+        ed.execute_command("ai-load");
+        assert!(ed.status_msg.to_lowercase().contains("usage"));
+    }
+
+    #[test]
+    fn ai_save_and_load_round_trip_via_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conv.json");
+
+        let mut ed = Editor::new();
+        ed.open_conversation_buffer();
+        ed.conversation_mut().unwrap().push_user("round-trip");
+
+        ed.execute_command(&format!("ai-save {}", path.display()));
+        assert!(ed.status_msg.contains("Saved 1 entries"));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("round-trip"));
+
+        // Mutate, then reload: load must replace, not merge.
+        ed.conversation_mut().unwrap().push_user("to-be-replaced");
+        assert_eq!(ed.conversation().unwrap().entries.len(), 2);
+
+        ed.execute_command(&format!("ai-load {}", path.display()));
+        assert!(ed.status_msg.contains("Loaded 1 entries"));
+        assert_eq!(ed.conversation().unwrap().entries.len(), 1);
     }
 }

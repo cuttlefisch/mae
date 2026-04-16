@@ -252,11 +252,11 @@ pub fn load_init_file(scheme: &mut SchemeRuntime, editor: &mut Editor) {
 }
 
 /// Find the first conversation buffer's Conversation, if any.
+/// Thin forwarder to `Editor::conversation_mut`; kept as a free function
+/// because `main.rs` uses it ergonomically alongside other `bootstrap::`
+/// helpers.
 pub fn find_conversation_buffer_mut(editor: &mut Editor) -> Option<&mut mae_core::Conversation> {
-    editor
-        .buffers
-        .iter_mut()
-        .find_map(|b| b.conversation.as_mut())
+    editor.conversation_mut()
 }
 
 /// Spawn the LSP coordinator task and return (event_rx, command_tx).
