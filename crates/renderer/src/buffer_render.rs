@@ -55,7 +55,11 @@ pub(crate) fn render_buffer(
     syntax_spans: Option<&[HighlightSpan]>,
 ) {
     let viewport_height = area.height as usize;
-    let gutter_w = gutter_width(buf.line_count());
+    let gutter_w = if editor.show_line_numbers {
+        gutter_width(buf.line_count())
+    } else {
+        2 // marker column + 1 padding
+    };
     let gutter_style = ts(editor, "ui.gutter");
     let text_style = ts(editor, "ui.text");
     let search_style = ts(editor, "ui.search.match");
@@ -118,156 +122,263 @@ pub(crate) fn render_buffer(
     let mut lines = Vec::with_capacity(viewport_height);
 
     let col_offset = win.col_offset;
+    let text_width = (area.width as usize).saturating_sub(gutter_w);
+    let wrap = editor.word_wrap && text_width > 0;
 
-    for i in 0..viewport_height {
-        let line_idx = win.scroll_offset + i;
-        if line_idx < buf.line_count() {
-            let line_text = buf.rope().line(line_idx);
-            let full_display: String = line_text
-                .chars()
-                .filter(|c| *c != '\n' && *c != '\r')
-                .collect();
+    let mut display_row = 0;
+    let mut line_idx = win.scroll_offset;
 
-            let line_num = format!("{:>width$}", line_idx + 1, width = gutter_w - 1);
-            let line_idx_u32 = line_idx as u32;
-            let marker = resolve_gutter_marker(
-                stopped_line == Some(line_idx_u32),
-                breakpoint_lines.contains(&line_idx_u32),
-                line_severities.get(&line_idx_u32).copied(),
-            );
-            let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
-                Some((ch, key)) => (ch, ts(editor, key)),
-                None => (' ', gutter_style),
-            };
-            let line_text_style = if stopped_line == Some(line_idx_u32) {
-                stopped_line_style
+    while display_row < viewport_height && line_idx < buf.line_count() {
+        let line_text = buf.rope().line(line_idx);
+        let full_display: String = line_text
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+
+        let line_num = if !editor.show_line_numbers {
+            " ".to_string()
+        } else if editor.relative_line_numbers && line_idx != win.cursor_row {
+            let offset = line_idx.abs_diff(win.cursor_row);
+            format!("{:>width$}", offset, width = gutter_w - 1)
+        } else {
+            format!("{:>width$}", line_idx + 1, width = gutter_w - 1)
+        };
+        let line_idx_u32 = line_idx as u32;
+        let marker = resolve_gutter_marker(
+            stopped_line == Some(line_idx_u32),
+            breakpoint_lines.contains(&line_idx_u32),
+            line_severities.get(&line_idx_u32).copied(),
+        );
+        let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
+            Some((ch, key)) => (ch, ts(editor, key)),
+            None => (' ', gutter_style),
+        };
+        let line_text_style = if stopped_line == Some(line_idx_u32) {
+            stopped_line_style
+        } else {
+            text_style
+        };
+
+        if needs_spans {
+            let line_char_start = buf.rope().line_to_char(line_idx);
+            let full_chars: Vec<char> = full_display.chars().collect();
+            let full_count = full_chars.len();
+            let line_char_end = line_char_start + full_count;
+
+            let mut styles: Vec<Style> = vec![line_text_style; full_count];
+
+            // Apply tree-sitter syntax highlights (lowest priority).
+            if let Some(spans) = syntax_spans {
+                let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                let line_byte_end = buf.rope().char_to_byte(line_char_end);
+                for span in spans {
+                    if span.byte_end <= line_byte_start || span.byte_start >= line_byte_end {
+                        continue;
+                    }
+                    let sb = span.byte_start.max(line_byte_start);
+                    let eb = span.byte_end.min(line_byte_end);
+                    let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                    let ec = buf
+                        .rope()
+                        .byte_to_char(eb)
+                        .saturating_sub(line_char_start)
+                        .min(full_count);
+                    let style = ts(editor, span.theme_key);
+                    for s in styles[sc..ec].iter_mut() {
+                        *s = s.patch(style);
+                    }
+                }
+            }
+
+            // Inline hex color preview.
+            apply_hex_color_preview(&full_chars, &mut styles);
+
+            // Cursorline: apply bg to every cell on the cursor row.
+            if show_cursorline && line_idx == win.cursor_row {
+                if let Some(bg) = cursorline_style.bg {
+                    for s in styles.iter_mut() {
+                        *s = s.patch(Style::default().bg(bg));
+                    }
+                }
+            }
+
+            // Apply selection highlight (overrides syntax).
+            if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
+                let s = sel_start.saturating_sub(line_char_start);
+                let e = (sel_end - line_char_start).min(full_count);
+                for style in styles[s..e].iter_mut() {
+                    *style = selection_style;
+                }
+            }
+
+            // Apply search highlights (highest priority).
+            if highlight_search {
+                for m in &editor.search_state.matches {
+                    if m.end <= line_char_start || m.start >= line_char_end {
+                        continue;
+                    }
+                    let ms = m.start.saturating_sub(line_char_start);
+                    let me = (m.end - line_char_start).min(full_count);
+                    for style in styles[ms..me].iter_mut() {
+                        *style = search_style;
+                    }
+                }
+            }
+
+            // Gutter spans — cursorline bg on gutter cells too.
+            let gutter_line_style = if show_cursorline && line_idx == win.cursor_row {
+                if let Some(bg) = cursorline_style.bg {
+                    gutter_style.patch(Style::default().bg(bg))
+                } else {
+                    gutter_style
+                }
             } else {
-                text_style
+                gutter_style
             };
 
-            if needs_spans {
-                let line_char_start = buf.rope().line_to_char(line_idx);
-                let full_chars: Vec<char> = full_display.chars().collect();
-                let full_count = full_chars.len();
-                let line_char_end = line_char_start + full_count;
+            if wrap {
+                // Word wrap: split styled chars into chunks of text_width.
+                let mut pos = 0;
+                let mut is_first = true;
+                loop {
+                    if display_row >= viewport_height {
+                        break;
+                    }
+                    let end = (pos + text_width).min(full_count);
+                    let chunk_chars = &full_chars[pos..end];
+                    let chunk_styles = &styles[pos..end];
 
-                let mut styles: Vec<Style> = vec![line_text_style; full_count];
+                    let mut spans: Vec<Span> = Vec::new();
+                    if is_first {
+                        spans.push(Span::styled(line_num.clone(), gutter_line_style));
+                        spans.push(Span::styled(marker_char.to_string(), marker_style));
+                    } else {
+                        let padding = " ".repeat(gutter_w);
+                        spans.push(Span::styled(padding, gutter_style));
+                    }
 
-                // Apply tree-sitter syntax highlights (lowest priority).
-                if let Some(spans) = syntax_spans {
-                    let line_byte_start = buf.rope().char_to_byte(line_char_start);
-                    let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                    for span in spans {
-                        if span.byte_end <= line_byte_start || span.byte_start >= line_byte_end {
-                            continue;
-                        }
-                        let sb = span.byte_start.max(line_byte_start);
-                        let eb = span.byte_end.min(line_byte_end);
-                        let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
-                        let ec = buf
-                            .rope()
-                            .byte_to_char(eb)
-                            .saturating_sub(line_char_start)
-                            .min(full_count);
-                        let style = ts(editor, span.theme_key);
-                        for s in styles[sc..ec].iter_mut() {
-                            *s = s.patch(style);
-                        }
+                    if !chunk_chars.is_empty() {
+                        emit_styled_spans(chunk_chars, chunk_styles, &mut spans);
+                    }
+
+                    lines.push(Line::from(spans));
+                    display_row += 1;
+                    is_first = false;
+                    pos = end;
+                    if pos >= full_count {
+                        break;
                     }
                 }
-
-                // Inline hex color preview.
-                apply_hex_color_preview(&full_chars, &mut styles);
-
-                // Cursorline: apply bg to every cell on the cursor row.
-                if show_cursorline && line_idx == win.cursor_row {
-                    if let Some(bg) = cursorline_style.bg {
-                        for s in styles.iter_mut() {
-                            *s = s.patch(Style::default().bg(bg));
-                        }
-                    }
+                // Empty line still needs one display row.
+                if is_first {
+                    lines.push(Line::from(vec![
+                        Span::styled(line_num, gutter_line_style),
+                        Span::styled(marker_char.to_string(), marker_style),
+                    ]));
+                    display_row += 1;
                 }
-
-                // Apply selection highlight (overrides syntax).
-                if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
-                    let s = sel_start.saturating_sub(line_char_start);
-                    let e = (sel_end - line_char_start).min(full_count);
-                    for style in styles[s..e].iter_mut() {
-                        *style = selection_style;
-                    }
-                }
-
-                // Apply search highlights (highest priority).
-                if highlight_search {
-                    for m in &editor.search_state.matches {
-                        if m.end <= line_char_start || m.start >= line_char_end {
-                            continue;
-                        }
-                        let ms = m.start.saturating_sub(line_char_start);
-                        let me = (m.end - line_char_start).min(full_count);
-                        for style in styles[ms..me].iter_mut() {
-                            *style = search_style;
-                        }
-                    }
-                }
-
-                // Apply horizontal scroll.
+            } else {
+                // No wrap: apply horizontal scroll.
                 let visible_start = col_offset.min(full_count);
                 let display_chars = &full_chars[visible_start..];
                 let visible_styles = &styles[visible_start..];
 
-                // Gutter spans — cursorline bg on gutter cells too.
-                let gutter_line_style = if show_cursorline && line_idx == win.cursor_row {
-                    if let Some(bg) = cursorline_style.bg {
-                        gutter_style.patch(Style::default().bg(bg))
-                    } else {
-                        gutter_style
-                    }
-                } else {
-                    gutter_style
-                };
-
-                // Coalesce consecutive chars with same style into spans.
                 let mut spans = vec![
                     Span::styled(line_num, gutter_line_style),
                     Span::styled(marker_char.to_string(), marker_style),
                 ];
                 if !display_chars.is_empty() {
-                    let mut run_start = 0;
-                    let mut run_style = visible_styles[0];
-                    for j in 1..display_chars.len() {
-                        if visible_styles[j] != run_style {
-                            let s: String = display_chars[run_start..j].iter().collect();
-                            spans.push(Span::styled(s, run_style));
-                            run_start = j;
-                            run_style = visible_styles[j];
-                        }
-                    }
-                    let s: String = display_chars[run_start..].iter().collect();
-                    spans.push(Span::styled(s, run_style));
+                    emit_styled_spans(display_chars, visible_styles, &mut spans);
                 }
 
                 lines.push(Line::from(spans));
-            } else {
-                // Apply horizontal scroll to simple (no highlight) lines.
-                let display: String = full_display.chars().skip(col_offset).collect();
+                display_row += 1;
+            }
+        } else if wrap {
+            // Word wrap without syntax spans.
+            let full_chars: Vec<char> = full_display.chars().collect();
+            let full_count = full_chars.len();
+            let mut pos = 0;
+            let mut is_first = true;
+            loop {
+                if display_row >= viewport_height {
+                    break;
+                }
+                let end = (pos + text_width).min(full_count);
+                let chunk: String = full_chars[pos..end].iter().collect();
+                let mut spans: Vec<Span> = Vec::new();
+                if is_first {
+                    spans.push(Span::styled(line_num.clone(), gutter_style));
+                    spans.push(Span::styled(marker_char.to_string(), marker_style));
+                } else {
+                    let padding = " ".repeat(gutter_w);
+                    spans.push(Span::styled(padding, gutter_style));
+                }
+                spans.push(Span::styled(chunk, line_text_style));
+                lines.push(Line::from(spans));
+                display_row += 1;
+                is_first = false;
+                pos = end;
+                if pos >= full_count {
+                    break;
+                }
+            }
+            if is_first {
                 lines.push(Line::from(vec![
                     Span::styled(line_num, gutter_style),
                     Span::styled(marker_char.to_string(), marker_style),
-                    Span::styled(display, line_text_style),
                 ]));
+                display_row += 1;
             }
         } else {
-            let padding = " ".repeat(gutter_w.saturating_sub(1));
-            lines.push(Line::from(vec![Span::styled(
-                format!("{}~", padding),
-                gutter_style,
-            )]));
+            // No wrap, no spans: apply horizontal scroll to simple lines.
+            let display: String = full_display.chars().skip(col_offset).collect();
+            lines.push(Line::from(vec![
+                Span::styled(line_num, gutter_style),
+                Span::styled(marker_char.to_string(), marker_style),
+                Span::styled(display, line_text_style),
+            ]));
+            display_row += 1;
         }
+
+        line_idx += 1;
+    }
+
+    // Fill remaining viewport with ~ lines.
+    while display_row < viewport_height {
+        let padding = " ".repeat(gutter_w.saturating_sub(1));
+        lines.push(Line::from(vec![Span::styled(
+            format!("{}~", padding),
+            gutter_style,
+        )]));
+        display_row += 1;
     }
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
+}
+
+// ---------------------------------------------------------------------------
+// Styled span coalescing helper
+// ---------------------------------------------------------------------------
+
+/// Coalesce consecutive chars with the same style into `Span`s and append to `out`.
+fn emit_styled_spans(chars: &[char], styles: &[Style], out: &mut Vec<Span<'static>>) {
+    if chars.is_empty() {
+        return;
+    }
+    let mut run_start = 0;
+    let mut run_style = styles[0];
+    for j in 1..chars.len() {
+        if styles[j] != run_style {
+            let s: String = chars[run_start..j].iter().collect();
+            out.push(Span::styled(s, run_style));
+            run_start = j;
+            run_style = styles[j];
+        }
+    }
+    let s: String = chars[run_start..].iter().collect();
+    out.push(Span::styled(s, run_style));
 }
 
 // ---------------------------------------------------------------------------
