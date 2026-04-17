@@ -210,7 +210,9 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
             // Try path completion for absolute/home paths first, then
             // Doom-style longest-common-prefix within the current root,
             // then fall back to cycling selection.
-            if !picker.complete_path_tab() && !picker.complete_longest_prefix() {
+            // Both methods have side effects — can't collapse into a match guard.
+            let completed = picker.complete_path_tab() || picker.complete_longest_prefix();
+            if !completed {
                 picker.move_down();
             }
         }
