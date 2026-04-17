@@ -12,6 +12,31 @@ use crate::tool_impls::{
     execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
     execute_project_search, execute_switch_buffer, execute_syntax_tree, execute_window_layout,
 };
+use crate::tool_impls::lsp::{
+    execute_lsp_definition, execute_lsp_hover, execute_lsp_references,
+};
+
+/// What kind of deferred LSP tool call is pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeferredKind {
+    LspDefinition,
+    LspReferences,
+    LspHover,
+}
+
+/// Result of executing a tool call — either immediately available or
+/// deferred until an async response (e.g. from the LSP task) arrives.
+#[derive(Debug)]
+pub enum ExecuteResult {
+    /// Tool completed synchronously.
+    Immediate(ToolResult),
+    /// Tool queued an async request (e.g. LSP). The caller must hold the
+    /// reply channel open and complete it when the matching event arrives.
+    Deferred {
+        tool_call_id: String,
+        kind: DeferredKind,
+    },
+}
 
 /// Execute a tool call against editor state.
 /// Runs on the MAIN THREAD because Editor and SchemeRuntime are !Send.
@@ -24,7 +49,7 @@ pub fn execute_tool(
     call: &ToolCall,
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
-) -> ToolResult {
+) -> ExecuteResult {
     // 1. Find the tool definition
     let tool_def = all_tools.iter().find(|t| t.name == call.name);
     let permission = tool_def
@@ -33,17 +58,44 @@ pub fn execute_tool(
 
     // 2. Check permission
     if !policy.is_allowed(permission) {
-        return ToolResult {
+        return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             success: false,
             output: format!(
                 "Permission denied: {} requires {:?} tier",
                 call.name, permission
             ),
+        });
+    }
+
+    // 3. Check for deferred (async) tools first
+    let deferred_kind = match call.name.as_str() {
+        "lsp_definition" => Some(DeferredKind::LspDefinition),
+        "lsp_references" => Some(DeferredKind::LspReferences),
+        "lsp_hover" => Some(DeferredKind::LspHover),
+        _ => None,
+    };
+
+    if let Some(kind) = deferred_kind {
+        let result = match kind {
+            DeferredKind::LspDefinition => execute_lsp_definition(editor, &call.arguments),
+            DeferredKind::LspReferences => execute_lsp_references(editor, &call.arguments),
+            DeferredKind::LspHover => execute_lsp_hover(editor, &call.arguments),
+        };
+        return match result {
+            Ok(()) => ExecuteResult::Deferred {
+                tool_call_id: call.id.clone(),
+                kind,
+            },
+            Err(e) => ExecuteResult::Immediate(ToolResult {
+                tool_call_id: call.id.clone(),
+                success: false,
+                output: e,
+            }),
         };
     }
 
-    // 3. Dispatch — check AI-specific tools first (some have command_ prefix collision)
+    // 4. Dispatch synchronous tools
     let ai_tool_names = [
         "buffer_read",
         "buffer_write",
@@ -84,11 +136,11 @@ pub fn execute_tool(
         execute_ai_tool(editor, call)
     };
 
-    ToolResult {
+    ExecuteResult::Immediate(ToolResult {
         tool_call_id: call.id.clone(),
         success: result.is_ok(),
         output: result.unwrap_or_else(|e| e),
-    }
+    })
 }
 
 fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
@@ -155,6 +207,13 @@ mod tests {
         tools
     }
 
+    fn unwrap_immediate(result: ExecuteResult) -> ToolResult {
+        match result {
+            ExecuteResult::Immediate(r) => r,
+            ExecuteResult::Deferred { .. } => panic!("expected Immediate, got Deferred"),
+        }
+    }
+
     fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall {
             id: "test_call".into(),
@@ -167,12 +226,12 @@ mod tests {
     fn buffer_read_full() {
         let mut editor = make_editor_with_text("hello\nworld\n");
         let call = make_call("buffer_read", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("hello"));
         assert!(result.output.contains("world"));
@@ -185,12 +244,12 @@ mod tests {
             "buffer_read",
             serde_json::json!({"start_line": 2, "end_line": 2}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("bbb"));
         assert!(!result.output.contains("aaa"));
@@ -201,12 +260,12 @@ mod tests {
     fn buffer_read_empty() {
         let mut editor = Editor::new();
         let call = make_call("buffer_read", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
     }
 
@@ -214,12 +273,12 @@ mod tests {
     fn cursor_info_returns_json() {
         let mut editor = make_editor_with_text("hello");
         let call = make_call("cursor_info", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert!(info["cursor_row"].is_number());
@@ -232,12 +291,12 @@ mod tests {
         editor.window_mgr.focused_window_mut().cursor_row = 0;
         editor.window_mgr.focused_window_mut().cursor_col = 0;
         let call = make_call("command_move_down", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
@@ -246,12 +305,12 @@ mod tests {
     fn registry_command_unknown() {
         let mut editor = Editor::new();
         let call = make_call("command_nonexistent", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("Unknown command"));
     }
@@ -261,7 +320,7 @@ mod tests {
         let mut editor = Editor::new();
         let call = make_call("command_quit", serde_json::json!({}));
         let policy = PermissionPolicy::default(); // allows up to Shell
-        let result = execute_tool(&mut editor, &call, &all_tools(), &policy);
+        let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
         assert!(!result.success);
         assert!(result.output.contains("Permission denied"));
     }
@@ -270,12 +329,12 @@ mod tests {
     fn unknown_tool_returns_error() {
         let mut editor = Editor::new();
         let call = make_call("totally_fake_tool", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("Unknown tool"));
     }
@@ -284,12 +343,12 @@ mod tests {
     fn list_buffers_returns_metadata() {
         let mut editor = Editor::new();
         let call = make_call("list_buffers", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let buffers: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
         assert_eq!(buffers.len(), 1);
@@ -304,12 +363,12 @@ mod tests {
             "buffer_write",
             serde_json::json!({"start_line": 1, "content": "new\n"}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let text = editor.active_buffer().text();
         assert!(text.starts_with("new\n"));
@@ -322,12 +381,12 @@ mod tests {
             "buffer_write",
             serde_json::json!({"start_line": 2, "end_line": 2, "content": "XXX\n"}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let text = editor.active_buffer().text();
         assert!(text.contains("XXX"));
@@ -338,12 +397,12 @@ mod tests {
     fn editor_state_returns_valid_json() {
         let mut editor = Editor::new();
         let call = make_call("editor_state", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert!(info["buffer_count"].is_number());
@@ -356,12 +415,12 @@ mod tests {
     fn window_layout_returns_valid_json() {
         let mut editor = Editor::new();
         let call = make_call("window_layout", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let windows: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
         assert_eq!(windows.len(), 1);
@@ -372,12 +431,12 @@ mod tests {
     fn command_list_includes_expected_commands() {
         let mut editor = Editor::new();
         let call = make_call("command_list", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "command_list failed: {}", result.output);
         let commands: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
         let names: Vec<&str> = commands
@@ -393,12 +452,12 @@ mod tests {
     fn debug_state_no_session() {
         let mut editor = Editor::new();
         let call = make_call("debug_state", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert_eq!(result.output, "No active debug session");
     }
@@ -408,12 +467,12 @@ mod tests {
         let mut editor = Editor::new();
         editor.dispatch_builtin("debug-self");
         let call = make_call("debug_state", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(info["target"], "SelfDebug");
@@ -432,12 +491,12 @@ mod tests {
             "file_read",
             serde_json::json!({"path": path.to_str().unwrap()}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("hello"));
         assert!(result.output.contains("world"));
@@ -458,12 +517,12 @@ mod tests {
             "open_file",
             serde_json::json!({"path": path.to_str().unwrap()}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "open_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
         assert!(editor.active_buffer().text().contains("line1"));
@@ -483,18 +542,18 @@ mod tests {
             "open_file",
             serde_json::json!({"path": path.to_str().unwrap()}),
         );
-        execute_tool(
+        unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
-        let result = execute_tool(
+        ));
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("already open"));
         assert_eq!(editor.buffers.len(), 2); // scratch + the file, not 3
@@ -510,12 +569,12 @@ mod tests {
         editor.buffers.push(b);
 
         let call = make_call("switch_buffer", serde_json::json!({"name": "second"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert_eq!(editor.active_buffer().name, "second");
     }
@@ -524,12 +583,12 @@ mod tests {
     fn switch_buffer_nonexistent() {
         let mut editor = Editor::new();
         let call = make_call("switch_buffer", serde_json::json!({"name": "nope"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("No buffer named"));
     }
@@ -543,12 +602,12 @@ mod tests {
         assert_eq!(editor.buffers.len(), 2);
 
         let call = make_call("close_buffer", serde_json::json!({"name": "tobeclosed"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "close_buffer failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 1);
     }
@@ -560,12 +619,12 @@ mod tests {
         editor.buffers[0].insert_char(win, 'x');
 
         let call = make_call("close_buffer", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("unsaved"));
     }
@@ -581,12 +640,12 @@ mod tests {
         editor.buffers[1].insert_char(win, 'X');
 
         let call = make_call("buffer_read", serde_json::json!({"buffer_name": "other"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("X"));
     }
@@ -602,12 +661,12 @@ mod tests {
             "buffer_write",
             serde_json::json!({"buffer_name": "target", "start_line": 1, "content": "hello\n"}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(editor.buffers[1].text().contains("hello"));
         // Active buffer (scratch) should be unchanged
@@ -626,12 +685,12 @@ mod tests {
             "create_file",
             serde_json::json!({"path": path.to_str().unwrap(), "content": "new file\n"}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "create_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
         assert!(editor.active_buffer().text().contains("new file"));
@@ -646,12 +705,12 @@ mod tests {
         // We're in a git repo, so this should work
         let mut editor = Editor::new();
         let call = make_call("project_files", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "project_files failed: {}", result.output);
         assert!(result.output.contains("Cargo.toml"));
     }
@@ -660,12 +719,12 @@ mod tests {
     fn project_files_with_pattern() {
         let mut editor = Editor::new();
         let call = make_call("project_files", serde_json::json!({"pattern": "*.toml"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         assert!(result.output.contains("Cargo.toml"));
         // Should not contain .rs files
@@ -679,12 +738,12 @@ mod tests {
             "project_search",
             serde_json::json!({"pattern": "mae-core", "glob": "*.toml"}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "project_search failed: {}", result.output);
         assert!(result.output.contains("mae-core"));
     }
@@ -696,12 +755,12 @@ mod tests {
             "project_search",
             serde_json::json!({"pattern": "fn", "max_results": 3}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success);
         // Should have at most 3 result lines (not counting truncation message)
         let non_truncation_lines: Vec<&str> = result
@@ -745,12 +804,12 @@ mod tests {
             }],
         );
         let call = make_call("lsp_diagnostics", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "lsp_diagnostics failed: {}", result.output);
         let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(v["counts"]["error"], 1);
@@ -773,12 +832,12 @@ mod tests {
         editor.syntax.invalidate(0);
 
         let call = make_call("syntax_tree", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(result.success, "syntax_tree failed: {}", result.output);
         let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(v["language"], "rust");
@@ -814,7 +873,7 @@ mod tests {
             "dap_start",
             serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
         );
-        let result = execute_tool(&mut editor, &call, &all_tools(), &privileged_policy());
+        let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &privileged_policy()));
         assert!(result.success, "dap_start failed: {}", result.output);
         assert_eq!(editor.pending_dap_intents.len(), 1);
         assert!(editor.debug_state.is_some());
@@ -828,12 +887,12 @@ mod tests {
             serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
         );
         // Default policy allows up to Shell — should be denied.
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("Permission denied"));
     }
@@ -845,12 +904,12 @@ mod tests {
             "dap_set_breakpoint",
             serde_json::json!({"source": "/a.rs", "line": 42}),
         );
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(
             result.success,
             "dap_set_breakpoint failed: {}",
@@ -865,12 +924,12 @@ mod tests {
     fn dap_continue_tool_errors_without_session() {
         let mut editor = Editor::new();
         let call = make_call("dap_continue", serde_json::json!({}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("No active"));
     }
@@ -883,12 +942,12 @@ mod tests {
             program: "/bin/ls".into(),
         }));
         let call = make_call("dap_step", serde_json::json!({"direction": "sideways"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("Unknown step"));
     }
@@ -897,13 +956,64 @@ mod tests {
     fn dap_inspect_variable_tool_errors_without_session() {
         let mut editor = Editor::new();
         let call = make_call("dap_inspect_variable", serde_json::json!({"name": "x"}));
-        let result = execute_tool(
+        let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
-        );
+        ));
         assert!(!result.success);
         assert!(result.output.contains("No active"));
+    }
+
+    // --- Phase 4a M5: Deferred LSP AI tools ---
+
+    #[test]
+    fn lsp_definition_returns_deferred() {
+        let mut b = mae_core::Buffer::new();
+        b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
+        let mut editor = Editor::with_buffer(b);
+        let call = make_call("lsp_definition", serde_json::json!({}));
+        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        match result {
+            ExecuteResult::Deferred { kind, .. } => {
+                assert_eq!(kind, DeferredKind::LspDefinition);
+            }
+            ExecuteResult::Immediate(r) => panic!("expected Deferred, got Immediate: {}", r.output),
+        }
+        assert_eq!(editor.pending_lsp_requests.len(), 1);
+    }
+
+    #[test]
+    fn lsp_references_returns_deferred() {
+        let mut b = mae_core::Buffer::new();
+        b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
+        let mut editor = Editor::with_buffer(b);
+        let call = make_call("lsp_references", serde_json::json!({}));
+        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        assert!(matches!(result, ExecuteResult::Deferred { kind: DeferredKind::LspReferences, .. }));
+    }
+
+    #[test]
+    fn lsp_hover_returns_deferred() {
+        let mut b = mae_core::Buffer::new();
+        b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
+        let mut editor = Editor::with_buffer(b);
+        let call = make_call("lsp_hover", serde_json::json!({}));
+        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        assert!(matches!(result, ExecuteResult::Deferred { kind: DeferredKind::LspHover, .. }));
+    }
+
+    #[test]
+    fn lsp_definition_returns_immediate_error_for_scratch() {
+        let mut editor = Editor::new();
+        let call = make_call("lsp_definition", serde_json::json!({}));
+        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        let result = match result {
+            ExecuteResult::Immediate(r) => r,
+            ExecuteResult::Deferred { .. } => panic!("expected Immediate error for scratch buffer"),
+        };
+        assert!(!result.success);
+        assert!(result.output.contains("no file path"));
     }
 }

@@ -48,6 +48,17 @@ Preferred KB workflow when the user asks about a topic:
 2. `kb_get` or `kb_graph` to understand the local neighborhood.
 3. `help_open` so the user can read and navigate the same page themselves.
 
+### LSP (Language Server Protocol)
+- `lsp_definition` — Go to definition of symbol at position. Params: line (1-indexed), character (1-indexed), buffer_name (all optional — defaults to cursor in active buffer). Returns JSON with locations (uri, path, line, character).
+- `lsp_references` — Find all references to symbol at position. Same params as `lsp_definition`. Returns JSON with count and references array.
+- `lsp_hover` — Get type signature and docs for symbol at position. Same params. Returns hover text string.
+- `lsp_diagnostics` — Read diagnostics (errors/warnings). Params: scope ("buffer"|"all"), buffer_name. Returns structured JSON with per-file diagnostics and severity counts.
+
+Note: LSP tools require a language server running for the file's language. Use these for semantic code understanding — they give you types, definitions, and references that simple text search can't.
+
+### Syntax
+- `syntax_tree` — Tree-sitter syntax tree. Params: scope ("buffer"|"cursor"), buffer_name. Returns S-expression (buffer) or node kind (cursor).
+
 ### Shell Access
 - `shell_exec` — Execute a shell command. Params: command, timeout_ms. Returns stdout/stderr/exit_code. Use for: git, cargo, grep, file operations, running tests.
 
@@ -68,7 +79,7 @@ Examples: `command_save`, `command_undo`, `command_redo`, `command_move_down`, `
 10. Use `command_list` to discover available commands if you're unsure what's possible
 
 ## What You Cannot Do (yet)
-- Access LSP/DAP state directly (coming in future phases; use `debug_state` for self-debug)
+- Drive DAP sessions interactively (tools exist but require active debug session)
 - Evaluate Scheme directly (tell user to use `:eval` command)
 
 ## Tone

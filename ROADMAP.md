@@ -55,6 +55,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 9 | `:read !cmd` | future |
 | 10 | Multiple cursors | future |
 | 11 | Session persistence | 3f M3 |
+| 12 | README badges (CI status, Rust version, license, crate count) | future |
 
 ---
 
@@ -459,14 +460,14 @@ Language server integration. AI gets semantic code intelligence.
 - [x] Popup overlay below cursor: up to 10 items, selected item highlighted, flips above edge
 - [x] Tab=accept (replaces word prefix), Ctrl-n/Ctrl-p navigate, non-word chars dismiss
 
-### M5: Scheme + AI Exposure (partial)
+### M5: Scheme + AI Exposure ✅ (partial — AI done, Scheme deferred)
 - [x] AI tool: `lsp_diagnostics` (structured JSON, done as part of M3)
-- [ ] AI tools: `lsp_definition`, `lsp_references`, `lsp_hover` — blocked on async
-      request/response plumbing through the tool executor (results currently
-      flow back to the status bar only; nav commands are reachable via
-      `command_lsp_goto_definition` etc. but don't return structured data).
-- [ ] Scheme functions: `(lsp-definition)`, `(lsp-references)`, `(lsp-hover)`
-- [ ] AI system prompt updated with LSP tool descriptions
+- [x] AI tools: `lsp_definition`, `lsp_references`, `lsp_hover` — deferred
+      execution via `ExecuteResult::Deferred` + oneshot relay pattern. Tools
+      queue `LspIntent`, main loop holds reply channel, completes it when
+      `LspTaskEvent` arrives. Structured JSON output (1-indexed positions).
+- [x] AI system prompt updated with LSP tool descriptions
+- [ ] Scheme functions: `(lsp-definition)`, `(lsp-references)`, `(lsp-hover)` — deferred
 
 ---
 

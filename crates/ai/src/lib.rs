@@ -9,7 +9,7 @@ pub mod tools;
 pub mod types;
 
 pub use claude::ClaudeProvider;
-pub use executor::execute_tool;
+pub use executor::{execute_tool, DeferredKind, ExecuteResult};
 pub use openai::OpenAiProvider;
 pub use pricing::{lookup as lookup_price, ModelPrice};
 pub use provider::{
