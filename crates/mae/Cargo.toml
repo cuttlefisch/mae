@@ -22,4 +22,4 @@ futures = "0.3"
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
