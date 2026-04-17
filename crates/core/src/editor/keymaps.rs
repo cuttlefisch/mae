@@ -187,6 +187,7 @@ impl Editor {
 
         // Leader key (SPC) bindings — Doom Emacs style
         normal.bind(parse_key_seq_spaced("SPC SPC"), "command-palette");
+        normal.bind(parse_key_seq_spaced("SPC :"), "enter-command-mode");
         // +buffer
         normal.bind(parse_key_seq_spaced("SPC b s"), "save");
         normal.bind(parse_key_seq_spaced("SPC b b"), "switch-buffer");

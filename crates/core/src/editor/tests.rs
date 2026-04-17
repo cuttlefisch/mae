@@ -3278,3 +3278,38 @@ fn search_word_backward_hash() {
         col
     );
 }
+
+#[test]
+fn cmdline_completes_command_names() {
+    let ed = Editor::new();
+    // Simulate typing "set-t" — should match set-theme
+    let mut ed2 = ed;
+    ed2.command_line = "set-t".to_string();
+    let completions = ed2.cmdline_completions();
+    assert!(
+        completions.iter().any(|c| c == "set-theme"),
+        "Expected set-theme in completions: {:?}",
+        completions
+    );
+}
+
+#[test]
+fn cmdline_completes_command_args() {
+    let mut ed = Editor::new();
+    ed.command_line = "set-splash-art h".to_string();
+    let completions = ed.cmdline_completions();
+    assert_eq!(completions, vec!["hairbow"]);
+}
+
+#[test]
+fn cmdline_completes_theme_names() {
+    let mut ed = Editor::new();
+    ed.command_line = "set-theme ".to_string();
+    let completions = ed.cmdline_completions();
+    assert!(
+        completions.len() > 3,
+        "Expected multiple theme completions, got {:?}",
+        completions
+    );
+    assert!(completions.iter().any(|c| c == "default"));
+}

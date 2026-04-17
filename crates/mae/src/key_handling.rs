@@ -1203,11 +1203,9 @@ pub fn handle_command_mode(
                 editor.execute_command(&cmd);
             }
         }
-        KeyCode::Tab if editor.command_line.starts_with("e ") => {
-            // Tab completion for :e <path>
-            let path_part = &editor.command_line[2..];
+        KeyCode::Tab => {
             if editor.tab_completions.is_empty() {
-                editor.tab_completions = mae_core::file_picker::complete_path(path_part);
+                editor.tab_completions = editor.cmdline_completions();
                 editor.tab_completion_idx = 0;
             } else {
                 editor.tab_completion_idx =
@@ -1215,11 +1213,38 @@ pub fn handle_command_mode(
             }
             if !editor.tab_completions.is_empty() {
                 let completion = editor.tab_completions[editor.tab_completion_idx].clone();
-                editor.command_line = format!("e {}", completion);
+                // Replace command line: if there's a space, keep the prefix
+                if let Some(space_pos) = editor.command_line.find(' ') {
+                    let prefix = editor.command_line[..=space_pos].to_string();
+                    editor.command_line = format!("{}{}", prefix, completion);
+                } else {
+                    editor.command_line = completion;
+                }
                 editor.command_cursor = editor.command_line.len();
             }
         }
-        KeyCode::Tab => {}
+        KeyCode::BackTab => {
+            // Shift-Tab: cycle completions backward
+            if editor.tab_completions.is_empty() {
+                editor.tab_completions = editor.cmdline_completions();
+                if !editor.tab_completions.is_empty() {
+                    editor.tab_completion_idx = editor.tab_completions.len() - 1;
+                }
+            } else {
+                let len = editor.tab_completions.len();
+                editor.tab_completion_idx = (editor.tab_completion_idx + len - 1) % len;
+            }
+            if !editor.tab_completions.is_empty() {
+                let completion = editor.tab_completions[editor.tab_completion_idx].clone();
+                if let Some(space_pos) = editor.command_line.find(' ') {
+                    let prefix = editor.command_line[..=space_pos].to_string();
+                    editor.command_line = format!("{}{}", prefix, completion);
+                } else {
+                    editor.command_line = completion;
+                }
+                editor.command_cursor = editor.command_line.len();
+            }
+        }
         KeyCode::Up => {
             editor.command_history_prev();
         }

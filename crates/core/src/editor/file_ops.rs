@@ -472,6 +472,84 @@ impl Editor {
         self.tab_completions.clear();
     }
 
+    /// Compute tab completions for the current command line content.
+    /// Returns candidates for command names (no space yet) or arguments.
+    pub fn cmdline_completions(&self) -> Vec<String> {
+        let line = &self.command_line;
+        if let Some(space_pos) = line.find(' ') {
+            // After a space: complete arguments for known commands.
+            let cmd = &line[..space_pos];
+            let arg_prefix = &line[space_pos + 1..];
+            self.complete_command_arg(cmd, arg_prefix)
+        } else {
+            // No space: complete command names.
+            self.complete_command_name(line)
+        }
+    }
+
+    fn complete_command_name(&self, prefix: &str) -> Vec<String> {
+        // Built-in ex commands
+        let ex_cmds = [
+            "w",
+            "q",
+            "q!",
+            "wq",
+            "x",
+            "e",
+            "vsplit",
+            "split",
+            "close",
+            "messages",
+            "help",
+            "diagnostics",
+            "changes",
+            "registers",
+            "eval",
+            "ai",
+            "ai-status",
+        ];
+        let mut matches: Vec<String> = ex_cmds
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .map(|c| c.to_string())
+            .collect();
+        // Registered commands
+        for name in self.commands.list_names() {
+            if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
+                matches.push(name.to_string());
+            }
+        }
+        matches.sort();
+        matches
+    }
+
+    fn complete_command_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
+        match cmd {
+            "e" => crate::file_picker::complete_path(prefix),
+            "help" | "describe-command" => {
+                let mut matches: Vec<String> = self
+                    .commands
+                    .list_names()
+                    .into_iter()
+                    .filter(|n| n.starts_with(prefix))
+                    .map(|n| n.to_string())
+                    .collect();
+                matches.sort();
+                matches
+            }
+            "set-theme" | "theme" => bundled_theme_names()
+                .into_iter()
+                .filter(|n| n.starts_with(prefix))
+                .collect(),
+            "set-splash-art" => ["cherry-blossom", "hairbow", "bat"]
+                .iter()
+                .filter(|n| n.starts_with(prefix))
+                .map(|n| n.to_string())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     #[cfg(test)]
     pub fn cmdline_text(&self) -> &str {
         &self.command_line
