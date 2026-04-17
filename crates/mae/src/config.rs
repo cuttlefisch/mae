@@ -429,8 +429,8 @@ pub fn default_config_template() -> String {
 # Bundled themes: default, gruvbox-dark, nord, tokyo-night, catppuccin, solarized-light, dracula\n\
 # theme = \"default\"\n\
 \n\
-# Splash screen art: \"cherry-blossom\" | \"hairbow\" | \"bat\"\n\
-# splash_art = \"cherry-blossom\"\n\
+# Splash screen art: \"bat\" (more variants coming)\n\
+# splash_art = \"bat\"\n\
 ",
         config_path().display()
     )

@@ -469,6 +469,32 @@ Language server integration. AI gets semantic code intelligence.
 - [x] AI system prompt updated with LSP tool descriptions
 - [ ] Scheme functions: `(lsp-definition)`, `(lsp-references)`, `(lsp-hover)` — deferred
 
+### M6: LSP UI Parity (lsp-ui / VSCode equivalents)
+Rich presentation of LSP results — currently we show hover in the status
+bar and references in a scratch buffer. This milestone brings the UX up to
+lsp-ui-mode (Emacs) / VSCode inline standards, with evil-style navigation.
+
+- [ ] Floating hover popup: multi-line type signature + docs in a bordered
+      overlay near the cursor. Dismiss on motion, `q`, or Escape.
+- [ ] Peek definition: inline split showing the target file's context without
+      leaving the current buffer. `gd` with peek prefix (e.g. `gpd`), navigate
+      with `j`/`k`, Enter to jump, `q` to dismiss.
+- [ ] Peek references: same inline split UX for `gr`, cycling through
+      locations with `]r`/`[r` or `j`/`k` inside the peek window.
+- [ ] Inline diagnostics: underline/highlight the diagnostic range in the
+      buffer with severity-colored markers. Show the message on the same line
+      (sideline) or on hover. Toggle with `SPC t d`.
+- [ ] Code action menu: `SPC c a` opens a popup list of available actions
+      (quickfix, refactor, etc.). `j`/`k` to navigate, Enter to apply.
+- [ ] Symbol outline / imenu: `SPC c o` opens a sidebar or popup with
+      `textDocument/documentSymbol` results. Jump on Enter.
+- [ ] Breadcrumbs: optional header line showing the symbol path at cursor
+      (function > struct > field). Uses `textDocument/documentSymbol`.
+- [ ] Signature help: `textDocument/signatureHelp` shown as a floating tooltip
+      when typing function arguments in insert mode.
+- [ ] Rename preview: `SPC c R` shows a diff of all affected locations before
+      applying the rename. Confirm with `y`, cancel with `n`.
+
 ---
 
 ## Phase 4b: Syntax Highlighting (Tree-sitter)
@@ -664,6 +690,21 @@ agent can observe, suggest, and execute commands alongside the user.
 - [ ] `SPC e S` — eval-region sends visual selection to shell
 - [ ] Shell-aware completion (optional, future)
 
+### M5: Magit Parity
+Full git porcelain in a dedicated buffer — the magit experience. Builds on
+M1 PTY shell and the existing `SPC g` stubs.
+
+- [ ] `SPC g s` — git status buffer with staged/unstaged/untracked sections
+- [ ] Stage/unstage: `s` to stage file or hunk, `u` to unstage, `S`/`U` for all
+- [ ] `c c` — commit (inline message editing), `c a` — amend
+- [ ] Diff view: per-file and per-hunk diffs with syntax-highlighted context
+- [ ] Log view: `l l` — commit history with graph, `l b` — branch log
+- [ ] Blame: `SPC g b` — line-by-line blame in gutter or dedicated buffer
+- [ ] Stash: `z z` — stash, `z p` — pop, `z l` — list stashes
+- [ ] Keybindings match magit conventions where possible (s/u/c/l/z prefixes)
+- [ ] AI tools: `git_status`, `git_diff`, `git_log` — structured JSON for agent use
+- [ ] Scheme exposure: `(git-status)`, `(git-stage FILE)`, `(git-commit MSG)`
+
 ---
 
 ## Phase 7: Embedded Documentation System
@@ -725,6 +766,41 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 
 ---
 
+## Phase 9: Package System Architecture Review
+
+Architecture decision record — not implementation. The editor is accumulating
+domain-specific subsystems (git_ops, org-mode, project management, LSP server
+configs) that may belong as runtime-loadable packages rather than compiled-in
+code. This phase produces a binding decision before Phase 6+ features
+calcify the boundary.
+
+### M1: Landscape Survey
+- [ ] Review Neovim's lazy.nvim model — Lua-based, lazy-loaded, declarative specs
+- [ ] Review Emacs's package.el + MELPA — elisp-only, runtime-installed, advice-friendly
+- [ ] Review Helix's no-plugin philosophy — all features compiled-in, no user extensions
+- [ ] Review Lapce's WASI plugin system — language-agnostic, sandboxed, capability-based
+- [ ] Document tradeoffs: startup time, security, discoverability, API stability surface
+
+### M2: MAE-Specific Analysis
+- [ ] Inventory current compiled-in subsystems: git_ops, org parser, LSP configs,
+      DAP configs, theme loader, syntax grammars, KB seeded help nodes
+- [ ] For each: evaluate whether it should be a Scheme package, a WASI plugin,
+      or remain compiled-in (using criteria from M1)
+- [ ] Decision point: Scheme-only packages (Emacs model) vs WASI plugins (Lapce
+      model) vs hybrid (Scheme for UI/glue, WASI for performance-critical)
+- [ ] Assess impact on the "AI as peer" principle — can the AI install, inspect,
+      and configure packages the same way a user can?
+
+### M3: Architecture Decision Record
+- [ ] Write ADR with decision, rationale, and consequences
+- [ ] Define package manifest format (if applicable)
+- [ ] Define package API contract (what hooks/events packages can bind to)
+- [ ] Identify first candidate packages to extract (likely: themes, LSP server
+      configs, org-mode, git porcelain)
+- [ ] No implementation — output is the ADR document + updated ROADMAP entries
+
+---
+
 ## Future Considerations (from editor history research)
 
 These are architectural investments informed by studying Neovim, Helix, Zed,
@@ -760,10 +836,14 @@ Phase 3e (editor essentials) ✅ COMPLETE
     ├─→ Phase 4d + 5 (KB + help + SQLite) ✅
     │
     ├─→ Phase 6 (embedded shell) ← next high-value target
+    │       │
+    │       └─→ Phase 6 M5 (magit parity) ← builds on M1 PTY shell + SPC g stubs
     │
     ├─→ Phase 7 (embedded docs) ← parallel with Phase 6
     │
-    └─→ Phase 8 (org-mode editing) ← builds on Phase 5 org parser
+    ├─→ Phase 8 (org-mode editing) ← builds on Phase 5 org parser
+    │
+    └─→ Phase 9 (package system ADR) ← before Phase 6+ features calcify boundaries
 ```
 
 **Next priority order:**
@@ -772,8 +852,9 @@ Phase 3e (editor essentials) ✅ COMPLETE
 3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
 4. **Session & file management** — session save/restore, recent files, file watchers
 5. **LSP packaging review** — multi-language defaults, user-configurable server selection
-6. **Phase 8** (Org-Mode Editing) — full org-mode environment
-7. **C-o in insert mode** (M1 remaining item) — quick win
+6. **Phase 9** (Package System ADR) — decide package architecture before more subsystems land
+7. **Phase 8** (Org-Mode Editing) — full org-mode environment
+8. **C-o in insert mode** (M1 remaining item) — quick win
 
 ---
 

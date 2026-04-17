@@ -92,17 +92,20 @@ impl HelpView {
         true
     }
 
-    /// Focus the next link at or after `cursor_byte`. If already focused
-    /// on a link, advance to the one after it. Wraps around.
+    /// Focus the next link at or after `cursor_byte`. If the cursor is
+    /// still on the currently-focused link, advance to the next one.
+    /// Otherwise, find the nearest link from the cursor position. Wraps.
     pub fn focus_next_link(&mut self, cursor_byte: usize) {
         if self.rendered_links.is_empty() {
             self.focused_link = None;
             return;
         }
-        // If we already have a focused link, just advance from it.
+        // If already focused and cursor is still on that link, advance.
         if let Some(cur) = self.focused_link {
-            self.focused_link = Some((cur + 1) % self.rendered_links.len());
-            return;
+            if self.cursor_on_link(cur, cursor_byte) {
+                self.focused_link = Some((cur + 1) % self.rendered_links.len());
+                return;
+            }
         }
         // Find the first link whose start is >= cursor_byte.
         let next = self
@@ -112,18 +115,21 @@ impl HelpView {
         self.focused_link = Some(next.unwrap_or(0));
     }
 
-    /// Focus the previous link before `cursor_byte`. If already focused
-    /// on a link, move to the one before it. Wraps around.
+    /// Focus the previous link before `cursor_byte`. If the cursor is
+    /// still on the currently-focused link, move to the one before it.
+    /// Otherwise, find the nearest link from the cursor position. Wraps.
     pub fn focus_prev_link(&mut self, cursor_byte: usize) {
         let count = self.rendered_links.len();
         if count == 0 {
             self.focused_link = None;
             return;
         }
-        // If we already have a focused link, just go back from it.
+        // If already focused and cursor is still on that link, go back.
         if let Some(cur) = self.focused_link {
-            self.focused_link = Some((cur + count - 1) % count);
-            return;
+            if self.cursor_on_link(cur, cursor_byte) {
+                self.focused_link = Some((cur + count - 1) % count);
+                return;
+            }
         }
         // Find the last link whose start is < cursor_byte.
         let prev = self
@@ -131,6 +137,13 @@ impl HelpView {
             .iter()
             .rposition(|l| l.byte_start < cursor_byte);
         self.focused_link = Some(prev.unwrap_or(count - 1));
+    }
+
+    /// True if `cursor_byte` falls within the byte range of link at `idx`.
+    fn cursor_on_link(&self, idx: usize, cursor_byte: usize) -> bool {
+        self.rendered_links
+            .get(idx)
+            .is_some_and(|l| cursor_byte >= l.byte_start && cursor_byte < l.byte_end)
     }
 
     pub fn scroll_down(&mut self, n: usize) {
@@ -221,16 +234,17 @@ mod tests {
         // First Tab from cursor at byte 0 → finds link at byte 10 (index 0)
         v.focus_next_link(0);
         assert_eq!(v.focused_link, Some(0));
-        // Subsequent Tabs advance sequentially
-        v.focus_next_link(0);
+        // Cursor moves to link 0 (byte 10). Tab again → advance to link 1.
+        v.focus_next_link(10);
         assert_eq!(v.focused_link, Some(1));
-        v.focus_next_link(0);
+        // Cursor moves to link 1 (byte 30). Tab → link 2.
+        v.focus_next_link(30);
         assert_eq!(v.focused_link, Some(2));
-        // Wraps around
-        v.focus_next_link(0);
+        // Cursor moves to link 2 (byte 50). Tab → wraps to link 0.
+        v.focus_next_link(50);
         assert_eq!(v.focused_link, Some(0));
-        // S-Tab goes back
-        v.focus_prev_link(0);
+        // Cursor moves to link 0 (byte 10). S-Tab → wraps to link 2.
+        v.focus_prev_link(10);
         assert_eq!(v.focused_link, Some(2));
     }
 
@@ -260,6 +274,29 @@ mod tests {
         // S-Tab from cursor at byte 150 → should find link before byte 150 (index 1)
         v.focused_link = None;
         v.focus_prev_link(150);
+        assert_eq!(v.focused_link, Some(1));
+    }
+
+    #[test]
+    fn focus_link_resets_when_cursor_moves_away() {
+        let mut v = HelpView::new("a");
+        v.rendered_links = vec![
+            HelpLinkSpan {
+                byte_start: 10,
+                byte_end: 20,
+                target: "a".into(),
+            },
+            HelpLinkSpan {
+                byte_start: 100,
+                byte_end: 110,
+                target: "b".into(),
+            },
+        ];
+        // Tab at byte 0 → link 0
+        v.focus_next_link(0);
+        assert_eq!(v.focused_link, Some(0));
+        // User moves cursor to byte 80 (not on link 0). Tab should find link 1.
+        v.focus_next_link(80);
         assert_eq!(v.focused_link, Some(1));
     }
 

@@ -60,7 +60,7 @@ impl From<serde_json::Error> for PersistError {
     }
 }
 
-fn kind_to_str(k: NodeKind) -> &'static str {
+pub fn kind_to_str(k: NodeKind) -> &'static str {
     match k {
         NodeKind::Index => "index",
         NodeKind::Command => "command",

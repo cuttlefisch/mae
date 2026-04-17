@@ -11,13 +11,7 @@ use crate::help_view::HelpLinkSpan;
 use super::Editor;
 
 fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
-    match kind {
-        mae_kb::NodeKind::Index => "index",
-        mae_kb::NodeKind::Command => "command",
-        mae_kb::NodeKind::Concept => "concept",
-        mae_kb::NodeKind::Key => "key",
-        mae_kb::NodeKind::Note => "note",
-    }
+    mae_kb::persist::kind_to_str(kind)
 }
 
 /// Render a KB node into plain text and extract link byte ranges.
@@ -194,14 +188,29 @@ impl Editor {
     }
 
     /// Follow the currently-focused link in the *Help* buffer.
+    /// If no link is focused but the cursor is on a link, follow that one.
     pub fn help_follow_link(&mut self) {
+        // If no link is explicitly focused, check if cursor is on a link.
+        let cursor_byte = self.help_cursor_byte_offset();
+        if let Some(view) = self.help_view_mut() {
+            if view.focused_link.is_none() {
+                // Find link under cursor.
+                if let Some(idx) = view
+                    .rendered_links
+                    .iter()
+                    .position(|l| cursor_byte >= l.byte_start && cursor_byte < l.byte_end)
+                {
+                    view.focused_link = Some(idx);
+                }
+            }
+        }
         let (target, buf_idx) = {
             let Some(view) = self.help_view() else {
                 self.set_status("Not in a help buffer");
                 return;
             };
             let Some(idx) = view.focused_link else {
-                self.set_status("No link focused (Tab to move between links)");
+                self.set_status("No link under cursor (Tab to move between links)");
                 return;
             };
             let Some(link) = view.rendered_links.get(idx) else {
@@ -212,11 +221,9 @@ impl Editor {
                 self.set_status(format!("Link target '{}' not found", target));
                 return;
             }
-            let buf_idx = self
-                .buffers
-                .iter()
-                .position(|b| b.kind == BufferKind::Help)
-                .unwrap();
+            let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) else {
+                return;
+            };
             (target, buf_idx)
         };
         if let Some(view) = self.help_view_mut() {
@@ -292,8 +299,10 @@ impl Editor {
             },
             None => return,
         };
-        let idx = self.active_buffer_idx();
-        let rope = self.buffers[idx].rope().clone();
+        let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) else {
+            return;
+        };
+        let rope = self.buffers[buf_idx].rope();
         let row = rope.byte_to_line(byte_start);
         let line_byte_start = rope.line_to_byte(row);
         let col = byte_start - line_byte_start;
@@ -302,10 +311,14 @@ impl Editor {
         win.cursor_col = col;
     }
 
-    /// Compute the byte offset in the rope corresponding to the cursor position.
+    /// Compute the byte offset in the help buffer's rope corresponding to the cursor position.
     fn help_cursor_byte_offset(&self) -> usize {
-        let idx = self.active_buffer_idx();
-        let buf = &self.buffers[idx];
+        let buf_idx = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Help)
+            .unwrap_or_else(|| self.active_buffer_idx());
+        let buf = &self.buffers[buf_idx];
         let win = self.window_mgr.focused_window();
         let rope = buf.rope();
         let row = win.cursor_row.min(rope.len_lines().saturating_sub(1));

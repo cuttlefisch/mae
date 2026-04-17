@@ -1,3 +1,20 @@
+use mae_core::Editor;
+
+pub fn execute_project_info(editor: &Editor) -> Result<String, String> {
+    let info = serde_json::json!({
+        "project": editor.project.as_ref().map(|p| serde_json::json!({
+            "name": p.name,
+            "root": p.root.display().to_string(),
+            "has_config": p.config.is_some(),
+        })),
+        "recent_files": editor.recent_files.list().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "show_line_numbers": editor.show_line_numbers,
+        "relative_line_numbers": editor.relative_line_numbers,
+        "word_wrap": editor.word_wrap,
+    });
+    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+}
+
 pub fn execute_project_files(args: &serde_json::Value) -> Result<String, String> {
     let pattern = args.get("pattern").and_then(|v| v.as_str());
 

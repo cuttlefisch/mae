@@ -223,4 +223,193 @@ impl Editor {
             }
         }
     }
+
+    /// Apply a pending operator after a motion has moved the cursor.
+    /// Called from the key handling layer after a motion completes while
+    /// `pending_operator` is set. Computes the range between the saved
+    /// start position and the current cursor, then applies d/c/y.
+    pub fn apply_pending_operator(&mut self) {
+        self.apply_pending_operator_for_motion("");
+    }
+
+    /// Apply the pending operator with knowledge of which motion triggered it.
+    pub fn apply_pending_operator_for_motion(&mut self, motion_cmd: &str) {
+        let Some(op) = self.pending_operator.take() else {
+            return;
+        };
+        let Some((start_row, start_col)) = self.operator_start.take() else {
+            return;
+        };
+        let linewise = self.last_motion_linewise;
+        let exclusive = Self::is_exclusive_motion(motion_cmd);
+        let idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let (end_row, end_col) = (win.cursor_row, win.cursor_col);
+
+        let rope = self.buffers[idx].rope();
+        let rope_len = rope.len_chars();
+        if rope_len == 0 {
+            return;
+        }
+
+        let (from, to) = if linewise {
+            // Linewise: expand to full lines
+            let min_row = start_row.min(end_row);
+            let max_row = start_row.max(end_row);
+            let from = self.buffers[idx].rope().line_to_char(min_row);
+            let to = if max_row + 1 < self.buffers[idx].line_count() {
+                self.buffers[idx].rope().line_to_char(max_row + 1)
+            } else {
+                rope_len
+            };
+            (from, to)
+        } else {
+            // Characterwise: use char offsets
+            let start_off = self.buffers[idx].char_offset_at(start_row, start_col);
+            let end_off = self.buffers[idx].char_offset_at(end_row, end_col);
+            if start_off <= end_off {
+                if exclusive {
+                    // Exclusive: end position not included (w, b, 0, ^)
+                    (start_off, end_off)
+                } else {
+                    // Inclusive: end position included (e, $, %, G, gg, f, t)
+                    (start_off, (end_off + 1).min(rope_len))
+                }
+            } else {
+                if exclusive {
+                    (end_off, start_off)
+                } else {
+                    (end_off, (start_off + 1).min(rope_len))
+                }
+            }
+        };
+
+        if from >= to {
+            return;
+        }
+
+        let text = self.buffers[idx].text_range(from, to);
+
+        match op.as_str() {
+            "d" => {
+                self.buffers[idx].delete_range(from, to);
+                self.save_delete(text);
+                // Position cursor at start of deleted range
+                let rope = self.buffers[idx].rope();
+                let clamped = from.min(rope.len_chars().saturating_sub(1));
+                let new_row = rope.char_to_line(clamped);
+                let line_start = rope.line_to_char(new_row);
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = new_row;
+                win.cursor_col = clamped.saturating_sub(line_start);
+                win.clamp_cursor(&self.buffers[idx]);
+                self.record_edit("operator-delete");
+            }
+            "c" => {
+                self.buffers[idx].delete_range(from, to);
+                self.save_delete(text);
+                // Position cursor at start of deleted range
+                let rope = self.buffers[idx].rope();
+                let clamped = from.min(rope.len_chars());
+                let new_row = if rope.len_chars() == 0 {
+                    0
+                } else {
+                    rope.char_to_line(clamped.min(rope.len_chars().saturating_sub(1)))
+                };
+                let line_start = if rope.len_chars() == 0 {
+                    0
+                } else {
+                    rope.line_to_char(new_row)
+                };
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = new_row;
+                win.cursor_col = clamped.saturating_sub(line_start);
+                self.enter_insert_for_change("operator-change");
+            }
+            "y" => {
+                self.save_yank(text);
+                // Restore cursor to start position
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = start_row.min(end_row);
+                win.cursor_col =
+                    if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+                        start_col
+                    } else {
+                        end_col
+                    };
+                self.set_status("yanked");
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns true if the given command is a motion that can follow an operator.
+    pub fn is_motion_command(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "move-up"
+                | "move-down"
+                | "move-left"
+                | "move-right"
+                | "move-to-line-start"
+                | "move-to-line-end"
+                | "move-to-first-line"
+                | "move-to-last-line"
+                | "move-word-forward"
+                | "move-word-backward"
+                | "move-word-end"
+                | "move-big-word-forward"
+                | "move-big-word-backward"
+                | "move-big-word-end"
+                | "move-word-end-backward"
+                | "move-big-word-end-backward"
+                | "move-to-first-non-blank"
+                | "move-line-next-non-blank"
+                | "move-line-prev-non-blank"
+                | "move-matching-bracket"
+                | "move-paragraph-forward"
+                | "move-paragraph-backward"
+                | "move-screen-top"
+                | "move-screen-middle"
+                | "move-screen-bottom"
+                | "scroll-half-up"
+                | "scroll-half-down"
+                | "scroll-page-up"
+                | "scroll-page-down"
+                | "search-next"
+                | "search-prev"
+        )
+    }
+
+    /// Returns true if the given motion command operates on full lines.
+    pub fn is_linewise_motion(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "move-to-first-line"
+                | "move-to-last-line"
+                | "move-paragraph-forward"
+                | "move-paragraph-backward"
+                | "move-line-next-non-blank"
+                | "move-line-prev-non-blank"
+                | "move-screen-top"
+                | "move-screen-middle"
+                | "move-screen-bottom"
+        )
+    }
+
+    /// Returns true if the motion is exclusive (end position is NOT included).
+    /// Exclusive motions: w, W, b, B, 0, ^, search-next, search-prev.
+    /// Inclusive motions: e, E, $, %, f, t, G, gg, ge, gE, etc.
+    pub fn is_exclusive_motion(cmd: &str) -> bool {
+        matches!(
+            cmd,
+            "move-word-forward"
+                | "move-word-backward"
+                | "move-big-word-forward"
+                | "move-big-word-backward"
+                | "move-to-line-start"
+                | "move-to-line-end"
+                | "move-to-first-non-blank"
+        )
+    }
 }

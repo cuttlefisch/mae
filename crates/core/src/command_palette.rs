@@ -31,6 +31,7 @@ pub enum PalettePurpose {
     HelpSearch,
     SwitchBuffer,
     SetSplashArt,
+    RecentFile,
 }
 
 /// State for the command palette overlay.
@@ -83,44 +84,19 @@ impl CommandPalette {
         }
     }
 
-    /// Theme picker palette: entries are theme names, Enter applies the
-    /// selected theme. Used by `SPC t s` / `set-theme`.
+    /// Theme picker palette. Used by `SPC t s` / `set-theme`.
     pub fn for_themes(names: &[&str]) -> Self {
-        let entries: Vec<PaletteEntry> = names
-            .iter()
-            .map(|n| PaletteEntry {
-                name: n.to_string(),
-                doc: String::new(),
-            })
-            .collect();
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        CommandPalette {
-            query: String::new(),
-            entries,
-            filtered,
-            selected: 0,
-            purpose: PalettePurpose::SetTheme,
-        }
+        Self::with_name_list(names, PalettePurpose::SetTheme)
     }
 
-    /// Buffer picker palette: entries are buffer names, Enter switches
-    /// to the selected buffer. Used by `SPC b b` / `switch-buffer`.
+    /// Buffer picker palette. Used by `SPC b b` / `switch-buffer`.
     pub fn for_buffers(names: &[&str]) -> Self {
-        let entries: Vec<PaletteEntry> = names
-            .iter()
-            .map(|n| PaletteEntry {
-                name: n.to_string(),
-                doc: String::new(),
-            })
-            .collect();
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        CommandPalette {
-            query: String::new(),
-            entries,
-            filtered,
-            selected: 0,
-            purpose: PalettePurpose::SwitchBuffer,
-        }
+        Self::with_name_list(names, PalettePurpose::SwitchBuffer)
+    }
+
+    /// Recent file picker palette. Used by `SPC f r` / `SPC p r`.
+    pub fn for_recent_files(names: &[&str]) -> Self {
+        Self::with_name_list(names, PalettePurpose::RecentFile)
     }
 
     /// Splash art picker palette. More art variants will be added in a
@@ -137,6 +113,24 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose: PalettePurpose::SetSplashArt,
+        }
+    }
+
+    fn with_name_list(names: &[&str], purpose: PalettePurpose) -> Self {
+        let entries: Vec<PaletteEntry> = names
+            .iter()
+            .map(|n| PaletteEntry {
+                name: n.to_string(),
+                doc: String::new(),
+            })
+            .collect();
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose,
         }
     }
 

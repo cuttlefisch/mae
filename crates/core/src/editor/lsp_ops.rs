@@ -197,6 +197,50 @@ impl Editor {
         self.completion_selected = self.completion_selected.checked_sub(1).unwrap_or(len - 1);
     }
 
+    /// Queue a `textDocument/codeAction` request at the cursor.
+    pub fn lsp_request_code_action(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else {
+            self.set_status("LSP code-action: buffer has no file path");
+            return;
+        };
+        let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
+            self.set_status("LSP code-action: unsupported language");
+            return;
+        };
+        let win = self.window_mgr.focused_window();
+        let uri = crate::lsp_intent::path_to_uri(path);
+        self.pending_lsp_requests
+            .push(crate::LspIntent::CodeAction {
+                uri,
+                language_id: lang_id,
+                line: win.cursor_row as u32,
+                character: win.cursor_col as u32,
+            });
+        self.set_status("LSP code-action: awaiting server response");
+    }
+
+    /// Queue a `textDocument/formatting` request for the active buffer.
+    pub fn lsp_request_format(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else {
+            self.set_status("LSP format: buffer has no file path");
+            return;
+        };
+        let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
+            self.set_status("LSP format: unsupported language");
+            return;
+        };
+        let uri = crate::lsp_intent::path_to_uri(path);
+        self.pending_lsp_requests.push(crate::LspIntent::Format {
+            uri,
+            language_id: lang_id,
+        });
+        self.set_status("LSP format: awaiting server response");
+    }
+
     /// Queue a `textDocument/didOpen` notification for the active buffer
     /// (if it has a file path with a known language).
     pub fn lsp_notify_did_open(&mut self) {

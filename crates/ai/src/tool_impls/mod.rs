@@ -17,7 +17,8 @@ pub use dap::{
     execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_state, execute_window_layout,
+    execute_command_list, execute_debug_state, execute_editor_state, execute_set_option,
+    execute_window_layout,
 };
 pub use file::{
     execute_close_buffer, execute_create_file, execute_open_file, execute_switch_buffer,
@@ -28,7 +29,7 @@ pub use kb::{
     execute_kb_search,
 };
 pub use lsp::execute_lsp_diagnostics;
-pub use project::{execute_project_files, execute_project_search};
+pub use project::{execute_project_files, execute_project_info, execute_project_search};
 pub use syntax::execute_syntax_tree;
 
 use mae_core::Editor;

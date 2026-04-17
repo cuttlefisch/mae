@@ -55,6 +55,46 @@ pub fn execute_command_list(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
 }
 
+pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let option = args
+        .get("option")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'option' parameter")?;
+    let value = args
+        .get("value")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'value' parameter")?;
+    match option {
+        "theme" => {
+            editor.set_theme_by_name(value);
+            Ok(format!("Theme set to: {}", editor.theme.name))
+        }
+        "splash_art" => {
+            editor.splash_art = Some(value.to_string());
+            Ok(format!("Splash art set to: {}", value))
+        }
+        "line_numbers" => {
+            editor.show_line_numbers = value == "true" || value == "on" || value == "1";
+            Ok(format!("Line numbers: {}", editor.show_line_numbers))
+        }
+        "relative_line_numbers" => {
+            editor.relative_line_numbers = value == "true" || value == "on" || value == "1";
+            Ok(format!(
+                "Relative line numbers: {}",
+                editor.relative_line_numbers
+            ))
+        }
+        "word_wrap" => {
+            editor.word_wrap = value == "true" || value == "on" || value == "1";
+            Ok(format!("Word wrap: {}", editor.word_wrap))
+        }
+        _ => Err(format!(
+            "Unknown option: '{}'. Supported: 'theme', 'splash_art', 'line_numbers', 'relative_line_numbers', 'word_wrap'",
+            option
+        )),
+    }
+}
+
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
     match &editor.debug_state {
         None => Ok("No active debug session".into()),

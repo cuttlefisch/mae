@@ -5,12 +5,14 @@ mod diagnostics;
 mod dispatch;
 mod edit_ops;
 mod file_ops;
+mod git_ops;
 mod help_ops;
 mod jumps;
 mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+mod project_ops;
 mod register_ops;
 mod scheme_ops;
 mod search_ops;
@@ -213,9 +215,15 @@ pub struct Editor {
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_help_state: Option<crate::help_view::HelpView>,
-    /// Which ASCII art to show on the splash screen. Options: "cherry-blossom",
-    /// "hairbow", "bat". Default is "cherry-blossom".
+    /// Which ASCII art to show on the splash screen. Default is "bat".
     pub splash_art: Option<String>,
+    /// Pending operator for operator-pending mode (`d`, `c`, `y`).
+    /// When set, the next motion completes the operator.
+    pub pending_operator: Option<String>,
+    /// Cursor position (row, col) when operator-pending started.
+    pub operator_start: Option<(usize, usize)>,
+    /// True if the last dispatched motion was linewise (gg, G, {, }, etc.).
+    pub last_motion_linewise: bool,
     /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
     /// `,` repeats opposite.
     pub last_find_char: Option<(char, String)>,
@@ -236,6 +244,16 @@ pub struct Editor {
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
+    /// Detected project for the current working context.
+    pub project: Option<crate::project::Project>,
+    /// Recently opened files (bounded, deduplicated).
+    pub recent_files: crate::project::RecentFiles,
+    /// Toggle: show line numbers in the gutter. Default true.
+    pub show_line_numbers: bool,
+    /// Toggle: use relative line numbers. Default false.
+    pub relative_line_numbers: bool,
+    /// Toggle: wrap long lines. Default false.
+    pub word_wrap: bool,
 }
 
 impl Default for Editor {
@@ -307,6 +325,9 @@ impl Editor {
             macro_replay_depth: 0,
             last_help_state: None,
             splash_art: Some("bat".to_string()),
+            pending_operator: None,
+            operator_start: None,
+            last_motion_linewise: false,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -315,6 +336,11 @@ impl Editor {
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
             bell_until: None,
+            project: None,
+            recent_files: crate::project::RecentFiles::default(),
+            show_line_numbers: true,
+            relative_line_numbers: false,
+            word_wrap: false,
         }
     }
 
@@ -392,6 +418,9 @@ impl Editor {
             macro_replay_depth: 0,
             last_help_state: None,
             splash_art: None,
+            pending_operator: None,
+            operator_start: None,
+            last_motion_linewise: false,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -400,6 +429,11 @@ impl Editor {
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
             bell_until: None,
+            project: None,
+            recent_files: crate::project::RecentFiles::default(),
+            show_line_numbers: true,
+            relative_line_numbers: false,
+            word_wrap: false,
         }
     }
 

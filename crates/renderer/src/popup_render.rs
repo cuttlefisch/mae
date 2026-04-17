@@ -6,6 +6,15 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::theme_convert::ts;
 
+/// Centered popup rect (70% × 60% of the area, clamped).
+fn centered_popup_rect(area: Rect) -> Rect {
+    let w = (area.width * 70 / 100).max(40).min(area.width);
+    let h = (area.height * 60 / 100).max(10).min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w, h)
+}
+
 // ---------------------------------------------------------------------------
 // LSP completion popup
 // ---------------------------------------------------------------------------
@@ -108,11 +117,7 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
         None => return,
     };
 
-    let popup_w = (area.width * 70 / 100).max(40).min(area.width);
-    let popup_h = (area.height * 60 / 100).max(10).min(area.height);
-    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+    let popup_area = centered_popup_rect(area);
 
     let clear = ratatui::widgets::Clear;
     frame.render_widget(clear, popup_area);
@@ -120,7 +125,10 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
     let border_style = ts(editor, "ui.window.border.active");
     let match_count = picker.filtered.len();
     let total = picker.candidates.len();
-    let title = format!(" Find File ({}/{}) ", match_count, total);
+    let title = format!(
+        " Find File [{}] ({}/{}) ",
+        picker.root_label, match_count, total
+    );
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -197,11 +205,7 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
         None => return,
     };
 
-    let popup_w = (area.width * 70 / 100).max(40).min(area.width);
-    let popup_h = (area.height * 60 / 100).max(10).min(area.height);
-    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+    let popup_area = centered_popup_rect(area);
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 
@@ -284,11 +288,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         None => return,
     };
 
-    let popup_w = (area.width * 70 / 100).max(40).min(area.width);
-    let popup_h = (area.height * 60 / 100).max(10).min(area.height);
-    let popup_x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-    let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+    let popup_area = centered_popup_rect(area);
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 
@@ -303,6 +303,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         PalettePurpose::HelpSearch => format!(" Help Topics ({}/{}) ", match_count, total),
         PalettePurpose::SwitchBuffer => format!(" Buffers ({}/{}) ", match_count, total),
         PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
+        PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
     };
 
     let block = Block::default()

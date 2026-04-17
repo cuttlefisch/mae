@@ -488,6 +488,7 @@ impl Editor {
     }
 
     fn complete_command_name(&self, prefix: &str) -> Vec<String> {
+        use std::collections::HashSet;
         // Built-in ex commands
         let ex_cmds = [
             "w",
@@ -508,15 +509,20 @@ impl Editor {
             "ai",
             "ai-status",
         ];
+        let mut seen = HashSet::new();
         let mut matches: Vec<String> = ex_cmds
             .iter()
             .filter(|c| c.starts_with(prefix))
-            .map(|c| c.to_string())
+            .map(|c| {
+                seen.insert(c.to_string());
+                c.to_string()
+            })
             .collect();
         // Registered commands
         for name in self.commands.list_names() {
-            if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
-                matches.push(name.to_string());
+            let name_s = name.to_string();
+            if name.starts_with(prefix) && seen.insert(name_s.clone()) {
+                matches.push(name_s);
             }
         }
         matches.sort();
@@ -562,6 +568,16 @@ impl Editor {
                 let name = buf.name.clone();
                 let detected_lang = buf.file_path().and_then(crate::syntax::language_for_path);
                 let prev_idx = self.active_buffer_idx();
+                // Track recent files
+                if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
+                    self.recent_files.push(canonical.clone());
+                    // Auto-detect project root if not yet set
+                    if self.project.is_none() {
+                        if let Some(root) = crate::project::detect_project_root(&canonical) {
+                            self.project = Some(crate::project::Project::from_root(root));
+                        }
+                    }
+                }
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
                 self.alternate_buffer_idx = Some(prev_idx);

@@ -85,22 +85,20 @@ impl Editor {
         // Editing
         normal.bind(parse_key_seq("x"), "delete-char-forward");
         normal.bind(parse_key_seq("dd"), "delete-line");
-        normal.bind(parse_key_seq("dw"), "delete-word-forward");
-        normal.bind(parse_key_seq("d$"), "delete-to-line-end");
-        normal.bind(parse_key_seq("d0"), "delete-to-line-start");
-        // Text object operators
+        // Operator-pending: bare d/c/y enter pending state, compose with any motion
+        normal.bind(parse_key_seq("d"), "operator-delete");
+        normal.bind(parse_key_seq("c"), "operator-change");
+        normal.bind(parse_key_seq("y"), "operator-yank");
+        // Text object operators (kept — text objects use their own flow)
         normal.bind(parse_key_seq("di"), "delete-inner-object");
         normal.bind(parse_key_seq("da"), "delete-around-object");
         normal.bind(parse_key_seq("ci"), "change-inner-object");
         normal.bind(parse_key_seq("ca"), "change-around-object");
         normal.bind(parse_key_seq("yi"), "yank-inner-object");
         normal.bind(parse_key_seq("ya"), "yank-around-object");
-        // Change operators
+        // Linewise specials (kept — these operate on whole lines)
         normal.bind(parse_key_seq("cc"), "change-line");
-        normal.bind(parse_key_seq("cw"), "change-word-forward");
-        normal.bind(parse_key_seq("c$"), "change-to-line-end");
         normal.bind(parse_key_seq("C"), "change-to-line-end");
-        normal.bind(parse_key_seq("c0"), "change-to-line-start");
         // Replace
         normal.bind(parse_key_seq("r"), "replace-char-await");
         // Substitute (Practical Vim tip 2 — single-key `xi` / `cc` shortcuts)
@@ -153,9 +151,6 @@ impl Editor {
         normal.bind(parse_key_seq("."), "dot-repeat");
         // Yank/Paste
         normal.bind(parse_key_seq("yy"), "yank-line");
-        normal.bind(parse_key_seq("yw"), "yank-word-forward");
-        normal.bind(parse_key_seq("y$"), "yank-to-line-end");
-        normal.bind(parse_key_seq("y0"), "yank-to-line-start");
         normal.bind(parse_key_seq("p"), "paste-after");
         normal.bind(parse_key_seq("P"), "paste-before");
         // Register prompt: `"<char>` selects the register for the next
@@ -188,12 +183,16 @@ impl Editor {
         // Leader key (SPC) bindings — Doom Emacs style
         normal.bind(parse_key_seq_spaced("SPC SPC"), "command-palette");
         normal.bind(parse_key_seq_spaced("SPC :"), "enter-command-mode");
-        // +buffer
+        // +buffer (Doom parity)
         normal.bind(parse_key_seq_spaced("SPC b s"), "save");
         normal.bind(parse_key_seq_spaced("SPC b b"), "switch-buffer");
         normal.bind(parse_key_seq_spaced("SPC b d"), "kill-buffer");
         normal.bind(parse_key_seq_spaced("SPC b n"), "next-buffer");
         normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
+        normal.bind(parse_key_seq_spaced("SPC b l"), "alternate-file");
+        normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
+        normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
+        normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
         // +file
         normal.bind(parse_key_seq_spaced("SPC f f"), "find-file");
         // Ranger/dired-style directory browser: spatial traversal
@@ -238,26 +237,71 @@ impl Editor {
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
-        // +syntax (tree-sitter structural selection)
-        normal.bind(parse_key_seq_spaced("SPC s s"), "syntax-select-node");
+        // +search/syntax (tree-sitter structural selection + search)
+        normal.bind(parse_key_seq_spaced("SPC s s"), "search-buffer");
+        normal.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
         normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
+        normal.bind(parse_key_seq_spaced("SPC s p"), "project-search");
+        normal.bind(parse_key_seq_spaced("SPC s h"), "clear-search-highlight");
+        // SPC / — Doom shortcut for project search
+        normal.bind(parse_key_seq_spaced("SPC /"), "project-search");
         // +eval (Scheme REPL / lisp machine)
         normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
         normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
         normal.bind(parse_key_seq_spaced("SPC e o"), "open-scheme-repl");
+        // +project
+        normal.bind(parse_key_seq_spaced("SPC p f"), "project-find-file");
+        normal.bind(parse_key_seq_spaced("SPC p s"), "project-search");
+        normal.bind(parse_key_seq_spaced("SPC p d"), "project-browse");
+        normal.bind(parse_key_seq_spaced("SPC p r"), "project-recent-files");
+        // +file expansions
+        normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
+        normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
+        normal.bind(parse_key_seq_spaced("SPC f R"), "rename-file");
+        normal.bind(parse_key_seq_spaced("SPC f S"), "save-as");
+        // +buffer expansions
+        normal.bind(parse_key_seq_spaced("SPC b o"), "kill-other-buffers");
+        normal.bind(parse_key_seq_spaced("SPC b S"), "save-all-buffers");
+        normal.bind(parse_key_seq_spaced("SPC b r"), "revert-buffer");
+        // +toggle expansions
+        normal.bind(parse_key_seq_spaced("SPC t l"), "toggle-line-numbers");
+        normal.bind(
+            parse_key_seq_spaced("SPC t r"),
+            "toggle-relative-line-numbers",
+        );
+        normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
+        // +git
+        normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
+        normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");
+        normal.bind(parse_key_seq_spaced("SPC g d"), "git-diff");
+        normal.bind(parse_key_seq_spaced("SPC g l"), "git-log");
+        // +notes (KB shortcuts)
+        normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
+        // +code (LSP shortcuts)
+        normal.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");
+        normal.bind(parse_key_seq_spaced("SPC c r"), "lsp-find-references");
+        normal.bind(parse_key_seq_spaced("SPC c k"), "lsp-hover");
+        normal.bind(parse_key_seq_spaced("SPC c x"), "lsp-show-diagnostics");
+        normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
+        normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
+        normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
         normal.set_group_name(parse_key_seq_spaced("SPC f"), "+file");
         normal.set_group_name(parse_key_seq_spaced("SPC w"), "+window");
         normal.set_group_name(parse_key_seq_spaced("SPC a"), "+ai");
-        normal.set_group_name(parse_key_seq_spaced("SPC t"), "+theme");
+        normal.set_group_name(parse_key_seq_spaced("SPC t"), "+toggle");
         normal.set_group_name(parse_key_seq_spaced("SPC d"), "+debug");
         normal.set_group_name(parse_key_seq_spaced("SPC h"), "+help");
         normal.set_group_name(parse_key_seq_spaced("SPC q"), "+quit");
-        normal.set_group_name(parse_key_seq_spaced("SPC s"), "+syntax");
+        normal.set_group_name(parse_key_seq_spaced("SPC s"), "+search/syntax");
         normal.set_group_name(parse_key_seq_spaced("SPC e"), "+eval");
+        normal.set_group_name(parse_key_seq_spaced("SPC c"), "+code");
+        normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
+        normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
+        normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -355,6 +399,7 @@ impl Editor {
         visual.bind(parse_key_seq("V"), "enter-visual-line");
         visual.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
         // Tree-sitter structural expansion (Phase 4b M3)
+        visual.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
         visual.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         visual.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
         // Scheme eval region

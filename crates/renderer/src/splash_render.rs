@@ -99,6 +99,7 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
 
     // Art lines with two-tone coloring.
     let art_lines: Vec<&str> = splash.art.lines().collect();
+    let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     for (i, line) in art_lines.iter().enumerate() {
         let style = if splash.accent_lines.contains(&i) {
             art_accent
@@ -108,31 +109,65 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         lines.push(Line::styled(line.to_string(), style));
     }
 
-    // MAE logo.
-    for line in MAE_LOGO.lines() {
-        lines.push(Line::styled(line.to_string(), logo_style));
+    // Helper: center a block of text (all lines padded to same width) within art_width.
+    let center_block_pad =
+        |block_width: usize| -> usize { art_width.saturating_sub(block_width) / 2 };
+
+    // MAE logo — treat as a fixed-width block, then center the block.
+    let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
+    let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+    let logo_pad = center_block_pad(logo_width);
+    for line in &logo_lines {
+        let padded = format!(
+            "{:>pad$}{:<width$}",
+            "",
+            line,
+            pad = logo_pad,
+            width = logo_width
+        );
+        lines.push(Line::styled(padded, logo_style));
     }
 
+    // Subtitle — single line, center within art_width.
+    let subtitle = "Modern AI Editor — ai-native lisp machine";
+    let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
     lines.push(Line::styled(
-        "Modern AI Editor — ai-native lisp machine",
+        format!("{:>width$}{}", "", subtitle, width = sub_pad),
         subtitle_style,
     ));
     lines.push(Line::raw(""));
 
+    // Quick actions — format all to the same fixed width, then center the block.
+    let qa_width = QUICK_ACTIONS
+        .iter()
+        .map(|(k, d)| format!("{:<10}{}", k, d).len())
+        .max()
+        .unwrap_or(0);
+    let qa_pad = center_block_pad(qa_width);
     for &(key, desc) in QUICK_ACTIONS {
         lines.push(Line::from(vec![
-            Span::styled(format!("  {:<10}", key), key_style),
-            Span::styled(desc, desc_style),
+            Span::raw(" ".repeat(qa_pad)),
+            Span::styled(format!("{:<10}", key), key_style),
+            Span::styled(
+                format!("{:<width$}", desc, width = qa_width.saturating_sub(10)),
+                desc_style,
+            ),
         ]));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("Press any key to dismiss", subtitle_style));
 
-    // Vertical centering
+    // Dismiss hint — single line, center within art_width.
+    let dismiss = "Press any key to dismiss";
+    let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
+    lines.push(Line::styled(
+        format!("{:>width$}{}", "", dismiss, width = dismiss_pad),
+        subtitle_style,
+    ));
+
+    // Vertical + horizontal centering of the whole block.
     let total_height = lines.len() as u16;
     let top_pad = area.height.saturating_sub(total_height) / 2;
 
-    // Horizontal centering: find the widest line
     let max_width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let left_pad = area.width.saturating_sub(max_width) / 2;
 

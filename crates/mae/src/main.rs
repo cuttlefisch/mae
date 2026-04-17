@@ -505,6 +505,14 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             language_id,
             position: Position { line, character },
         },
+        // Stubs: these intents are queued but the LSP client doesn't
+        // handle them yet. Log and ignore until Phase 4a M5.
+        LspIntent::CodeAction { .. } | LspIntent::Rename { .. } | LspIntent::Format { .. } => {
+            return LspCommand::DidClose {
+                uri: String::new(),
+                language_id: String::new(),
+            };
+        }
     }
 }
 

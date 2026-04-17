@@ -61,7 +61,8 @@ pub fn handle_key(
             && !key.modifiers.contains(KeyModifiers::ALT)
             && editor.mode == Mode::Normal
             && pending_keys.is_empty()
-            && editor.pending_char_command.is_none();
+            && editor.pending_char_command.is_none()
+            && editor.pending_operator.is_none();
         if is_stop_key {
             editor.stop_recording();
             return;
@@ -111,6 +112,7 @@ pub fn handle_key(
 
 /// Dispatch a command by name, handling both builtins and Scheme commands.
 fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str) {
+    let theme_before = editor.theme.name.clone();
     let source = editor.commands.get(name).map(|c| c.source.clone());
 
     match source {
@@ -140,6 +142,11 @@ fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str)
                 editor.set_status(format!("Unknown command: {}", name));
             }
         }
+    }
+
+    // Persist theme change regardless of source (cycle-theme, set-theme, scheme).
+    if editor.theme.name != theme_before {
+        crate::config::persist_editor_preference("theme", &editor.theme.name);
     }
 }
 
@@ -199,14 +206,14 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Down => {
             picker.move_down();
         }
-        KeyCode::Tab if !picker.complete_longest_prefix() => {
-            // Doom-style: complete to longest shared prefix of filtered
-            // matches. If the prefix is already exhausted (single match or
-            // no common ground), fall back to moving the selection down —
-            // preserves the previous Tab = next candidate behavior.
-            picker.move_down();
+        KeyCode::Tab => {
+            // Try path completion for absolute/home paths first, then
+            // Doom-style longest-common-prefix within the current root,
+            // then fall back to cycling selection.
+            if !picker.complete_path_tab() && !picker.complete_longest_prefix() {
+                picker.move_down();
+            }
         }
-        KeyCode::Tab => {}
         KeyCode::Backspace => {
             if picker.query.is_empty() {
                 editor.file_picker = None;
@@ -215,6 +222,19 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
                 picker.query.pop();
                 picker.update_filter();
             }
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl-U: clear the query line (Emacs/readline style).
+            picker.clear_query();
+        }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl-W: delete last path component or word.
+            let q = &picker.query;
+            let trimmed = q.trim_end_matches('/');
+            let new_end = trimmed.rfind('/').map(|i| i + 1).unwrap_or(0);
+            let new_query = picker.query[..new_end].to_string();
+            picker.query = new_query;
+            picker.update_filter();
         }
         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             picker.move_up();
@@ -228,7 +248,13 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         }
         KeyCode::Char(ch) => {
             picker.query.push(ch);
-            picker.update_filter();
+            // If the query now looks like `~/dir/` or `/abs/path/`,
+            // switch the picker root to that directory.
+            if ch == '/' && picker.maybe_switch_root() {
+                // Root switched — filter already reset by rescan.
+            } else {
+                picker.update_filter();
+            }
         }
         _ => {}
     }
@@ -266,6 +292,11 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
             }
             KeyCode::Char('k') => {
                 browser.move_up();
+                return;
+            }
+            KeyCode::Char('u') => {
+                browser.query.clear();
+                browser.update_filter();
                 return;
             }
             _ => {}
@@ -359,6 +390,9 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                         editor.switch_to_buffer(idx);
                     }
                 }
+                (Some(path), PalettePurpose::RecentFile) => {
+                    editor.open_file(&path);
+                }
                 (Some(art), PalettePurpose::SetSplashArt) => {
                     editor.splash_art = Some(art.clone());
                     editor.set_status(format!("Splash art set to: {}", art));
@@ -440,7 +474,12 @@ fn handle_keymap_mode(
             let cmd = cmd.to_string();
             pending_keys.clear();
             editor.which_key_prefix.clear();
+            let had_pending_op = editor.pending_operator.is_some();
             dispatch_command(editor, scheme, &cmd);
+            // After a motion completes with a pending operator, apply the operator
+            if had_pending_op && Editor::is_motion_command(&cmd) {
+                editor.apply_pending_operator_for_motion(&cmd);
+            }
         }
         LookupResult::Prefix => {
             editor.which_key_prefix = pending_keys.clone();
@@ -549,10 +588,20 @@ fn handle_normal_mode(
     // If a char-argument command is pending (f/F/t/T or text objects), capture the next char
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
+            let had_pending_op = editor.pending_operator.is_some();
             // Try text object dispatch first, then fall back to char motion
             if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
                 editor.dispatch_char_motion(&cmd, ch);
+                // f/t motions with a pending operator
+                if had_pending_op {
+                    editor.last_motion_linewise = false;
+                    editor.apply_pending_operator();
+                }
             }
+        } else {
+            // Escape or non-char clears pending operator too
+            editor.pending_operator = None;
+            editor.operator_start = None;
         }
         // Any key (including Escape) clears the pending state
         return;
@@ -584,9 +633,11 @@ fn handle_normal_mode(
         }
     }
 
-    // Escape dismisses which-key popup if active, and clears count prefix
+    // Escape dismisses which-key popup if active, clears count prefix and pending operator
     if key.code == KeyCode::Esc {
         editor.count_prefix = None;
+        editor.pending_operator = None;
+        editor.operator_start = None;
         if !editor.which_key_prefix.is_empty() {
             pending_keys.clear();
             editor.which_key_prefix.clear();
@@ -705,9 +756,17 @@ fn handle_visual_mode(
     // Handle pending char-argument commands (f/F/t/T or text objects)
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
+            let had_pending_op = editor.pending_operator.is_some();
             if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
                 editor.dispatch_char_motion(&cmd, ch);
+                if had_pending_op {
+                    editor.last_motion_linewise = false;
+                    editor.apply_pending_operator();
+                }
             }
+        } else {
+            editor.pending_operator = None;
+            editor.operator_start = None;
         }
         return;
     }
@@ -1102,6 +1161,21 @@ fn handle_conversation_input(
     }
 }
 
+/// Apply the currently selected tab completion to the command line.
+fn apply_tab_completion(editor: &mut Editor) {
+    if editor.tab_completions.is_empty() {
+        return;
+    }
+    let completion = editor.tab_completions[editor.tab_completion_idx].clone();
+    if let Some(space_pos) = editor.command_line.find(' ') {
+        let prefix = editor.command_line[..=space_pos].to_string();
+        editor.command_line = format!("{}{}", prefix, completion);
+    } else {
+        editor.command_line = completion;
+    }
+    editor.command_cursor = editor.command_line.len();
+}
+
 pub fn handle_command_mode(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
@@ -1194,13 +1268,16 @@ pub fn handle_command_mode(
                 return;
             }
 
-            // Registered command name (e.g., :move-down, :count-lines)
-            let cmd_name = cmd.split_whitespace().next().unwrap_or("");
-            if editor.commands.contains(cmd_name) {
-                dispatch_command(editor, scheme, cmd_name);
-            } else {
-                // Fall back to ex commands (:w, :q, :q!, :wq, :e path)
-                editor.execute_command(&cmd);
+            // Try ex-command handler first (handles args like `:theme dracula`,
+            // `:e file.txt`, `:help topic`, etc.), then fall back to registered
+            // command dispatch for bare names like `:move-down`.
+            if !editor.execute_command(&cmd) {
+                let cmd_name = cmd.split_whitespace().next().unwrap_or("");
+                if editor.commands.contains(cmd_name) {
+                    dispatch_command(editor, scheme, cmd_name);
+                } else {
+                    editor.set_status(format!("Unknown command: {}", cmd));
+                }
             }
         }
         KeyCode::Tab => {
@@ -1211,20 +1288,9 @@ pub fn handle_command_mode(
                 editor.tab_completion_idx =
                     (editor.tab_completion_idx + 1) % editor.tab_completions.len();
             }
-            if !editor.tab_completions.is_empty() {
-                let completion = editor.tab_completions[editor.tab_completion_idx].clone();
-                // Replace command line: if there's a space, keep the prefix
-                if let Some(space_pos) = editor.command_line.find(' ') {
-                    let prefix = editor.command_line[..=space_pos].to_string();
-                    editor.command_line = format!("{}{}", prefix, completion);
-                } else {
-                    editor.command_line = completion;
-                }
-                editor.command_cursor = editor.command_line.len();
-            }
+            apply_tab_completion(editor);
         }
         KeyCode::BackTab => {
-            // Shift-Tab: cycle completions backward
             if editor.tab_completions.is_empty() {
                 editor.tab_completions = editor.cmdline_completions();
                 if !editor.tab_completions.is_empty() {
@@ -1234,16 +1300,7 @@ pub fn handle_command_mode(
                 let len = editor.tab_completions.len();
                 editor.tab_completion_idx = (editor.tab_completion_idx + len - 1) % len;
             }
-            if !editor.tab_completions.is_empty() {
-                let completion = editor.tab_completions[editor.tab_completion_idx].clone();
-                if let Some(space_pos) = editor.command_line.find(' ') {
-                    let prefix = editor.command_line[..=space_pos].to_string();
-                    editor.command_line = format!("{}{}", prefix, completion);
-                } else {
-                    editor.command_line = completion;
-                }
-                editor.command_cursor = editor.command_line.len();
-            }
+            apply_tab_completion(editor);
         }
         KeyCode::Up => {
             editor.command_history_prev();

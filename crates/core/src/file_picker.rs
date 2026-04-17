@@ -12,6 +12,8 @@ pub struct FilePicker {
     pub selected: usize,
     /// Root directory we scanned from.
     pub root: PathBuf,
+    /// Display label for the root (uses `~` when under $HOME).
+    pub root_label: String,
 }
 
 /// Directories to skip during recursive scan.
@@ -48,12 +50,14 @@ impl FilePicker {
         candidates.sort();
 
         let filtered: Vec<usize> = (0..candidates.len()).collect();
+        let root_label = unexpand_tilde(&root.to_string_lossy());
         FilePicker {
             query: String::new(),
             candidates,
             filtered,
             selected: 0,
             root: root.to_path_buf(),
+            root_label,
         }
     }
 
@@ -155,6 +159,111 @@ impl FilePicker {
             false
         }
     }
+
+    /// If the query is an absolute path ending in `/` that resolves to a
+    /// directory, rescan from that directory. Emacs/Doom-style: typing
+    /// `~/RoamNotes/` switches the picker root to that directory.
+    /// Returns true if the root was switched.
+    pub fn maybe_switch_root(&mut self) -> bool {
+        let expanded = expand_tilde(&self.query);
+        if !expanded.starts_with('/') {
+            return false;
+        }
+        let path = Path::new(&expanded);
+        if path.is_dir() {
+            self.rescan(path);
+            self.query.clear();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Tab completion for absolute/home-relative paths. Uses filesystem
+    /// listing to complete to the longest common prefix, then switches
+    /// root if the result is a directory. Returns true if anything happened.
+    pub fn complete_path_tab(&mut self) -> bool {
+        let expanded = expand_tilde(&self.query);
+        if !expanded.starts_with('/') {
+            return false;
+        }
+        let completions = complete_path(&expanded);
+        if completions.is_empty() {
+            return false;
+        }
+        if completions.len() == 1 {
+            let completed = unexpand_tilde(&completions[0]);
+            if completed != self.query {
+                self.query = completed;
+                // If the completion is a directory, switch root immediately.
+                self.maybe_switch_root();
+                return true;
+            }
+            return false;
+        }
+        // Multiple completions: extend to longest common prefix.
+        let first = &completions[0];
+        let mut prefix_len = first.len();
+        for c in &completions[1..] {
+            prefix_len = common_prefix_bytes(first, c).min(prefix_len);
+        }
+        while prefix_len > 0 && !first.is_char_boundary(prefix_len) {
+            prefix_len -= 1;
+        }
+        let prefix = &first[..prefix_len];
+        if prefix.len() > expanded.len() {
+            self.query = unexpand_tilde(prefix);
+            self.maybe_switch_root();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rescan from a new root directory.
+    fn rescan(&mut self, new_root: &Path) {
+        self.root = new_root.to_path_buf();
+        self.root_label = unexpand_tilde(&new_root.to_string_lossy());
+        self.candidates.clear();
+        walk_dir(new_root, new_root, 0, &mut self.candidates);
+        self.candidates.sort();
+        self.filtered = (0..self.candidates.len()).collect();
+        self.selected = 0;
+    }
+
+    /// Clear the query (Ctrl-U style).
+    pub fn clear_query(&mut self) {
+        self.query.clear();
+        self.update_filter();
+    }
+}
+
+/// Expand `~` or `~/...` to the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}/{}", home.to_string_lossy(), rest);
+        }
+    } else if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return home.to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}
+
+/// Replace the home directory prefix with `~` for display.
+pub fn unexpand_tilde(path: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
+            if rest.is_empty() {
+                return "~".to_string();
+            }
+            return format!("~{}", rest);
+        }
+    }
+    path.to_string()
 }
 
 /// Byte length of the longest common ASCII/UTF-8 byte prefix of two strings.
@@ -678,5 +787,67 @@ mod tests {
         picker.update_filter();
         let top = picker.candidates[picker.filtered[0]].as_str();
         assert_eq!(top, "crates/core/src/editor/mod.rs");
+    }
+
+    #[test]
+    fn switch_root_to_absolute_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("subdir");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("inner.txt"), "").unwrap();
+        fs::write(tmp.path().join("outer.txt"), "").unwrap();
+
+        let mut picker = FilePicker::scan(tmp.path());
+        assert!(picker.candidates.iter().any(|c| c == "outer.txt"));
+        assert!(picker.candidates.iter().any(|c| c == "subdir/inner.txt"));
+
+        // Simulate typing an absolute path to subdir
+        picker.query = format!("{}/", sub.display());
+        assert!(picker.maybe_switch_root());
+        assert_eq!(picker.root, sub);
+        assert_eq!(picker.query, "");
+        assert!(picker.candidates.iter().any(|c| c == "inner.txt"));
+        assert!(!picker.candidates.iter().any(|c| c.contains("outer")));
+    }
+
+    #[test]
+    fn switch_root_ignores_non_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("file.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = format!("{}", tmp.path().join("file.txt").display());
+        assert!(!picker.maybe_switch_root());
+    }
+
+    #[test]
+    fn clear_query_resets_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.rs"), "").unwrap();
+        fs::write(tmp.path().join("b.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "zzz".to_string();
+        picker.update_filter();
+        assert!(picker.filtered.is_empty());
+        picker.clear_query();
+        assert_eq!(picker.filtered.len(), 2);
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let expanded = expand_tilde("~/foo/bar");
+        assert!(!expanded.starts_with('~'));
+        assert!(expanded.ends_with("/foo/bar"));
+
+        let round_trip = unexpand_tilde(&expanded);
+        assert_eq!(round_trip, "~/foo/bar");
+    }
+
+    #[test]
+    fn root_label_uses_tilde() {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home_path = Path::new(&home);
+            let picker = FilePicker::scan(home_path);
+            assert_eq!(picker.root_label, "~");
+        }
     }
 }

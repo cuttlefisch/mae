@@ -1,10 +1,8 @@
-name: "Modern AI Editor"
-root-directory: ~/src/modern-ai-editor
-required-resources:
-  - README.org
-  - Cargo.toml
-symlinks:
-  - targ: ~/RoamNotes/20260415142357-ai_native_lisp_machine_editor.org
-    link: README.org
-workspaces:
-  - "Modern AI Editor"
+name = "Modern AI Editor"
+root-directory = "~/src/modern-ai-editor"
+required-resources = ["README.org", "Cargo.toml"]
+workspaces = ["Modern AI Editor"]
+
+[[symlinks]]
+target = "~/RoamNotes/20260415142357-ai_native_lisp_machine_editor.org"
+link = "README.org"
