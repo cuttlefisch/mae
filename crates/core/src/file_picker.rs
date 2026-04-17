@@ -218,20 +218,38 @@ impl FilePicker {
     /// If the query is an absolute path ending in `/` that resolves to a
     /// directory, rescan from that directory. Emacs/Doom-style: typing
     /// `~/RoamNotes/` switches the picker root to that directory.
+    ///
+    /// Also handles relative paths: if `root.join(query)` is a directory,
+    /// switch to it (e.g. after root-switching to `/`, typing `tmp/`
+    /// descends into `/tmp/`).
+    ///
     /// Returns true if the root was switched.
     pub fn maybe_switch_root(&mut self) -> bool {
         let expanded = expand_tilde(&self.query);
-        if !expanded.starts_with('/') {
-            return false;
+        if expanded.starts_with('/') {
+            let path = Path::new(&expanded);
+            // Don't rescan from filesystem root — it's too broad and slow.
+            // Wait until the user has typed at least one directory component
+            // (e.g. `/tmp/` not just `/`).
+            if path != Path::new("/") && path.is_dir() {
+                self.rescan(path);
+                self.query.clear();
+                return true;
+            }
         }
-        let path = Path::new(&expanded);
-        if path.is_dir() {
-            self.rescan(path);
-            self.query.clear();
-            true
-        } else {
-            false
+        // Try as a relative path under the current root.
+        // Skip if the query starts with '/' (already handled above) or is
+        // just a bare '/'.
+        if self.query.ends_with('/') && !self.query.starts_with('/') {
+            let joined = self.root.join(&self.query);
+            if joined.is_dir() {
+                let canonical = joined.canonicalize().unwrap_or(joined);
+                self.rescan(&canonical);
+                self.query.clear();
+                return true;
+            }
         }
+        false
     }
 
     /// Tab completion for absolute/home-relative paths. Uses filesystem
@@ -411,6 +429,13 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     }
 
     // ---- Tier 5: fuzzy subsequence (legacy) ----
+    // Skip fuzzy matching when the query contains '/' — it's clearly a
+    // path, and scattered subsequence matches (t-m-p-b-u-t-s across a
+    // 120-char path) produce garbage. Only tiers 1-4 make sense for paths.
+    if query_str.contains('/') {
+        return None;
+    }
+
     let path_chars: Vec<char> = path_lower.chars().collect();
     let mut qi = 0;
     let mut score: i64 = 0;
@@ -991,6 +1016,44 @@ mod tests {
                 .iter()
                 .map(|&i| &picker.candidates[i])
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn switch_root_skips_filesystem_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        // Typing just "/" should NOT switch root to /
+        picker.query = "/".to_string();
+        assert!(!picker.maybe_switch_root());
+        assert_eq!(picker.root, tmp.path());
+    }
+
+    #[test]
+    fn switch_root_relative_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("mydir");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("inner.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "mydir/".to_string();
+        assert!(picker.maybe_switch_root());
+        assert!(picker.root.ends_with("mydir"));
+        assert_eq!(picker.query, "");
+        assert!(picker.candidates.iter().any(|c| c == "inner.txt"));
+    }
+
+    #[test]
+    fn fuzzy_skip_for_path_queries() {
+        // Query with '/' should not fuzzy-subsequence match
+        let hit = score_match(
+            "home/heimdall/Downloads/jupyter_widgets.html.j2",
+            &q("tmp/butts"),
+        );
+        assert!(
+            hit.is_none(),
+            "path-like query should not fuzzy-match unrelated paths"
         );
     }
 
