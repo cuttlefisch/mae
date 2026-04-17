@@ -1,0 +1,13 @@
+[package]
+name = "mae-shell"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Terminal emulator for MAE, wrapping alacritty_terminal"
+
+[dependencies]
+alacritty_terminal = "0.26"
+portable-pty = "0.8"
+tracing = { workspace = true }
+
+[dev-dependencies]
