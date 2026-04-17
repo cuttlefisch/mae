@@ -582,8 +582,40 @@ fn handle_keymap_mode(
                 editor.which_key_prefix.clear();
                 dispatch_command(editor, scheme, &split_cmd);
 
-                // Re-lookup the remaining keys as a new sequence.
-                *pending_keys = remaining;
+                // Extract leading digits from remaining keys as count_prefix.
+                // This handles sequences like `d3k` where `3` follows the
+                // operator and should be consumed as a motion count, not
+                // looked up in the keymap.
+                let mut digit_end = 0;
+                for kp in &remaining {
+                    if let mae_core::keymap::Key::Char(ch) = kp.key {
+                        if ch.is_ascii_digit() && (ch != '0' || digit_end > 0) {
+                            digit_end += 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                if digit_end > 0 {
+                    let mut count = 0usize;
+                    for kp in &remaining[..digit_end] {
+                        if let mae_core::keymap::Key::Char(ch) = kp.key {
+                            count = count * 10 + (ch as usize - '0' as usize);
+                        }
+                    }
+                    editor.count_prefix = Some(count.clamp(1, 99999));
+                }
+
+                // Re-lookup the remaining keys (after digits) as a new sequence.
+                *pending_keys = remaining[digit_end..].to_vec();
+
+                // If all remaining keys were digits, we're waiting for the
+                // motion keystroke — operator is pending, count is set.
+                if pending_keys.is_empty() {
+                    // Nothing more to look up; next keypress will complete.
+                    return;
+                }
+
                 let result2 = editor
                     .keymaps
                     .get(mode_name)
