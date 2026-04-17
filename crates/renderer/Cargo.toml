@@ -8,5 +8,5 @@ license = "GPL-3.0-or-later"
 [dependencies]
 mae-core = { path = "../core" }
 ratatui = "0.29"
-crossterm = "0.28"
+crossterm = "0.29"
 tracing = { workspace = true }
