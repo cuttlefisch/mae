@@ -27,6 +27,11 @@ impl Editor {
         normal.bind(parse_key_seq("-"), "move-line-prev-non-blank");
         normal.bind(parse_key_seq("G"), "move-to-last-line");
         normal.bind(parse_key_seq("gg"), "move-to-first-line");
+        // Display-line motions (word wrap aware)
+        normal.bind(parse_key_seq("gj"), "move-display-down");
+        normal.bind(parse_key_seq("gk"), "move-display-up");
+        normal.bind(parse_key_seq("g0"), "move-display-line-start");
+        normal.bind(parse_key_seq("g$"), "move-display-line-end");
         // Word motions
         normal.bind(parse_key_seq("w"), "move-word-forward");
         normal.bind(parse_key_seq("b"), "move-word-backward");

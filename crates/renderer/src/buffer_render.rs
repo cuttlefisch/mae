@@ -253,8 +253,10 @@ pub(crate) fn render_buffer(
                         spans.push(Span::styled(line_num.clone(), gutter_line_style));
                         spans.push(Span::styled(marker_char.to_string(), marker_style));
                     } else {
-                        let padding = " ".repeat(gutter_w);
-                        spans.push(Span::styled(padding, gutter_style));
+                        // Continuation line: blank line number + wrap indicator.
+                        let padding = " ".repeat(gutter_w.saturating_sub(1));
+                        spans.push(Span::styled(padding, gutter_line_style));
+                        spans.push(Span::styled("↪", gutter_line_style));
                     }
 
                     if !chunk_chars.is_empty() {
@@ -311,8 +313,10 @@ pub(crate) fn render_buffer(
                     spans.push(Span::styled(line_num.clone(), gutter_style));
                     spans.push(Span::styled(marker_char.to_string(), marker_style));
                 } else {
-                    let padding = " ".repeat(gutter_w);
+                    // Continuation line: blank line number + wrap indicator.
+                    let padding = " ".repeat(gutter_w.saturating_sub(1));
                     spans.push(Span::styled(padding, gutter_style));
+                    spans.push(Span::styled("↪", gutter_style));
                 }
                 spans.push(Span::styled(chunk, line_text_style));
                 lines.push(Line::from(spans));

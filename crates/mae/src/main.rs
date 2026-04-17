@@ -227,12 +227,19 @@ async fn main() -> io::Result<()> {
                 // inner_rect subtracts 2 for border, gutter takes more
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
-                let gutter_w = mae_renderer::gutter_width(buf.line_count());
+                let gutter_w = if editor.show_line_numbers {
+                    mae_renderer::gutter_width(buf.line_count())
+                } else {
+                    2
+                };
                 let text_w = inner_w.saturating_sub(gutter_w);
-                editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll_horizontal(text_w);
+                editor.text_area_width = text_w;
+                if !editor.word_wrap {
+                    editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_horizontal(text_w);
+                }
             }
         }
 

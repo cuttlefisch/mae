@@ -54,6 +54,76 @@ impl Editor {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 self.window_mgr.focused_window_mut().move_to_line_end(buf);
             }
+            "move-display-down" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_down(buf);
+                    }
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        let line = buf.rope().line(win.cursor_row);
+                        let line_len = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                        let wrap_row = win.cursor_col / tw;
+                        let wrap_rows = if line_len == 0 { 1 } else { (line_len - 1) / tw + 1 };
+                        if wrap_row + 1 < wrap_rows {
+                            win.cursor_col = ((wrap_row + 1) * tw).min(line_len.saturating_sub(1));
+                        } else {
+                            win.move_down(buf);
+                            win.cursor_col = 0;
+                        }
+                    }
+                }
+            }
+            "move-display-up" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_up(buf);
+                    }
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        let wrap_row = win.cursor_col / tw;
+                        if wrap_row > 0 {
+                            win.cursor_col = (wrap_row - 1) * tw;
+                        } else if win.cursor_row > 0 {
+                            win.move_up(buf);
+                            let prev_line = buf.rope().line(win.cursor_row);
+                            let prev_len = prev_line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                            let prev_wrap_rows = if prev_len == 0 { 1 } else { (prev_len - 1) / tw + 1 };
+                            win.cursor_col = ((prev_wrap_rows - 1) * tw).min(prev_len.saturating_sub(1));
+                        }
+                    }
+                }
+            }
+            "move-display-line-start" => {
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    self.window_mgr.focused_window_mut().move_to_line_start();
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    let wrap_row = win.cursor_col / tw;
+                    win.cursor_col = wrap_row * tw;
+                }
+            }
+            "move-display-line-end" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    self.window_mgr.focused_window_mut().move_to_line_end(buf);
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    let line = buf.rope().line(win.cursor_row);
+                    let line_len = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                    let wrap_row = win.cursor_col / tw;
+                    let end = ((wrap_row + 1) * tw).min(line_len).saturating_sub(1);
+                    win.cursor_col = end;
+                }
+            }
             "move-to-first-line" => {
                 self.record_jump();
                 let buf = &self.buffers[self.active_buffer_idx()];

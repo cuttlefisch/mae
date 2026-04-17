@@ -130,6 +130,9 @@ pub struct Editor {
     /// Viewport height in lines, updated each frame from the renderer.
     /// Used by scroll commands (Ctrl-U/D/F/B, H/M/L, zz/zt/zb).
     pub viewport_height: usize,
+    /// Text area width in columns (after gutter), updated each frame.
+    /// Used by word-wrap aware cursor movement (gj/gk).
+    pub text_area_width: usize,
     /// Fuzzy file picker state. Some when the picker overlay is active.
     pub file_picker: Option<FilePicker>,
     /// Ranger-style directory browser. Some when the browser overlay is active.
@@ -299,6 +302,7 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            text_area_width: 80,
             file_picker: None,
             file_browser: None,
             command_palette: None,
@@ -384,6 +388,7 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            text_area_width: 80,
             file_picker: None,
             file_browser: None,
             command_palette: None,

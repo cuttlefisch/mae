@@ -121,6 +121,10 @@ impl CommandRegistry {
         reg.register_builtin("move-right", "Move cursor right one character");
         reg.register_builtin("move-to-line-start", "Move cursor to start of line");
         reg.register_builtin("move-to-line-end", "Move cursor to end of line");
+        reg.register_builtin("move-display-down", "Move cursor down one display line (gj)");
+        reg.register_builtin("move-display-up", "Move cursor up one display line (gk)");
+        reg.register_builtin("move-display-line-start", "Move to start of display line (g0)");
+        reg.register_builtin("move-display-line-end", "Move to end of display line (g$)");
         reg.register_builtin("move-to-first-line", "Move cursor to first line");
         reg.register_builtin("move-to-last-line", "Move cursor to last line");
         reg.register_builtin("move-word-forward", "Move to start of next word (w)");
