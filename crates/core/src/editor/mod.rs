@@ -573,6 +573,9 @@ impl Editor {
         win.buffer_idx = idx;
         win.cursor_row = 0;
         win.cursor_col = 0;
+        // Recompute search matches for the new buffer so highlights and
+        // `n`/`N` navigation are correct.
+        self.recompute_search_matches();
         true
     }
 

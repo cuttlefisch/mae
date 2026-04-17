@@ -399,7 +399,10 @@ async fn main() -> io::Result<()> {
                 // Check if this event completes a deferred AI tool call.
                 if let Some((kind, ref tool_call_id, _)) = deferred_ai_reply {
                     if let Some(result) = try_complete_deferred(&lsp_event, kind, tool_call_id) {
-                        let (_, _, reply) = deferred_ai_reply.take().unwrap();
+                        let (_, _, reply) = match deferred_ai_reply.take() {
+                            Some(val) => val,
+                            None => continue,
+                        };
                         debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed");
                         if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
                             conv.push_tool_result(result.success, &result.output);

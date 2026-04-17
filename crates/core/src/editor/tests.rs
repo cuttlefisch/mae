@@ -3732,3 +3732,23 @@ fn project_switch_palette_populates() {
     );
     assert_eq!(palette.entries.len(), 2);
 }
+
+#[test]
+fn switch_buffer_recomputes_search_matches() {
+    let mut editor = Editor::new();
+    // Buffer 0 (scratch) has no "hello"
+    // Buffer 1 contains "hello world"
+    let mut b = Buffer::new();
+    b.insert_text_at(0, "hello world");
+    b.name = "target".into();
+    editor.buffers.push(b);
+
+    // Search for "hello" while on buffer 0 (no matches)
+    editor.search_input = "hello".to_string();
+    editor.execute_search();
+    assert_eq!(editor.search_state.matches.len(), 0);
+
+    // Switch to buffer 1 — matches should be recomputed
+    editor.switch_to_buffer(1);
+    assert_eq!(editor.search_state.matches.len(), 1);
+}
