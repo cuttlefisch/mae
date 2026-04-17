@@ -112,7 +112,10 @@ pub fn handle_key(
 
 /// Returns true if a command is a vim operator (d/c/y) that enters pending state.
 fn is_operator_command(cmd: &str) -> bool {
-    matches!(cmd, "operator-delete" | "operator-change" | "operator-yank")
+    matches!(
+        cmd,
+        "operator-delete" | "operator-change" | "operator-yank" | "operator-surround"
+    )
 }
 
 /// Dispatch a command by name, handling both builtins and Scheme commands.
@@ -511,36 +514,34 @@ fn handle_keymap_mode(
             editor.which_key_prefix = pending_keys.clone();
         }
         LookupResult::None => {
-            // Operator fallback: if the first key is an operator (d/c/y) that
-            // is also a prefix of longer bindings (dd, di, da, ds, dgn, ...),
-            // split the sequence into operator + remaining keys and retry.
-            // This makes `dgg`, `dj`, `dk`, `yG`, `cw`, etc. work without
-            // explicit bindings for every operator+motion combination.
-            let did_split = pending_keys.len() > 1 && {
-                let first = &pending_keys[..1];
-                let op_cmd = editor
-                    .keymaps
-                    .get(mode_name)
-                    .and_then(|km| km.exact_match(first))
-                    .map(|s| s.to_string());
-                if let Some(ref cmd) = op_cmd {
-                    is_operator_command(cmd)
-                } else {
-                    false
+            // Operator fallback: try splitting the sequence at each position
+            // to find the longest prefix that is an operator command.
+            // E.g. `dgg` → split at 1: `d` (operator-delete) + `gg`
+            //       `ysw` → split at 2: `ys` (operator-surround) + `w`
+            // Longest match wins (try from len-1 down to 1).
+            let mut split_at = 0;
+            let mut split_cmd = String::new();
+            if pending_keys.len() > 1 {
+                for i in (1..pending_keys.len()).rev() {
+                    if let Some(cmd) = editor
+                        .keymaps
+                        .get(mode_name)
+                        .and_then(|km| km.exact_match(&pending_keys[..i]))
+                    {
+                        if is_operator_command(cmd) {
+                            split_at = i;
+                            split_cmd = cmd.to_string();
+                            break;
+                        }
+                    }
                 }
-            };
+            }
 
-            if did_split {
-                let op_cmd = editor
-                    .keymaps
-                    .get(mode_name)
-                    .and_then(|km| km.exact_match(&pending_keys[..1]))
-                    .unwrap()
-                    .to_string();
-                let remaining: Vec<KeyPress> = pending_keys[1..].to_vec();
+            if split_at > 0 {
+                let remaining: Vec<KeyPress> = pending_keys[split_at..].to_vec();
                 pending_keys.clear();
                 editor.which_key_prefix.clear();
-                dispatch_command(editor, scheme, &op_cmd);
+                dispatch_command(editor, scheme, &split_cmd);
 
                 // Re-lookup the remaining keys as a new sequence.
                 *pending_keys = remaining;

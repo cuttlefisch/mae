@@ -339,6 +339,12 @@ impl Editor {
                     };
                 self.set_status("yanked");
             }
+            "s" => {
+                // ys{motion}: stash the range for the upcoming char-await
+                // that wraps it with a delimiter pair (surround.rs).
+                self.pending_surround_range = Some((from, to));
+                self.pending_char_command = Some("surround-motion".to_string());
+            }
             _ => {}
         }
     }

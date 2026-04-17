@@ -1538,6 +1538,11 @@ impl Editor {
                 self.pending_operator = Some("y".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
             }
+            "operator-surround" => {
+                let win = self.window_mgr.focused_window();
+                self.pending_operator = Some("s".to_string());
+                self.operator_start = Some((win.cursor_row, win.cursor_col));
+            }
 
             _ => return false,
         }

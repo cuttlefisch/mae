@@ -281,6 +281,10 @@ impl CommandRegistry {
             "operator-yank",
             "Enter operator-pending mode for yank (y + motion)",
         );
+        reg.register_builtin(
+            "operator-surround",
+            "Surround motion range with delimiter (ys + motion + char)",
+        );
 
         // Undo/Redo
         reg.register_builtin("undo", "Undo last edit");

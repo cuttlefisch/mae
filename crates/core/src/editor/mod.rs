@@ -224,6 +224,9 @@ pub struct Editor {
     pub operator_start: Option<(usize, usize)>,
     /// True if the last dispatched motion was linewise (gg, G, {, }, etc.).
     pub last_motion_linewise: bool,
+    /// Char offset range saved by `ys{motion}` for the subsequent char-await
+    /// that wraps the range with a delimiter pair.
+    pub pending_surround_range: Option<(usize, usize)>,
     /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
     /// `,` repeats opposite.
     pub last_find_char: Option<(char, String)>,
@@ -328,6 +331,7 @@ impl Editor {
             pending_operator: None,
             operator_start: None,
             last_motion_linewise: false,
+            pending_surround_range: None,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -421,6 +425,7 @@ impl Editor {
             pending_operator: None,
             operator_start: None,
             last_motion_linewise: false,
+            pending_surround_range: None,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),

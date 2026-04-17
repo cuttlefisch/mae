@@ -125,6 +125,22 @@ impl Editor {
         self.record_edit("surround-visual");
     }
 
+    /// `ys{motion}<char>` — wrap the range from the preceding motion
+    /// with the delimiter pair for `ch`. Called after
+    /// `apply_pending_operator_for_motion` stashes the range in
+    /// `pending_surround_range`.
+    pub fn surround_motion(&mut self, ch: char) {
+        let Some((from, to)) = self.pending_surround_range.take() else {
+            return;
+        };
+        let (open, close) = Self::surround_pair(ch);
+        let idx = self.active_buffer_idx();
+        // Insert close first (avoids shifting `from`).
+        self.buffers[idx].insert_text_at(to, &close.to_string());
+        self.buffers[idx].insert_text_at(from, &open.to_string());
+        self.record_edit("surround-motion");
+    }
+
     /// Char-await dispatcher for surround commands. Mirrors
     /// [`Editor::dispatch_text_object`] and is called from the key
     /// handler's `pending_char_command` resolution site. Returns true
@@ -144,6 +160,7 @@ impl Editor {
             }
             "surround-line" => self.surround_line(ch),
             "surround-visual" => self.surround_visual(ch),
+            "surround-motion" => self.surround_motion(ch),
             _ => return false,
         }
         true
@@ -252,6 +269,31 @@ mod tests {
         ed.surround_visual('(');
         assert_eq!(ed.buffers[0].text(), "a(bcd)ef");
         assert_eq!(ed.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn surround_motion_wraps_range() {
+        let mut ed = ed_with("hello world");
+        // Simulate ys{motion}( wrapping chars 0..5 ("hello") with parens
+        ed.pending_surround_range = Some((0, 5));
+        ed.surround_motion('(');
+        assert_eq!(ed.buffers[0].text(), "(hello) world");
+    }
+
+    #[test]
+    fn surround_motion_brackets() {
+        let mut ed = ed_with("foo bar baz");
+        ed.pending_surround_range = Some((4, 7));
+        ed.surround_motion('[');
+        assert_eq!(ed.buffers[0].text(), "foo [bar] baz");
+    }
+
+    #[test]
+    fn dispatch_surround_motion() {
+        let mut ed = ed_with("test");
+        ed.pending_surround_range = Some((0, 4));
+        assert!(ed.dispatch_surround("surround-motion", '"'));
+        assert_eq!(ed.buffers[0].text(), "\"test\"");
     }
 
     #[test]

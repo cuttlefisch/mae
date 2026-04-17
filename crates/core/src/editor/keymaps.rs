@@ -160,6 +160,7 @@ impl Editor {
         // Surrounds (vim-surround)
         normal.bind(parse_key_seq("ds"), "delete-surround-await");
         normal.bind(parse_key_seq("cs"), "change-surround-await");
+        normal.bind(parse_key_seq("ys"), "operator-surround");
         normal.bind(parse_key_seq("yss"), "surround-line-await");
         // Undo/Redo
         normal.bind(parse_key_seq("u"), "undo");
