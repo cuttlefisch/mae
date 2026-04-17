@@ -265,6 +265,10 @@ pub struct Editor {
     pub relative_line_numbers: bool,
     /// Toggle: wrap long lines. Default false.
     pub word_wrap: bool,
+    /// Toggle: continuation lines preserve indentation. Default true.
+    pub break_indent: bool,
+    /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
+    pub show_break: String,
 }
 
 impl Default for Editor {
@@ -356,6 +360,8 @@ impl Editor {
             show_line_numbers: true,
             relative_line_numbers: false,
             word_wrap: false,
+            break_indent: true,
+            show_break: "↪ ".to_string(),
         }
     }
 
@@ -453,6 +459,8 @@ impl Editor {
             show_line_numbers: true,
             relative_line_numbers: false,
             word_wrap: false,
+            break_indent: true,
+            show_break: "↪ ".to_string(),
         }
     }
 

@@ -1,6 +1,7 @@
 //! Text buffer rendering: gutter, syntax spans, hex color preview,
 //! search/selection highlights, cursorline, diagnostics, breakpoints.
 
+use mae_core::wrap::{find_wrap_break, leading_indent_len};
 use mae_core::{DiagnosticSeverity, Editor, HighlightSpan, Mode, Window};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -124,6 +125,11 @@ pub(crate) fn render_buffer(
     let col_offset = win.col_offset;
     let text_width = (area.width as usize).saturating_sub(gutter_w);
     let wrap = editor.word_wrap && text_width > 0;
+    let show_break_width = if wrap {
+        editor.show_break.chars().count()
+    } else {
+        0
+    };
 
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
@@ -237,14 +243,29 @@ pub(crate) fn render_buffer(
             };
 
             if wrap {
-                // Word wrap: split styled chars into chunks of text_width.
+                // Word wrap with word-boundary breaks + breakindent.
+                let indent_len = if editor.break_indent {
+                    leading_indent_len(&full_chars)
+                } else {
+                    0
+                };
+                // Width available for continuation text (after gutter + indent + showbreak).
+                let cont_prefix_w = indent_len + show_break_width;
+                let cont_text_w = if text_width > cont_prefix_w {
+                    text_width - cont_prefix_w
+                } else {
+                    text_width
+                };
+
                 let mut pos = 0;
                 let mut is_first = true;
                 loop {
                     if display_row >= viewport_height {
                         break;
                     }
-                    let end = (pos + text_width).min(full_count);
+
+                    let avail = if is_first { text_width } else { cont_text_w };
+                    let end = find_wrap_break(&full_chars, pos, avail);
                     let chunk_chars = &full_chars[pos..end];
                     let chunk_styles = &styles[pos..end];
 
@@ -253,9 +274,16 @@ pub(crate) fn render_buffer(
                         spans.push(Span::styled(line_num.clone(), gutter_line_style));
                         spans.push(Span::styled(marker_char.to_string(), marker_style));
                     } else {
-                        // Continuation line: blank line number + wrap indicator + space.
-                        let padding = " ".repeat(gutter_w.saturating_sub(2));
-                        spans.push(Span::styled(format!("{}↪ ", padding), gutter_line_style));
+                        // Gutter: blank line number area.
+                        let gutter_pad = " ".repeat(gutter_w);
+                        spans.push(Span::styled(gutter_pad, gutter_line_style));
+                        // Breakindent + showbreak prefix.
+                        if indent_len > 0 {
+                            spans.push(Span::styled(" ".repeat(indent_len), gutter_line_style));
+                        }
+                        if !editor.show_break.is_empty() {
+                            spans.push(Span::styled(editor.show_break.clone(), gutter_line_style));
+                        }
                     }
 
                     if !chunk_chars.is_empty() {
@@ -299,22 +327,40 @@ pub(crate) fn render_buffer(
             // Word wrap without syntax spans.
             let full_chars: Vec<char> = full_display.chars().collect();
             let full_count = full_chars.len();
+            let indent_len = if editor.break_indent {
+                leading_indent_len(&full_chars)
+            } else {
+                0
+            };
+            let cont_prefix_w = indent_len + show_break_width;
+            let cont_text_w = if text_width > cont_prefix_w {
+                text_width - cont_prefix_w
+            } else {
+                text_width
+            };
+
             let mut pos = 0;
             let mut is_first = true;
             loop {
                 if display_row >= viewport_height {
                     break;
                 }
-                let end = (pos + text_width).min(full_count);
+                let avail = if is_first { text_width } else { cont_text_w };
+                let end = find_wrap_break(&full_chars, pos, avail);
                 let chunk: String = full_chars[pos..end].iter().collect();
                 let mut spans: Vec<Span> = Vec::new();
                 if is_first {
                     spans.push(Span::styled(line_num.clone(), gutter_style));
                     spans.push(Span::styled(marker_char.to_string(), marker_style));
                 } else {
-                    // Continuation line: blank line number + wrap indicator + space.
-                    let padding = " ".repeat(gutter_w.saturating_sub(2));
-                    spans.push(Span::styled(format!("{}↪ ", padding), gutter_style));
+                    let gutter_pad = " ".repeat(gutter_w);
+                    spans.push(Span::styled(gutter_pad, gutter_style));
+                    if indent_len > 0 {
+                        spans.push(Span::styled(" ".repeat(indent_len), gutter_style));
+                    }
+                    if !editor.show_break.is_empty() {
+                        spans.push(Span::styled(editor.show_break.clone(), gutter_style));
+                    }
                 }
                 spans.push(Span::styled(chunk, line_text_style));
                 lines.push(Line::from(spans));
@@ -360,8 +406,6 @@ pub(crate) fn render_buffer(
     frame.render_widget(paragraph, area);
 }
 
-// ---------------------------------------------------------------------------
-// Styled span coalescing helper
 // ---------------------------------------------------------------------------
 
 /// Coalesce consecutive chars with the same style into `Span`s and append to `out`.

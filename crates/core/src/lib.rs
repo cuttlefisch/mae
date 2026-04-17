@@ -20,6 +20,7 @@ pub mod syntax;
 pub mod theme;
 pub mod window;
 pub mod word;
+pub mod wrap;
 
 pub use buffer::{Buffer, BufferKind};
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};

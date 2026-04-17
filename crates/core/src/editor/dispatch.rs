@@ -62,14 +62,21 @@ impl Editor {
                         self.window_mgr.focused_window_mut().move_down(buf);
                     }
                 } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         let line = buf.rope().line(win.cursor_row);
-                        let line_len = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
-                        let wrap_row = win.cursor_col / tw;
-                        let wrap_rows = if line_len == 0 { 1 } else { (line_len - 1) / tw + 1 };
-                        if wrap_row + 1 < wrap_rows {
-                            win.cursor_col = ((wrap_row + 1) * tw).min(line_len.saturating_sub(1));
+                        let lt: String = line.chars().collect();
+                        let lt = lt.trim_end_matches('\n');
+                        let (wrap_row, _) =
+                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                        let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                        if wrap_row + 1 < total_rows {
+                            // Move to next display row within same buffer line.
+                            let next_start =
+                                crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w);
+                            win.cursor_col = next_start;
                         } else {
                             win.move_down(buf);
                             win.cursor_col = 0;
@@ -85,17 +92,35 @@ impl Editor {
                         self.window_mgr.focused_window_mut().move_up(buf);
                     }
                 } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
-                        let wrap_row = win.cursor_col / tw;
+                        let line = buf.rope().line(win.cursor_row);
+                        let lt: String = line.chars().collect();
+                        let lt = lt.trim_end_matches('\n');
+                        let (wrap_row, _) =
+                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
                         if wrap_row > 0 {
-                            win.cursor_col = (wrap_row - 1) * tw;
+                            let prev_start =
+                                crate::wrap::wrap_row_start_col(lt, wrap_row - 1, tw, bi, sb_w);
+                            win.cursor_col = prev_start;
                         } else if win.cursor_row > 0 {
                             win.move_up(buf);
                             let prev_line = buf.rope().line(win.cursor_row);
-                            let prev_len = prev_line.chars().filter(|c| *c != '\n' && *c != '\r').count();
-                            let prev_wrap_rows = if prev_len == 0 { 1 } else { (prev_len - 1) / tw + 1 };
-                            win.cursor_col = ((prev_wrap_rows - 1) * tw).min(prev_len.saturating_sub(1));
+                            let plt: String = prev_line.chars().collect();
+                            let plt = plt.trim_end_matches('\n');
+                            let prev_rows = crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w);
+                            if prev_rows > 1 {
+                                let last_start = crate::wrap::wrap_row_start_col(
+                                    plt,
+                                    prev_rows - 1,
+                                    tw,
+                                    bi,
+                                    sb_w,
+                                );
+                                win.cursor_col = last_start;
+                            }
                         }
                     }
                 }
@@ -105,9 +130,16 @@ impl Editor {
                 if !self.word_wrap || tw == 0 {
                     self.window_mgr.focused_window_mut().move_to_line_start();
                 } else {
+                    let buf = &self.buffers[self.active_buffer_idx()];
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
                     let win = self.window_mgr.focused_window_mut();
-                    let wrap_row = win.cursor_col / tw;
-                    win.cursor_col = wrap_row * tw;
+                    let line = buf.rope().line(win.cursor_row);
+                    let lt: String = line.chars().collect();
+                    let lt = lt.trim_end_matches('\n');
+                    let (wrap_row, _) =
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                    win.cursor_col = crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w);
                 }
             }
             "move-display-line-end" => {
@@ -116,11 +148,23 @@ impl Editor {
                 if !self.word_wrap || tw == 0 {
                     self.window_mgr.focused_window_mut().move_to_line_end(buf);
                 } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
                     let win = self.window_mgr.focused_window_mut();
                     let line = buf.rope().line(win.cursor_row);
-                    let line_len = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
-                    let wrap_row = win.cursor_col / tw;
-                    let end = ((wrap_row + 1) * tw).min(line_len).saturating_sub(1);
+                    let lt: String = line.chars().collect();
+                    let lt = lt.trim_end_matches('\n');
+                    let line_len = lt.chars().count();
+                    let (wrap_row, _) =
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                    let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                    let end = if wrap_row + 1 < total_rows {
+                        // End of this wrap row = start of next row - 1
+                        crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w)
+                            .saturating_sub(1)
+                    } else {
+                        line_len.saturating_sub(1)
+                    };
                     win.cursor_col = end;
                 }
             }

@@ -3,6 +3,8 @@
 use mae_core::{grapheme, Editor, Mode};
 use ratatui::prelude::*;
 
+use mae_core::wrap::{wrap_cursor_position, wrap_line_display_rows};
+
 use crate::buffer_render::gutter_width;
 
 /// Compute and set the terminal cursor position for the current mode.
@@ -63,31 +65,51 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
             let text_width = inner.width.saturating_sub(gutter_w as u16) as usize;
             let wrap = editor.word_wrap && text_width > 0;
 
+            let show_break_w = editor.show_break.chars().count();
+
             if wrap {
                 // Count display rows consumed by lines before the cursor line.
                 let mut screen_row: u16 = 0;
                 for ln in focused_win.scroll_offset..focused_win.cursor_row {
                     if ln < focused_buf.line_count() {
                         let line = focused_buf.rope().line(ln);
-                        let char_count = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
-                        let rows = if char_count == 0 {
-                            1
-                        } else {
-                            ((char_count - 1) / text_width + 1) as u16
-                        };
-                        screen_row += rows;
+                        let lt: String = line.chars().collect();
+                        let rows = wrap_line_display_rows(
+                            lt.trim_end_matches('\n'),
+                            text_width,
+                            editor.break_indent,
+                            show_break_w,
+                        );
+                        screen_row += rows as u16;
                     } else {
                         screen_row += 1;
                     }
                 }
-                // Add wrapped row offset within the cursor's own line.
-                let wrap_row = if text_width > 0 {
-                    (display_col / text_width) as u16
+                // Add wrapped row/col offset within the cursor's own line.
+                let (wrap_row, wrap_col) = wrap_cursor_position(
+                    &line_text,
+                    focused_win.cursor_col,
+                    text_width,
+                    editor.break_indent,
+                    show_break_w,
+                );
+                screen_row += wrap_row as u16;
+                // Continuation lines have indent+showbreak prefix.
+                let col_prefix = if wrap_row > 0 {
+                    let chars: Vec<char> = line_text.chars().collect();
+                    let indent = if editor.break_indent {
+                        chars
+                            .iter()
+                            .take_while(|c| **c == ' ' || **c == '\t')
+                            .count()
+                    } else {
+                        0
+                    };
+                    indent + show_break_w
                 } else {
                     0
                 };
-                screen_row += wrap_row;
-                let screen_col = gutter_w as u16 + (display_col % text_width) as u16;
+                let screen_col = gutter_w as u16 + col_prefix as u16 + wrap_col as u16;
                 if screen_row < inner.height {
                     frame.set_cursor_position(Position::new(
                         inner.x + screen_col,
@@ -97,11 +119,11 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
             } else {
                 let screen_row = focused_win
                     .cursor_row
-                    .saturating_sub(focused_win.scroll_offset) as u16;
+                    .saturating_sub(focused_win.scroll_offset)
+                    as u16;
                 let scroll_col =
                     grapheme::display_width_up_to_grapheme(&line_text, focused_win.col_offset);
-                let screen_col =
-                    gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
+                let screen_col = gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
                 if screen_row < inner.height {
                     frame.set_cursor_position(Position::new(
                         inner.x + screen_col,
