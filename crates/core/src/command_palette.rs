@@ -19,13 +19,16 @@ pub struct PaletteEntry {
 
 /// What to do with the selected entry when the user presses Enter.
 ///
-/// The palette UI is the same in both cases — the only difference is
+/// The palette UI is the same in all cases — the only difference is
 /// what the key handler does on `Enter`. `Execute` runs the command
-/// (SPC SPC), `Describe` opens the `cmd:<name>` help node (SPC h c).
+/// (SPC SPC), `Describe` opens the `cmd:<name>` help node (SPC h c),
+/// `SetTheme` applies the selected theme name (SPC t s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PalettePurpose {
     Execute,
     Describe,
+    SetTheme,
+    HelpSearch,
 }
 
 /// State for the command palette overlay.
@@ -57,6 +60,47 @@ impl CommandPalette {
         Self::with_purpose(reg, PalettePurpose::Describe)
     }
 
+    /// Help search palette: entries are KB node ids + titles, Enter opens
+    /// the selected node in the help buffer. Used by `SPC h s`.
+    pub fn for_help_search(nodes: &[(String, String)]) -> Self {
+        let mut entries: Vec<PaletteEntry> = nodes
+            .iter()
+            .map(|(id, title)| PaletteEntry {
+                name: id.clone(),
+                doc: title.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::HelpSearch,
+        }
+    }
+
+    /// Theme picker palette: entries are theme names, Enter applies the
+    /// selected theme. Used by `SPC t s` / `set-theme`.
+    pub fn for_themes(names: &[&str]) -> Self {
+        let entries: Vec<PaletteEntry> = names
+            .iter()
+            .map(|n| PaletteEntry {
+                name: n.to_string(),
+                doc: String::new(),
+            })
+            .collect();
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SetTheme,
+        }
+    }
+
     fn with_purpose(reg: &CommandRegistry, purpose: PalettePurpose) -> Self {
         let mut entries: Vec<PaletteEntry> = reg
             .list_commands()
@@ -78,6 +122,7 @@ impl CommandPalette {
     }
 
     /// Re-score and re-rank entries against the current query.
+    /// Matches against both `name` and `doc` fields, taking the better score.
     pub fn update_filter(&mut self) {
         if self.query.is_empty() {
             self.filtered = (0..self.entries.len()).collect();
@@ -87,7 +132,15 @@ impl CommandPalette {
                 .entries
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, e)| score_match(&e.name, &q).map(|s| (idx, s)))
+                .filter_map(|(idx, e)| {
+                    let name_score = score_match(&e.name, &q);
+                    let doc_score = if e.doc.is_empty() {
+                        None
+                    } else {
+                        score_match(&e.doc, &q)
+                    };
+                    name_score.max(doc_score).map(|s| (idx, s))
+                })
                 .collect();
             scored.sort_by_key(|b| std::cmp::Reverse(b.1));
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();

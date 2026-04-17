@@ -388,7 +388,7 @@ fn render_window(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    render_buffer(frame, inner, buf, win, editor, syntax_spans);
+    render_buffer(frame, inner, buf, win, focused, editor, syntax_spans);
 }
 
 fn inner_rect(area: Rect) -> Rect {
@@ -405,6 +405,7 @@ fn render_buffer(
     area: Rect,
     buf: &mae_core::Buffer,
     win: &Window,
+    focused: bool,
     editor: &Editor,
     syntax_spans: Option<&[HighlightSpan]>,
 ) {
@@ -423,7 +424,12 @@ fn render_buffer(
         (0, 0)
     };
     let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
-    let needs_spans = highlight_search || highlight_selection || has_syntax;
+    // Cursorline: subtle background on the cursor's line (Emacs hl-line-mode).
+    // Only in the focused window, and not in visual mode (selection is enough).
+    let cursorline_style = ts(editor, "ui.cursorline");
+    let show_cursorline =
+        focused && !highlight_selection && cursorline_style.bg.is_some();
+    let needs_spans = highlight_search || highlight_selection || has_syntax || show_cursorline;
 
     // Per-line worst-severity diagnostic for gutter markers. We only need
     // the highest severity per line (Error > Warning > Information > Hint).
@@ -544,6 +550,12 @@ fn render_buffer(
                         }
                     }
                 }
+
+                // Inline hex color preview: #rrggbb or #rgb patterns get
+                // their background set to the parsed color. Foreground auto-
+                // adjusts to black or white for readability. Like Emacs
+                // rainbow-mode / highlight-colors.
+                apply_hex_color_preview(&full_chars, &mut styles);
 
                 // Apply selection highlight (overrides syntax)
                 if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
@@ -1676,6 +1688,78 @@ fn render_messages_window(
 // Utilities
 // ---------------------------------------------------------------------------
 
+/// Detect `#rrggbb` and `#rgb` hex color strings in a line and set
+/// their background to the parsed color. Foreground auto-adjusts to
+/// black or white for readability (relative luminance threshold).
+/// Like Emacs `rainbow-mode` or VS Code's color decorations.
+fn apply_hex_color_preview(chars: &[char], styles: &mut [Style]) {
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '#' {
+            // Try #rrggbb (7 chars total)
+            if i + 7 <= len && chars[i + 1..i + 7].iter().all(|c| c.is_ascii_hexdigit()) {
+                let hex: String = chars[i + 1..i + 7].iter().collect();
+                if let Some((r, g, b)) = parse_hex6(&hex) {
+                    let fg = contrast_fg(r, g, b);
+                    let bg = Color::Rgb(r, g, b);
+                    for s in styles[i..i + 7].iter_mut() {
+                        *s = Style::default().fg(fg).bg(bg);
+                    }
+                    i += 7;
+                    continue;
+                }
+            }
+            // Try #rgb (4 chars total)
+            if i + 4 <= len && chars[i + 1..i + 4].iter().all(|c| c.is_ascii_hexdigit()) {
+                let hex: String = chars[i + 1..i + 4].iter().collect();
+                if let Some((r, g, b)) = parse_hex3(&hex) {
+                    let fg = contrast_fg(r, g, b);
+                    let bg = Color::Rgb(r, g, b);
+                    for s in styles[i..i + 4].iter_mut() {
+                        *s = Style::default().fg(fg).bg(bg);
+                    }
+                    i += 4;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+fn parse_hex6(s: &str) -> Option<(u8, u8, u8)> {
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+fn parse_hex3(s: &str) -> Option<(u8, u8, u8)> {
+    if s.len() != 3 {
+        return None;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let r = u8::from_str_radix(&format!("{0}{0}", chars[0]), 16).ok()?;
+    let g = u8::from_str_radix(&format!("{0}{0}", chars[1]), 16).ok()?;
+    let b = u8::from_str_radix(&format!("{0}{0}", chars[2]), 16).ok()?;
+    Some((r, g, b))
+}
+
+/// Pick black or white foreground for readability on the given bg color.
+/// Uses W3C relative luminance formula.
+fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
+    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
+    if lum > 128.0 {
+        Color::Black
+    } else {
+        Color::White
+    }
+}
+
 /// Is `new` a higher-priority diagnostic severity than `cur`?
 /// Ordering: Error > Warning > Information > Hint > None.
 fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeverity>) -> bool {
@@ -1920,5 +2004,57 @@ mod tests {
         assert_eq!(node_kind_label(KbNodeKind::Concept), "concept");
         assert_eq!(node_kind_label(KbNodeKind::Key), "key");
         assert_eq!(node_kind_label(KbNodeKind::Note), "note");
+    }
+
+    // --- Hex color preview ------------------------------------------------
+
+    #[test]
+    fn hex6_color_sets_bg() {
+        let chars: Vec<char> = "color #ff5733 here".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        // The '#' and 6 hex digits (indices 6..13) should have bg set
+        assert_eq!(styles[6].bg, Some(Color::Rgb(0xff, 0x57, 0x33)));
+        assert_eq!(styles[12].bg, Some(Color::Rgb(0xff, 0x57, 0x33)));
+        // Text before/after unchanged
+        assert_eq!(styles[0].bg, None);
+        assert_eq!(styles[13].bg, None);
+    }
+
+    #[test]
+    fn hex3_color_sets_bg() {
+        let chars: Vec<char> = "#f00".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert_eq!(styles[0].bg, Some(Color::Rgb(0xff, 0x00, 0x00)));
+        assert_eq!(styles[3].bg, Some(Color::Rgb(0xff, 0x00, 0x00)));
+    }
+
+    #[test]
+    fn hex_color_contrast_fg_light_bg_gets_black() {
+        assert_eq!(contrast_fg(255, 255, 255), Color::Black);
+    }
+
+    #[test]
+    fn hex_color_contrast_fg_dark_bg_gets_white() {
+        assert_eq!(contrast_fg(0, 0, 0), Color::White);
+    }
+
+    #[test]
+    fn hex_color_no_false_positive_on_non_hex() {
+        let chars: Vec<char> = "#zzzzzz".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        // No bg should be set
+        assert!(styles.iter().all(|s| s.bg.is_none()));
+    }
+
+    #[test]
+    fn hex_color_multiple_on_same_line() {
+        let chars: Vec<char> = "#000000 #ffffff".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert_eq!(styles[0].bg, Some(Color::Rgb(0, 0, 0)));
+        assert_eq!(styles[8].bg, Some(Color::Rgb(255, 255, 255)));
     }
 }

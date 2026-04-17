@@ -605,6 +605,17 @@ impl Editor {
             "help-next-link" => self.help_next_link(),
             "help-prev-link" => self.help_prev_link(),
             "help-close" => self.help_close(),
+            "help-search" => {
+                let nodes: Vec<(String, String)> = self
+                    .kb
+                    .list_ids(None)
+                    .iter()
+                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
+                    .collect();
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_help_search(&nodes));
+                self.mode = Mode::CommandPalette;
+            }
 
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));
@@ -741,10 +752,11 @@ impl Editor {
                 self.mode = Mode::CommandPalette;
             }
             "set-theme" => {
-                // Stub: in full implementation, opens command-line for theme name.
-                // For now, set status with available themes.
-                let names = bundled_theme_names().join(", ");
-                self.set_status(format!("Available themes: {} — use :theme <name>", names));
+                let names = bundled_theme_names();
+                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_themes(&name_refs));
+                self.mode = Mode::CommandPalette;
             }
             "cycle-theme" => {
                 self.cycle_theme();
@@ -755,13 +767,11 @@ impl Editor {
                 self.start_self_debug();
             }
             "debug-start" => {
-                // Concrete `dap_start_session(...)` is called from the
-                // command-line handler (`:debug-start <adapter> <program>`)
-                // or from the AI agent tool. Hitting this bare key-bound
-                // command without args just prompts for them.
-                self.set_status(
-                    "Usage: :debug-start <adapter> <program> — or use AI to start a DAP session",
-                );
+                // Pre-fill the command line so the user can type
+                // adapter + program args interactively.
+                self.mode = Mode::Command;
+                self.command_line = "debug-start ".to_string();
+                self.command_cursor = self.command_line.len();
             }
             "debug-stop" => {
                 if self.debug_state.is_some() {
@@ -797,8 +807,36 @@ impl Editor {
                 self.dap_toggle_breakpoint_at_cursor();
             }
             "debug-inspect" => {
-                if self.debug_state.is_some() {
-                    self.set_status("Debug inspect: use :debug-eval <expr> or AI agent");
+                if let Some(state) = &self.debug_state {
+                    // Show a summary of current debug state in status.
+                    let thread_info = if state.threads.is_empty() {
+                        "no threads".to_string()
+                    } else {
+                        let stopped: Vec<&str> = state
+                            .threads
+                            .iter()
+                            .filter(|t| t.stopped)
+                            .map(|t| t.name.as_str())
+                            .collect();
+                        if stopped.is_empty() {
+                            format!("{} threads (all running)", state.threads.len())
+                        } else {
+                            format!("{} stopped: {}", stopped.len(), stopped.join(", "))
+                        }
+                    };
+                    let frame_info = state
+                        .stack_frames
+                        .first()
+                        .map(|f| format!(" | top: {}:{}", f.name, f.line))
+                        .unwrap_or_default();
+                    let var_count: usize = state.variables.values().map(|v| v.len()).sum();
+                    self.set_status(format!(
+                        "Debug: {}{}  | {} vars across {} scopes",
+                        thread_info,
+                        frame_info,
+                        var_count,
+                        state.scopes.len()
+                    ));
                 } else {
                     self.set_status("No active debug session");
                 }

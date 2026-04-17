@@ -690,6 +690,41 @@ docs to help users effectively. Builds on the existing KB + help buffer.
 
 ---
 
+## Phase 8: Org-Mode Editing
+
+Full org-mode editing support — MAE as a first-class org-mode environment.
+Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
+
+### M1: Structural Editing
+- [ ] Heading promotion/demotion (M-Left/M-Right or TAB cycling)
+- [ ] Heading folding (TAB to cycle visibility: folded → children → subtree)
+- [ ] Move subtree up/down (M-Up/M-Down)
+- [ ] Insert heading (M-Enter respects level)
+
+### M2: TODO & Agenda
+- [ ] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked)
+- [ ] Priority cycling ([#A]/[#B]/[#C])
+- [ ] Tags on headings (`:tag1:tag2:`)
+- [ ] Agenda view: query across org files for TODO items
+
+### M3: Tables & Lists
+- [ ] Org table alignment (Tab to next cell, auto-align)
+- [ ] Checkbox lists (`- [ ]` / `- [x]`) with toggle
+- [ ] Ordered/unordered list continuation on Enter
+
+### M4: Rich Rendering
+- [ ] Inline markup rendering: `*bold*`, `/italic/`, `=code=`, `~verbatim~`, `+strikethrough+`
+- [ ] Link rendering and following in org buffers (`[[target][display]]`)
+- [ ] Image preview (terminal: sixel/kitty protocol; future: GUI)
+- [ ] Source block syntax highlighting (```#+begin_src lang```)
+
+### M5: Export & Babel
+- [ ] Export to HTML/Markdown (basic)
+- [ ] Babel code block execution (Scheme eval built-in, shell via PTY)
+- [ ] Results blocks (`#+RESULTS:`)
+
+---
+
 ## Future Considerations (from editor history research)
 
 These are architectural investments informed by studying Neovim, Helix, Zed,
@@ -726,15 +761,18 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 6 (embedded shell) ← next high-value target
     │
-    └─→ Phase 7 (embedded docs) ← parallel with Phase 6
+    ├─→ Phase 7 (embedded docs) ← parallel with Phase 6
+    │
+    └─→ Phase 8 (org-mode editing) ← builds on Phase 5 org parser
 ```
 
 **Next priority order:**
-1. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
-2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-3. **Phase 4a M5** (LSP async AI tools) — AI gains semantic code understanding
-4. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
-5. **C-o in insert mode** (M1 remaining item) — quick win
+1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
+2. **Help browser + which-key QoL** — rich text rendering, interactive arg prompts
+3. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
+4. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
+5. **Phase 8** (Org-Mode Editing) — full org-mode environment
+6. **C-o in insert mode** (M1 remaining item) — quick win
 
 ---
 

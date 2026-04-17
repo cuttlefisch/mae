@@ -50,6 +50,7 @@ crust = "#11111b"
 "ui.cursor" = { fg = "base", bg = "text" }
 "ui.selection" = { bg = "surface1" }
 "ui.search.match" = { fg = "base", bg = "yellow" }
+"ui.cursorline" = { bg = "surface0" }
 
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }

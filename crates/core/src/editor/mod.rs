@@ -511,7 +511,7 @@ impl Editor {
 
     /// Default area for window operations when we don't have the real terminal size.
     /// The renderer will provide real dimensions at render time.
-    pub(crate) fn default_area(&self) -> Rect {
+    pub fn default_area(&self) -> Rect {
         Rect {
             x: 0,
             y: 0,

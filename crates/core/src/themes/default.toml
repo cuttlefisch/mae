@@ -23,6 +23,7 @@
 "ui.cursor" = { fg = "black", bg = "white" }
 "ui.selection" = { bg = "blue" }
 "ui.search.match" = { fg = "black", bg = "yellow" }
+"ui.cursorline" = { bg = "dark_gray" }
 
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }

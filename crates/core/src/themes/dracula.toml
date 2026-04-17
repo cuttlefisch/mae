@@ -36,6 +36,7 @@ yellow = "#f1fa8c"
 "ui.cursor" = { fg = "bg", bg = "fg" }
 "ui.selection" = { bg = "bg_light" }
 "ui.search.match" = { fg = "bg", bg = "yellow" }
+"ui.cursorline" = { bg = "bg_light" }
 
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "orange" }

@@ -213,8 +213,13 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC a a"), "ai-prompt");
         normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
         // +help
+        normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
         normal.bind(parse_key_seq_spaced("SPC h c"), "describe-command");
+        normal.bind(parse_key_seq_spaced("SPC h s"), "help-search");
+        normal.bind(parse_key_seq_spaced("SPC h b"), "help-back");
+        normal.bind(parse_key_seq_spaced("SPC h f"), "help-forward");
+        normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
         // +theme
         normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
         normal.bind(parse_key_seq_spaced("SPC t s"), "set-theme");

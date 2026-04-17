@@ -533,6 +533,10 @@ impl CommandRegistry {
             "help-close",
             "Kill the *Help* buffer and return to the previous",
         );
+        reg.register_builtin(
+            "help-search",
+            "Fuzzy search all help topics and open the selected page",
+        );
 
         reg
     }
