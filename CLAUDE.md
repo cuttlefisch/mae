@@ -89,7 +89,12 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - KB queries from Scheme and AI
 - Help buffer with navigation, link following, neighborhood display
 
-### Phase 6: Embedded Shell — PLANNED
+### Phase 6: Embedded Shell — IN PROGRESS (M1 complete, M2 in progress)
+- Terminal emulator via `alacritty_terminal` (full VT100, colors, attributes) ✅
+- ShellInsert mode, Ctrl-\ Ctrl-n exit, process lifecycle handling ✅
+- Scheme hooks (7 hook points) + `set-option!` configuration ✅
+- **Next: AI/Scheme shell tools (shell_list, shell_read_output, shell_send_input)**
+
 ### Phase 7: Embedded Documentation — PLANNED
 
 ## Key Design Decisions Already Made

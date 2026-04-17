@@ -22,6 +22,12 @@ struct SharedState {
     command_defs: Vec<(String, String, String)>,
     /// Status messages set by Scheme code
     status_message: Option<String>,
+    /// Hook registrations: (hook_name, fn_name)
+    pending_hook_adds: Vec<(String, String)>,
+    /// Hook removals: (hook_name, fn_name)
+    pending_hook_removes: Vec<(String, String)>,
+    /// Editor option changes: (key, value)
+    pending_options: Vec<(String, String)>,
     /// Theme name requested by Scheme code via `(set-theme "name")`
     theme_request: Option<String>,
 
@@ -36,6 +42,8 @@ struct SharedState {
     pending_commands: Vec<String>,
     /// Messages to append to the message log via `(message TEXT)`.
     pending_messages: Vec<String>,
+    /// Shell inputs to send: (buffer_index, text).
+    pending_shell_inputs: Vec<(usize, String)>,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -161,6 +169,46 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        // --- Hook system ---
+
+        // (add-hook! HOOK-NAME FN-NAME)
+        let s = shared.clone();
+        engine.register_fn("add-hook!", move |hook: String, fn_name: String| {
+            s.lock().unwrap().pending_hook_adds.push((hook, fn_name));
+            SteelVal::Void
+        });
+
+        // (remove-hook! HOOK-NAME FN-NAME)
+        let s = shared.clone();
+        engine.register_fn("remove-hook!", move |hook: String, fn_name: String| {
+            s.lock().unwrap().pending_hook_removes.push((hook, fn_name));
+            SteelVal::Void
+        });
+
+        // --- Editor options ---
+
+        // (set-option! KEY VALUE)
+        let s = shared.clone();
+        engine.register_fn("set-option!", move |key: String, value: String| {
+            s.lock().unwrap().pending_options.push((key, value));
+            SteelVal::Void
+        });
+
+        // --- Shell terminal bindings ---
+
+        // (shell-send-input BUF-IDX TEXT) — send text to a terminal PTY
+        let s = shared.clone();
+        engine.register_fn("shell-send-input", move |buf_idx: isize, text: String| {
+            if buf_idx < 0 {
+                return SteelVal::Void; // ignore negative indices
+            }
+            s.lock()
+                .unwrap()
+                .pending_shell_inputs
+                .push((buf_idx as usize, text));
+            SteelVal::Void
+        });
+
         Ok(SchemeRuntime {
             engine,
             shared,
@@ -257,6 +305,7 @@ impl SchemeRuntime {
             mae_core::Mode::FilePicker => "file-picker",
             mae_core::Mode::FileBrowser => "file-browser",
             mae_core::Mode::CommandPalette => "command-palette",
+            mae_core::Mode::ShellInsert => "shell-insert",
         };
         self.engine
             .register_value("*mode*", SteelVal::StringV(mode_str.into()));
@@ -296,6 +345,49 @@ impl SchemeRuntime {
         for (name, doc, scheme_fn) in state.command_defs.drain(..) {
             debug!(command = %name, scheme_fn = %scheme_fn, "registering scheme command");
             editor.commands.register_scheme(&name, &doc, &scheme_fn);
+        }
+
+        // Apply hook registrations
+        for (hook, fn_name) in state.pending_hook_adds.drain(..) {
+            if editor.hooks.add(&hook, &fn_name) {
+                debug!(hook = %hook, fn_name = %fn_name, "hook registered");
+            } else {
+                warn!(hook = %hook, "unknown hook name in add-hook!");
+                editor.set_status(format!("Unknown hook: {}", hook));
+            }
+        }
+        for (hook, fn_name) in state.pending_hook_removes.drain(..) {
+            if editor.hooks.remove(&hook, &fn_name) {
+                debug!(hook = %hook, fn_name = %fn_name, "hook removed");
+            }
+        }
+
+        // Apply editor options
+        for (key, value) in state.pending_options.drain(..) {
+            match key.as_str() {
+                "line-numbers" | "show-line-numbers" => {
+                    editor.show_line_numbers = parse_bool(&value);
+                }
+                "relative-line-numbers" => {
+                    editor.relative_line_numbers = parse_bool(&value);
+                }
+                "word-wrap" => {
+                    editor.word_wrap = parse_bool(&value);
+                }
+                "break-indent" => {
+                    editor.break_indent = parse_bool(&value);
+                }
+                "show-break" => {
+                    editor.show_break = value;
+                }
+                "theme" => {
+                    editor.set_theme_by_name(&value);
+                }
+                other => {
+                    warn!(key = other, "unknown set-option! key");
+                    editor.set_status(format!("Unknown option: {}", other));
+                }
+            }
         }
 
         // Apply status message
@@ -351,6 +443,11 @@ impl SchemeRuntime {
             info!("[scheme] {}", msg);
         }
 
+        // (shell-send-input BUF-IDX TEXT) — queue shell terminal input.
+        for (buf_idx, text) in state.pending_shell_inputs.drain(..) {
+            editor.pending_shell_inputs.push((buf_idx, text));
+        }
+
         // Drop the lock before dispatching commands (which may call
         // back into Scheme via user-defined commands).
         drop(state);
@@ -399,6 +496,12 @@ impl SchemeRuntime {
         self.eval(expr)
     }
 
+    /// Set a Scheme global variable (for injecting hook context, etc.).
+    pub fn inject_value(&mut self, name: &str, value: &str) {
+        self.engine
+            .register_value(name, SteelVal::StringV(value.into()));
+    }
+
     /// Evaluate code and append input + result to a REPL output string.
     /// Returns the formatted output (prompt + result or error) suitable
     /// for appending to the `*Scheme*` buffer.
@@ -417,6 +520,11 @@ impl SchemeRuntime {
         };
         format!("> {}\n{}\n", code.trim(), result)
     }
+}
+
+/// Parse a string value as a boolean (for `set-option!`).
+fn parse_bool(s: &str) -> bool {
+    matches!(s, "true" | "#t" | "1" | "yes" | "on")
 }
 
 fn steel_val_to_string(val: &SteelVal) -> String {
@@ -745,5 +853,111 @@ mod tests {
             km.lookup(&parse_key_seq("dd")),
             mae_core::LookupResult::Exact("delete-line")
         );
+    }
+
+    // --- Hook system tests ---
+
+    #[test]
+    fn add_hook_from_scheme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(add-hook! "before-save" "my-save-fn")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+
+        assert_eq!(editor.hooks.get("before-save"), &["my-save-fn"]);
+    }
+
+    #[test]
+    fn remove_hook_from_scheme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(add-hook! "after-save" "fn-a")"#).unwrap();
+        rt.eval(r#"(add-hook! "after-save" "fn-b")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.hooks.get("after-save").len(), 2);
+
+        rt.eval(r#"(remove-hook! "after-save" "fn-a")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.hooks.get("after-save"), &["fn-b"]);
+    }
+
+    #[test]
+    fn add_hook_invalid_name_warns() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(add-hook! "nonexistent" "fn")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+
+        // Should have set a warning in status
+        assert!(editor.status_msg.contains("Unknown hook"));
+    }
+
+    // --- set-option! tests ---
+
+    #[test]
+    fn set_option_line_numbers() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        assert!(editor.show_line_numbers); // default true
+
+        rt.eval(r#"(set-option! "line-numbers" "false")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(!editor.show_line_numbers);
+    }
+
+    #[test]
+    fn set_option_word_wrap() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        assert!(!editor.word_wrap); // default false
+
+        rt.eval(r#"(set-option! "word-wrap" "true")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(editor.word_wrap);
+    }
+
+    #[test]
+    fn set_option_relative_line_numbers() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(set-option! "relative-line-numbers" "on")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(editor.relative_line_numbers);
+    }
+
+    #[test]
+    fn set_option_theme() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(set-option! "theme" "gruvbox-dark")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.theme.name, "gruvbox-dark");
+    }
+
+    #[test]
+    fn set_option_show_break() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(set-option! "show-break" ">> ")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.show_break, ">> ");
+    }
+
+    #[test]
+    fn set_option_unknown_warns() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(set-option! "nonexistent" "value")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(editor.status_msg.contains("Unknown option"));
     }
 }

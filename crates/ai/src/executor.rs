@@ -11,7 +11,8 @@ use crate::tool_impls::{
     execute_editor_state, execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
-    execute_project_info, execute_project_search, execute_set_option, execute_switch_buffer,
+    execute_project_info, execute_project_search, execute_set_option, execute_shell_list,
+    execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
     execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 
@@ -128,6 +129,9 @@ pub fn execute_tool(
         "kb_links_to",
         "kb_graph",
         "help_open",
+        "shell_list",
+        "shell_read_output",
+        "shell_send_input",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -187,6 +191,9 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "kb_graph" => execute_kb_graph(editor, &call.arguments),
         "help_open" => execute_help_open(editor, &call.arguments),
         "set_option" => execute_set_option(editor, &call.arguments),
+        "shell_list" => execute_shell_list(editor),
+        "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
+        "shell_send_input" => execute_shell_send_input(editor, &call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }

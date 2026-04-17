@@ -796,6 +796,71 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Shell terminal tools ---
+        ToolDefinition {
+            name: "shell_list".into(),
+            description: "List all active shell terminal buffers with their names, buffer indices, and status (running/exited).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "shell_read_output".into(),
+            description: "Read recent output from a shell terminal buffer's viewport. Returns the last N lines of visible terminal content.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the shell terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "lines".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of lines to read (default: 24)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "shell_send_input".into(),
+            description: "Send text input to a shell terminal buffer's PTY. Escape sequences: \\n or \\r for Enter, \\t for Tab, \\e for ESC.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the shell terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "input".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text to send to the terminal. Escapes: \\n/\\r=Enter, \\t=Tab, \\e=ESC".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into(), "input".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
     ]
 }
 
@@ -893,7 +958,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 39);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

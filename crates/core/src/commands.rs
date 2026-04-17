@@ -597,6 +597,17 @@ impl CommandRegistry {
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
 
+        // Shell / terminal emulator
+        reg.register_builtin("terminal", "Open a terminal emulator buffer (:terminal)");
+        reg.register_builtin(
+            "terminal-reset",
+            "Reset/clear the current terminal emulator",
+        );
+        reg.register_builtin(
+            "terminal-close",
+            "Close the current terminal and its shell process",
+        );
+
         reg
     }
 }

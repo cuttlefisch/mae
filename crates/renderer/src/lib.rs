@@ -5,6 +5,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mae_core::{Editor, HighlightSpan};
+use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
 use std::collections::HashMap;
 
@@ -14,6 +15,7 @@ mod cursor;
 mod help_render;
 mod messages_render;
 mod popup_render;
+mod shell_render;
 mod splash_render;
 mod status_render;
 mod theme_convert;
@@ -44,9 +46,13 @@ impl TerminalRenderer {
         Ok(TerminalRenderer { terminal })
     }
 
-    pub fn render(&mut self, editor: &mut Editor) -> io::Result<()> {
+    pub fn render(
+        &mut self,
+        editor: &mut Editor,
+        shells: &HashMap<usize, ShellTerminal>,
+    ) -> io::Result<()> {
         self.terminal.draw(|frame| {
-            render_frame(frame, editor);
+            render_frame(frame, editor, shells);
         })?;
         Ok(())
     }
@@ -75,7 +81,7 @@ impl TerminalRenderer {
 
 /// Pure rendering function: Editor state in, frame out.
 /// No side effects, no global state. Emacs lesson: this is the anti-xdisp.c.
-fn render_frame(frame: &mut Frame, editor: &mut Editor) {
+fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, ShellTerminal>) {
     let area = frame.area();
 
     // Pre-compute syntax-highlight spans for every visible text buffer.
@@ -90,7 +96,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_file_picker(frame, area, editor);
@@ -102,7 +108,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_file_browser(frame, area, editor);
@@ -114,7 +120,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_command_palette(frame, area, editor);
@@ -132,7 +138,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         let chunks =
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);
 
-        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         which_key_render::render_which_key_popup(frame, chunks[1], editor, &entries);
     } else if splash_render::should_show_splash(editor) {
         let chunks = Layout::vertical([
@@ -153,10 +159,13 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor) {
         ])
         .split(area);
 
-        render_window_area(frame, chunks[0], editor, &syntax_spans);
+        render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
-        cursor::set_cursor(frame, editor, chunks[0], chunks[2]);
+        // Shell buffers set their own cursor in render_shell_grid.
+        if editor.mode != mae_core::Mode::ShellInsert {
+            cursor::set_cursor(frame, editor, chunks[0], chunks[2]);
+        }
         if !editor.completion_items.is_empty() {
             popup_render::render_completion_popup(frame, chunks[0], editor);
         }
@@ -203,6 +212,7 @@ fn render_window_area(
     area: Rect,
     editor: &Editor,
     syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    shells: &HashMap<usize, ShellTerminal>,
 ) {
     let window_area = mae_core::WinRect {
         x: area.x,
@@ -272,6 +282,19 @@ fn render_window_area(
                         editor,
                         Some(&help_spans),
                     );
+                }
+                mae_core::BufferKind::Shell => {
+                    if let Some(shell) = shells.get(&win.buffer_idx) {
+                        shell_render::render_shell_window(
+                            frame,
+                            ratatui_rect,
+                            buf,
+                            win,
+                            is_focused,
+                            editor,
+                            shell,
+                        );
+                    }
                 }
                 _ => {
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());

@@ -283,6 +283,10 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");
         normal.bind(parse_key_seq_spaced("SPC g d"), "git-diff");
         normal.bind(parse_key_seq_spaced("SPC g l"), "git-log");
+        // +open
+        normal.bind(parse_key_seq_spaced("SPC o t"), "terminal");
+        normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
+        normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
         // +notes (KB shortcuts)
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
         // +code (LSP shortcuts)
@@ -309,6 +313,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC p"), "+project");
         normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
+        normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");

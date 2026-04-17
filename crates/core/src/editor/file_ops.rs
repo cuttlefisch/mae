@@ -8,6 +8,7 @@ use super::Editor;
 
 impl Editor {
     pub(crate) fn save_current_buffer(&mut self) {
+        self.fire_hook("before-save");
         let idx = self.active_buffer_idx();
         match self.buffers[idx].save() {
             Ok(()) => {
@@ -15,6 +16,7 @@ impl Editor {
                 self.set_status(format!("\"{}\" written", name));
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
+                self.fire_hook("after-save");
             }
             Err(e) => {
                 self.set_status(format!("Error saving: {}", e));
@@ -591,6 +593,7 @@ impl Editor {
                 self.set_status(format!("\"{}\" opened", name));
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
+                self.fire_hook("buffer-open");
             }
             Err(e) => {
                 self.set_status(format!("Error opening: {}", e));

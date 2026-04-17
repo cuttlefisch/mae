@@ -67,8 +67,13 @@ impl Editor {
     }
 
     /// Enter insert mode from a change command, recording state for dot-repeat.
+    /// If the current buffer is a Shell buffer, enters ShellInsert instead.
     pub(crate) fn enter_insert_for_change(&mut self, command: &str) {
         let idx = self.active_buffer_idx();
+        if self.buffers[idx].kind == crate::BufferKind::Shell {
+            self.mode = Mode::ShellInsert;
+            return;
+        }
         let win = self.window_mgr.focused_window();
         let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
         self.insert_start_offset = Some(offset);

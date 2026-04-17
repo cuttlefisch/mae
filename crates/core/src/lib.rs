@@ -10,6 +10,7 @@ pub mod file_browser;
 pub mod file_picker;
 pub mod grapheme;
 pub mod help_view;
+pub mod hooks;
 pub mod kb_seed;
 pub mod keymap;
 pub mod lsp_intent;
@@ -37,6 +38,7 @@ pub use editor::{
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
 pub use help_view::{HelpLinkSpan, HelpView};
+pub use hooks::HookRegistry;
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };
@@ -71,4 +73,6 @@ pub enum Mode {
     FilePicker,
     FileBrowser,
     CommandPalette,
+    /// Terminal emulator — keys go directly to PTY. Exit with Ctrl-\ Ctrl-n.
+    ShellInsert,
 }

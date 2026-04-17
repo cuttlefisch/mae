@@ -124,6 +124,27 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_PROJECT,
         )
         .with_tags(["project", "workflow"]),
+        Node::new(
+            "concept:terminal",
+            "Concept: Embedded Terminal",
+            NodeKind::Concept,
+            CONCEPT_TERMINAL,
+        )
+        .with_tags(["terminal", "shell", "phase-6"]),
+        Node::new(
+            "concept:hooks",
+            "Concept: Hooks",
+            NodeKind::Concept,
+            CONCEPT_HOOKS,
+        )
+        .with_tags(["hooks", "extensibility", "scheme"]),
+        Node::new(
+            "concept:options",
+            "Concept: Editor Options",
+            NodeKind::Concept,
+            CONCEPT_OPTIONS,
+        )
+        .with_tags(["options", "configuration", "scheme"]),
     ]
 }
 
@@ -137,6 +158,9 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:command|Command]] — the shared API between human, Scheme, and AI
 - [[concept:ai-as-peer|The AI as Peer Actor]] — the fundamental design stance
 - [[concept:knowledge-base|Knowledge Base]] — this page, and why it exists
+- [[concept:terminal|Embedded Terminal]] — full terminal emulator inside MAE
+- [[concept:hooks|Hooks]] — Scheme extension points for editor events
+- [[concept:options|Editor Options]] — configuring MAE from Scheme
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -151,7 +175,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 ";
 
 const CONCEPT_BUFFER: &str = "A **buffer** is the unit of editable content in MAE.\n\
-It has an optional file path, a kind ([[concept:buffer-kind|BufferKind]]), modification \
+It has an optional file path, a kind (BufferKind), modification \
 state, and either a rope (for text) or a structured payload (for conversations, help, etc).\n\n\
 ## Contrast with other editors\n\
 - **Emacs buffer** ≈ MAE buffer (same lineage).\n\
@@ -164,7 +188,7 @@ See also: [[concept:window]], [[concept:command]], [[cmd:list-buffers]]\n";
 
 const CONCEPT_WINDOW: &str =
     "A **window** is a rectangular view onto a [[concept:buffer|buffer]]. \
-MAE's tiling [[concept:window-manager|WindowManager]] owns the layout tree (splits, sizes) \
+MAE's tiling WindowManager owns the layout tree (splits, sizes) \
 and exactly one window is focused at a time.\n\n\
 ## Why cursor state lives here, not on the buffer\n\
 Emacs has taught us that two windows can legitimately view the same buffer at different \
@@ -184,14 +208,15 @@ determines which keymap is active.\n\n\
 - **Command** — `:command` line.\n\
 - **Search** — `/` incremental search.\n\
 - **ConversationInput** — typing into the AI prompt.\n\
-- **FilePicker** — fuzzy file open overlay.\n\n\
+- **FilePicker** — fuzzy file open overlay.\n\
+- **ShellInsert** — raw keyboard passthrough to [[concept:terminal|embedded terminal]].\n\n\
 Mode transitions are commands — see [[cmd:enter-normal-mode]], [[cmd:enter-insert-mode]], \
 [[cmd:enter-command-mode]]. The AI agent can trigger them too (that's the point of [[concept:ai-as-peer]]).\n\n\
 See also: [[key:normal-mode]]\n";
 
 const CONCEPT_COMMAND: &str =
     "A **command** is a named, documented operation with a stable string identifier. \
-Commands are registered in a shared [[concept:command-registry|CommandRegistry]] and can \
+Commands are registered in a shared CommandRegistry and can \
 be triggered from three peer surfaces:\n\n\
 1. **Human** — via keybindings (`:command-list` or `SPC SPC`).\n\
 2. **Scheme** — via `(execute-command \"name\")` from config or packages.\n\
@@ -214,13 +239,12 @@ with the same effect, and vice versa.\n\n\
 - This knowledge base (`kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`).\n\
 - [[concept:project|Project state]] via `project_info`, `project_files`, `project_search`.\n\n\
 ## Permission tiers\n\
-Every tool has a [[concept:permission-tier|permission tier]]: ReadOnly, Write, Shell, \
+Every tool has a permission tier: ReadOnly, Write, Shell, \
 Privileged. Users control how far the agent can act autonomously.\n\n\
 See also: [[concept:knowledge-base]], [[concept:command]]\n";
 
-const CONCEPT_KB: &str =
-    "MAE's **knowledge base** is a typed graph of [[concept:kb-node|nodes]] with \
-bidirectional [[link]] markers. It started as the help system's backing store and is \
+const CONCEPT_KB: &str = "MAE's **knowledge base** is a typed graph of nodes with \
+bidirectional link markers. It started as the help system's backing store and is \
 designed to grow into an org-roam-equivalent personal knowledge graph.\n\n\
 ## Why one system for both?\n\
 Help pages, keybinding docs, architectural essays, user notes, and AI-authored findings \
@@ -367,6 +391,12 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `b` | [[cmd:debug-toggle-breakpoint]] | Toggle breakpoint |\n\
 | `c` | [[cmd:debug-continue]] | Continue |\n\
 | `n/i/o` | step over/in/out | Step |\n\n\
+### SPC o — +open\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `t` | [[cmd:terminal]] | Open terminal |\n\
+| `r` | [[cmd:terminal-reset]] | Reset terminal |\n\
+| `c` | [[cmd:terminal-close]] | Close terminal |\n\n\
 ### SPC n — +notes\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -407,6 +437,95 @@ The AI agent can query project state via the `project_info` tool and \
 search project files via `project_files` and `project_search`.\n\n\
 See also: [[index]], [[concept:ai-as-peer]]\n";
 
+const CONCEPT_TERMINAL: &str =
+    "MAE embeds a full **terminal emulator** backed by `alacritty_terminal`, the same \
+engine that powers the Alacritty terminal. Programs like vim, less, top, fzf, and tmux \
+work correctly — this is not a line-oriented shell like eshell.\n\n\
+## Opening a terminal\n\
+- `:terminal` or `SPC o t` — opens a new `*Terminal*` buffer in ShellInsert mode.\n\
+- The terminal runs the user's `$SHELL` in a PTY.\n\n\
+## Modes\n\
+- **ShellInsert** — all keys go directly to the PTY. The terminal is fully interactive.\n\
+- **Normal** — `Ctrl-\\ Ctrl-n` exits ShellInsert → Normal mode (Neovim convention). \
+You can then use leader keys (`SPC`), window commands, etc.\n\
+- Press `i` or `a` to re-enter ShellInsert from Normal mode on a terminal buffer.\n\n\
+## Commands\n\
+- [[cmd:terminal]] — open a new terminal buffer.\n\
+- [[cmd:terminal-reset]] (`SPC o r`) — reset/clear the terminal (fixes residual \
+characters from programs like cmatrix that don't clean up on exit).\n\
+- [[cmd:terminal-close]] (`SPC o c`) — close the terminal and kill the shell process.\n\n\
+## Process lifecycle\n\
+When the shell process exits (e.g. `exit` or `Ctrl-D`), MAE automatically:\n\
+1. Switches back to Normal mode.\n\
+2. Shuts down the PTY.\n\
+3. Marks the buffer name with `[exited]`.\n\
+Close the buffer manually with `SPC o c` or `:kill-buffer`.\n\n\
+## Architecture\n\
+The `mae-shell` crate wraps `alacritty_terminal::Term` with PTY management. The renderer \
+reads the terminal grid and converts cells to ratatui spans with full color and attribute \
+support. A 30fps render tick ensures smooth output.\n\n\
+See also: [[concept:mode]], [[concept:ai-as-peer]], [[index]]\n";
+
+const CONCEPT_HOOKS: &str =
+    "**Hooks** are MAE's primary extensibility mechanism — they let Scheme code react to \
+editor events without the core knowing anything about Scheme.\n\n\
+## Available hooks\n\
+| Hook name | Fires when |\n\
+|-----------|------------|\n\
+| `before-save` | Just before a buffer is written to disk |\n\
+| `after-save` | After a successful save |\n\
+| `buffer-open` | After a file is opened into a buffer |\n\
+| `buffer-close` | Before a buffer is killed |\n\
+| `mode-change` | When the editing mode changes |\n\
+| `command-pre` | Before a command is dispatched (planned) |\n\
+| `command-post` | After a command completes (planned) |\n\n\
+## Usage from Scheme\n\
+```scheme\n\
+;; Register a function to run on save:\n\
+(add-hook! \"after-save\" \"my-after-save\")\n\
+\n\
+;; Define the function:\n\
+(define (my-after-save)\n\
+  (display \"File saved!\"))\n\
+\n\
+;; Remove a hook:\n\
+(remove-hook! \"after-save\" \"my-after-save\")\n\
+```\n\n\
+## Design\n\
+Core fires hooks by pushing `(hook-name, fn-name)` entries into \
+`Editor::pending_hook_evals`. The binary drains them and calls the Scheme runtime — \
+the same intent pattern used for LSP and DAP. This keeps the core crate free of \
+Scheme dependencies.\n\n\
+See also: [[concept:command]], [[concept:options]], [[index]]\n";
+
+const CONCEPT_OPTIONS: &str =
+    "MAE's editor options can be configured from Scheme using `(set-option! KEY VALUE)`.\n\n\
+## Available options\n\
+| Option | Values | Description |\n\
+|--------|--------|-------------|\n\
+| `line-numbers` | `true`/`false` | Show line numbers in gutter |\n\
+| `relative-line-numbers` | `true`/`false` | Relative line numbering |\n\
+| `word-wrap` | `true`/`false` | Soft-wrap long lines |\n\
+| `break-indent` | `true`/`false` | Indent wrapped continuation lines |\n\
+| `show-break` | string | Character prefix for wrapped lines (e.g. `↪`) |\n\
+| `theme` | theme name | Set the color theme |\n\n\
+## Usage from Scheme\n\
+```scheme\n\
+;; In init.scm:\n\
+(set-option! \"line-numbers\" \"true\")\n\
+(set-option! \"relative-line-numbers\" \"true\")\n\
+(set-option! \"theme\" \"dracula\")\n\
+(set-option! \"word-wrap\" \"true\")\n\
+(set-option! \"show-break\" \"↪ \")\n\
+```\n\n\
+## Toggle commands\n\
+Options can also be toggled interactively via `SPC t`:\n\
+- `SPC t l` — [[cmd:toggle-line-numbers]]\n\
+- `SPC t r` — [[cmd:toggle-relative-line-numbers]]\n\
+- `SPC t w` — [[cmd:toggle-word-wrap]]\n\
+- `SPC t t` — [[cmd:cycle-theme]]\n\n\
+See also: [[concept:hooks]], [[concept:command]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +553,9 @@ mod tests {
             "concept:ai-as-peer",
             "concept:knowledge-base",
             "concept:project",
+            "concept:terminal",
+            "concept:hooks",
+            "concept:options",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

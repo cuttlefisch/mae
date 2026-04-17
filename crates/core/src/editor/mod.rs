@@ -7,6 +7,7 @@ mod edit_ops;
 mod file_ops;
 mod git_ops;
 mod help_ops;
+mod hook_ops;
 mod jumps;
 mod keymaps;
 mod lsp_ops;
@@ -38,6 +39,7 @@ use crate::commands::CommandRegistry;
 use crate::dap_intent::DapIntent;
 use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
+use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
 use crate::keymap::{KeyPress, Keymap};
 use crate::lsp_intent::LspIntent;
@@ -184,6 +186,29 @@ pub struct Editor {
     /// directly; commands push intents here and `main.rs` forwards them to
     /// `run_dap_task`.
     pub pending_dap_intents: Vec<DapIntent>,
+    /// Buffer indices of newly created shell buffers that need PTY spawning.
+    /// The binary drains this and creates `ShellTerminal` instances.
+    pub pending_shell_spawns: Vec<usize>,
+    /// Buffer indices of shell terminals that should be reset (clear screen).
+    /// Drained by the binary which owns the `ShellTerminal` instances.
+    pub pending_shell_resets: Vec<usize>,
+    /// Buffer indices of shell terminals that should be closed.
+    /// Drained by the binary which shuts down the PTY and removes the terminal.
+    pub pending_shell_closes: Vec<usize>,
+    /// Queued text to send to shell terminals: (buffer_index, text).
+    /// Drained by the binary which owns the `ShellTerminal` instances.
+    pub pending_shell_inputs: Vec<(usize, String)>,
+    /// Cached viewport snapshots for shell terminals, updated by the binary
+    /// each render tick. Keyed by buffer index. Used by AI tools to read
+    /// terminal output without direct access to `ShellTerminal`.
+    pub shell_viewports: HashMap<usize, Vec<String>>,
+    /// Hook registry: named extension points with ordered Scheme function lists.
+    /// Populated by `(add-hook! ...)` from Scheme, fired by core operations.
+    pub hooks: HookRegistry,
+    /// Queued hook evaluations for the binary to drain. Each entry is
+    /// `(hook_name, scheme_fn_name)`. Core pushes here; the binary drains
+    /// and calls the Scheme runtime (same pattern as `pending_scheme_eval`).
+    pub pending_hook_evals: Vec<(String, String)>,
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
@@ -328,6 +353,13 @@ impl Editor {
             command_cursor: 0,
             pending_lsp_requests: Vec::new(),
             pending_dap_intents: Vec::new(),
+            pending_shell_spawns: Vec::new(),
+            pending_shell_resets: Vec::new(),
+            pending_shell_closes: Vec::new(),
+            pending_shell_inputs: Vec::new(),
+            shell_viewports: HashMap::new(),
+            hooks: HookRegistry::new(),
+            pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             syntax: crate::syntax::SyntaxMap::new(),
             syntax_selection_stack: Vec::new(),
@@ -415,6 +447,13 @@ impl Editor {
             command_history_idx: None,
             pending_lsp_requests: Vec::new(),
             pending_dap_intents: Vec::new(),
+            pending_shell_spawns: Vec::new(),
+            pending_shell_resets: Vec::new(),
+            pending_shell_closes: Vec::new(),
+            pending_shell_inputs: Vec::new(),
+            shell_viewports: HashMap::new(),
+            hooks: HookRegistry::new(),
+            pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             syntax: {
                 let mut m = crate::syntax::SyntaxMap::new();
@@ -476,6 +515,7 @@ impl Editor {
             | Mode::FilePicker
             | Mode::FileBrowser
             | Mode::CommandPalette => "command",
+            Mode::ShellInsert => return None, // Keys handled by binary shell layer
         };
         self.keymaps.get(name)
     }

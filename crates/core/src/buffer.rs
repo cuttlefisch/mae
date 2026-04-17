@@ -19,6 +19,9 @@ pub enum BufferKind {
     Messages,
     /// Knowledge-base viewer (`*Help*`). Body rendered live from the KB.
     Help,
+    /// Terminal emulator buffer. Rendering is driven by an external
+    /// `ShellTerminal` (lives in `mae` binary, not in core).
+    Shell,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -122,6 +125,22 @@ impl Buffer {
             read_only: true,
             conversation: None,
             help_view: Some(HelpView::new(start)),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// Create a shell (terminal emulator) buffer.
+    pub fn new_shell(name: impl Into<String>) -> Self {
+        Buffer {
+            rope: Rope::new(),
+            file_path: None,
+            modified: false,
+            name: name.into(),
+            kind: BufferKind::Shell,
+            read_only: true,
+            conversation: None,
+            help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
