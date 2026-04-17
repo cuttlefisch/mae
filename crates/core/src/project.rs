@@ -88,6 +88,49 @@ pub fn detect_project_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Bounded list of recently used project roots.
+#[derive(Debug, Clone)]
+pub struct RecentProjects {
+    roots: VecDeque<PathBuf>,
+    cap: usize,
+}
+
+impl Default for RecentProjects {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
+impl RecentProjects {
+    pub fn new(cap: usize) -> Self {
+        RecentProjects {
+            roots: VecDeque::new(),
+            cap,
+        }
+    }
+
+    /// Push a project root, deduplicating and enforcing capacity.
+    pub fn push(&mut self, root: PathBuf) {
+        self.roots.retain(|r| r != &root);
+        self.roots.push_front(root);
+        while self.roots.len() > self.cap {
+            self.roots.pop_back();
+        }
+    }
+
+    pub fn list(&self) -> &VecDeque<PathBuf> {
+        &self.roots
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.roots.len()
+    }
+}
+
 /// Bounded list of recently opened files.
 #[derive(Debug, Clone)]
 pub struct RecentFiles {

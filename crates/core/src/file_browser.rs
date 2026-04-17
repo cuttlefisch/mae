@@ -171,6 +171,55 @@ impl FileBrowser {
         }
     }
 
+    /// Tab completion: single dir match → descend, single file → complete
+    /// query, multiple → extend to longest common prefix.
+    pub fn complete_tab(&mut self) -> bool {
+        if self.filtered.is_empty() {
+            return false;
+        }
+        if self.filtered.len() == 1 {
+            let entry = &self.entries[self.filtered[0]];
+            if entry.is_dir {
+                // Single dir match → descend
+                self.cwd = self.cwd.join(&entry.name);
+                self.refresh();
+                return true;
+            }
+            // Single file match → complete query to full name
+            if self.query != entry.name {
+                self.query = entry.name.clone();
+                self.update_filter();
+                return true;
+            }
+            return false;
+        }
+        // Multiple matches → extend to longest common prefix of display names
+        let names: Vec<String> = self
+            .filtered
+            .iter()
+            .map(|&i| self.entries[i].name.clone())
+            .collect();
+        let first = &names[0];
+        let mut prefix_bytes = first.len();
+        for other in &names[1..] {
+            prefix_bytes = crate::file_picker::common_prefix_bytes(first, other).min(prefix_bytes);
+            if prefix_bytes == 0 {
+                return false;
+            }
+        }
+        while prefix_bytes > 0 && !first.is_char_boundary(prefix_bytes) {
+            prefix_bytes -= 1;
+        }
+        let prefix = &first[..prefix_bytes];
+        if prefix.len() > self.query.len() {
+            self.query = prefix.to_string();
+            self.update_filter();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Move to the parent directory.
     ///
     /// No-op at the filesystem root. After ascending, selection is placed
@@ -455,5 +504,54 @@ mod tests {
         };
         assert_eq!(file.display(), "foo.rs");
         assert_eq!(dir.display(), "src/");
+    }
+
+    // ---- WU4: Tab completion ----
+
+    #[test]
+    fn tab_single_dir_descends() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_tree(tmp.path());
+        let mut browser = FileBrowser::open(tmp.path());
+        browser.query = "sr".to_string(); // should match "src" only
+        browser.update_filter();
+        assert!(browser.complete_tab());
+        // Should have descended into src
+        assert_eq!(browser.cwd, tmp.path().join("src"));
+        assert!(browser.query.is_empty());
+    }
+
+    #[test]
+    fn tab_single_file_completes_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_tree(tmp.path());
+        let mut browser = FileBrowser::open(&tmp.path().join("src"));
+        browser.query = "ma".to_string();
+        browser.update_filter();
+        assert!(browser.complete_tab());
+        assert_eq!(browser.query, "main.rs");
+    }
+
+    #[test]
+    fn tab_multiple_extends_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        fs::write(tmp.path().join("foobar.rs"), "").unwrap();
+        fs::write(tmp.path().join("foobaz.rs"), "").unwrap();
+        let mut browser = FileBrowser::open(tmp.path());
+        browser.query = "foo".to_string();
+        browser.update_filter();
+        assert!(browser.complete_tab());
+        assert_eq!(browser.query, "fooba");
+    }
+
+    #[test]
+    fn tab_empty_filtered_returns_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_tree(tmp.path());
+        let mut browser = FileBrowser::open(tmp.path());
+        browser.query = "zzzzzzz".to_string();
+        browser.update_filter();
+        assert!(!browser.complete_tab());
     }
 }

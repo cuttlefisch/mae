@@ -32,6 +32,7 @@ pub enum PalettePurpose {
     SwitchBuffer,
     SetSplashArt,
     RecentFile,
+    SwitchProject,
 }
 
 /// State for the command palette overlay.
@@ -97,6 +98,11 @@ impl CommandPalette {
     /// Recent file picker palette. Used by `SPC f r` / `SPC p r`.
     pub fn for_recent_files(names: &[&str]) -> Self {
         Self::with_name_list(names, PalettePurpose::RecentFile)
+    }
+
+    /// Project switch palette. Used by `SPC p p` / `project-switch`.
+    pub fn for_project_switch(roots: &[&str]) -> Self {
+        Self::with_name_list(roots, PalettePurpose::SwitchProject)
     }
 
     /// Splash art picker palette. More art variants will be added in a

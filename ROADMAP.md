@@ -56,6 +56,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 10 | Multiple cursors | future |
 | 11 | Session persistence | 3f M3 |
 | 12 | README badges (CI status, Rust version, license, crate count) | future |
+| 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
 
 ---
 

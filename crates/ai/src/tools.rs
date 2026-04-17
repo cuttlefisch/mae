@@ -750,6 +750,24 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Project management ---
+        ToolDefinition {
+            name: "switch_project".into(),
+            description: "Switch the active project to a new root directory. Detects project markers (.git, Cargo.toml, etc.) and updates the editor's project context. Adds the root to recent projects.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Absolute path to the project root directory".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Editor settings ---
         ToolDefinition {
             name: "set_option".into(),
@@ -875,7 +893,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 36);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -912,6 +930,7 @@ mod tests {
         assert!(names.contains(&"kb_links_to"));
         assert!(names.contains(&"kb_graph"));
         assert!(names.contains(&"help_open"));
+        assert!(names.contains(&"switch_project"));
     }
 
     #[test]

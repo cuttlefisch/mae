@@ -574,8 +574,11 @@ impl Editor {
                     // Auto-detect project root if not yet set
                     if self.project.is_none() {
                         if let Some(root) = crate::project::detect_project_root(&canonical) {
+                            self.recent_projects.push(root.clone());
                             self.project = Some(crate::project::Project::from_root(root));
                         }
+                    } else if let Some(ref proj) = self.project {
+                        self.recent_projects.push(proj.root.clone());
                     }
                 }
                 self.buffers.push(buf);

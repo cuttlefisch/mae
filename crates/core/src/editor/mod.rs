@@ -222,6 +222,9 @@ pub struct Editor {
     pub pending_operator: Option<String>,
     /// Cursor position (row, col) when operator-pending started.
     pub operator_start: Option<(usize, usize)>,
+    /// Count prefix saved from the operator key (e.g. `2d` saves 2).
+    /// Multiplied with the motion's own count when the motion fires.
+    pub operator_count: Option<usize>,
     /// True if the last dispatched motion was linewise (gg, G, {, }, etc.).
     pub last_motion_linewise: bool,
     /// Char offset range saved by `ys{motion}` for the subsequent char-await
@@ -251,6 +254,8 @@ pub struct Editor {
     pub project: Option<crate::project::Project>,
     /// Recently opened files (bounded, deduplicated).
     pub recent_files: crate::project::RecentFiles,
+    /// Recently used project roots (bounded, deduplicated).
+    pub recent_projects: crate::project::RecentProjects,
     /// Toggle: show line numbers in the gutter. Default true.
     pub show_line_numbers: bool,
     /// Toggle: use relative line numbers. Default false.
@@ -330,6 +335,7 @@ impl Editor {
             splash_art: Some("bat".to_string()),
             pending_operator: None,
             operator_start: None,
+            operator_count: None,
             last_motion_linewise: false,
             pending_surround_range: None,
             last_find_char: None,
@@ -342,6 +348,7 @@ impl Editor {
             bell_until: None,
             project: None,
             recent_files: crate::project::RecentFiles::default(),
+            recent_projects: crate::project::RecentProjects::default(),
             show_line_numbers: true,
             relative_line_numbers: false,
             word_wrap: false,
@@ -424,6 +431,7 @@ impl Editor {
             splash_art: None,
             pending_operator: None,
             operator_start: None,
+            operator_count: None,
             last_motion_linewise: false,
             pending_surround_range: None,
             last_find_char: None,
@@ -436,6 +444,7 @@ impl Editor {
             bell_until: None,
             project: None,
             recent_files: crate::project::RecentFiles::default(),
+            recent_projects: crate::project::RecentProjects::default(),
             show_line_numbers: true,
             relative_line_numbers: false,
             word_wrap: false,

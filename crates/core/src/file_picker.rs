@@ -71,12 +71,35 @@ impl FilePicker {
         if self.query.is_empty() {
             self.filtered = (0..self.candidates.len()).collect();
         } else {
-            let query_lower: Vec<char> = self.query.to_lowercase().chars().collect();
+            // Directory-prefix filtering: if query contains '/' and the
+            // prefix matches a directory path, restrict search to that subtree.
+            let (dir_prefix, remainder) = split_directory_prefix(&self.query, &self.candidates);
+            let query_lower: Vec<char> = remainder.to_lowercase().chars().collect();
+
             let mut scored: Vec<(usize, i64)> = self
                 .candidates
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, path)| score_match(path, &query_lower).map(|s| (idx, s)))
+                .filter(|(_, path)| {
+                    if let Some(dp) = dir_prefix {
+                        path.to_lowercase().starts_with(&dp.to_lowercase())
+                    } else {
+                        true
+                    }
+                })
+                .filter_map(|(idx, path)| {
+                    // Score only the portion after the directory prefix
+                    let score_target = if let Some(dp) = dir_prefix {
+                        &path[dp.len().min(path.len())..]
+                    } else {
+                        path.as_str()
+                    };
+                    if query_lower.is_empty() {
+                        Some((idx, 0i64 - path.len() as i64))
+                    } else {
+                        score_match(score_target, &query_lower).map(|s| (idx, s))
+                    }
+                })
                 .collect();
             // Higher score = better match, sort descending
             scored.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -298,8 +321,26 @@ pub fn unexpand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+/// Split a query into an optional directory prefix and the remainder.
+/// If the query contains '/' and the prefix up to the last '/' matches
+/// candidates, returns (Some(dir_prefix), remainder). Otherwise returns
+/// (None, full_query).
+fn split_directory_prefix<'a>(query: &'a str, candidates: &[String]) -> (Option<&'a str>, &'a str) {
+    if let Some(last_slash) = query.rfind('/') {
+        let dir_prefix = &query[..=last_slash];
+        let lower = dir_prefix.to_lowercase();
+        if candidates
+            .iter()
+            .any(|c| c.to_lowercase().starts_with(&lower))
+        {
+            return (Some(dir_prefix), &query[last_slash + 1..]);
+        }
+    }
+    (None, query)
+}
+
 /// Byte length of the longest common ASCII/UTF-8 byte prefix of two strings.
-fn common_prefix_bytes(a: &str, b: &str) -> usize {
+pub(crate) fn common_prefix_bytes(a: &str, b: &str) -> usize {
     a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
 }
 
@@ -337,6 +378,13 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     // ---- Tier 1: exact equality ----
     if path_lower == query_str {
         return Some(1_000_000);
+    }
+
+    // ---- Tier 1.5: query exactly matches the basename ----
+    let basename_start = path_lower.rfind('/').map(|p| p + 1).unwrap_or(0);
+    let basename = &path_lower[basename_start..];
+    if basename == query_str {
+        return Some(750_000 - path_len);
     }
 
     // ---- Tier 2/3: suffix match ----
@@ -885,5 +933,73 @@ mod tests {
             let picker = FilePicker::scan(home_path);
             assert_eq!(picker.root_label, "~");
         }
+    }
+
+    // ---- WU3: Directory prefix filtering + basename scoring ----
+
+    #[test]
+    fn dir_prefix_filters_to_subtree() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/editor")).unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
+        fs::write(tmp.path().join("docs/readme.md"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "src/editor/".to_string();
+        picker.update_filter();
+        // Should only show files under src/editor/
+        let names: Vec<&str> = picker
+            .filtered
+            .iter()
+            .map(|&i| picker.candidates[i].as_str())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().all(|n| n.starts_with("src/editor/")));
+    }
+
+    #[test]
+    fn dir_prefix_with_remainder_finds_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/editor")).unwrap();
+        fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "src/editor/mod".to_string();
+        picker.update_filter();
+        assert!(!picker.filtered.is_empty());
+        assert_eq!(picker.candidates[picker.filtered[0]], "src/editor/mod.rs");
+    }
+
+    #[test]
+    fn basename_exact_ranks_highest() {
+        // "mod.rs" should rank editor/mod.rs above module_helper.rs
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("editor")).unwrap();
+        fs::write(tmp.path().join("editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("module_helper.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "mod.rs".to_string();
+        picker.update_filter();
+        assert!(!picker.filtered.is_empty());
+        assert_eq!(
+            picker.candidates[picker.filtered[0]],
+            "editor/mod.rs",
+            "exact basename should win, got: {:?}",
+            picker
+                .filtered
+                .iter()
+                .map(|&i| &picker.candidates[i])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn empty_query_shows_all_no_regression() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.rs"), "").unwrap();
+        fs::write(tmp.path().join("b.rs"), "").unwrap();
+        let picker = FilePicker::scan(tmp.path());
+        assert_eq!(picker.filtered.len(), 2);
     }
 }

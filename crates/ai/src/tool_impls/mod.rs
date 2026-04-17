@@ -29,7 +29,9 @@ pub use kb::{
     execute_kb_search,
 };
 pub use lsp::execute_lsp_diagnostics;
-pub use project::{execute_project_files, execute_project_info, execute_project_search};
+pub use project::{
+    execute_project_files, execute_project_info, execute_project_search, execute_switch_project,
+};
 pub use syntax::execute_syntax_tree;
 
 use mae_core::Editor;

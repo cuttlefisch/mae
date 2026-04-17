@@ -68,6 +68,23 @@ impl Editor {
         self.mode = Mode::CommandPalette;
     }
 
+    /// `project-switch` — palette with recently used project roots.
+    pub(crate) fn project_switch_palette(&mut self) {
+        let roots: Vec<String> = self
+            .recent_projects
+            .list()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        if roots.is_empty() {
+            self.set_status("No recent projects");
+            return;
+        }
+        let name_refs: Vec<&str> = roots.iter().map(|s| s.as_str()).collect();
+        self.command_palette = Some(CommandPalette::for_project_switch(&name_refs));
+        self.mode = Mode::CommandPalette;
+    }
+
     /// `recent-files` — palette with all recent files.
     pub(crate) fn recent_files_palette(&mut self) {
         let files: Vec<String> = self

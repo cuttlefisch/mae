@@ -3562,3 +3562,173 @@ fn lsp_rename_enters_command_mode() {
     assert_eq!(editor.mode, Mode::Command);
     assert!(editor.command_line.starts_with("lsp-rename "));
 }
+
+// ---- WU1: Count prefix with operators ----
+
+#[test]
+fn operator_count_3dj_deletes_4_lines() {
+    // 3dj: operator_count=3, motion j has no count → multiply 3*1=3
+    // In the real key handler, operator_count is multiplied with motion count
+    // and set as count_prefix before dispatch. Here we simulate that.
+    let mut editor = editor_with_text("line1\nline2\nline3\nline4\nline5\n");
+    editor.count_prefix = Some(3);
+    editor.dispatch_builtin("operator-delete");
+    assert_eq!(editor.operator_count, Some(3));
+    assert!(editor.pending_operator.is_some());
+    // Simulate what key_handling does: multiply op_count * motion_count
+    let op_count = editor.operator_count.take().unwrap();
+    let motion_count = editor.count_prefix.unwrap_or(1);
+    editor.count_prefix = Some(op_count * motion_count); // 3*1=3
+    editor.dispatch_builtin("move-down"); // moves 3 lines
+    editor.apply_pending_operator_for_motion("move-down");
+    assert_eq!(editor.active_buffer().rope().to_string(), "line5\n");
+}
+
+#[test]
+fn operator_count_d3j_deletes_4_lines() {
+    // d3j: no operator count, motion count=3
+    // The count_prefix is set before the motion dispatch — dispatch_builtin
+    // consumes it and repeats move-down 3 times.
+    let mut editor = editor_with_text("line1\nline2\nline3\nline4\nline5\n");
+    editor.dispatch_builtin("operator-delete");
+    assert!(editor.operator_count.is_none());
+    // Motion j with count=3: set count_prefix, then dispatch (which consumes it)
+    editor.count_prefix = Some(3);
+    editor.dispatch_builtin("move-down"); // dispatch_builtin repeats 3 times
+    editor.apply_pending_operator_for_motion("move-down");
+    assert_eq!(editor.active_buffer().rope().to_string(), "line5\n");
+}
+
+#[test]
+fn operator_count_saved_on_delete() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    editor.count_prefix = Some(5);
+    editor.dispatch_builtin("operator-delete");
+    assert_eq!(editor.operator_count, Some(5));
+}
+
+#[test]
+fn operator_count_saved_on_change() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    editor.count_prefix = Some(2);
+    editor.dispatch_builtin("operator-change");
+    assert_eq!(editor.operator_count, Some(2));
+}
+
+#[test]
+fn operator_count_saved_on_yank() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    editor.count_prefix = Some(3);
+    editor.dispatch_builtin("operator-yank");
+    assert_eq!(editor.operator_count, Some(3));
+}
+
+#[test]
+fn operator_count_saved_on_surround() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    editor.count_prefix = Some(4);
+    editor.dispatch_builtin("operator-surround");
+    assert_eq!(editor.operator_count, Some(4));
+}
+
+#[test]
+fn operator_count_none_without_count() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    editor.dispatch_builtin("operator-delete");
+    assert!(editor.operator_count.is_none());
+}
+
+#[test]
+fn operator_count_cleared_on_apply() {
+    let mut editor = editor_with_text("hello world");
+    editor.count_prefix = Some(2);
+    editor.dispatch_builtin("operator-delete");
+    editor.dispatch_builtin("move-word-forward");
+    editor.apply_pending_operator_for_motion("move-word-forward");
+    assert!(editor.operator_count.is_none());
+}
+
+// ---- WU2: Motion classification fixes ----
+
+#[test]
+fn move_to_line_end_deletes_to_eol() {
+    // d$ — delete from cursor to end of line (exclusive because cursor goes
+    // past last char, so the range [5, 11) correctly deletes " world")
+    let mut editor = editor_with_text("hello world\nsecond\n");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_col = 5; // at ' '
+    editor.dispatch_builtin("operator-delete");
+    editor.dispatch_builtin("move-to-line-end");
+    editor.apply_pending_operator_for_motion("move-to-line-end");
+    assert_eq!(editor.active_buffer().rope().to_string(), "hello\nsecond\n");
+}
+
+#[test]
+fn search_next_is_exclusive() {
+    assert!(Editor::is_exclusive_motion("search-next"));
+    assert!(Editor::is_exclusive_motion("search-prev"));
+}
+
+#[test]
+fn scroll_motions_are_linewise() {
+    assert!(Editor::is_linewise_motion("scroll-half-up"));
+    assert!(Editor::is_linewise_motion("scroll-half-down"));
+    assert!(Editor::is_linewise_motion("scroll-page-up"));
+    assert!(Editor::is_linewise_motion("scroll-page-down"));
+}
+
+#[test]
+fn text_object_clears_pending_operator() {
+    // di( should not leave dangling pending_operator
+    let mut editor = editor_with_text("fn(hello, world)");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_col = 3; // inside parens
+    editor.dispatch_text_object("delete-inner-object", '(');
+    assert!(editor.pending_operator.is_none());
+    assert!(editor.operator_start.is_none());
+    assert!(editor.operator_count.is_none());
+}
+
+// ---- WU5: Project switching ----
+
+#[test]
+fn recent_projects_push_dedup_bounded() {
+    let mut rp = crate::project::RecentProjects::new(3);
+    rp.push(std::path::PathBuf::from("/a"));
+    rp.push(std::path::PathBuf::from("/b"));
+    rp.push(std::path::PathBuf::from("/a")); // duplicate
+    assert_eq!(rp.len(), 2);
+    assert_eq!(rp.list()[0], std::path::PathBuf::from("/a"));
+    // Test bounded
+    rp.push(std::path::PathBuf::from("/c"));
+    rp.push(std::path::PathBuf::from("/d"));
+    assert_eq!(rp.len(), 3);
+    assert_eq!(rp.list()[0], std::path::PathBuf::from("/d"));
+}
+
+#[test]
+fn project_switch_palette_empty_shows_status() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("project-switch");
+    assert!(editor.status_msg.contains("No recent projects"));
+    assert!(editor.command_palette.is_none());
+}
+
+#[test]
+fn project_switch_palette_populates() {
+    let mut editor = Editor::new();
+    editor
+        .recent_projects
+        .push(std::path::PathBuf::from("/proj1"));
+    editor
+        .recent_projects
+        .push(std::path::PathBuf::from("/proj2"));
+    editor.dispatch_builtin("project-switch");
+    assert!(editor.command_palette.is_some());
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert_eq!(
+        palette.purpose,
+        crate::command_palette::PalettePurpose::SwitchProject
+    );
+    assert_eq!(palette.entries.len(), 2);
+}

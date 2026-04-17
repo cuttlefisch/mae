@@ -526,6 +526,7 @@ impl CommandRegistry {
         reg.register_builtin("project-search", "Search in project (SPC p s)");
         reg.register_builtin("project-browse", "Browse project directory (SPC p d)");
         reg.register_builtin("project-recent-files", "Recent files in project (SPC p r)");
+        reg.register_builtin("project-switch", "Switch to a recent project (SPC p p)");
 
         // Search aliases
         reg.register_builtin("search-buffer", "Search in current buffer (SPC s s)");

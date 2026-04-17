@@ -1380,6 +1380,7 @@ impl Editor {
             "project-search" => self.project_search(),
             "project-browse" => self.project_browse(),
             "project-recent-files" => self.project_recent_files(),
+            "project-switch" => self.project_switch_palette(),
 
             // +search/syntax (SPC s) — search-buffer is an alias
             "search-buffer" => {
@@ -1527,21 +1528,25 @@ impl Editor {
                 let win = self.window_mgr.focused_window();
                 self.pending_operator = Some("d".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
             }
             "operator-change" => {
                 let win = self.window_mgr.focused_window();
                 self.pending_operator = Some("c".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
             }
             "operator-yank" => {
                 let win = self.window_mgr.focused_window();
                 self.pending_operator = Some("y".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
             }
             "operator-surround" => {
                 let win = self.window_mgr.focused_window();
                 self.pending_operator = Some("s".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
             }
 
             _ => return false,

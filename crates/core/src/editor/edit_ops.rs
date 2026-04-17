@@ -240,6 +240,7 @@ impl Editor {
         let Some((start_row, start_col)) = self.operator_start.take() else {
             return;
         };
+        self.operator_count = None; // consumed — clean up
         let linewise = self.last_motion_linewise;
         let exclusive = Self::is_exclusive_motion(motion_cmd);
         let idx = self.active_buffer_idx();
@@ -402,12 +403,19 @@ impl Editor {
                 | "move-screen-top"
                 | "move-screen-middle"
                 | "move-screen-bottom"
+                | "scroll-half-up"
+                | "scroll-half-down"
+                | "scroll-page-up"
+                | "scroll-page-down"
         )
     }
 
     /// Returns true if the motion is exclusive (end position is NOT included).
-    /// Exclusive motions: w, W, b, B, 0, ^, search-next, search-prev.
-    /// Inclusive motions: e, E, $, %, f, t, G, gg, ge, gE, etc.
+    /// Exclusive motions: w, W, b, B, 0, ^, $, search-next, search-prev.
+    /// Note: `$` (`move-to-line-end`) is exclusive in our implementation because
+    /// `move_to_line_end` sets cursor to `line_len` (one past the last character),
+    /// so excluding end_off correctly stops at the last char (matching vim's `d$`).
+    /// Inclusive motions: e, E, %, f, t, G, gg, ge, gE, etc.
     pub fn is_exclusive_motion(cmd: &str) -> bool {
         matches!(
             cmd,
@@ -418,6 +426,8 @@ impl Editor {
                 | "move-to-line-start"
                 | "move-to-line-end"
                 | "move-to-first-non-blank"
+                | "search-next"
+                | "search-prev"
         )
     }
 }

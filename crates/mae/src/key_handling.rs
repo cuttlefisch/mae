@@ -349,14 +349,36 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
             }
             // Descended / Nothing: stay in browser mode with refreshed listing.
         }
-        // Enter while a query is active still activates (so users don't
-        // have to hit Backspace to clear the filter first).
+        // Enter while a query is active: check for path navigation first,
+        // then activate the selected entry.
         KeyCode::Enter => {
-            if let Activation::OpenFile(path) = browser.activate() {
+            // If query looks like an absolute or home-relative path to a
+            // directory, navigate there directly.
+            let nav_path = if browser.query.starts_with('/') {
+                Some(std::path::PathBuf::from(&browser.query))
+            } else if browser.query.starts_with("~/") {
+                let expanded = mae_core::file_picker::expand_tilde(&browser.query);
+                Some(std::path::PathBuf::from(expanded))
+            } else {
+                None
+            };
+            if let Some(p) = nav_path {
+                if p.is_dir() {
+                    browser.cwd = p;
+                    browser.refresh();
+                } else if let Activation::OpenFile(path) = browser.activate() {
+                    editor.file_browser = None;
+                    editor.mode = Mode::Normal;
+                    editor.open_file(&path);
+                }
+            } else if let Activation::OpenFile(path) = browser.activate() {
                 editor.file_browser = None;
                 editor.mode = Mode::Normal;
                 editor.open_file(&path);
             }
+        }
+        KeyCode::Tab => {
+            browser.complete_tab();
         }
         KeyCode::Up => browser.move_up(),
         KeyCode::Down => browser.move_down(),
@@ -426,6 +448,16 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                     editor.splash_art = Some(art.clone());
                     editor.set_status(format!("Splash art set to: {}", art));
                     crate::config::persist_editor_preference("splash_art", &art);
+                }
+                (Some(root_str), PalettePurpose::SwitchProject) => {
+                    let root = std::path::PathBuf::from(&root_str);
+                    if root.is_dir() {
+                        editor.recent_projects.push(root.clone());
+                        editor.project = Some(mae_core::project::Project::from_root(root));
+                        editor.set_status(format!("Switched to project: {}", root_str));
+                    } else {
+                        editor.set_status(format!("Project root not found: {}", root_str));
+                    }
                 }
                 (None, _) => editor.set_status("No command selected"),
             }
@@ -504,6 +536,13 @@ fn handle_keymap_mode(
             pending_keys.clear();
             editor.which_key_prefix.clear();
             let had_pending_op = editor.pending_operator.is_some();
+            // Multiply operator count with motion count (e.g. 2d3j → 6j)
+            if had_pending_op && Editor::is_motion_command(&cmd) {
+                if let Some(op_count) = editor.operator_count.take() {
+                    let motion_count = editor.count_prefix.unwrap_or(1);
+                    editor.count_prefix = Some(op_count * motion_count);
+                }
+            }
             dispatch_command(editor, scheme, &cmd);
             // After a motion completes with a pending operator, apply the operator
             if had_pending_op && Editor::is_motion_command(&cmd) {
@@ -554,6 +593,13 @@ fn handle_keymap_mode(
                     LookupResult::Exact(cmd) => {
                         let cmd = cmd.to_string();
                         let had_pending = editor.pending_operator.is_some();
+                        // Multiply operator count with motion count
+                        if had_pending && Editor::is_motion_command(&cmd) {
+                            if let Some(op_count) = editor.operator_count.take() {
+                                let motion_count = editor.count_prefix.unwrap_or(1);
+                                editor.count_prefix = Some(op_count * motion_count);
+                            }
+                        }
                         pending_keys.clear();
                         editor.which_key_prefix.clear();
                         dispatch_command(editor, scheme, &cmd);
@@ -572,6 +618,7 @@ fn handle_keymap_mode(
                         editor.which_key_prefix.clear();
                         editor.pending_operator = None;
                         editor.operator_start = None;
+                        editor.operator_count = None;
                         editor.set_status("Key not bound");
                     }
                 }
@@ -682,7 +729,12 @@ fn handle_normal_mode(
         if let KeyCode::Char(ch) = key.code {
             let had_pending_op = editor.pending_operator.is_some();
             // Try text object dispatch first, then fall back to char motion
-            if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
+            if editor.dispatch_text_object(&cmd, ch) || editor.dispatch_surround(&cmd, ch) {
+                // Text object/surround handled it directly — clear dangling state
+                editor.pending_operator = None;
+                editor.operator_start = None;
+                editor.operator_count = None;
+            } else {
                 editor.dispatch_char_motion(&cmd, ch);
                 // f/t motions with a pending operator
                 if had_pending_op {
@@ -694,6 +746,7 @@ fn handle_normal_mode(
             // Escape or non-char clears pending operator too
             editor.pending_operator = None;
             editor.operator_start = None;
+            editor.operator_count = None;
         }
         // Any key (including Escape) clears the pending state
         return;
@@ -730,6 +783,7 @@ fn handle_normal_mode(
         editor.count_prefix = None;
         editor.pending_operator = None;
         editor.operator_start = None;
+        editor.operator_count = None;
         if !editor.which_key_prefix.is_empty() {
             pending_keys.clear();
             editor.which_key_prefix.clear();
@@ -849,7 +903,12 @@ fn handle_visual_mode(
     if let Some(cmd) = editor.pending_char_command.take() {
         if let KeyCode::Char(ch) = key.code {
             let had_pending_op = editor.pending_operator.is_some();
-            if !editor.dispatch_text_object(&cmd, ch) && !editor.dispatch_surround(&cmd, ch) {
+            if editor.dispatch_text_object(&cmd, ch) || editor.dispatch_surround(&cmd, ch) {
+                // Text object/surround handled it directly — clear dangling state
+                editor.pending_operator = None;
+                editor.operator_start = None;
+                editor.operator_count = None;
+            } else {
                 editor.dispatch_char_motion(&cmd, ch);
                 if had_pending_op {
                     editor.last_motion_linewise = false;
@@ -859,6 +918,7 @@ fn handle_visual_mode(
         } else {
             editor.pending_operator = None;
             editor.operator_start = None;
+            editor.operator_count = None;
         }
         return;
     }
