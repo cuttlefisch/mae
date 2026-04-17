@@ -319,6 +319,42 @@ impl SchemeRuntime {
         self.engine.register_fn("buffer-line", move |n: isize| {
             lines.get(n.max(0) as usize).cloned().unwrap_or_default()
         });
+
+        // --- Shell state ---
+
+        // *shell-buffers* — list of buffer indices that are Shell-kind.
+        let shell_indices: Vec<SteelVal> = editor
+            .buffers
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == mae_core::BufferKind::Shell)
+            .map(|(i, _)| SteelVal::IntV(i as isize))
+            .collect();
+        self.engine
+            .register_value("*shell-buffers*", SteelVal::ListV(shell_indices.into()));
+
+        // (shell-cwd BUF-IDX) — return cached CWD for a shell buffer.
+        let cwds = editor.shell_cwds.clone();
+        self.engine.register_fn("shell-cwd", move |idx: isize| {
+            cwds.get(&(idx.max(0) as usize))
+                .cloned()
+                .unwrap_or_default()
+        });
+
+        // (shell-read-output BUF-IDX MAX-LINES) — read viewport snapshot.
+        let viewports = editor.shell_viewports.clone();
+        self.engine
+            .register_fn("shell-read-output", move |idx: isize, max: isize| {
+                let idx = idx.max(0) as usize;
+                let max = max.max(1) as usize;
+                viewports
+                    .get(&idx)
+                    .map(|lines| {
+                        let start = lines.len().saturating_sub(max);
+                        lines[start..].join("\n")
+                    })
+                    .unwrap_or_default()
+            });
     }
 
     /// Apply accumulated config changes to the editor.
@@ -959,5 +995,43 @@ mod tests {
         rt.eval(r#"(set-option! "nonexistent" "value")"#).unwrap();
         rt.apply_to_editor(&mut editor);
         assert!(editor.status_msg.contains("Unknown option"));
+    }
+
+    // --- Shell state tests ---
+
+    #[test]
+    fn test_shell_cwd_returns_cached_value() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        editor.shell_cwds.insert(1, "/home/user".to_string());
+        rt.inject_editor_state(&editor);
+        let result = rt.eval("(shell-cwd 1)").unwrap();
+        assert_eq!(result, "/home/user");
+    }
+
+    #[test]
+    fn test_shell_read_output_returns_viewport() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        editor
+            .shell_viewports
+            .insert(2, vec!["$ ls".to_string(), "file.txt".to_string()]);
+        rt.inject_editor_state(&editor);
+        let result = rt.eval("(shell-read-output 2 10)").unwrap();
+        assert!(result.contains("$ ls"));
+        assert!(result.contains("file.txt"));
+    }
+
+    #[test]
+    fn test_shell_list_with_buffers() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        editor
+            .buffers
+            .push(mae_core::Buffer::new_shell("*terminal*"));
+        rt.inject_editor_state(&editor);
+        let result = rt.eval("*shell-buffers*").unwrap();
+        // Should contain the index of the shell buffer (1).
+        assert!(result.contains("1"));
     }
 }

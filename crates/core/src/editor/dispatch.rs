@@ -790,6 +790,12 @@ impl Editor {
                     self.set_status("Not a terminal buffer");
                 }
             }
+            "send-to-shell" => {
+                self.send_line_to_shell();
+            }
+            "send-region-to-shell" => {
+                self.send_region_to_shell();
+            }
 
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));

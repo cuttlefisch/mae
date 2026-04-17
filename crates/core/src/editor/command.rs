@@ -241,6 +241,23 @@ impl Editor {
                 }
                 true
             }
+            "agent-setup" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(name) => {
+                        self.pending_agent_setup = Some(name.to_string());
+                    }
+                    None => {
+                        self.set_status(
+                            "Usage: :agent-setup <name>  — use :agent-list to see available agents",
+                        );
+                    }
+                }
+                true
+            }
+            "agent-list" => {
+                self.pending_agent_setup = Some("__list__".to_string());
+                true
+            }
             "noh" | "nohlsearch" => {
                 self.search_state.highlight_active = false;
                 true

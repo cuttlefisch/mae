@@ -28,10 +28,12 @@
 PREFIX     ?= $(HOME)/.local/bin
 CARGO      ?= cargo
 BINARY     := mae
+SHIM_BINARY := mae-mcp-shim
 TARGET_DIR := target
 
-RELEASE_BIN := $(TARGET_DIR)/release/$(BINARY)
-DEBUG_BIN   := $(TARGET_DIR)/debug/$(BINARY)
+RELEASE_BIN  := $(TARGET_DIR)/release/$(BINARY)
+RELEASE_SHIM := $(TARGET_DIR)/release/$(SHIM_BINARY)
+DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 
 .PHONY: all build dev install uninstall run test check fmt fmt-check clippy clean ci setup-hooks help
 
@@ -50,12 +52,16 @@ dev:
 install: build
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
+	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY)"
+	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 
 ## uninstall: remove the installed binary from PREFIX
 uninstall:
 	@rm -f $(PREFIX)/$(BINARY)
+	@rm -f $(PREFIX)/$(SHIM_BINARY)
 	@echo "Removed $(PREFIX)/$(BINARY)"
+	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
 
 ## run: dev build and run (pass extra arguments via ARGS=…)
 run: dev

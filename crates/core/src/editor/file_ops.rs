@@ -563,6 +563,34 @@ impl Editor {
         &self.command_line
     }
 
+    /// Check if a buffer's backing file changed on disk and reload if clean,
+    /// or warn if the buffer has unsaved modifications.
+    pub fn check_and_reload_buffer(&mut self, idx: usize) {
+        if idx >= self.buffers.len() {
+            return;
+        }
+        if !self.buffers[idx].check_disk_changed() {
+            return;
+        }
+        let name = self.buffers[idx].name.clone();
+        if self.buffers[idx].modified {
+            self.set_status(format!(
+                "Warning: {} changed on disk (buffer has unsaved changes)",
+                name
+            ));
+        } else {
+            match self.buffers[idx].reload_from_disk() {
+                Ok(()) => {
+                    self.set_status(format!("Reloaded: {}", name));
+                }
+                Err(e) => {
+                    self.set_status(format!("Reload failed for {}: {}", name, e));
+                }
+            }
+        }
+        self.fire_hook("file-changed-on-disk");
+    }
+
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
         let path = path.as_ref();
         match Buffer::from_file(path) {

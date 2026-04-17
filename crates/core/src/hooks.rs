@@ -21,6 +21,7 @@ pub const HOOK_NAMES: &[&str] = &[
     "mode-change",
     "command-pre",
     "command-post",
+    "file-changed-on-disk",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.

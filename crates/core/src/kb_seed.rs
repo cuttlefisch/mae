@@ -145,6 +145,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_OPTIONS,
         )
         .with_tags(["options", "configuration", "scheme"]),
+        Node::new(
+            "concept:agent-bootstrap",
+            "Concept: Agent Bootstrap",
+            NodeKind::Concept,
+            CONCEPT_AGENT_BOOTSTRAP,
+        )
+        .with_tags(["agents", "mcp", "ai"]),
     ]
 }
 
@@ -158,9 +165,10 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:command|Command]] — the shared API between human, Scheme, and AI
 - [[concept:ai-as-peer|The AI as Peer Actor]] — the fundamental design stance
 - [[concept:knowledge-base|Knowledge Base]] — this page, and why it exists
-- [[concept:terminal|Embedded Terminal]] — full terminal emulator inside MAE
+- [[concept:terminal|Embedded Terminal]] — full terminal emulator inside MAE + MCP bridge
 - [[concept:hooks|Hooks]] — Scheme extension points for editor events
 - [[concept:options|Editor Options]] — configuring MAE from Scheme
+- [[concept:agent-bootstrap|Agent Bootstrap]] — zero-config MCP tool discovery for AI agents
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -453,7 +461,23 @@ You can then use leader keys (`SPC`), window commands, etc.\n\
 - [[cmd:terminal]] — open a new terminal buffer.\n\
 - [[cmd:terminal-reset]] (`SPC o r`) — reset/clear the terminal (fixes residual \
 characters from programs like cmatrix that don't clean up on exit).\n\
-- [[cmd:terminal-close]] (`SPC o c`) — close the terminal and kill the shell process.\n\n\
+- [[cmd:terminal-close]] (`SPC o c`) — close the terminal and kill the shell process.\n\
+- [[cmd:send-to-shell]] (`SPC e s`) — send current line to a terminal.\n\
+- [[cmd:send-region-to-shell]] (`SPC e S`) — send visual selection to a terminal.\n\n\
+## Scheme integration\n\
+- `(shell-cwd BUF-IDX)` — returns the CWD of a shell buffer (via `/proc/PID/cwd`).\n\
+- `(shell-read-output BUF-IDX MAX-LINES)` — reads the last N lines of terminal output.\n\
+- `*shell-buffers*` — list of buffer indices that are Shell-kind.\n\n\
+## MCP bridge\n\
+MAE runs an MCP (Model Context Protocol) server on a Unix socket (`/tmp/mae-PID.sock`). \
+The `MAE_MCP_SOCKET` env var is injected into every spawned terminal. This lets Claude Code \
+(running inside the terminal) call back into the editor via the same tool API the built-in \
+AI uses. The `mae-mcp-shim` binary bridges stdio to the socket.\n\n\
+## File auto-reload\n\
+When switching to a buffer whose backing file has changed on disk:\n\
+- **Clean buffer** (no unsaved edits): reloaded automatically.\n\
+- **Dirty buffer**: warning shown, no clobber.\n\
+The `file-changed-on-disk` hook fires in both cases.\n\n\
 ## Process lifecycle\n\
 When the shell process exits (e.g. `exit` or `Ctrl-D`), MAE automatically:\n\
 1. Switches back to Normal mode.\n\
@@ -478,7 +502,8 @@ editor events without the core knowing anything about Scheme.\n\n\
 | `buffer-close` | Before a buffer is killed |\n\
 | `mode-change` | When the editing mode changes |\n\
 | `command-pre` | Before a command is dispatched (planned) |\n\
-| `command-post` | After a command completes (planned) |\n\n\
+| `command-post` | After a command completes (planned) |\n\
+| `file-changed-on-disk` | When a buffer's backing file changes externally |\n\n\
 ## Usage from Scheme\n\
 ```scheme\n\
 ;; Register a function to run on save:\n\
@@ -526,6 +551,31 @@ Options can also be toggled interactively via `SPC t`:\n\
 - `SPC t t` — [[cmd:cycle-theme]]\n\n\
 See also: [[concept:hooks]], [[concept:command]], [[index]]\n";
 
+const CONCEPT_AGENT_BOOTSTRAP: &str =
+    "MAE auto-configures AI agents running inside its embedded terminal so they \
+can discover the editor's MCP tools with zero manual setup.\n\n\
+## How it works\n\
+1. MAE starts an MCP socket server at `/tmp/mae-{pid}.sock`.\n\
+2. The `MAE_MCP_SOCKET` env var is injected into every PTY.\n\
+3. On first `:terminal` spawn, MAE writes `.mcp.json` to the project root:\n\
+   ```json\n\
+   { \"mcpServers\": { \"mae-editor\": { \"command\": \"/path/to/mae-mcp-shim\" } } }\n\
+   ```\n\
+4. Claude Code reads `.mcp.json` automatically, spawns the shim.\n\
+5. The shim inherits `MAE_MCP_SOCKET` from the shell env and connects.\n\n\
+## Commands\n\
+- `:agent-setup <name>` — manually write `.mcp.json` for a specific agent\n\
+- `:agent-list` — show all agents MAE can bootstrap\n\
+- `mae --setup-agents [DIR]` — CLI: write `.mcp.json` without starting the editor\n\n\
+## Configuration\n\
+In `~/.config/mae/config.toml`:\n\
+```toml\n\
+[agents]\n\
+auto_mcp_json = false  # disable auto-write\n\
+```\n\
+Or: `MAE_AGENTS_AUTO_MCP=0`\n\n\
+See also: [[concept:terminal]], [[concept:ai-as-peer]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,6 +606,7 @@ mod tests {
             "concept:terminal",
             "concept:hooks",
             "concept:options",
+            "concept:agent-bootstrap",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

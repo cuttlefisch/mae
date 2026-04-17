@@ -202,6 +202,9 @@ pub struct Editor {
     /// each render tick. Keyed by buffer index. Used by AI tools to read
     /// terminal output without direct access to `ShellTerminal`.
     pub shell_viewports: HashMap<usize, Vec<String>>,
+    /// Cached current working directories for shell terminals, keyed by
+    /// buffer index. Updated by the binary via /proc/{pid}/cwd.
+    pub shell_cwds: HashMap<usize, String>,
     /// Hook registry: named extension points with ordered Scheme function lists.
     /// Populated by `(add-hook! ...)` from Scheme, fired by core operations.
     pub hooks: HookRegistry,
@@ -294,6 +297,10 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
+    /// The binary drains this and calls `agents::setup_agent()`.
+    /// `Some("__list__")` is the sentinel for `:agent-list`.
+    pub pending_agent_setup: Option<String>,
 }
 
 impl Default for Editor {
@@ -358,6 +365,7 @@ impl Editor {
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),
             shell_viewports: HashMap::new(),
+            shell_cwds: HashMap::new(),
             hooks: HookRegistry::new(),
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
@@ -394,6 +402,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            pending_agent_setup: None,
         }
     }
 
@@ -452,6 +461,7 @@ impl Editor {
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),
             shell_viewports: HashMap::new(),
+            shell_cwds: HashMap::new(),
             hooks: HookRegistry::new(),
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
@@ -500,6 +510,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            pending_agent_setup: None,
         }
     }
 
@@ -609,6 +620,8 @@ impl Editor {
         if prev_idx != idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
+        // Check for external file changes before showing the buffer.
+        self.check_and_reload_buffer(idx);
         let win = self.window_mgr.focused_window_mut();
         win.buffer_idx = idx;
         win.cursor_row = 0;

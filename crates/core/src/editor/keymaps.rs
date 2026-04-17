@@ -256,6 +256,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
         normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
         normal.bind(parse_key_seq_spaced("SPC e o"), "open-scheme-repl");
+        normal.bind(parse_key_seq_spaced("SPC e s"), "send-to-shell");
+
         // +project
         normal.bind(parse_key_seq_spaced("SPC p f"), "project-find-file");
         normal.bind(parse_key_seq_spaced("SPC p s"), "project-search");
@@ -416,6 +418,7 @@ impl Editor {
         visual.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
         // Scheme eval region
         visual.bind(parse_key_seq_spaced("SPC e r"), "eval-region");
+        visual.bind(parse_key_seq_spaced("SPC e S"), "send-region-to-shell");
 
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);

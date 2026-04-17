@@ -9,6 +9,7 @@ members = [
     "crates/kb",
     "crates/mae",
     "crates/shell",
+    "crates/mcp",
 ]
 resolver = "2"
 

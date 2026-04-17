@@ -89,11 +89,15 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - KB queries from Scheme and AI
 - Help buffer with navigation, link following, neighborhood display
 
-### Phase 6: Embedded Shell — IN PROGRESS (M1 complete, M2 in progress)
+### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload, 1294 tests)
 - Terminal emulator via `alacritty_terminal` (full VT100, colors, attributes) ✅
 - ShellInsert mode, Ctrl-\ Ctrl-n exit, process lifecycle handling ✅
 - Scheme hooks (7 hook points) + `set-option!` configuration ✅
-- **Next: AI/Scheme shell tools (shell_list, shell_read_output, shell_send_input)**
+- Shell integration + README overhaul ✅
+- Scheme shell functions: `shell-cwd`, `shell-read-output`, `*shell-buffers*` ✅
+- Send-to-shell: `SPC e s` (line), `SPC e S` (region) ✅
+- MCP bridge: Unix socket server, JSON-RPC, stdio shim, tool re-export ✅
+- File auto-reload: mtime tracking, clean buffer reload, dirty buffer warning, `file-changed-on-disk` hook ✅
 
 ### Phase 7: Embedded Documentation — PLANNED
 

@@ -70,6 +70,9 @@ pub struct ShellTerminal {
 
     /// Whether the child process has exited.
     exited: bool,
+
+    /// PID of the child shell process.
+    child_pid: u32,
 }
 
 impl ShellTerminal {
@@ -81,6 +84,17 @@ impl ShellTerminal {
         cols: u16,
         rows: u16,
         working_dir: Option<std::path::PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::spawn_with_env(cols, rows, working_dir, std::collections::HashMap::new())
+    }
+
+    /// Spawn a new terminal with extra environment variables injected
+    /// into the child process (e.g. `MAE_MCP_SOCKET`).
+    pub fn spawn_with_env(
+        cols: u16,
+        rows: u16,
+        working_dir: Option<std::path::PathBuf>,
+        extra_env: std::collections::HashMap<String, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let columns = cols as usize;
         let screen_lines = rows as usize;
@@ -100,6 +114,7 @@ impl ShellTerminal {
         // PTY options.
         let mut env = std::collections::HashMap::new();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
+        env.extend(extra_env);
         let pty_opts = tty::Options {
             working_directory: working_dir,
             env,
@@ -118,6 +133,9 @@ impl ShellTerminal {
 
         // Spawn the PTY.
         let pty = tty::new(&pty_opts, window_size, 0)?;
+
+        // Extract child PID before the PTY is moved into the event loop.
+        let child_pid = pty.child().id();
 
         // Create and spawn the I/O event loop.
         let event_loop = EventLoop::new(
@@ -139,6 +157,7 @@ impl ShellTerminal {
             _io_thread: io_thread,
             title: String::new(),
             exited: false,
+            child_pid,
         })
     }
 
@@ -203,6 +222,22 @@ impl ShellTerminal {
     /// Current terminal title (set by shell escape sequences).
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    /// PID of the child shell process.
+    pub fn child_pid(&self) -> u32 {
+        self.child_pid
+    }
+
+    /// Current working directory of the foreground process in the terminal.
+    ///
+    /// On Linux, reads `/proc/{pid}/cwd` to determine the cwd. Returns `None`
+    /// if the symlink cannot be read (e.g., process has exited, or on non-Linux).
+    pub fn cwd(&self) -> Option<String> {
+        let link = format!("/proc/{}/cwd", self.child_pid);
+        std::fs::read_link(&link)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
     }
 
     /// Reset the terminal: send a full reset escape sequence to clear screen

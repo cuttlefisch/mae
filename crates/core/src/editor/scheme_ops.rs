@@ -80,6 +80,72 @@ impl Editor {
         self.switch_to_buffer(idx);
     }
 
+    /// Find the best shell buffer target for send-to-shell. Prefers the
+    /// active buffer if it's a Shell, otherwise picks the most recent
+    /// Shell buffer that has a viewport snapshot.
+    pub fn find_shell_target(&self) -> Option<usize> {
+        let active = self.active_buffer_idx();
+        if self.buffers[active].kind == crate::buffer::BufferKind::Shell {
+            return Some(active);
+        }
+        // Find the most recent shell buffer (highest index) with a viewport.
+        self.buffers
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(idx, b)| {
+                b.kind == crate::buffer::BufferKind::Shell && self.shell_viewports.contains_key(idx)
+            })
+            .map(|(idx, _)| idx)
+    }
+
+    /// `send-to-shell` — send the current line to the shell terminal.
+    pub fn send_line_to_shell(&mut self) {
+        let Some(shell_idx) = self.find_shell_target() else {
+            self.set_status("send-to-shell: no active terminal");
+            return;
+        };
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let text = self.buffers[buf_idx].line_text(row);
+        let text = text.trim_end_matches('\n').to_string();
+        if text.is_empty() {
+            self.set_status("send-to-shell: empty line");
+            return;
+        }
+        self.pending_shell_inputs.push((shell_idx, text + "\r"));
+        self.set_status("Sent to shell");
+    }
+
+    /// `send-region-to-shell` — send the visual selection to the shell terminal.
+    pub fn send_region_to_shell(&mut self) {
+        if !matches!(self.mode, Mode::Visual(_)) {
+            self.set_status("send-region-to-shell: no visual selection");
+            return;
+        }
+        let Some(shell_idx) = self.find_shell_target() else {
+            self.mode = Mode::Normal;
+            self.set_status("send-region-to-shell: no active terminal");
+            return;
+        };
+        let (start, end) = self.visual_selection_range();
+        self.mode = Mode::Normal;
+        if start >= end {
+            self.set_status("send-region-to-shell: empty selection");
+            return;
+        }
+        let buf_idx = self.active_buffer_idx();
+        let text = self.buffers[buf_idx].text_range(start, end);
+        // Split multi-line text and join with \r for the terminal.
+        let joined: String = text.lines().collect::<Vec<_>>().join("\r");
+        if joined.is_empty() {
+            self.set_status("send-region-to-shell: empty selection");
+            return;
+        }
+        self.pending_shell_inputs.push((shell_idx, joined + "\r"));
+        self.set_status("Sent region to shell");
+    }
+
     /// Append REPL output to the `*Scheme*` buffer, creating it if
     /// needed. Called by the binary after eval completes.
     pub fn append_to_scheme_repl(&mut self, output: &str) {
@@ -161,5 +227,68 @@ mod tests {
         ed.append_to_scheme_repl("> (+ 1 2)\n; => 3\n");
         let buf = ed.buffers.iter().find(|b| b.name == "*Scheme*").unwrap();
         assert!(buf.text().contains("; => 3"));
+    }
+
+    // --- send-to-shell ---
+
+    #[test]
+    fn send_line_to_shell_no_shell() {
+        let mut buf = Buffer::new();
+        buf.replace_contents("echo hello\n");
+        let mut ed = Editor::with_buffer(buf);
+        ed.send_line_to_shell();
+        assert!(ed.status_msg.contains("no active terminal"));
+        assert!(ed.pending_shell_inputs.is_empty());
+    }
+
+    #[test]
+    fn send_line_to_shell_queues_input() {
+        let mut ed = Editor::new();
+        // Set up: a text buffer with content, and a shell buffer with viewport.
+        ed.buffers[0].replace_contents("echo hello\necho world\n");
+        ed.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = ed.buffers.len() - 1;
+        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        // Cursor on line 0 of buffer 0.
+        ed.send_line_to_shell();
+        assert_eq!(ed.pending_shell_inputs.len(), 1);
+        assert_eq!(ed.pending_shell_inputs[0].0, shell_idx);
+        assert_eq!(ed.pending_shell_inputs[0].1, "echo hello\r");
+    }
+
+    #[test]
+    fn send_line_to_shell_empty_line() {
+        let mut ed = Editor::new();
+        ed.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = ed.buffers.len() - 1;
+        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        // Buffer 0 is empty scratch.
+        ed.send_line_to_shell();
+        assert!(ed.status_msg.contains("empty"));
+        assert!(ed.pending_shell_inputs.is_empty());
+    }
+
+    #[test]
+    fn find_shell_target_prefers_active() {
+        let mut ed = Editor::new();
+        ed.buffers.push(Buffer::new_shell("*terminal*"));
+        let shell_idx = ed.buffers.len() - 1;
+        ed.shell_viewports.insert(shell_idx, vec!["$ ".to_string()]);
+        // Switch to shell buffer.
+        ed.window_mgr.focused_window_mut().buffer_idx = shell_idx;
+        assert_eq!(ed.find_shell_target(), Some(shell_idx));
+    }
+
+    #[test]
+    fn find_shell_target_finds_most_recent() {
+        let mut ed = Editor::new();
+        ed.buffers.push(Buffer::new_shell("*terminal-1*"));
+        let idx1 = ed.buffers.len() - 1;
+        ed.buffers.push(Buffer::new_shell("*terminal-2*"));
+        let idx2 = ed.buffers.len() - 1;
+        ed.shell_viewports.insert(idx1, vec!["$ ".to_string()]);
+        ed.shell_viewports.insert(idx2, vec!["$ ".to_string()]);
+        // Active buffer is 0 (text), so find_shell_target should pick idx2 (most recent).
+        assert_eq!(ed.find_shell_target(), Some(idx2));
     }
 }

@@ -1,6 +1,7 @@
 use ropey::Rope;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::conversation::Conversation;
 use crate::help_view::HelpView;
@@ -57,6 +58,9 @@ pub struct Buffer {
     pub help_view: Option<HelpView>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
+    /// Last known modification time of the backing file on disk.
+    /// Used by auto-reload to detect external changes.
+    pub file_mtime: Option<SystemTime>,
 }
 
 impl Default for Buffer {
@@ -78,6 +82,7 @@ impl Buffer {
             help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: None,
         }
     }
 
@@ -94,6 +99,7 @@ impl Buffer {
             help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: None,
         }
     }
 
@@ -110,6 +116,7 @@ impl Buffer {
             help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: None,
         }
     }
 
@@ -127,6 +134,7 @@ impl Buffer {
             help_view: Some(HelpView::new(start)),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: None,
         }
     }
 
@@ -143,12 +151,14 @@ impl Buffer {
             help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: None,
         }
     }
 
     pub fn from_file(path: &Path) -> std::io::Result<Self> {
         let content = fs::read_to_string(path)?;
         let rope = Rope::from_str(&content);
+        let mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
         Ok(Buffer {
             rope,
             name: path
@@ -163,6 +173,7 @@ impl Buffer {
             help_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            file_mtime: mtime,
         })
     }
 
@@ -180,6 +191,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
+            self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
         } else {
             Err(std::io::Error::other("No file path set"))
@@ -196,6 +208,42 @@ impl Buffer {
 
     pub fn file_path(&self) -> Option<&Path> {
         self.file_path.as_deref()
+    }
+
+    /// Check whether the backing file has been modified externally since we
+    /// last loaded or saved it.
+    pub fn check_disk_changed(&self) -> bool {
+        let Some(ref path) = self.file_path else {
+            return false;
+        };
+        let Some(stored) = self.file_mtime else {
+            return false;
+        };
+        let Ok(meta) = fs::metadata(path) else {
+            return false;
+        };
+        let Ok(disk_mtime) = meta.modified() else {
+            return false;
+        };
+        disk_mtime > stored
+    }
+
+    /// Reload buffer contents from its backing file. Returns Ok(()) on
+    /// success, Err if file_path is None or the read fails. Clears the
+    /// modified flag and undo/redo history.
+    pub fn reload_from_disk(&mut self) -> std::io::Result<()> {
+        let path = self
+            .file_path
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("No file path set"))?
+            .clone();
+        let content = fs::read_to_string(&path)?;
+        self.rope = Rope::from_str(&content);
+        self.modified = false;
+        self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        Ok(())
     }
 
     pub fn rope(&self) -> &Rope {
@@ -1191,6 +1239,107 @@ mod tests {
         buf.delete_to_line_end(&mut win);
         // '\n' is killed when cursor is on it
         assert_eq!(buf.text(), "hello");
+    }
+
+    // --- File mtime / auto-reload ---
+
+    #[test]
+    fn test_buffer_mtime_set_on_load() {
+        let dir = std::env::temp_dir().join("mae_test_mtime_load");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("mtime.txt");
+        fs::write(&path, "hello").unwrap();
+
+        let buf = Buffer::from_file(&path).unwrap();
+        assert!(buf.file_mtime.is_some());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_buffer_mtime_updated_on_save() {
+        let dir = std::env::temp_dir().join("mae_test_mtime_save");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("mtime_save.txt");
+        fs::write(&path, "hello").unwrap();
+
+        let mut buf = Buffer::from_file(&path).unwrap();
+        let mtime1 = buf.file_mtime;
+
+        // Small delay to ensure mtime changes
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        buf.insert_text_at(0, "new ");
+        buf.save().unwrap();
+        let mtime2 = buf.file_mtime;
+        assert!(mtime2 >= mtime1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_check_disk_changed_detects_external_edit() {
+        let dir = std::env::temp_dir().join("mae_test_disk_changed");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("detect.txt");
+        fs::write(&path, "original").unwrap();
+
+        let buf = Buffer::from_file(&path).unwrap();
+        assert!(!buf.check_disk_changed());
+
+        // Simulate external edit
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&path, "modified externally").unwrap();
+        assert!(buf.check_disk_changed());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_auto_reload_clean_buffer() {
+        let dir = std::env::temp_dir().join("mae_test_auto_reload");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("reload.txt");
+        fs::write(&path, "original").unwrap();
+
+        let mut buf = Buffer::from_file(&path).unwrap();
+        assert!(!buf.modified);
+
+        // External edit
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&path, "updated content").unwrap();
+
+        // Reload should succeed on clean buffer
+        assert!(buf.check_disk_changed());
+        buf.reload_from_disk().unwrap();
+        assert_eq!(buf.text(), "updated content");
+        assert!(!buf.modified);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_no_reload_dirty_buffer() {
+        let dir = std::env::temp_dir().join("mae_test_no_reload_dirty");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("dirty.txt");
+        fs::write(&path, "original").unwrap();
+
+        let mut buf = Buffer::from_file(&path).unwrap();
+        buf.insert_text_at(0, "local edit ");
+        assert!(buf.modified);
+
+        // External edit
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::write(&path, "external edit").unwrap();
+
+        // check_disk_changed should detect the change
+        assert!(buf.check_disk_changed());
+        // But we should NOT reload — buffer has local changes.
+        // (The caller decides this, not the buffer itself.)
+        assert!(buf.modified);
+        assert!(buf.text().contains("local edit"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

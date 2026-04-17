@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-5 complete, Phase 6 M1 COMPLETE, M2 COMPLETE (1278+ tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-5 complete, Phase 6 M1-M4 COMPLETE + MCP bridge + file auto-reload + agent bootstrap (1290+ tests). All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -698,15 +698,49 @@ agent can observe, suggest, and execute commands alongside the user.
 - [x] Viewport caching: main loop snapshots shell grids for AI/Scheme access
 - [x] Intent pattern: `pending_shell_inputs` drained by binary alongside LSP/DAP intents
 
-### M3: Scheme Exposure
-- [ ] `(shell-cwd)` — current working directory of the shell process
-- [ ] Scheme REPL overlay in shell buffer (Layer 1)
-- [ ] Pipe bridge: `shell | scheme-fn` and `scheme-fn | shell` (Layer 3)
+### M3: Scheme Shell Read Functions — COMPLETE
+- [x] `(shell-cwd BUF-IDX)` — CWD of shell process (via /proc/PID/cwd)
+- [x] `(shell-read-output BUF-IDX MAX-LINES)` — read viewport snapshot
+- [x] `*shell-buffers*` — list of shell buffer indices
+- [x] `child_pid()` + `cwd()` on `ShellTerminal` struct
+- [x] `shell_cwds` cache on Editor, populated by main loop
+- [ ] Scheme REPL overlay in shell buffer (deferred — Layer 1)
+- [ ] Pipe bridge: `shell | scheme-fn` (deferred — Layer 3)
 
-### M4: Send-to-Shell
-- [ ] `SPC e s` — eval-line sends current line to shell (like Emacs `C-c C-c`)
-- [ ] `SPC e S` — eval-region sends visual selection to shell
+### M4: Send-to-Shell — COMPLETE
+- [x] `SPC e s` (`send-to-shell`) — send current line to a terminal buffer
+- [x] `SPC e S` (`send-region-to-shell`) — send visual selection to terminal
+- [x] `find_shell_target()` — prefers active shell, falls back to most recent
+- [x] Multi-line regions joined with `\r` for terminal
 - [ ] Shell-aware completion (optional, future)
+
+### M2b: MCP Bridge — COMPLETE
+- [x] `mae-mcp` crate: Unix socket JSON-RPC server (tokio)
+- [x] MCP protocol types: Initialize, ToolList, ToolCall, JSON-RPC 2.0
+- [x] `mae-mcp-shim` binary: stdio ↔ Unix socket bridge
+- [x] `MAE_MCP_SOCKET=/tmp/mae-{pid}.sock` injected into PTY env
+- [x] Main loop drains MCP tool requests alongside AI tool requests
+- [x] Same permission tiers as built-in AI
+- [ ] MCP resources/prompts (deferred)
+
+### File Auto-Reload — COMPLETE
+- [x] `file_mtime` field on Buffer, set on load/save
+- [x] `check_disk_changed()` — compares stored vs current mtime
+- [x] `reload_from_disk()` — reload clean buffers automatically
+- [x] `check_and_reload_buffer()` — called from `switch_to_buffer()`
+- [x] `file-changed-on-disk` hook point
+- [x] Dirty buffers show warning, no clobber
+
+### Agent Bootstrap — COMPLETE
+- [x] `agents.rs` module: agent registry, shim resolution, `.mcp.json` read-merge-write
+- [x] Auto-write `.mcp.json` on `:terminal` spawn (idempotent, preserves existing entries)
+- [x] `MAE_MCP_SOCKET` inherited from PTY env — file is static (no PID), reusable across restarts
+- [x] `:agent-setup <name>` — manually bootstrap a specific agent
+- [x] `:agent-list` — show available agents
+- [x] `mae --setup-agents [DIR]` — CLI: write `.mcp.json` without starting editor
+- [x] Config opt-out: `[agents] auto_mcp_json = false` / `MAE_AGENTS_AUTO_MCP=0`
+- [x] `mae-mcp-shim` installed alongside `mae` by `make install`
+- [x] KB help entry: `concept:agent-bootstrap`
 
 ### M5: Magit Parity
 Full git porcelain in a dedicated buffer — the magit experience. Builds on

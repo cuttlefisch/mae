@@ -1,3 +1,4 @@
+mod agents;
 mod bootstrap;
 mod config;
 mod key_handling;
@@ -75,6 +76,7 @@ async fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
+        println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -86,6 +88,7 @@ async fn main() -> io::Result<()> {
         println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
         println!("  ANTHROPIC_API_KEY   Claude API key");
         println!("  OPENAI_API_KEY      OpenAI API key");
+        println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
         return Ok(());
@@ -97,6 +100,26 @@ async fn main() -> io::Result<()> {
     if args.iter().any(|a| a == "--print-config-template") {
         print!("{}", config::default_config_template());
         return Ok(());
+    }
+    if args.iter().any(|a| a == "--setup-agents") {
+        let dir = args
+            .iter()
+            .position(|a| a == "--setup-agents")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let shim = agents::resolve_shim_path();
+        match agents::write_mcp_json(&dir, &shim) {
+            Ok(()) => {
+                println!("Wrote {}", dir.join(".mcp.json").display());
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
     if args.iter().any(|a| a == "--init-config") {
         let force = args.iter().any(|a| a == "--force");
@@ -143,14 +166,12 @@ async fn main() -> io::Result<()> {
     editor.message_log = message_log;
 
     // Apply editor preferences from config file.
-    {
-        let cfg = config::load_config();
-        if let Some(ref theme) = cfg.editor.theme {
-            editor.set_theme_by_name(theme);
-        }
-        if let Some(ref art) = cfg.editor.splash_art {
-            editor.splash_art = Some(art.clone());
-        }
+    let app_config = config::load_config();
+    if let Some(ref theme) = app_config.editor.theme {
+        editor.set_theme_by_name(theme);
+    }
+    if let Some(ref art) = app_config.editor.splash_art {
+        editor.splash_art = Some(art.clone());
     }
 
     // Initialize Scheme runtime
@@ -208,6 +229,23 @@ async fn main() -> io::Result<()> {
         std::collections::HashMap::new();
     // Track Ctrl-\ for the shell exit sequence (Ctrl-\ Ctrl-n).
     let mut shell_escape_pending = false;
+
+    // MCP bridge: Unix socket for external agents (Claude Code, etc.)
+    let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
+    let (mcp_tool_tx, mut mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
+    {
+        let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+            .iter()
+            .map(|t| mae_mcp::protocol::ToolInfo {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+            })
+            .collect();
+        let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
+        tokio::spawn(server.run(mcp_tools));
+        info!(socket = %mcp_socket_path, "MCP server started");
+    }
 
     loop {
         // Update viewport dimensions and scroll before rendering
@@ -273,14 +311,38 @@ async fn main() -> io::Result<()> {
         drain_lsp_intents(&mut editor, &lsp_command_tx);
         drain_dap_intents(&mut editor, &dap_command_tx);
 
+        // Drain pending agent setup requests (:agent-setup / :agent-list).
+        if let Some(agent_name) = editor.pending_agent_setup.take() {
+            if agent_name == "__list__" {
+                let list = agents::agent_list_display();
+                editor.set_status(format!("Available agents:\n{}", list));
+            } else {
+                let root = editor
+                    .project
+                    .as_ref()
+                    .map(|p| p.root.clone())
+                    .or_else(|| std::env::current_dir().ok());
+                match root {
+                    Some(root) => match agents::setup_agent(&agent_name, &root) {
+                        Ok(msg) => editor.set_status(msg),
+                        Err(msg) => editor.set_status(msg),
+                    },
+                    None => editor.set_status("No project root or working directory available"),
+                }
+            }
+        }
+
         // Spawn any pending shell terminals.
         let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
+        let had_shell_spawns = !shell_spawns.is_empty();
         for buf_idx in shell_spawns {
             let (term_w, _term_h) = renderer.terminal_size().unwrap_or((80, 24));
             let inner_cols = term_w.saturating_sub(4); // border + gutter
             let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
             let cwd = editor.project.as_ref().map(|p| p.root.clone());
-            match mae_shell::ShellTerminal::spawn(inner_cols, inner_rows, cwd) {
+            let mut extra_env = std::collections::HashMap::new();
+            extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
+            match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
                 Ok(shell) => {
                     debug!(buf_idx, "shell terminal spawned");
                     shell_terminals.insert(buf_idx, shell);
@@ -288,6 +350,21 @@ async fn main() -> io::Result<()> {
                 Err(e) => {
                     error!(buf_idx, error = %e, "failed to spawn shell terminal");
                     editor.set_status(format!("Terminal spawn failed: {}", e));
+                }
+            }
+        }
+
+        // Auto-write .mcp.json on first shell spawn (idempotent).
+        if had_shell_spawns && app_config.agents.auto_mcp_json_effective() {
+            let root = editor
+                .project
+                .as_ref()
+                .map(|p| p.root.clone())
+                .or_else(|| std::env::current_dir().ok());
+            if let Some(root) = root {
+                let shim = agents::resolve_shim_path();
+                if let Err(e) = agents::write_mcp_json(&root, &shim) {
+                    debug!(error = %e, "failed to write .mcp.json");
                 }
             }
         }
@@ -364,10 +441,17 @@ async fn main() -> io::Result<()> {
         for (buf_idx, shell) in shell_terminals.iter() {
             let viewport = shell.read_viewport(100);
             editor.shell_viewports.insert(*buf_idx, viewport);
+            // Cache CWD for Scheme access.
+            if let Some(cwd) = shell.cwd() {
+                editor.shell_cwds.insert(*buf_idx, cwd);
+            }
         }
-        // Remove viewports for shells that no longer exist.
+        // Remove viewports/cwds for shells that no longer exist.
         editor
             .shell_viewports
+            .retain(|idx, _| shell_terminals.contains_key(idx));
+        editor
+            .shell_cwds
             .retain(|idx, _| shell_terminals.contains_key(idx));
 
         // When shell terminals are active, poll for new output at ~30fps.
@@ -547,8 +631,38 @@ async fn main() -> io::Result<()> {
             _ = shell_tick => {
                 // Shell output tick — just re-render (top of loop handles it).
             }
+            Some(mcp_req) = mcp_tool_rx.recv() => {
+                // MCP tool call from external agent (Claude Code in terminal).
+                debug!(tool = %mcp_req.tool_name, "MCP tool call");
+                let fake_call = mae_ai::ToolCall {
+                    id: "mcp".to_string(),
+                    name: mcp_req.tool_name.clone(),
+                    arguments: mcp_req.arguments,
+                };
+                let exec_result = execute_tool(
+                    &mut editor, &fake_call, &all_tools, &permission_policy,
+                );
+                let result = match exec_result {
+                    ExecuteResult::Immediate(result) => result,
+                    ExecuteResult::Deferred { .. } => {
+                        // MCP doesn't support deferred — return error.
+                        ToolResult {
+                            tool_call_id: "mcp".to_string(),
+                            success: false,
+                            output: "Tool requires async resolution (not supported via MCP)".to_string(),
+                        }
+                    }
+                };
+                let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                    success: result.success,
+                    output: result.output,
+                });
+            }
         }
     }
+
+    // Clean up MCP socket.
+    let _ = std::fs::remove_file(&mcp_socket_path);
 
     renderer.cleanup()?;
     info!("mae exited cleanly");

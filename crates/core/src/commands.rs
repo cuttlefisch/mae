@@ -607,6 +607,14 @@ impl CommandRegistry {
             "terminal-close",
             "Close the current terminal and its shell process",
         );
+        reg.register_builtin(
+            "send-to-shell",
+            "Send current line to a terminal buffer (SPC e s)",
+        );
+        reg.register_builtin(
+            "send-region-to-shell",
+            "Send visual selection to a terminal buffer (SPC e S)",
+        );
 
         reg
     }

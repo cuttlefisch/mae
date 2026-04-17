@@ -28,6 +28,8 @@ pub struct Config {
     pub ai: AiSection,
     #[serde(default)]
     pub editor: EditorSection,
+    #[serde(default)]
+    pub agents: AgentsSection,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -53,6 +55,36 @@ pub struct AiSection {
 pub struct EditorSection {
     pub theme: Option<String>,
     pub splash_art: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentsSection {
+    /// Automatically write `.mcp.json` to the project root on terminal spawn.
+    /// Set to `false` or `MAE_AGENTS_AUTO_MCP=0` to disable.
+    #[serde(default = "default_true")]
+    pub auto_mcp_json: bool,
+}
+
+impl Default for AgentsSection {
+    fn default() -> Self {
+        Self {
+            auto_mcp_json: true,
+        }
+    }
+}
+
+impl AgentsSection {
+    /// Resolve with env var override: `MAE_AGENTS_AUTO_MCP=0` disables.
+    pub fn auto_mcp_json_effective(&self) -> bool {
+        if let Ok(val) = std::env::var("MAE_AGENTS_AUTO_MCP") {
+            return val != "0";
+        }
+        self.auto_mcp_json
+    }
 }
 
 /// Return the path to the user config file, honoring XDG_CONFIG_HOME.
@@ -431,6 +463,12 @@ pub fn default_config_template() -> String {
 \n\
 # Splash screen art: \"bat\" (more variants coming)\n\
 # splash_art = \"bat\"\n\
+\n\
+[agents]\n\
+# Automatically write .mcp.json to the project root on :terminal spawn.\n\
+# Claude Code and other MCP clients will auto-discover MAE's tools.\n\
+# Set to false to disable. Env override: MAE_AGENTS_AUTO_MCP=0\n\
+# auto_mcp_json = true\n\
 ",
         config_path().display()
     )
@@ -466,6 +504,7 @@ mod tests {
                 theme: Some("gruvbox-dark".into()),
                 ..Default::default()
             },
+            ..Default::default()
         };
         let s = toml::to_string(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
