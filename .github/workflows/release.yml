@@ -15,7 +15,7 @@ jobs:
     name: Build linux-x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # full history for changelog
 
@@ -43,7 +43,7 @@ jobs:
           git cliff --current --output CHANGELOG-release.md
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: CHANGELOG-release.md
           files: dist/mae-linux-x86_64
