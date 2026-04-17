@@ -146,9 +146,14 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
     let selection_style = ts(editor, "ui.selection");
     let prompt_style = ts(editor, "ui.popup.key");
 
+    let query_text_style = if picker.query_selected {
+        selection_style
+    } else {
+        text_style
+    };
     let query_line = Line::from(vec![
         Span::styled("> ", prompt_style),
-        Span::styled(&picker.query, text_style),
+        Span::styled(&picker.query, query_text_style),
     ]);
 
     let results_height = (inner.height - 1) as usize;
@@ -170,7 +175,7 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
     {
         let path = &picker.candidates[filtered_idx];
         let actual_idx = start + display_idx;
-        let style = if actual_idx == picker.selected {
+        let style = if actual_idx == picker.selected && !picker.query_selected {
             selection_style
         } else {
             text_style

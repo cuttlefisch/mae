@@ -110,6 +110,11 @@ pub fn handle_key(
     }
 }
 
+/// Returns true if a command is a vim operator (d/c/y) that enters pending state.
+fn is_operator_command(cmd: &str) -> bool {
+    matches!(cmd, "operator-delete" | "operator-change" | "operator-yank")
+}
+
 /// Dispatch a command by name, handling both builtins and Scheme commands.
 fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str) {
     let theme_before = editor.theme.name.clone();
@@ -191,9 +196,22 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         }
         KeyCode::Enter => {
             if let Some(path) = picker.selected_path() {
+                let creating = picker.query_selected && !path.exists();
                 editor.file_picker = None;
                 editor.mode = Mode::Normal;
-                editor.open_file(&path);
+                if creating {
+                    // Create parent directories and an empty file, then open it.
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Err(e) = std::fs::write(&path, "") {
+                        editor.set_status(format!("Cannot create file: {}", e));
+                    } else {
+                        editor.open_file(&path);
+                    }
+                } else {
+                    editor.open_file(&path);
+                }
             } else {
                 editor.file_picker = None;
                 editor.mode = Mode::Normal;
@@ -203,7 +221,13 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Up | KeyCode::BackTab => {
             picker.move_up();
         }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            picker.move_up();
+        }
         KeyCode::Down => {
+            picker.move_down();
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             picker.move_down();
         }
         KeyCode::Tab => {
@@ -487,11 +511,76 @@ fn handle_keymap_mode(
             editor.which_key_prefix = pending_keys.clone();
         }
         LookupResult::None => {
-            pending_keys.clear();
-            if !editor.which_key_prefix.is_empty() {
-                editor.set_status("Key not bound");
+            // Operator fallback: if the first key is an operator (d/c/y) that
+            // is also a prefix of longer bindings (dd, di, da, ds, dgn, ...),
+            // split the sequence into operator + remaining keys and retry.
+            // This makes `dgg`, `dj`, `dk`, `yG`, `cw`, etc. work without
+            // explicit bindings for every operator+motion combination.
+            let did_split = pending_keys.len() > 1 && {
+                let first = &pending_keys[..1];
+                let op_cmd = editor
+                    .keymaps
+                    .get(mode_name)
+                    .and_then(|km| km.exact_match(first))
+                    .map(|s| s.to_string());
+                if let Some(ref cmd) = op_cmd {
+                    is_operator_command(cmd)
+                } else {
+                    false
+                }
+            };
+
+            if did_split {
+                let op_cmd = editor
+                    .keymaps
+                    .get(mode_name)
+                    .and_then(|km| km.exact_match(&pending_keys[..1]))
+                    .unwrap()
+                    .to_string();
+                let remaining: Vec<KeyPress> = pending_keys[1..].to_vec();
+                pending_keys.clear();
+                editor.which_key_prefix.clear();
+                dispatch_command(editor, scheme, &op_cmd);
+
+                // Re-lookup the remaining keys as a new sequence.
+                *pending_keys = remaining;
+                let result2 = editor
+                    .keymaps
+                    .get(mode_name)
+                    .map(|km| km.lookup(pending_keys))
+                    .unwrap_or(LookupResult::None);
+                match result2 {
+                    LookupResult::Exact(cmd) => {
+                        let cmd = cmd.to_string();
+                        let had_pending = editor.pending_operator.is_some();
+                        pending_keys.clear();
+                        editor.which_key_prefix.clear();
+                        dispatch_command(editor, scheme, &cmd);
+                        if had_pending && Editor::is_motion_command(&cmd) {
+                            editor.apply_pending_operator_for_motion(&cmd);
+                        }
+                    }
+                    LookupResult::Prefix => {
+                        // Remaining keys are a prefix (e.g., `g` of `gg`).
+                        // Keep them in pending_keys; next keystroke will complete.
+                        editor.which_key_prefix = pending_keys.clone();
+                    }
+                    LookupResult::None => {
+                        // Remaining keys also don't match — give up.
+                        pending_keys.clear();
+                        editor.which_key_prefix.clear();
+                        editor.pending_operator = None;
+                        editor.operator_start = None;
+                        editor.set_status("Key not bound");
+                    }
+                }
+            } else {
+                pending_keys.clear();
+                if !editor.which_key_prefix.is_empty() {
+                    editor.set_status("Key not bound");
+                }
+                editor.which_key_prefix.clear();
             }
-            editor.which_key_prefix.clear();
         }
     }
 }

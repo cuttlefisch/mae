@@ -14,6 +14,10 @@ pub struct FilePicker {
     pub root: PathBuf,
     /// Display label for the root (uses `~` when under $HOME).
     pub root_label: String,
+    /// When true, the query line itself is selected (Emacs-style: the literal
+    /// text is the chosen value, not a candidate). Set by C-p/Up past the
+    /// first candidate, or automatically when `filtered` is empty.
+    pub query_selected: bool,
 }
 
 /// Directories to skip during recursive scan.
@@ -58,6 +62,7 @@ impl FilePicker {
             selected: 0,
             root: root.to_path_buf(),
             root_label,
+            query_selected: false,
         }
     }
 
@@ -78,28 +83,55 @@ impl FilePicker {
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected = 0;
+        // Auto-select the query line when there are no matches and a
+        // non-empty query — this lets the user press Enter to open/create
+        // the literal path they typed.
+        self.query_selected = !self.query.is_empty() && self.filtered.is_empty();
     }
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
+        if self.query_selected {
+            // Leave query-line selection and enter the candidate list.
+            self.query_selected = false;
+            self.selected = 0;
+        } else if !self.filtered.is_empty() {
             self.selected = (self.selected + 1) % self.filtered.len();
         }
     }
 
-    /// Move selection up.
+    /// Move selection up (C-p / Up). When already at the first candidate,
+    /// moves to the query line itself (Emacs minibuffer pattern).
     pub fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            if self.selected == 0 {
-                self.selected = self.filtered.len() - 1;
-            } else {
-                self.selected -= 1;
-            }
+        if self.query_selected {
+            return; // already at query line
+        }
+        if self.filtered.is_empty() || self.selected == 0 {
+            self.query_selected = true;
+        } else {
+            self.selected -= 1;
         }
     }
 
-    /// Get the full path of the currently selected file, if any.
+    /// Get the full path of the currently selected file.
+    ///
+    /// When `query_selected` is true (the user navigated to the query line
+    /// via C-p/Up, or there are no matches), returns the query text as a
+    /// literal path — enabling file creation for paths that don't exist yet.
     pub fn selected_path(&self) -> Option<PathBuf> {
+        if self.query_selected && !self.query.is_empty() {
+            let q = &self.query;
+            // Absolute or home-relative paths are used as-is.
+            if q.starts_with('/') {
+                return Some(PathBuf::from(q));
+            }
+            if let Some(rest) = q.strip_prefix("~/") {
+                if let Ok(home) = std::env::var("HOME") {
+                    return Some(PathBuf::from(home).join(rest));
+                }
+            }
+            return Some(self.root.join(q));
+        }
         if self.filtered.is_empty() {
             return None;
         }
@@ -633,9 +665,13 @@ mod tests {
             picker.move_down();
         }
         assert_eq!(picker.selected, 0);
-        // Wrap up from 0
+        // Up from 0 goes to query line (Emacs minibuffer pattern)
         picker.move_up();
-        assert_eq!(picker.selected, count - 1);
+        assert!(picker.query_selected);
+        // Down from query line returns to first candidate
+        picker.move_down();
+        assert!(!picker.query_selected);
+        assert_eq!(picker.selected, 0);
     }
 
     #[test]

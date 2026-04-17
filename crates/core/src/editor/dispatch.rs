@@ -285,6 +285,11 @@ impl Editor {
                     all_deleted.push_str(&deleted);
                 }
                 if !all_deleted.is_empty() {
+                    // Ensure linewise delete text ends with '\n' so paste
+                    // recognizes it as linewise.
+                    if !all_deleted.ends_with('\n') {
+                        all_deleted.push('\n');
+                    }
                     self.save_delete(all_deleted);
                 }
                 self.record_edit_with_count("delete-line", count);
@@ -347,6 +352,11 @@ impl Editor {
                     yanked.push_str(&self.buffers[idx].line_text(row));
                 }
                 if !yanked.is_empty() {
+                    // Ensure linewise yank always ends with '\n' so paste
+                    // recognizes it as linewise (last line may lack trailing newline).
+                    if !yanked.ends_with('\n') {
+                        yanked.push('\n');
+                    }
                     self.save_yank(yanked);
                     let yanked_count = end_row - start_row;
                     self.set_status(format!(

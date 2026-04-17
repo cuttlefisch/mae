@@ -123,6 +123,13 @@ impl Keymap {
         LookupResult::None
     }
 
+    /// Look up a key sequence, ignoring prefix status.
+    /// Returns `Some(cmd)` if there's an exact binding, even if the
+    /// sequence is also a prefix of longer bindings.
+    pub fn exact_match(&self, seq: &[KeyPress]) -> Option<&str> {
+        self.bindings.get(seq).map(|s| s.as_str())
+    }
+
     /// Remove a binding.
     pub fn unbind(&mut self, seq: &[KeyPress]) {
         self.bindings.remove(seq);

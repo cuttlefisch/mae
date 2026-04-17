@@ -385,7 +385,9 @@ impl Editor {
     pub fn is_linewise_motion(cmd: &str) -> bool {
         matches!(
             cmd,
-            "move-to-first-line"
+            "move-up"
+                | "move-down"
+                | "move-to-first-line"
                 | "move-to-last-line"
                 | "move-paragraph-forward"
                 | "move-paragraph-backward"
