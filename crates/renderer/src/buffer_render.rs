@@ -1,0 +1,547 @@
+//! Text buffer rendering: gutter, syntax spans, hex color preview,
+//! search/selection highlights, cursorline, diagnostics, breakpoints.
+
+use mae_core::{DiagnosticSeverity, Editor, HighlightSpan, Mode, Window};
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Paragraph};
+use std::collections::HashMap;
+
+use crate::theme_convert::ts;
+
+// ---------------------------------------------------------------------------
+// Text buffer window (border + inner)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_window(
+    frame: &mut Frame,
+    area: Rect,
+    buf: &mae_core::Buffer,
+    win: &Window,
+    focused: bool,
+    editor: &Editor,
+    syntax_spans: Option<&[HighlightSpan]>,
+) {
+    let border_style = if focused {
+        ts(editor, "ui.window.border.active")
+    } else {
+        ts(editor, "ui.window.border")
+    };
+
+    let modified = if buf.modified { " [+]" } else { "" };
+    let title = format!(" {}{} ", buf.name, modified);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    render_buffer(frame, inner, buf, win, focused, editor, syntax_spans);
+}
+
+// ---------------------------------------------------------------------------
+// Buffer content rendering
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_buffer(
+    frame: &mut Frame,
+    area: Rect,
+    buf: &mae_core::Buffer,
+    win: &Window,
+    focused: bool,
+    editor: &Editor,
+    syntax_spans: Option<&[HighlightSpan]>,
+) {
+    let viewport_height = area.height as usize;
+    let gutter_w = gutter_width(buf.line_count());
+    let gutter_style = ts(editor, "ui.gutter");
+    let text_style = ts(editor, "ui.text");
+    let search_style = ts(editor, "ui.search.match");
+    let selection_style = ts(editor, "ui.selection");
+    let highlight_search =
+        editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
+    let highlight_selection = matches!(editor.mode, Mode::Visual(_));
+    let (sel_start, sel_end) = if highlight_selection {
+        editor.visual_selection_range()
+    } else {
+        (0, 0)
+    };
+    let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
+    // Cursorline: subtle background on the cursor's line (Emacs hl-line-mode).
+    // Only in the focused window, and not in visual mode (selection is enough).
+    let cursorline_style = ts(editor, "ui.cursorline");
+    let show_cursorline = focused && !highlight_selection && cursorline_style.bg.is_some();
+    let needs_spans = highlight_search || highlight_selection || has_syntax || show_cursorline;
+
+    // Per-line worst-severity diagnostic for gutter markers.
+    let line_severities: HashMap<u32, DiagnosticSeverity> = {
+        let mut map: HashMap<u32, DiagnosticSeverity> = HashMap::new();
+        if let Some(path) = buf.file_path() {
+            let uri = mae_core::path_to_uri(path);
+            if let Some(diags) = editor.diagnostics.get(&uri) {
+                for d in diags {
+                    let cur = map.get(&d.line).copied();
+                    if severity_higher(cur, Some(d.severity)) {
+                        map.insert(d.line, d.severity);
+                    }
+                }
+            }
+        }
+        map
+    };
+
+    // Breakpoint lines + stopped line for the current buffer's source.
+    let (breakpoint_lines, stopped_line): (std::collections::HashSet<u32>, Option<u32>) = {
+        let mut bps: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stopped: Option<u32> = None;
+        if let (Some(path), Some(state)) = (buf.file_path(), editor.debug_state.as_ref()) {
+            let path_str = path.to_string_lossy();
+            if let Some(list) = state.breakpoints.get(path_str.as_ref()) {
+                for bp in list {
+                    if bp.line >= 1 {
+                        bps.insert((bp.line - 1) as u32);
+                    }
+                }
+            }
+            if let Some((src, line)) = &state.stopped_location {
+                if src.as_str() == path_str.as_ref() && *line >= 1 {
+                    stopped = Some((*line - 1) as u32);
+                }
+            }
+        }
+        (bps, stopped)
+    };
+    let stopped_line_style = ts(editor, "debug.current_line");
+
+    let mut lines = Vec::with_capacity(viewport_height);
+
+    let col_offset = win.col_offset;
+
+    for i in 0..viewport_height {
+        let line_idx = win.scroll_offset + i;
+        if line_idx < buf.line_count() {
+            let line_text = buf.rope().line(line_idx);
+            let full_display: String = line_text
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .collect();
+
+            let line_num = format!("{:>width$}", line_idx + 1, width = gutter_w - 1);
+            let line_idx_u32 = line_idx as u32;
+            let marker = resolve_gutter_marker(
+                stopped_line == Some(line_idx_u32),
+                breakpoint_lines.contains(&line_idx_u32),
+                line_severities.get(&line_idx_u32).copied(),
+            );
+            let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
+                Some((ch, key)) => (ch, ts(editor, key)),
+                None => (' ', gutter_style),
+            };
+            let line_text_style = if stopped_line == Some(line_idx_u32) {
+                stopped_line_style
+            } else {
+                text_style
+            };
+
+            if needs_spans {
+                let line_char_start = buf.rope().line_to_char(line_idx);
+                let full_chars: Vec<char> = full_display.chars().collect();
+                let full_count = full_chars.len();
+                let line_char_end = line_char_start + full_count;
+
+                let mut styles: Vec<Style> = vec![line_text_style; full_count];
+
+                // Apply tree-sitter syntax highlights (lowest priority).
+                if let Some(spans) = syntax_spans {
+                    let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                    let line_byte_end = buf.rope().char_to_byte(line_char_end);
+                    for span in spans {
+                        if span.byte_end <= line_byte_start || span.byte_start >= line_byte_end {
+                            continue;
+                        }
+                        let sb = span.byte_start.max(line_byte_start);
+                        let eb = span.byte_end.min(line_byte_end);
+                        let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                        let ec = buf
+                            .rope()
+                            .byte_to_char(eb)
+                            .saturating_sub(line_char_start)
+                            .min(full_count);
+                        let style = ts(editor, span.theme_key);
+                        for s in styles[sc..ec].iter_mut() {
+                            *s = s.patch(style);
+                        }
+                    }
+                }
+
+                // Inline hex color preview.
+                apply_hex_color_preview(&full_chars, &mut styles);
+
+                // Cursorline: apply bg to every cell on the cursor row.
+                if show_cursorline && line_idx == win.cursor_row {
+                    if let Some(bg) = cursorline_style.bg {
+                        for s in styles.iter_mut() {
+                            *s = s.patch(Style::default().bg(bg));
+                        }
+                    }
+                }
+
+                // Apply selection highlight (overrides syntax).
+                if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
+                    let s = sel_start.saturating_sub(line_char_start);
+                    let e = (sel_end - line_char_start).min(full_count);
+                    for style in styles[s..e].iter_mut() {
+                        *style = selection_style;
+                    }
+                }
+
+                // Apply search highlights (highest priority).
+                if highlight_search {
+                    for m in &editor.search_state.matches {
+                        if m.end <= line_char_start || m.start >= line_char_end {
+                            continue;
+                        }
+                        let ms = m.start.saturating_sub(line_char_start);
+                        let me = (m.end - line_char_start).min(full_count);
+                        for style in styles[ms..me].iter_mut() {
+                            *style = search_style;
+                        }
+                    }
+                }
+
+                // Apply horizontal scroll.
+                let visible_start = col_offset.min(full_count);
+                let display_chars = &full_chars[visible_start..];
+                let visible_styles = &styles[visible_start..];
+
+                // Gutter spans — cursorline bg on gutter cells too.
+                let gutter_line_style = if show_cursorline && line_idx == win.cursor_row {
+                    if let Some(bg) = cursorline_style.bg {
+                        gutter_style.patch(Style::default().bg(bg))
+                    } else {
+                        gutter_style
+                    }
+                } else {
+                    gutter_style
+                };
+
+                // Coalesce consecutive chars with same style into spans.
+                let mut spans = vec![
+                    Span::styled(line_num, gutter_line_style),
+                    Span::styled(marker_char.to_string(), marker_style),
+                ];
+                if !display_chars.is_empty() {
+                    let mut run_start = 0;
+                    let mut run_style = visible_styles[0];
+                    for j in 1..display_chars.len() {
+                        if visible_styles[j] != run_style {
+                            let s: String = display_chars[run_start..j].iter().collect();
+                            spans.push(Span::styled(s, run_style));
+                            run_start = j;
+                            run_style = visible_styles[j];
+                        }
+                    }
+                    let s: String = display_chars[run_start..].iter().collect();
+                    spans.push(Span::styled(s, run_style));
+                }
+
+                lines.push(Line::from(spans));
+            } else {
+                // Apply horizontal scroll to simple (no highlight) lines.
+                let display: String = full_display.chars().skip(col_offset).collect();
+                lines.push(Line::from(vec![
+                    Span::styled(line_num, gutter_style),
+                    Span::styled(marker_char.to_string(), marker_style),
+                    Span::styled(display, line_text_style),
+                ]));
+            }
+        } else {
+            let padding = " ".repeat(gutter_w.saturating_sub(1));
+            lines.push(Line::from(vec![Span::styled(
+                format!("{}~", padding),
+                gutter_style,
+            )]));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+}
+
+// ---------------------------------------------------------------------------
+// Hex color preview
+// ---------------------------------------------------------------------------
+
+/// Detect `#rrggbb` and `#rgb` hex color strings in a line and set
+/// their background to the parsed color. Foreground auto-adjusts to
+/// black or white for readability (relative luminance threshold).
+pub(crate) fn apply_hex_color_preview(chars: &[char], styles: &mut [Style]) {
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '#' {
+            // Try #rrggbb (7 chars total)
+            if i + 7 <= len && chars[i + 1..i + 7].iter().all(|c| c.is_ascii_hexdigit()) {
+                let hex: String = chars[i + 1..i + 7].iter().collect();
+                if let Some((r, g, b)) = parse_hex6(&hex) {
+                    let fg = contrast_fg(r, g, b);
+                    let bg = Color::Rgb(r, g, b);
+                    for s in styles[i..i + 7].iter_mut() {
+                        *s = Style::default().fg(fg).bg(bg);
+                    }
+                    i += 7;
+                    continue;
+                }
+            }
+            // Try #rgb (4 chars total)
+            if i + 4 <= len && chars[i + 1..i + 4].iter().all(|c| c.is_ascii_hexdigit()) {
+                let hex: String = chars[i + 1..i + 4].iter().collect();
+                if let Some((r, g, b)) = parse_hex3(&hex) {
+                    let fg = contrast_fg(r, g, b);
+                    let bg = Color::Rgb(r, g, b);
+                    for s in styles[i..i + 4].iter_mut() {
+                        *s = Style::default().fg(fg).bg(bg);
+                    }
+                    i += 4;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+fn parse_hex6(s: &str) -> Option<(u8, u8, u8)> {
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+fn parse_hex3(s: &str) -> Option<(u8, u8, u8)> {
+    if s.len() != 3 {
+        return None;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let r = u8::from_str_radix(&format!("{0}{0}", chars[0]), 16).ok()?;
+    let g = u8::from_str_radix(&format!("{0}{0}", chars[1]), 16).ok()?;
+    let b = u8::from_str_radix(&format!("{0}{0}", chars[2]), 16).ok()?;
+    Some((r, g, b))
+}
+
+/// Pick black or white foreground for readability on the given bg color.
+fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
+    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
+    if lum > 128.0 {
+        Color::Black
+    } else {
+        Color::White
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic severity
+// ---------------------------------------------------------------------------
+
+/// Is `new` a higher-priority diagnostic severity than `cur`?
+fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeverity>) -> bool {
+    fn rank(s: Option<DiagnosticSeverity>) -> u8 {
+        match s {
+            Some(DiagnosticSeverity::Error) => 4,
+            Some(DiagnosticSeverity::Warning) => 3,
+            Some(DiagnosticSeverity::Information) => 2,
+            Some(DiagnosticSeverity::Hint) => 1,
+            None => 0,
+        }
+    }
+    rank(new) > rank(cur)
+}
+
+// ---------------------------------------------------------------------------
+// Gutter
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GutterMarker {
+    None,
+    Diagnostic(DiagnosticSeverity),
+    Breakpoint,
+    Stopped,
+}
+
+impl GutterMarker {
+    pub(crate) fn glyph_and_theme_key(self) -> Option<(char, &'static str)> {
+        match self {
+            GutterMarker::None => None,
+            GutterMarker::Diagnostic(sev) => Some((sev.gutter_char(), sev.theme_key())),
+            GutterMarker::Breakpoint => Some(('●', "debug.breakpoint")),
+            GutterMarker::Stopped => Some(('▶', "debug.current_line")),
+        }
+    }
+}
+
+pub(crate) fn resolve_gutter_marker(
+    is_stopped: bool,
+    has_breakpoint: bool,
+    diag_severity: Option<DiagnosticSeverity>,
+) -> GutterMarker {
+    if is_stopped {
+        GutterMarker::Stopped
+    } else if has_breakpoint {
+        GutterMarker::Breakpoint
+    } else if let Some(sev) = diag_severity {
+        GutterMarker::Diagnostic(sev)
+    } else {
+        GutterMarker::None
+    }
+}
+
+pub fn gutter_width(line_count: usize) -> usize {
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as usize + 1
+    };
+    digits.max(2) + 1
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Gutter marker priority ---
+
+    #[test]
+    fn marker_priority_stopped_beats_breakpoint_and_diagnostic() {
+        let m = resolve_gutter_marker(true, true, Some(DiagnosticSeverity::Error));
+        assert_eq!(m, GutterMarker::Stopped);
+    }
+
+    #[test]
+    fn marker_priority_breakpoint_beats_diagnostic() {
+        let m = resolve_gutter_marker(false, true, Some(DiagnosticSeverity::Error));
+        assert_eq!(m, GutterMarker::Breakpoint);
+    }
+
+    #[test]
+    fn marker_priority_diagnostic_when_no_debug_state() {
+        let m = resolve_gutter_marker(false, false, Some(DiagnosticSeverity::Warning));
+        assert_eq!(m, GutterMarker::Diagnostic(DiagnosticSeverity::Warning));
+    }
+
+    #[test]
+    fn marker_none_when_nothing_present() {
+        let m = resolve_gutter_marker(false, false, None);
+        assert_eq!(m, GutterMarker::None);
+    }
+
+    // --- Marker glyph rendering ---
+
+    #[test]
+    fn stopped_glyph_uses_current_line_theme() {
+        let (ch, key) = GutterMarker::Stopped.glyph_and_theme_key().unwrap();
+        assert_eq!(ch, '▶');
+        assert_eq!(key, "debug.current_line");
+    }
+
+    #[test]
+    fn breakpoint_glyph_uses_debug_breakpoint_theme() {
+        let (ch, key) = GutterMarker::Breakpoint.glyph_and_theme_key().unwrap();
+        assert_eq!(ch, '●');
+        assert_eq!(key, "debug.breakpoint");
+    }
+
+    #[test]
+    fn diagnostic_glyph_matches_severity() {
+        let cases = [
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Information,
+            DiagnosticSeverity::Hint,
+        ];
+        for sev in cases {
+            let (ch, key) = GutterMarker::Diagnostic(sev).glyph_and_theme_key().unwrap();
+            assert_eq!(ch, sev.gutter_char());
+            assert_eq!(key, sev.theme_key());
+        }
+    }
+
+    #[test]
+    fn none_marker_has_no_glyph() {
+        assert!(GutterMarker::None.glyph_and_theme_key().is_none());
+    }
+
+    // --- gutter_width ---
+
+    #[test]
+    fn gutter_width_minimum_is_three() {
+        assert_eq!(gutter_width(0), 3);
+        assert_eq!(gutter_width(1), 3);
+        assert_eq!(gutter_width(99), 3);
+    }
+
+    #[test]
+    fn gutter_width_scales_with_digits() {
+        assert_eq!(gutter_width(100), 4);
+        assert_eq!(gutter_width(999), 4);
+        assert_eq!(gutter_width(1000), 5);
+    }
+
+    // --- Hex color preview ---
+
+    #[test]
+    fn hex6_color_sets_bg() {
+        let chars: Vec<char> = "color #ff5733 here".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert_eq!(styles[6].bg, Some(Color::Rgb(0xff, 0x57, 0x33)));
+        assert_eq!(styles[12].bg, Some(Color::Rgb(0xff, 0x57, 0x33)));
+        assert_eq!(styles[0].bg, None);
+        assert_eq!(styles[13].bg, None);
+    }
+
+    #[test]
+    fn hex3_color_sets_bg() {
+        let chars: Vec<char> = "#f00".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert_eq!(styles[0].bg, Some(Color::Rgb(0xff, 0x00, 0x00)));
+        assert_eq!(styles[3].bg, Some(Color::Rgb(0xff, 0x00, 0x00)));
+    }
+
+    #[test]
+    fn hex_color_contrast_fg_light_bg_gets_black() {
+        assert_eq!(contrast_fg(255, 255, 255), Color::Black);
+    }
+
+    #[test]
+    fn hex_color_contrast_fg_dark_bg_gets_white() {
+        assert_eq!(contrast_fg(0, 0, 0), Color::White);
+    }
+
+    #[test]
+    fn hex_color_no_false_positive_on_non_hex() {
+        let chars: Vec<char> = "#zzzzzz".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert!(styles.iter().all(|s| s.bg.is_none()));
+    }
+
+    #[test]
+    fn hex_color_multiple_on_same_line() {
+        let chars: Vec<char> = "#000000 #ffffff".chars().collect();
+        let mut styles = vec![Style::default(); chars.len()];
+        apply_hex_color_preview(&chars, &mut styles);
+        assert_eq!(styles[0].bg, Some(Color::Rgb(0, 0, 0)));
+        assert_eq!(styles[8].bg, Some(Color::Rgb(255, 255, 255)));
+    }
+}

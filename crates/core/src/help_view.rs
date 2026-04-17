@@ -13,6 +13,14 @@
 /// index". `None` means no link is currently focused — `Enter` is a no-op.
 pub type LinkIdx = usize;
 
+/// A navigable link embedded in the rendered help text (byte range in the rope).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelpLinkSpan {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub target: String,
+}
+
 /// Navigation state for a help buffer.
 #[derive(Debug, Clone)]
 pub struct HelpView {
@@ -27,6 +35,8 @@ pub struct HelpView {
     /// Which link is currently focused (0-indexed into the node's link list).
     /// `None` if the node has no links.
     pub focused_link: Option<LinkIdx>,
+    /// Link spans in the rendered rope text. Populated by `help_populate_buffer`.
+    pub rendered_links: Vec<HelpLinkSpan>,
 }
 
 impl HelpView {
@@ -37,6 +47,7 @@ impl HelpView {
             forward_stack: Vec::new(),
             scroll: 0,
             focused_link: None,
+            rendered_links: Vec::new(),
         }
     }
 
@@ -52,6 +63,7 @@ impl HelpView {
         self.forward_stack.clear();
         self.scroll = 0;
         self.focused_link = None;
+        self.rendered_links.clear();
     }
 
     /// Go back one step. Returns false if the back stack is empty.
@@ -63,6 +75,7 @@ impl HelpView {
         self.forward_stack.push(current);
         self.scroll = 0;
         self.focused_link = None;
+        self.rendered_links.clear();
         true
     }
 
@@ -75,6 +88,7 @@ impl HelpView {
         self.back_stack.push(current);
         self.scroll = 0;
         self.focused_link = None;
+        self.rendered_links.clear();
         true
     }
 

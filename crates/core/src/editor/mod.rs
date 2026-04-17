@@ -210,6 +210,12 @@ pub struct Editor {
     /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
+    /// Saved help view state from the last `help_close`. `help-reopen`
+    /// restores this to resume exactly where the user left off.
+    pub last_help_state: Option<crate::help_view::HelpView>,
+    /// Which ASCII art to show on the splash screen. Options: "cherry-blossom",
+    /// "hairbow", "bat". Default is "cherry-blossom".
+    pub splash_art: Option<String>,
     /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
     /// `,` repeats opposite.
     pub last_find_char: Option<(char, String)>,
@@ -296,6 +302,8 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_help_state: None,
+            splash_art: Some("cherry-blossom".to_string()),
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -378,6 +386,8 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_help_state: None,
+            splash_art: None,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),

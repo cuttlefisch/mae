@@ -774,10 +774,16 @@ fn kill_buffer_modified_refuses() {
 }
 
 #[test]
-fn switch_buffer_shows_list() {
+fn switch_buffer_opens_palette() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("switch-buffer");
-    assert!(editor.status_msg.contains("[scratch]"));
+    assert!(editor.command_palette.is_some());
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert_eq!(
+        palette.purpose,
+        crate::command_palette::PalettePurpose::SwitchBuffer
+    );
+    assert!(palette.entries.iter().any(|e| e.name == "[scratch]"));
 }
 
 // --- New command registrations ---

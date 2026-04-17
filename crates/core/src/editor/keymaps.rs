@@ -220,6 +220,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC h b"), "help-back");
         normal.bind(parse_key_seq_spaced("SPC h f"), "help-forward");
         normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
+        normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
         // +theme
         normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
         normal.bind(parse_key_seq_spaced("SPC t s"), "set-theme");

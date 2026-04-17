@@ -34,7 +34,7 @@ pub use editor::{
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
-pub use help_view::HelpView;
+pub use help_view::{HelpLinkSpan, HelpView};
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };

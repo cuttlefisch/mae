@@ -206,10 +206,7 @@ impl CommandRegistry {
         reg.register_builtin("substitute-char", "Substitute char under cursor (s)");
         reg.register_builtin("substitute-line", "Substitute entire line (S)");
         // Re-enter insert at last position
-        reg.register_builtin(
-            "reinsert-at-last-position",
-            "Re-enter insert mode at last insert-exit position (gi)",
-        );
+        reg.register_builtin("reinsert-at-last-position", "Insert at last edit position");
         // Jump list (Practical Vim ch. 9)
         reg.register_builtin(
             "jump-backward",
@@ -228,10 +225,7 @@ impl CommandRegistry {
             "change-forward",
             "Navigate forward through the change list (g,)",
         );
-        reg.register_builtin(
-            "show-changes-buffer",
-            "Open the *Changes* scratch buffer listing recorded edits (:changes)",
-        );
+        reg.register_builtin("show-changes-buffer", "Show change list");
         reg.register_builtin(
             "goto-file-under-cursor",
             "Open the filename under the cursor (gf)",
@@ -309,24 +303,15 @@ impl CommandRegistry {
         reg.register_builtin("next-buffer", "Cycle to next buffer");
         reg.register_builtin("prev-buffer", "Cycle to previous buffer");
         reg.register_builtin("find-file", "Open a file");
-        reg.register_builtin(
-            "file-browser",
-            "Open directory browser (ranger-style traversal)",
-        );
+        reg.register_builtin("file-browser", "Open directory browser");
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("describe-key", "Show what a key does");
         reg.register_builtin("describe-command", "Show command documentation");
-        reg.register_builtin(
-            "show-registers",
-            "Open the *Registers* buffer (:reg / :registers)",
-        );
-        reg.register_builtin(
-            "prompt-register",
-            "Prompt for a register letter (\" + <char>)",
-        );
+        reg.register_builtin("show-registers", "Show named registers");
+        reg.register_builtin("prompt-register", "Select a register");
 
         // Surrounds (vim-surround ports)
         reg.register_builtin(
@@ -347,6 +332,7 @@ impl CommandRegistry {
         );
         reg.register_builtin("set-theme", "Set editor color theme");
         reg.register_builtin("cycle-theme", "Cycle to next color theme");
+        reg.register_builtin("set-splash-art", "Choose splash screen art style");
 
         // Scheme REPL (lisp machine primitives)
         reg.register_builtin("eval-line", "Evaluate current line as Scheme (SPC e l)");
@@ -489,10 +475,7 @@ impl CommandRegistry {
             "lsp-accept-completion",
             "Accept the selected completion item (Tab)",
         );
-        reg.register_builtin(
-            "lsp-dismiss-completion",
-            "Dismiss the completion popup (Esc already exits insert mode)",
-        );
+        reg.register_builtin("lsp-dismiss-completion", "Dismiss completion popup");
         reg.register_builtin("lsp-complete-next", "Select next completion item (Ctrl-n)");
         reg.register_builtin(
             "lsp-complete-prev",
@@ -529,14 +512,9 @@ impl CommandRegistry {
             "help-prev-link",
             "Focus the previous link in the current help page",
         );
-        reg.register_builtin(
-            "help-close",
-            "Kill the *Help* buffer and return to the previous",
-        );
-        reg.register_builtin(
-            "help-search",
-            "Fuzzy search all help topics and open the selected page",
-        );
+        reg.register_builtin("help-close", "Close help buffer");
+        reg.register_builtin("help-search", "Search help topics");
+        reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
 
         reg
     }

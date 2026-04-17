@@ -353,6 +353,15 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 (Some(node_id), PalettePurpose::HelpSearch) => {
                     editor.open_help_at(&node_id);
                 }
+                (Some(buf_name), PalettePurpose::SwitchBuffer) => {
+                    if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
+                        editor.switch_to_buffer(idx);
+                    }
+                }
+                (Some(art), PalettePurpose::SetSplashArt) => {
+                    editor.splash_art = Some(art.clone());
+                    editor.set_status(format!("Splash art set to: {}", art));
+                }
                 (None, _) => editor.set_status("No command selected"),
             }
         }
@@ -583,33 +592,15 @@ fn handle_normal_mode(
         }
     }
 
-    // Help buffer: intercept a small set of navigation keys before the
-    // generic Normal-mode keymap lookup. This keeps the help buffer
-    // reachable with muscle-memory keys without polluting the global
-    // keymap (Tab/Enter mean different things elsewhere).
+    // Help buffer: intercept only link-navigation and help-specific keys.
+    // All normal vim navigation (j/k/G/gg/C-d/C-u/etc.) falls through to
+    // the standard keymap — the help buffer is a read-only rope buffer.
     let is_help = {
         let idx = editor.active_buffer_idx();
         editor.buffers[idx].kind == BufferKind::Help
     };
-    // Help buffer: handle multi-key sequences (gg → scroll to top).
-    if is_help
-        && pending_keys.len() == 1
-        && pending_keys[0] == KeyPress::char('g')
-        && key.code == KeyCode::Char('g')
-        && !key.modifiers.contains(KeyModifiers::CONTROL)
-    {
-        if let Some(view) = editor.help_view_mut() {
-            view.scroll = 0;
-        }
-        pending_keys.clear();
-        editor.which_key_prefix.clear();
-        editor.count_prefix = None;
-        return;
-    }
-
     if is_help && pending_keys.is_empty() {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let count = editor.count_prefix.unwrap_or(1).max(1);
         match key.code {
             KeyCode::Enter => {
                 editor.help_follow_link();
@@ -641,65 +632,7 @@ fn handle_normal_mode(
                 editor.count_prefix = None;
                 return;
             }
-            KeyCode::Char('j') if !ctrl => {
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_down(count);
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_up(count);
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('G') if !ctrl => {
-                // Jump to bottom (vim G). Scroll is clamped by renderer.
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll = usize::MAX / 2;
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('d') if ctrl => {
-                // Half-page down
-                let half = editor.default_area().height as usize / 2;
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_down(half.max(1));
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('u') if ctrl => {
-                // Half-page up
-                let half = editor.default_area().height as usize / 2;
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_up(half.max(1));
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('f') if ctrl => {
-                // Full page down
-                let page = editor.default_area().height as usize;
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_down(page.max(1));
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('b') if ctrl => {
-                // Full page up
-                let page = editor.default_area().height as usize;
-                if let Some(view) = editor.help_view_mut() {
-                    view.scroll_up(page.max(1));
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {}
+            _ => {} // Fall through to normal keymap
         }
     }
 

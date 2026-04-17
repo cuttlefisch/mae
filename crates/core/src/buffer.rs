@@ -47,6 +47,8 @@ pub struct Buffer {
     pub modified: bool,
     pub name: String,
     pub kind: BufferKind,
+    /// Read-only buffers reject all edit operations. Set for Help, Messages.
+    pub read_only: bool,
     pub conversation: Option<Conversation>,
     /// Help-buffer navigation state. Present iff `kind == BufferKind::Help`.
     pub help_view: Option<HelpView>,
@@ -68,6 +70,7 @@ impl Buffer {
             modified: false,
             name: String::from("[scratch]"),
             kind: BufferKind::Text,
+            read_only: false,
             conversation: None,
             help_view: None,
             undo_stack: Vec::new(),
@@ -83,6 +86,7 @@ impl Buffer {
             modified: false,
             name: name.into(),
             kind: BufferKind::Conversation,
+            read_only: false,
             conversation: Some(Conversation::new()),
             help_view: None,
             undo_stack: Vec::new(),
@@ -98,6 +102,7 @@ impl Buffer {
             modified: false,
             name: String::from("*Messages*"),
             kind: BufferKind::Messages,
+            read_only: true,
             conversation: None,
             help_view: None,
             undo_stack: Vec::new(),
@@ -114,6 +119,7 @@ impl Buffer {
             modified: false,
             name: String::from("*Help*"),
             kind: BufferKind::Help,
+            read_only: true,
             conversation: None,
             help_view: Some(HelpView::new(start)),
             undo_stack: Vec::new(),
@@ -133,6 +139,7 @@ impl Buffer {
             file_path: Some(path.to_path_buf()),
             modified: false,
             kind: BufferKind::Text,
+            read_only: false,
             conversation: None,
             help_view: None,
             undo_stack: Vec::new(),
@@ -245,6 +252,9 @@ impl Buffer {
     // Cursor state is on Window, passed as parameter.
 
     pub fn insert_char(&mut self, win: &mut Window, ch: char) {
+        if self.read_only {
+            return;
+        }
         let pos = self.char_offset_at(win.cursor_row, win.cursor_col);
         self.rope.insert_char(pos, ch);
         self.push_undo(EditAction::InsertChar { pos, ch });
@@ -259,6 +269,9 @@ impl Buffer {
     }
 
     pub fn delete_char_backward(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         if win.cursor_col == 0 && win.cursor_row == 0 {
             return;
         }
@@ -286,6 +299,9 @@ impl Buffer {
     }
 
     pub fn delete_char_forward(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let pos = self.char_offset_at(win.cursor_row, win.cursor_col);
         if pos >= self.rope.len_chars() {
             return;
@@ -300,6 +316,9 @@ impl Buffer {
 
     /// Delete the current line. Returns the deleted text (for yank register).
     pub fn delete_line(&mut self, win: &mut Window) -> String {
+        if self.read_only {
+            return String::new();
+        }
         let line_count = self.line_count();
         if line_count == 0 || self.rope.len_chars() == 0 {
             return String::new();
@@ -325,6 +344,9 @@ impl Buffer {
     /// Delete backward to the start of the previous whitespace-delimited token
     /// (readline/bash C-w behaviour). Does NOT cross line boundaries.
     pub fn delete_word_backward(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
         let line_start = self.rope.line_to_char(win.cursor_row);
         if cursor <= line_start {
@@ -351,6 +373,9 @@ impl Buffer {
 
     /// Delete from the cursor to the beginning of the current line (C-u).
     pub fn delete_to_line_start(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
         let line_start = self.rope.line_to_char(win.cursor_row);
         if cursor <= line_start {
@@ -370,6 +395,9 @@ impl Buffer {
     /// Delete from the cursor to the end of the current line (C-k / kill-line).
     /// Deletes the newline itself only if the line is otherwise empty.
     pub fn delete_to_line_end(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let cursor = self.char_offset_at(win.cursor_row, win.cursor_col);
         let rope = &self.rope;
         let line_end = {
@@ -406,6 +434,9 @@ impl Buffer {
 
     /// Insert text at an arbitrary character offset. Used by the AI agent.
     pub fn insert_text_at(&mut self, char_offset: usize, text: &str) {
+        if self.read_only {
+            return;
+        }
         let offset = char_offset.min(self.rope.len_chars());
         self.rope.insert(offset, text);
         self.push_undo(EditAction::InsertRange {
@@ -418,6 +449,9 @@ impl Buffer {
 
     /// Delete a character range [start, end). Used by the AI agent.
     pub fn delete_range(&mut self, start: usize, end: usize) {
+        if self.read_only {
+            return;
+        }
         let start = start.min(self.rope.len_chars());
         let end = end.min(self.rope.len_chars());
         if start >= end {
@@ -432,6 +466,9 @@ impl Buffer {
     }
 
     pub fn open_line_below(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let line_start = self.rope.line_to_char(win.cursor_row);
         let line = self.rope.line(win.cursor_row);
         let line_chars = line.len_chars();
@@ -449,6 +486,9 @@ impl Buffer {
     }
 
     pub fn open_line_above(&mut self, win: &mut Window) {
+        if self.read_only {
+            return;
+        }
         let line_start = self.rope.line_to_char(win.cursor_row);
         self.rope.insert_char(line_start, '\n');
         self.push_undo(EditAction::InsertChar {

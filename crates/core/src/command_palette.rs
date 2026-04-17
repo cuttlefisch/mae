@@ -29,6 +29,8 @@ pub enum PalettePurpose {
     Describe,
     SetTheme,
     HelpSearch,
+    SwitchBuffer,
+    SetSplashArt,
 }
 
 /// State for the command palette overlay.
@@ -98,6 +100,52 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose: PalettePurpose::SetTheme,
+        }
+    }
+
+    /// Buffer picker palette: entries are buffer names, Enter switches
+    /// to the selected buffer. Used by `SPC b b` / `switch-buffer`.
+    pub fn for_buffers(names: &[&str]) -> Self {
+        let entries: Vec<PaletteEntry> = names
+            .iter()
+            .map(|n| PaletteEntry {
+                name: n.to_string(),
+                doc: String::new(),
+            })
+            .collect();
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SwitchBuffer,
+        }
+    }
+
+    /// Splash art picker palette.
+    pub fn for_splash_art() -> Self {
+        let entries = vec![
+            PaletteEntry {
+                name: "cherry-blossom".to_string(),
+                doc: "Cherry blossom branches".to_string(),
+            },
+            PaletteEntry {
+                name: "hairbow".to_string(),
+                doc: "Decorative hairbow".to_string(),
+            },
+            PaletteEntry {
+                name: "bat".to_string(),
+                doc: "Night bat with spread wings".to_string(),
+            },
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SetSplashArt,
         }
     }
 

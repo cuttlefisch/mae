@@ -612,9 +612,13 @@ impl Editor {
                     .iter()
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
-                self.command_palette =
-                    Some(crate::command_palette::CommandPalette::for_help_search(&nodes));
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_help_search(&nodes),
+                );
                 self.mode = Mode::CommandPalette;
+            }
+            "help-reopen" => {
+                self.help_reopen();
             }
 
             "command-palette" => {
@@ -683,21 +687,12 @@ impl Editor {
                 }
             }
             "switch-buffer" => {
-                let list: Vec<String> = self
-                    .buffers
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| {
-                        let modified = if b.modified { " [+]" } else { "" };
-                        let current = if i == self.active_buffer_idx() {
-                            ">"
-                        } else {
-                            " "
-                        };
-                        format!("{}{} {}{}", current, i, b.name, modified)
-                    })
-                    .collect();
-                self.set_status(list.join("  |  "));
+                let names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                self.command_palette = Some(crate::command_palette::CommandPalette::for_buffers(
+                    &name_refs,
+                ));
+                self.mode = crate::Mode::CommandPalette;
             }
             "find-file" => {
                 let root = std::env::current_dir().unwrap_or_default();
@@ -754,12 +749,18 @@ impl Editor {
             "set-theme" => {
                 let names = bundled_theme_names();
                 let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                self.command_palette =
-                    Some(crate::command_palette::CommandPalette::for_themes(&name_refs));
+                self.command_palette = Some(crate::command_palette::CommandPalette::for_themes(
+                    &name_refs,
+                ));
                 self.mode = Mode::CommandPalette;
             }
             "cycle-theme" => {
                 self.cycle_theme();
+            }
+            "set-splash-art" => {
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_splash_art());
+                self.mode = Mode::CommandPalette;
             }
 
             // Debug commands
