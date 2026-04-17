@@ -26,6 +26,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
             Mode::FilePicker => " FIND FILE ",
             Mode::FileBrowser => " BROWSE ",
             Mode::CommandPalette => " COMMAND PALETTE ",
+            Mode::ShellInsert => " TERMINAL ",
         }
     };
     let mode_style = match editor.mode {
@@ -34,6 +35,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         Mode::Visual(_) => ts(editor, "ui.statusline.mode.normal"),
         Mode::Command => ts(editor, "ui.statusline.mode.command"),
         Mode::ConversationInput => ts(editor, "ui.statusline.mode.conversation"),
+        Mode::ShellInsert => ts(editor, "ui.statusline.mode.insert"),
         Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
             ts(editor, "ui.statusline.mode.command")
         }

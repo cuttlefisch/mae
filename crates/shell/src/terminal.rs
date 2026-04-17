@@ -205,6 +205,14 @@ impl ShellTerminal {
         &self.title
     }
 
+    /// Reset the terminal: send a full reset escape sequence to clear screen
+    /// and restore default state. Fixes residual characters from full-screen
+    /// programs like cmatrix, htop, etc. that don't clean up on kill.
+    pub fn reset(&self) {
+        // RIS (Reset to Initial State) + clear screen + home cursor
+        self.write_input(b"\x1bc\x1b[2J\x1b[H");
+    }
+
     /// Shutdown the terminal. Sends shutdown message to the I/O thread.
     pub fn shutdown(&self) {
         let _ = self.pty_tx.send(Msg::Shutdown);

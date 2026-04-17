@@ -13,3 +13,10 @@ mod terminal;
 
 pub use event::{ShellEvent, ShellEventListener};
 pub use terminal::ShellTerminal;
+
+// Re-export alacritty types needed by the renderer for grid cell access.
+pub mod grid_types {
+    pub use alacritty_terminal::term::cell::Flags as CellFlags;
+    pub use alacritty_terminal::term::color::Colors;
+    pub use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+}

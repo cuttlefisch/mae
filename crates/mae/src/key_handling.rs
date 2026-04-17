@@ -84,10 +84,12 @@ pub fn handle_key(
         Mode::FilePicker => handle_file_picker_mode(editor, key),
         Mode::FileBrowser => handle_file_browser_mode(editor, key),
         Mode::CommandPalette => handle_command_palette_mode(editor, scheme, key),
+        Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
     }
 
     if editor.mode != mode_before {
         pending_keys.clear();
+        editor.fire_hook("mode-change");
     }
 
     // --- Drain pending Scheme eval requests ---
@@ -106,6 +108,30 @@ pub fn handle_key(
                 editor.set_status(*err_line);
             }
             editor.append_to_scheme_repl(&output);
+        }
+    }
+
+    // --- Drain pending hook evaluations ---
+    // Hook points fire in core (save, open, close) and push (hook_name, fn_name)
+    // entries. We eval each function here where the SchemeRuntime is available.
+    drain_hook_evals(editor, scheme);
+}
+
+/// Evaluate all pending hook functions queued by `fire_hook`.
+fn drain_hook_evals(editor: &mut Editor, scheme: &mut SchemeRuntime) {
+    if editor.pending_hook_evals.is_empty() {
+        return;
+    }
+    let hooks: Vec<(String, String)> = editor.pending_hook_evals.drain(..).collect();
+    for (hook_name, fn_name) in hooks {
+        scheme.inject_editor_state(editor);
+        scheme.inject_value("*hook-name*", &hook_name);
+        match scheme.call_function(&fn_name) {
+            Ok(_) => scheme.apply_to_editor(editor),
+            Err(e) => {
+                warn!(hook = %hook_name, fn_name = %fn_name, error = %e, "hook error");
+                editor.set_status(format!("Hook error ({}): {}", hook_name, e));
+            }
         }
     }
 }
@@ -522,6 +548,7 @@ fn handle_keymap_mode(
         | Mode::FilePicker
         | Mode::FileBrowser
         | Mode::CommandPalette => "command",
+        Mode::ShellInsert => return, // Handled by main.rs handle_shell_key
     };
 
     let result = editor

@@ -602,16 +602,30 @@ impl Editor {
             }
 
             // Mode changes
-            "enter-insert-mode" => self.mode = Mode::Insert,
+            "enter-insert-mode" => {
+                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                    self.mode = Mode::ShellInsert;
+                } else {
+                    self.mode = Mode::Insert;
+                }
+            }
             "enter-insert-mode-after" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
-                self.window_mgr.focused_window_mut().move_right(buf);
-                self.mode = Mode::Insert;
+                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                    self.mode = Mode::ShellInsert;
+                } else {
+                    let buf = &self.buffers[self.active_buffer_idx()];
+                    self.window_mgr.focused_window_mut().move_right(buf);
+                    self.mode = Mode::Insert;
+                }
             }
             "enter-insert-mode-eol" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
-                self.window_mgr.focused_window_mut().move_to_line_end(buf);
-                self.mode = Mode::Insert;
+                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                    self.mode = Mode::ShellInsert;
+                } else {
+                    let buf = &self.buffers[self.active_buffer_idx()];
+                    self.window_mgr.focused_window_mut().move_to_line_end(buf);
+                    self.mode = Mode::Insert;
+                }
             }
             // Repeat f/F/t/T (;/,)
             "repeat-find" => {
@@ -748,6 +762,35 @@ impl Editor {
                 self.help_reopen();
             }
 
+            // Shell / terminal emulator
+            "terminal" => {
+                let shell_name = format!("*Terminal {}*", self.buffers.len());
+                let buf = Buffer::new_shell(shell_name);
+                self.buffers.push(buf);
+                let idx = self.buffers.len() - 1;
+                self.pending_shell_spawns.push(idx);
+                self.switch_to_buffer(idx);
+                self.mode = Mode::ShellInsert;
+            }
+            "terminal-reset" => {
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Shell {
+                    self.pending_shell_resets.push(idx);
+                    self.set_status("Terminal reset");
+                } else {
+                    self.set_status("Not a terminal buffer");
+                }
+            }
+            "terminal-close" => {
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Shell {
+                    self.pending_shell_closes.push(idx);
+                    self.mode = Mode::Normal;
+                } else {
+                    self.set_status("Not a terminal buffer");
+                }
+            }
+
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));
                 self.mode = Mode::CommandPalette;
@@ -800,6 +843,7 @@ impl Editor {
                 self.set_status("New buffer");
             }
             "kill-buffer" => {
+                self.fire_hook("buffer-close");
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].modified {
                     self.set_status("Buffer has unsaved changes (save first or use :q!)");
@@ -834,6 +878,7 @@ impl Editor {
                 }
             }
             "force-kill-buffer" => {
+                self.fire_hook("buffer-close");
                 let idx = self.active_buffer_idx();
                 if self.buffers.len() <= 1 {
                     self.lsp_notify_did_close_for_buffer(0);

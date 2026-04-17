@@ -116,6 +116,7 @@ impl Editor {
             | Mode::CommandPalette => {
                 self.replay_via_keymap(kp, pending);
             }
+            Mode::ShellInsert => {} // Keys go to PTY, not macro replay
         }
     }
 

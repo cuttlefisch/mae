@@ -5,7 +5,7 @@ mod key_handling;
 use std::io;
 use std::panic;
 
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use mae_ai::{
     ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent, DeferredKind,
@@ -13,7 +13,7 @@ use mae_ai::{
 };
 use mae_core::{
     Buffer, CompletionItem as CoreCompletionItem, DapIntent, Diagnostic as CoreDiagnostic,
-    DiagnosticSeverity as CoreSeverity, Editor, KeyPress, LspIntent, LspLocation, LspRange,
+    DiagnosticSeverity as CoreSeverity, Editor, KeyPress, LspIntent, LspLocation, LspRange, Mode,
 };
 use mae_dap::{DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint};
 use mae_lsp::{
@@ -203,6 +203,12 @@ async fn main() -> io::Result<()> {
         tokio::sync::oneshot::Sender<ToolResult>,
     )> = None;
 
+    // Active shell terminals, keyed by buffer index.
+    let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
+        std::collections::HashMap::new();
+    // Track Ctrl-\ for the shell exit sequence (Ctrl-\ Ctrl-n).
+    let mut shell_escape_pending = false;
+
     loop {
         // Update viewport dimensions and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
@@ -243,7 +249,7 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        renderer.render(&mut editor)?;
+        renderer.render(&mut editor, &shell_terminals)?;
 
         if !editor.running {
             info!("editor shutting down");
@@ -267,15 +273,134 @@ async fn main() -> io::Result<()> {
         drain_lsp_intents(&mut editor, &lsp_command_tx);
         drain_dap_intents(&mut editor, &dap_command_tx);
 
-        // Async event loop: select! over keyboard + AI channels
+        // Spawn any pending shell terminals.
+        let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
+        for buf_idx in shell_spawns {
+            let (term_w, _term_h) = renderer.terminal_size().unwrap_or((80, 24));
+            let inner_cols = term_w.saturating_sub(4); // border + gutter
+            let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
+            let cwd = editor.project.as_ref().map(|p| p.root.clone());
+            match mae_shell::ShellTerminal::spawn(inner_cols, inner_rows, cwd) {
+                Ok(shell) => {
+                    debug!(buf_idx, "shell terminal spawned");
+                    shell_terminals.insert(buf_idx, shell);
+                }
+                Err(e) => {
+                    error!(buf_idx, error = %e, "failed to spawn shell terminal");
+                    editor.set_status(format!("Terminal spawn failed: {}", e));
+                }
+            }
+        }
+
+        // Reset any pending shell terminals (clear screen after stuck programs).
+        let shell_resets: Vec<usize> = editor.pending_shell_resets.drain(..).collect();
+        for buf_idx in shell_resets {
+            if let Some(shell) = shell_terminals.get(&buf_idx) {
+                shell.reset();
+            }
+        }
+
+        // Close any pending shell terminals.
+        let shell_closes: Vec<usize> = editor.pending_shell_closes.drain(..).collect();
+        for buf_idx in shell_closes {
+            if let Some(shell) = shell_terminals.remove(&buf_idx) {
+                shell.shutdown();
+            }
+            // Force-close the buffer.
+            editor.execute_command("force-kill-buffer");
+        }
+
+        // Poll shell terminal events (wakeup, title, exit).
+        let mut exited_shells: Vec<usize> = Vec::new();
+        for (buf_idx, shell) in shell_terminals.iter_mut() {
+            let events = shell.poll_events();
+            for event in events {
+                match event {
+                    mae_shell::ShellEvent::Bell => editor.ring_bell(),
+                    mae_shell::ShellEvent::Title(t) => {
+                        editor.set_status(format!("Terminal: {}", t));
+                    }
+                    mae_shell::ShellEvent::ChildExit(code) => {
+                        info!(buf_idx, code, "shell process exited");
+                        exited_shells.push(*buf_idx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle exited shells: switch mode, clean up, keep buffer with status.
+        for buf_idx in exited_shells {
+            // If we're currently focused on this shell buffer, switch back to Normal.
+            if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
+                editor.mode = Mode::Normal;
+            }
+            // Shut down and remove the dead shell terminal.
+            if let Some(shell) = shell_terminals.remove(&buf_idx) {
+                shell.shutdown();
+            }
+            // Keep the buffer alive (user can close manually with SPC o c or :kill-buffer).
+            // Mark the buffer name so it's clear the process exited.
+            if buf_idx < editor.buffers.len() {
+                let name = editor.buffers[buf_idx].name.clone();
+                if !name.contains("[exited]") {
+                    editor.buffers[buf_idx].name = format!("{} [exited]", name);
+                }
+            }
+            editor.set_status("Terminal process exited");
+        }
+
+        // Drain pending shell inputs (from AI tools / Scheme).
+        let shell_inputs: Vec<(usize, String)> = editor.pending_shell_inputs.drain(..).collect();
+        for (buf_idx, text) in shell_inputs {
+            if let Some(shell) = shell_terminals.get(&buf_idx) {
+                shell.write_str(&text);
+            }
+        }
+
+        // Cache shell viewport snapshots for AI tool access.
+        // The AI executor can't access ShellTerminal directly, so we
+        // snapshot the viewport into Editor on each tick.
+        for (buf_idx, shell) in shell_terminals.iter() {
+            let viewport = shell.read_viewport(100);
+            editor.shell_viewports.insert(*buf_idx, viewport);
+        }
+        // Remove viewports for shells that no longer exist.
+        editor
+            .shell_viewports
+            .retain(|idx, _| shell_terminals.contains_key(idx));
+
+        // When shell terminals are active, poll for new output at ~30fps.
+        // Without this, shell output only renders on the next keypress.
+        let has_shells = !shell_terminals.is_empty();
+        let shell_tick = async {
+            if has_shells {
+                tokio::time::sleep(std::time::Duration::from_millis(33)).await;
+            } else {
+                // No shells — sleep forever (never wake from this branch).
+                std::future::pending::<()>().await;
+            }
+        };
+
+        // Async event loop: select! over keyboard + AI + shell tick
         tokio::select! {
             maybe_event = event_stream.next() => {
                 match maybe_event {
-                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                        handle_key(&mut editor, &mut scheme, key, &mut pending_keys, &ai_command_tx);
+                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                        if editor.mode == Mode::ShellInsert {
+                            handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_escape_pending);
+                        } else if key.kind == KeyEventKind::Press {
+                            shell_escape_pending = false;
+                            handle_key(&mut editor, &mut scheme, key, &mut pending_keys, &ai_command_tx);
+                        }
                     }
-                    Some(Ok(Event::Resize(_, _))) => {
-                        // Terminal resized — next loop iteration will re-render
+                    Some(Ok(Event::Resize(w, h))) => {
+                        // Terminal resized — resize all active shell terminals.
+                        let inner_cols = w.saturating_sub(4); // border + gutter
+                        let inner_rows = h.saturating_sub(4); // status + command + borders
+                        for shell in shell_terminals.values() {
+                            shell.resize(inner_cols, inner_rows);
+                        }
                     }
                     Some(Err(e)) => {
                         editor.set_status(format!("Input error: {}", e));
@@ -419,12 +544,111 @@ async fn main() -> io::Result<()> {
             Some(dap_event) = dap_event_rx.recv() => {
                 handle_dap_event(&mut editor, dap_event);
             }
+            _ = shell_tick => {
+                // Shell output tick — just re-render (top of loop handles it).
+            }
         }
     }
 
     renderer.cleanup()?;
     info!("mae exited cleanly");
     Ok(())
+}
+
+/// Handle a key event while in ShellInsert mode.
+///
+/// Keys are translated to terminal escape sequences and forwarded to the PTY.
+/// The escape sequence Ctrl-\ followed by Ctrl-n exits ShellInsert mode
+/// (Neovim convention for terminal-normal mode).
+fn handle_shell_key(
+    editor: &mut Editor,
+    key: crossterm::event::KeyEvent,
+    shell_terminals: &mut std::collections::HashMap<usize, mae_shell::ShellTerminal>,
+    escape_pending: &mut bool,
+) {
+    // Ctrl-\ Ctrl-n escape sequence: exit terminal mode.
+    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('\\') {
+        *escape_pending = true;
+        return;
+    }
+    if *escape_pending {
+        *escape_pending = false;
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('n') {
+            editor.mode = Mode::Normal;
+            editor.set_status("Terminal: normal mode (Ctrl-\\ Ctrl-n)");
+            return;
+        }
+        // Not Ctrl-n — send the buffered Ctrl-\ then fall through to handle this key.
+        if let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) {
+            shell.write_input(&[0x1C]); // Ctrl-\ = 0x1C
+        }
+    }
+
+    let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) else {
+        // No shell for this buffer (possibly exited). Switch back to Normal.
+        editor.mode = Mode::Normal;
+        editor.set_status("Terminal exited — returned to normal mode");
+        return;
+    };
+
+    // Don't send input to a dead shell.
+    if shell.has_exited() {
+        editor.mode = Mode::Normal;
+        editor.set_status("Terminal process has exited");
+        return;
+    }
+
+    // Translate crossterm KeyEvent → PTY byte sequences.
+    let bytes: Vec<u8> = match key.code {
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                // Ctrl+letter → byte 1-26
+                let byte = (c.to_ascii_lowercase() as u8)
+                    .wrapping_sub(b'a')
+                    .wrapping_add(1);
+                vec![byte]
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                // Alt+char → ESC + char
+                let mut v = vec![0x1b];
+                let mut buf = [0u8; 4];
+                v.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                v
+            } else {
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf).as_bytes().to_vec()
+            }
+        }
+        KeyCode::Enter => vec![b'\r'],
+        KeyCode::Backspace => vec![0x7f],
+        KeyCode::Tab => vec![b'\t'],
+        KeyCode::BackTab => b"\x1b[Z".to_vec(),
+        KeyCode::Esc => vec![0x1b],
+        KeyCode::Up => b"\x1b[A".to_vec(),
+        KeyCode::Down => b"\x1b[B".to_vec(),
+        KeyCode::Right => b"\x1b[C".to_vec(),
+        KeyCode::Left => b"\x1b[D".to_vec(),
+        KeyCode::Home => b"\x1b[H".to_vec(),
+        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::PageUp => b"\x1b[5~".to_vec(),
+        KeyCode::PageDown => b"\x1b[6~".to_vec(),
+        KeyCode::Delete => b"\x1b[3~".to_vec(),
+        KeyCode::Insert => b"\x1b[2~".to_vec(),
+        KeyCode::F(1) => b"\x1bOP".to_vec(),
+        KeyCode::F(2) => b"\x1bOQ".to_vec(),
+        KeyCode::F(3) => b"\x1bOR".to_vec(),
+        KeyCode::F(4) => b"\x1bOS".to_vec(),
+        KeyCode::F(5) => b"\x1b[15~".to_vec(),
+        KeyCode::F(6) => b"\x1b[17~".to_vec(),
+        KeyCode::F(7) => b"\x1b[18~".to_vec(),
+        KeyCode::F(8) => b"\x1b[19~".to_vec(),
+        KeyCode::F(9) => b"\x1b[20~".to_vec(),
+        KeyCode::F(10) => b"\x1b[21~".to_vec(),
+        KeyCode::F(11) => b"\x1b[23~".to_vec(),
+        KeyCode::F(12) => b"\x1b[24~".to_vec(),
+        _ => return,
+    };
+
+    shell.write_input(&bytes);
 }
 
 /// Drain all pending LSP intents from the editor and forward them to the LSP task.

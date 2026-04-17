@@ -1,10 +1,11 @@
 # MAE Roadmap
 
-Current state: Phases 1-3 complete, Phase 3e COMPLETE, Phase 3f M1-M4 COMPLETE, Phase 3g M1-M4 COMPLETE, Phase 4a M1-M4 COMPLETE, Phase 4b COMPLETE, Phase 4c M1/M2/M4 COMPLETE, Phase 3h M1-M8 COMPLETE, AI prompt UX QoL COMPLETE (1158+ tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-5 complete, Phase 6 M1 COMPLETE, M2 COMPLETE (1278+ tests). All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
-escape, horizontal scroll, and multi-file AI tools all working.
+escape, horizontal scroll, multi-file AI tools, embedded terminal emulator
+(alacritty_terminal), Scheme hooks, and `set-option!` all working.
 
 Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
@@ -669,22 +670,38 @@ The editor should be the user's primary interface to their shell — not a
 terminal multiplexer wrapper, but a first-class shell buffer where the AI
 agent can observe, suggest, and execute commands alongside the user.
 
-### M1: Shell Buffer
-- [ ] PTY-backed `*Shell*` buffer (`portable-pty` or `rustix` + forkpty)
-- [ ] Shell buffer mode with raw-mode passthrough (keyboard → PTY)
-- [ ] Scrollback ring buffer (bounded, same pattern as conversation entries)
-- [ ] `:shell` command to open/switch; `SPC !` binding
+### M1: Shell Buffer — COMPLETE
+- [x] PTY-backed `*Terminal*` buffer via `alacritty_terminal` (full VT100/VT500)
+- [x] ShellInsert mode with raw-mode passthrough (keyboard → PTY escape sequences)
+- [x] Full grid rendering: colors, attributes (bold/italic/dim/underline/strikeout)
+- [x] `:terminal` command; `SPC o t` binding
+- [x] `Ctrl-\ Ctrl-n` to exit ShellInsert → Normal mode (Neovim convention)
+- [x] `i`/`a`/`A` on a shell buffer re-enters ShellInsert mode
+- [x] Shell process exit detection → auto mode switch + buffer cleanup
+- [x] `terminal-reset` / `terminal-close` commands (`SPC o r` / `SPC o c`)
+- [x] 30fps render tick for smooth terminal output
+- [x] Window resize propagation to PTY
+- [x] Wide char / spacer handling, cursor positioning
 
-### M2: AI Integration
-- [ ] AI tool: `shell_run` — execute a command in the PTY, stream output
-- [ ] AI tool: `shell_read` — read last N lines of shell buffer
-- [ ] Permission tier: Shell (same as existing shell-escape)
-- [ ] AI can observe shell output to diagnose errors, suggest next commands
+### M1b: Scheme Hooks & set-option! — COMPLETE
+- [x] HookRegistry with 7 hook points: before-save, after-save, buffer-open, buffer-close, mode-change, command-pre, command-post
+- [x] `(add-hook! HOOK-NAME FN-NAME)` / `(remove-hook! HOOK-NAME FN-NAME)` Scheme bindings
+- [x] `(set-option! KEY VALUE)` for line-numbers, relative-line-numbers, word-wrap, break-indent, show-break, theme
+- [x] Hook eval drain in main loop (same intent pattern as LSP/DAP)
+- [x] Mode-change hooks fire on every mode transition
+
+### M2: AI & Scheme Shell Tools — COMPLETE
+- [x] AI tool: `shell_list` — list active shell buffers (ReadOnly tier)
+- [x] AI tool: `shell_read_output` — read terminal grid content via cached viewports
+- [x] AI tool: `shell_send_input` — send text to PTY (Shell tier)
+- [x] Scheme: `(shell-send-input IDX TEXT)` — queued via intent pattern
+- [x] Viewport caching: main loop snapshots shell grids for AI/Scheme access
+- [x] Intent pattern: `pending_shell_inputs` drained by binary alongside LSP/DAP intents
 
 ### M3: Scheme Exposure
-- [ ] `(shell-send CMD)` — send text to PTY
-- [ ] `(shell-output N)` — read last N lines from shell buffer
 - [ ] `(shell-cwd)` — current working directory of the shell process
+- [ ] Scheme REPL overlay in shell buffer (Layer 1)
+- [ ] Pipe bridge: `shell | scheme-fn` and `scheme-fn | shell` (Layer 3)
 
 ### M4: Send-to-Shell
 - [ ] `SPC e s` — eval-line sends current line to shell (like Emacs `C-c C-c`)

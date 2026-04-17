@@ -6,6 +6,7 @@ mod help;
 mod kb;
 pub(crate) mod lsp;
 mod project;
+mod shell;
 mod syntax;
 
 pub use buffer::{
@@ -32,6 +33,7 @@ pub use lsp::execute_lsp_diagnostics;
 pub use project::{
     execute_project_files, execute_project_info, execute_project_search, execute_switch_project,
 };
+pub use shell::{execute_shell_list, execute_shell_read_output, execute_shell_send_input};
 pub use syntax::execute_syntax_tree;
 
 use mae_core::Editor;
