@@ -110,6 +110,20 @@ fn static_nodes() -> Vec<Node> {
             KEY_NORMAL,
         )
         .with_tags(["keys", "modal-editing"]),
+        Node::new(
+            "key:leader-keys",
+            "Keys: SPC Leader Bindings",
+            NodeKind::Key,
+            KEY_LEADER,
+        )
+        .with_tags(["keys", "leader", "doom"]),
+        Node::new(
+            "concept:project",
+            "Concept: Project",
+            NodeKind::Concept,
+            CONCEPT_PROJECT,
+        )
+        .with_tags(["project", "workflow"]),
     ]
 }
 
@@ -126,6 +140,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
+- [[key:leader-keys|SPC leader bindings]] (14 groups, Doom Emacs style)
+- [[concept:project|Project management]]
 - Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
 
 ## Getting around
@@ -195,7 +211,8 @@ with the same effect, and vice versa.\n\n\
 - [[cmd:cursor-info|Cursor state]] and [[cmd:editor-state|editor state]].\n\
 - [[cmd:lsp-diagnostics|LSP diagnostics]] and [[cmd:syntax-tree|tree-sitter parse trees]].\n\
 - [[cmd:debug-state|DAP debug state]] when a session is active.\n\
-- This knowledge base (`kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`).\n\n\
+- This knowledge base (`kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`).\n\
+- [[concept:project|Project state]] via `project_info`, `project_files`, `project_search`.\n\n\
 ## Permission tiers\n\
 Every tool has a [[concept:permission-tier|permission tier]]: ReadOnly, Write, Shell, \
 Privileged. Users control how far the agent can act autonomously.\n\n\
@@ -229,12 +246,18 @@ const KEY_NORMAL: &str = "## Normal-mode keys (summary)\n\n\
 - `0` / `$` — start / end of line\n\
 - `gg` / `G` — first / last line\n\
 - `f<char>` — find char on line\n\n\
+### Operators (compose with any motion)\n\
+- `d{motion}` — delete (e.g. `dw`, `dG`, `dgg`, `d%`, `d}`)\n\
+- `c{motion}` — change (delete + enter insert)\n\
+- `y{motion}` — yank (copy)\n\
+- `dd` / `cc` / `yy` — linewise specials\n\
+- `di(` / `ca\"` / `yi{` — text objects\n\n\
 ### Editing\n\
 - `i` / `a` — enter insert mode (before / after cursor) ([[cmd:enter-insert-mode]])\n\
 - `o` / `O` — open line below / above ([[cmd:open-line-below]])\n\
-- `dd` — delete line ([[cmd:delete-line]])\n\
-- `yy` — yank line\n\
 - `u` / `C-r` — undo / redo ([[cmd:undo]], [[cmd:redo]])\n\n\
+### Leader keys (SPC)\n\
+See [[key:leader-keys]] for the full SPC leader reference.\n\n\
 ### Windows, buffers, files\n\
 - `:e <path>` — open file\n\
 - `:ls` — list buffers ([[cmd:list-buffers]])\n\
@@ -243,6 +266,146 @@ const KEY_NORMAL: &str = "## Normal-mode keys (summary)\n\n\
 - `:help` — open this page\n\
 - `:describe-command <name>` — show docs for any command\n\n\
 See also: [[index]], [[concept:mode]]\n";
+
+const KEY_LEADER: &str = "## SPC Leader Bindings (Doom Emacs style)\n\n\
+MAE uses `SPC` as leader in normal mode, organized into 14 groups.\n\
+Press `SPC` to see the which-key popup showing available sub-keys.\n\n\
+### SPC SPC — Command Palette\n\
+Fuzzy-search all commands (like Doom's `M-x` or VSCode's `Ctrl-Shift-P`).\n\n\
+### SPC / — Project Search\n\
+Quick shortcut for `project-search` (ripgrep in project root).\n\n\
+### SPC b — +buffer\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s` | [[cmd:save]] | Save current buffer |\n\
+| `b` | [[cmd:switch-buffer]] | Switch buffer (fuzzy) |\n\
+| `d` | [[cmd:kill-buffer]] | Kill buffer |\n\
+| `n` | [[cmd:next-buffer]] | Next buffer |\n\
+| `p` | [[cmd:prev-buffer]] | Previous buffer |\n\
+| `l` | [[cmd:alternate-file]] | Alternate file |\n\
+| `m` | [[cmd:view-messages]] | Messages buffer |\n\
+| `N` | [[cmd:new-buffer]] | New buffer |\n\
+| `D` | [[cmd:force-kill-buffer]] | Force kill |\n\
+| `o` | [[cmd:kill-other-buffers]] | Kill other buffers |\n\
+| `S` | [[cmd:save-all-buffers]] | Save all |\n\
+| `r` | [[cmd:revert-buffer]] | Revert from disk |\n\n\
+### SPC f — +file\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `f` | [[cmd:find-file]] | Open file picker |\n\
+| `d` | [[cmd:file-browser]] | Directory browser |\n\
+| `s` | [[cmd:save]] | Save |\n\
+| `r` | [[cmd:recent-files]] | Recent files |\n\
+| `y` | [[cmd:yank-file-path]] | Yank file path |\n\
+| `R` | [[cmd:rename-file]] | Rename file |\n\
+| `S` | [[cmd:save-as]] | Save as |\n\n\
+### SPC p — +project\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `f` | [[cmd:project-find-file]] | Find file in project |\n\
+| `s` | [[cmd:project-search]] | Grep in project |\n\
+| `d` | [[cmd:project-browse]] | Browse project dir |\n\
+| `r` | [[cmd:project-recent-files]] | Recent project files |\n\n\
+### SPC w — +window\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `v` | [[cmd:split-vertical]] | Vertical split |\n\
+| `s` | [[cmd:split-horizontal]] | Horizontal split |\n\
+| `q` | [[cmd:close-window]] | Close window |\n\
+| `h/j/k/l` | focus-{dir} | Move focus |\n\n\
+### SPC s — +search/syntax\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s` | [[cmd:search-buffer]] | Search in buffer |\n\
+| `n` | [[cmd:syntax-select-node]] | Select syntax node |\n\
+| `e` | [[cmd:syntax-expand-selection]] | Expand selection |\n\
+| `c` | [[cmd:syntax-contract-selection]] | Contract selection |\n\
+| `p` | [[cmd:project-search]] | Project search |\n\
+| `h` | [[cmd:clear-search-highlight]] | Clear highlights |\n\n\
+### SPC c — +code\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `d` | [[cmd:lsp-goto-definition]] | Go to definition |\n\
+| `r` | [[cmd:lsp-find-references]] | Find references |\n\
+| `k` | [[cmd:lsp-hover]] | Hover info |\n\
+| `x` | [[cmd:lsp-show-diagnostics]] | Diagnostics |\n\
+| `a` | [[cmd:lsp-code-action]] | Code action |\n\
+| `R` | [[cmd:lsp-rename]] | Rename symbol |\n\
+| `f` | [[cmd:lsp-format]] | Format |\n\n\
+### SPC g — +git\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s` | [[cmd:git-status]] | Git status |\n\
+| `b` | [[cmd:git-blame]] | Git blame |\n\
+| `d` | [[cmd:git-diff]] | Git diff |\n\
+| `l` | [[cmd:git-log]] | Git log |\n\n\
+### SPC t — +toggle\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `t` | [[cmd:cycle-theme]] | Cycle theme |\n\
+| `s` | [[cmd:set-theme]] | Set theme |\n\
+| `l` | [[cmd:toggle-line-numbers]] | Line numbers |\n\
+| `r` | [[cmd:toggle-relative-line-numbers]] | Relative numbers |\n\
+| `w` | [[cmd:toggle-word-wrap]] | Word wrap |\n\n\
+### SPC a — +ai\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `a` | [[cmd:ai-prompt]] | AI prompt |\n\
+| `c` | [[cmd:ai-cancel]] | Cancel AI |\n\n\
+### SPC h — +help\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `h` | [[cmd:help]] | Help index |\n\
+| `k` | [[cmd:describe-key]] | Describe key |\n\
+| `c` | [[cmd:describe-command]] | Describe command |\n\
+| `s` | [[cmd:help-search]] | Search help |\n\n\
+### SPC d — +debug\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `d` | [[cmd:debug-start]] | Start debug |\n\
+| `s` | [[cmd:debug-self]] | Self-debug |\n\
+| `b` | [[cmd:debug-toggle-breakpoint]] | Toggle breakpoint |\n\
+| `c` | [[cmd:debug-continue]] | Continue |\n\
+| `n/i/o` | step over/in/out | Step |\n\n\
+### SPC n — +notes\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `f` | [[cmd:kb-find]] | Search KB nodes |\n\n\
+### SPC e — +eval\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `l` | [[cmd:eval-line]] | Eval line |\n\
+| `b` | [[cmd:eval-buffer]] | Eval buffer |\n\
+| `o` | [[cmd:open-scheme-repl]] | REPL |\n\n\
+### SPC q — +quit\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `q` | [[cmd:quit]] | Quit |\n\
+| `Q` | [[cmd:force-quit]] | Force quit |\n\n\
+See also: [[key:normal-mode]], [[index]]\n";
+
+const CONCEPT_PROJECT: &str =
+    "A **project** in MAE is a directory with optional `.project` TOML configuration.\n\n\
+## Detection\n\
+When you open a file, MAE walks upward from its directory looking for marker files:\n\
+`.project` > `.git` > `Cargo.toml` > `package.json` > `go.mod` > `pyproject.toml` > `Makefile`.\n\
+The first match becomes the project root.\n\n\
+## .project TOML\n\
+Optional declarative config:\n\
+```toml\n\
+name = \"My Project\"\n\
+root-directory = \"~/src/my-project\"\n\
+required-resources = [\"README.org\", \"Cargo.toml\"]\n\
+```\n\n\
+## SPC p commands\n\
+- `SPC p f` — find file in project ([[cmd:project-find-file]])\n\
+- `SPC p s` — search in project ([[cmd:project-search]])\n\
+- `SPC p d` — browse project directory ([[cmd:project-browse]])\n\
+- `SPC p r` — recent project files ([[cmd:project-recent-files]])\n\n\
+## AI integration\n\
+The AI agent can query project state via the `project_info` tool and \
+search project files via `project_files` and `project_search`.\n\n\
+See also: [[index]], [[concept:ai-as-peer]]\n";
 
 #[cfg(test)]
 mod tests {
@@ -270,6 +433,8 @@ mod tests {
             "concept:command",
             "concept:ai-as-peer",
             "concept:knowledge-base",
+            "concept:project",
+            "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
         }

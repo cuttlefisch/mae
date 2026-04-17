@@ -482,6 +482,20 @@ red = "#cc0000"
     }
 
     #[test]
+    fn all_bundled_themes_define_cursorline() {
+        let resolver = BundledResolver;
+        for name in bundled_theme_names() {
+            let theme = Theme::load(&name, &resolver).unwrap();
+            let style = theme.style("ui.cursorline");
+            assert!(
+                style.bg.is_some(),
+                "bundled theme '{}' must define ui.cursorline with a bg color",
+                name,
+            );
+        }
+    }
+
+    #[test]
     fn bundled_themes_all_parse() {
         let resolver = BundledResolver;
         for name in bundled_theme_names() {

@@ -40,6 +40,7 @@ green = "#859900"
 "ui.cursor" = { fg = "base03", bg = "base0" }
 "ui.selection" = { bg = "base02" }
 "ui.search.match" = { fg = "base03", bg = "yellow" }
+"ui.cursorline" = { bg = "base02" }
 
 "diagnostic.error" = { fg = "red", bold = true }
 "diagnostic.warn" = { fg = "yellow" }

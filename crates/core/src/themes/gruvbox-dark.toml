@@ -48,6 +48,7 @@ bright_orange = "#fe8019"
 "ui.cursor" = { fg = "bg0", bg = "fg1" }
 "ui.selection" = { bg = "bg2" }
 "ui.search.match" = { fg = "bg0", bg = "yellow" }
+"ui.cursorline" = { bg = "bg1" }
 
 "diagnostic.error" = { fg = "bright_red", bold = true }
 "diagnostic.warn" = { fg = "bright_yellow" }

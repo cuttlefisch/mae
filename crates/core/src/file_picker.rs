@@ -12,6 +12,12 @@ pub struct FilePicker {
     pub selected: usize,
     /// Root directory we scanned from.
     pub root: PathBuf,
+    /// Display label for the root (uses `~` when under $HOME).
+    pub root_label: String,
+    /// When true, the query line itself is selected (Emacs-style: the literal
+    /// text is the chosen value, not a candidate). Set by C-p/Up past the
+    /// first candidate, or automatically when `filtered` is empty.
+    pub query_selected: bool,
 }
 
 /// Directories to skip during recursive scan.
@@ -48,12 +54,15 @@ impl FilePicker {
         candidates.sort();
 
         let filtered: Vec<usize> = (0..candidates.len()).collect();
+        let root_label = unexpand_tilde(&root.to_string_lossy());
         FilePicker {
             query: String::new(),
             candidates,
             filtered,
             selected: 0,
             root: root.to_path_buf(),
+            root_label,
+            query_selected: false,
         }
     }
 
@@ -62,40 +71,90 @@ impl FilePicker {
         if self.query.is_empty() {
             self.filtered = (0..self.candidates.len()).collect();
         } else {
-            let query_lower: Vec<char> = self.query.to_lowercase().chars().collect();
+            // Directory-prefix filtering: if query contains '/' and the
+            // prefix matches a directory path, restrict search to that subtree.
+            let (dir_prefix, remainder) = split_directory_prefix(&self.query, &self.candidates);
+            let query_lower: Vec<char> = remainder.to_lowercase().chars().collect();
+
             let mut scored: Vec<(usize, i64)> = self
                 .candidates
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, path)| score_match(path, &query_lower).map(|s| (idx, s)))
+                .filter(|(_, path)| {
+                    if let Some(dp) = dir_prefix {
+                        path.to_lowercase().starts_with(&dp.to_lowercase())
+                    } else {
+                        true
+                    }
+                })
+                .filter_map(|(idx, path)| {
+                    // Score only the portion after the directory prefix
+                    let score_target = if let Some(dp) = dir_prefix {
+                        &path[dp.len().min(path.len())..]
+                    } else {
+                        path.as_str()
+                    };
+                    if query_lower.is_empty() {
+                        Some((idx, 0i64 - path.len() as i64))
+                    } else {
+                        score_match(score_target, &query_lower).map(|s| (idx, s))
+                    }
+                })
                 .collect();
             // Higher score = better match, sort descending
             scored.sort_by_key(|b| std::cmp::Reverse(b.1));
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected = 0;
+        // Auto-select the query line when there are no matches and a
+        // non-empty query — this lets the user press Enter to open/create
+        // the literal path they typed.
+        self.query_selected = !self.query.is_empty() && self.filtered.is_empty();
     }
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if !self.filtered.is_empty() {
+        if self.query_selected {
+            // Leave query-line selection and enter the candidate list.
+            self.query_selected = false;
+            self.selected = 0;
+        } else if !self.filtered.is_empty() {
             self.selected = (self.selected + 1) % self.filtered.len();
         }
     }
 
-    /// Move selection up.
+    /// Move selection up (C-p / Up). When already at the first candidate,
+    /// moves to the query line itself (Emacs minibuffer pattern).
     pub fn move_up(&mut self) {
-        if !self.filtered.is_empty() {
-            if self.selected == 0 {
-                self.selected = self.filtered.len() - 1;
-            } else {
-                self.selected -= 1;
-            }
+        if self.query_selected {
+            return; // already at query line
+        }
+        if self.filtered.is_empty() || self.selected == 0 {
+            self.query_selected = true;
+        } else {
+            self.selected -= 1;
         }
     }
 
-    /// Get the full path of the currently selected file, if any.
+    /// Get the full path of the currently selected file.
+    ///
+    /// When `query_selected` is true (the user navigated to the query line
+    /// via C-p/Up, or there are no matches), returns the query text as a
+    /// literal path — enabling file creation for paths that don't exist yet.
     pub fn selected_path(&self) -> Option<PathBuf> {
+        if self.query_selected && !self.query.is_empty() {
+            let q = &self.query;
+            // Absolute or home-relative paths are used as-is.
+            if q.starts_with('/') {
+                return Some(PathBuf::from(q));
+            }
+            if let Some(rest) = q.strip_prefix("~/") {
+                if let Ok(home) = std::env::var("HOME") {
+                    return Some(PathBuf::from(home).join(rest));
+                }
+            }
+            return Some(self.root.join(q));
+        }
         if self.filtered.is_empty() {
             return None;
         }
@@ -155,10 +214,151 @@ impl FilePicker {
             false
         }
     }
+
+    /// If the query is an absolute path ending in `/` that resolves to a
+    /// directory, rescan from that directory. Emacs/Doom-style: typing
+    /// `~/RoamNotes/` switches the picker root to that directory.
+    ///
+    /// Also handles relative paths: if `root.join(query)` is a directory,
+    /// switch to it (e.g. after root-switching to `/`, typing `tmp/`
+    /// descends into `/tmp/`).
+    ///
+    /// Returns true if the root was switched.
+    pub fn maybe_switch_root(&mut self) -> bool {
+        let expanded = expand_tilde(&self.query);
+        if expanded.starts_with('/') {
+            let path = Path::new(&expanded);
+            // Don't rescan from filesystem root — it's too broad and slow.
+            // Wait until the user has typed at least one directory component
+            // (e.g. `/tmp/` not just `/`).
+            if path != Path::new("/") && path.is_dir() {
+                self.rescan(path);
+                self.query.clear();
+                return true;
+            }
+        }
+        // Try as a relative path under the current root.
+        // Skip if the query starts with '/' (already handled above) or is
+        // just a bare '/'.
+        if self.query.ends_with('/') && !self.query.starts_with('/') {
+            let joined = self.root.join(&self.query);
+            if joined.is_dir() {
+                let canonical = joined.canonicalize().unwrap_or(joined);
+                self.rescan(&canonical);
+                self.query.clear();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Tab completion for absolute/home-relative paths. Uses filesystem
+    /// listing to complete to the longest common prefix, then switches
+    /// root if the result is a directory. Returns true if anything happened.
+    pub fn complete_path_tab(&mut self) -> bool {
+        let expanded = expand_tilde(&self.query);
+        if !expanded.starts_with('/') {
+            return false;
+        }
+        let completions = complete_path(&expanded);
+        if completions.is_empty() {
+            return false;
+        }
+        if completions.len() == 1 {
+            let completed = unexpand_tilde(&completions[0]);
+            if completed != self.query {
+                self.query = completed;
+                // If the completion is a directory, switch root immediately.
+                self.maybe_switch_root();
+                return true;
+            }
+            return false;
+        }
+        // Multiple completions: extend to longest common prefix.
+        let first = &completions[0];
+        let mut prefix_len = first.len();
+        for c in &completions[1..] {
+            prefix_len = common_prefix_bytes(first, c).min(prefix_len);
+        }
+        while prefix_len > 0 && !first.is_char_boundary(prefix_len) {
+            prefix_len -= 1;
+        }
+        let prefix = &first[..prefix_len];
+        if prefix.len() > expanded.len() {
+            self.query = unexpand_tilde(prefix);
+            self.maybe_switch_root();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rescan from a new root directory.
+    fn rescan(&mut self, new_root: &Path) {
+        self.root = new_root.to_path_buf();
+        self.root_label = unexpand_tilde(&new_root.to_string_lossy());
+        self.candidates.clear();
+        walk_dir(new_root, new_root, 0, &mut self.candidates);
+        self.candidates.sort();
+        self.filtered = (0..self.candidates.len()).collect();
+        self.selected = 0;
+    }
+
+    /// Clear the query (Ctrl-U style).
+    pub fn clear_query(&mut self) {
+        self.query.clear();
+        self.update_filter();
+    }
+}
+
+/// Expand `~` or `~/...` to the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return format!("{}/{}", home.to_string_lossy(), rest);
+        }
+    } else if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return home.to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}
+
+/// Replace the home directory prefix with `~` for display.
+pub fn unexpand_tilde(path: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
+            if rest.is_empty() {
+                return "~".to_string();
+            }
+            return format!("~{}", rest);
+        }
+    }
+    path.to_string()
+}
+
+/// Split a query into an optional directory prefix and the remainder.
+/// If the query contains '/' and the prefix up to the last '/' matches
+/// candidates, returns (Some(dir_prefix), remainder). Otherwise returns
+/// (None, full_query).
+fn split_directory_prefix<'a>(query: &'a str, candidates: &[String]) -> (Option<&'a str>, &'a str) {
+    if let Some(last_slash) = query.rfind('/') {
+        let dir_prefix = &query[..=last_slash];
+        let lower = dir_prefix.to_lowercase();
+        if candidates
+            .iter()
+            .any(|c| c.to_lowercase().starts_with(&lower))
+        {
+            return (Some(dir_prefix), &query[last_slash + 1..]);
+        }
+    }
+    (None, query)
 }
 
 /// Byte length of the longest common ASCII/UTF-8 byte prefix of two strings.
-fn common_prefix_bytes(a: &str, b: &str) -> usize {
+pub(crate) fn common_prefix_bytes(a: &str, b: &str) -> usize {
     a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
 }
 
@@ -198,6 +398,13 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
         return Some(1_000_000);
     }
 
+    // ---- Tier 1.5: query exactly matches the basename ----
+    let basename_start = path_lower.rfind('/').map(|p| p + 1).unwrap_or(0);
+    let basename = &path_lower[basename_start..];
+    if basename == query_str {
+        return Some(750_000 - path_len);
+    }
+
     // ---- Tier 2/3: suffix match ----
     if path_lower.ends_with(&query_str) && path_lower.len() > query_str.len() {
         let rest_len = path_lower.len() - query_str.len();
@@ -222,6 +429,13 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     }
 
     // ---- Tier 5: fuzzy subsequence (legacy) ----
+    // Skip fuzzy matching when the query contains '/' — it's clearly a
+    // path, and scattered subsequence matches (t-m-p-b-u-t-s across a
+    // 120-char path) produce garbage. Only tiers 1-4 make sense for paths.
+    if query_str.contains('/') {
+        return None;
+    }
+
     let path_chars: Vec<char> = path_lower.chars().collect();
     let mut qi = 0;
     let mut score: i64 = 0;
@@ -524,9 +738,13 @@ mod tests {
             picker.move_down();
         }
         assert_eq!(picker.selected, 0);
-        // Wrap up from 0
+        // Up from 0 goes to query line (Emacs minibuffer pattern)
         picker.move_up();
-        assert_eq!(picker.selected, count - 1);
+        assert!(picker.query_selected);
+        // Down from query line returns to first candidate
+        picker.move_down();
+        assert!(!picker.query_selected);
+        assert_eq!(picker.selected, 0);
     }
 
     #[test]
@@ -678,5 +896,173 @@ mod tests {
         picker.update_filter();
         let top = picker.candidates[picker.filtered[0]].as_str();
         assert_eq!(top, "crates/core/src/editor/mod.rs");
+    }
+
+    #[test]
+    fn switch_root_to_absolute_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("subdir");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("inner.txt"), "").unwrap();
+        fs::write(tmp.path().join("outer.txt"), "").unwrap();
+
+        let mut picker = FilePicker::scan(tmp.path());
+        assert!(picker.candidates.iter().any(|c| c == "outer.txt"));
+        assert!(picker.candidates.iter().any(|c| c == "subdir/inner.txt"));
+
+        // Simulate typing an absolute path to subdir
+        picker.query = format!("{}/", sub.display());
+        assert!(picker.maybe_switch_root());
+        assert_eq!(picker.root, sub);
+        assert_eq!(picker.query, "");
+        assert!(picker.candidates.iter().any(|c| c == "inner.txt"));
+        assert!(!picker.candidates.iter().any(|c| c.contains("outer")));
+    }
+
+    #[test]
+    fn switch_root_ignores_non_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("file.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = format!("{}", tmp.path().join("file.txt").display());
+        assert!(!picker.maybe_switch_root());
+    }
+
+    #[test]
+    fn clear_query_resets_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.rs"), "").unwrap();
+        fs::write(tmp.path().join("b.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "zzz".to_string();
+        picker.update_filter();
+        assert!(picker.filtered.is_empty());
+        picker.clear_query();
+        assert_eq!(picker.filtered.len(), 2);
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let expanded = expand_tilde("~/foo/bar");
+        assert!(!expanded.starts_with('~'));
+        assert!(expanded.ends_with("/foo/bar"));
+
+        let round_trip = unexpand_tilde(&expanded);
+        assert_eq!(round_trip, "~/foo/bar");
+    }
+
+    #[test]
+    fn root_label_uses_tilde() {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home_path = Path::new(&home);
+            let picker = FilePicker::scan(home_path);
+            assert_eq!(picker.root_label, "~");
+        }
+    }
+
+    // ---- WU3: Directory prefix filtering + basename scoring ----
+
+    #[test]
+    fn dir_prefix_filters_to_subtree() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/editor")).unwrap();
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
+        fs::write(tmp.path().join("docs/readme.md"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "src/editor/".to_string();
+        picker.update_filter();
+        // Should only show files under src/editor/
+        let names: Vec<&str> = picker
+            .filtered
+            .iter()
+            .map(|&i| picker.candidates[i].as_str())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().all(|n| n.starts_with("src/editor/")));
+    }
+
+    #[test]
+    fn dir_prefix_with_remainder_finds_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/editor")).unwrap();
+        fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "src/editor/mod".to_string();
+        picker.update_filter();
+        assert!(!picker.filtered.is_empty());
+        assert_eq!(picker.candidates[picker.filtered[0]], "src/editor/mod.rs");
+    }
+
+    #[test]
+    fn basename_exact_ranks_highest() {
+        // "mod.rs" should rank editor/mod.rs above module_helper.rs
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("editor")).unwrap();
+        fs::write(tmp.path().join("editor/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("module_helper.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "mod.rs".to_string();
+        picker.update_filter();
+        assert!(!picker.filtered.is_empty());
+        assert_eq!(
+            picker.candidates[picker.filtered[0]],
+            "editor/mod.rs",
+            "exact basename should win, got: {:?}",
+            picker
+                .filtered
+                .iter()
+                .map(|&i| &picker.candidates[i])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn switch_root_skips_filesystem_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        // Typing just "/" should NOT switch root to /
+        picker.query = "/".to_string();
+        assert!(!picker.maybe_switch_root());
+        assert_eq!(picker.root, tmp.path());
+    }
+
+    #[test]
+    fn switch_root_relative_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("mydir");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("inner.txt"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path());
+        picker.query = "mydir/".to_string();
+        assert!(picker.maybe_switch_root());
+        assert!(picker.root.ends_with("mydir"));
+        assert_eq!(picker.query, "");
+        assert!(picker.candidates.iter().any(|c| c == "inner.txt"));
+    }
+
+    #[test]
+    fn fuzzy_skip_for_path_queries() {
+        // Query with '/' should not fuzzy-subsequence match
+        let hit = score_match(
+            "home/heimdall/Downloads/jupyter_widgets.html.j2",
+            &q("tmp/butts"),
+        );
+        assert!(
+            hit.is_none(),
+            "path-like query should not fuzzy-match unrelated paths"
+        );
+    }
+
+    #[test]
+    fn empty_query_shows_all_no_regression() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.rs"), "").unwrap();
+        fs::write(tmp.path().join("b.rs"), "").unwrap();
+        let picker = FilePicker::scan(tmp.path());
+        assert_eq!(picker.filtered.len(), 2);
     }
 }

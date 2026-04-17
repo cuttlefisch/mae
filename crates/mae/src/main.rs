@@ -142,6 +142,17 @@ async fn main() -> io::Result<()> {
     };
     editor.message_log = message_log;
 
+    // Apply editor preferences from config file.
+    {
+        let cfg = config::load_config();
+        if let Some(ref theme) = cfg.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        if let Some(ref art) = cfg.editor.splash_art {
+            editor.splash_art = Some(art.clone());
+        }
+    }
+
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {
@@ -216,12 +227,19 @@ async fn main() -> io::Result<()> {
                 // inner_rect subtracts 2 for border, gutter takes more
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
-                let gutter_w = mae_renderer::gutter_width(buf.line_count());
+                let gutter_w = if editor.show_line_numbers {
+                    mae_renderer::gutter_width(buf.display_line_count())
+                } else {
+                    2
+                };
                 let text_w = inner_w.saturating_sub(gutter_w);
-                editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll_horizontal(text_w);
+                editor.text_area_width = text_w;
+                if !editor.word_wrap {
+                    editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_horizontal(text_w);
+                }
             }
         }
 
@@ -494,6 +512,14 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             language_id,
             position: Position { line, character },
         },
+        // Stubs: these intents are queued but the LSP client doesn't
+        // handle them yet. Log and ignore until Phase 4a M5.
+        LspIntent::CodeAction { .. } | LspIntent::Rename { .. } | LspIntent::Format { .. } => {
+            LspCommand::DidClose {
+                uri: String::new(),
+                language_id: String::new(),
+            }
+        }
     }
 }
 

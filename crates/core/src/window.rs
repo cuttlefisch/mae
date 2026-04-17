@@ -40,7 +40,7 @@ impl Window {
     }
 
     pub fn move_down(&mut self, buf: &crate::buffer::Buffer) {
-        if self.cursor_row + 1 < buf.line_count() {
+        if self.cursor_row + 1 < buf.display_line_count() {
             self.cursor_row += 1;
             self.clamp_cursor(buf);
         }
@@ -72,7 +72,7 @@ impl Window {
     }
 
     pub fn move_to_last_line(&mut self, buf: &crate::buffer::Buffer) {
-        let count = buf.line_count();
+        let count = buf.display_line_count();
         if count > 0 {
             self.cursor_row = count - 1;
         }
@@ -200,7 +200,7 @@ impl Window {
 
     /// Ensure cursor is within valid bounds after any structural change.
     pub fn clamp_cursor(&mut self, buf: &crate::buffer::Buffer) {
-        let line_count = buf.line_count();
+        let line_count = buf.display_line_count();
         if line_count == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;

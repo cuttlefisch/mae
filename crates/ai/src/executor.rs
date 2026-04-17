@@ -11,7 +11,8 @@ use crate::tool_impls::{
     execute_editor_state, execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
-    execute_project_search, execute_switch_buffer, execute_syntax_tree, execute_window_layout,
+    execute_project_info, execute_project_search, execute_set_option, execute_switch_buffer,
+    execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -110,7 +111,9 @@ pub fn execute_tool(
         "close_buffer",
         "create_file",
         "project_files",
+        "project_info",
         "project_search",
+        "switch_project",
         "lsp_diagnostics",
         "syntax_tree",
         "dap_start",
@@ -166,7 +169,9 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "close_buffer" => execute_close_buffer(editor, &call.arguments),
         "create_file" => execute_create_file(editor, &call.arguments),
         "project_files" => execute_project_files(&call.arguments),
+        "project_info" => execute_project_info(editor),
         "project_search" => execute_project_search(&call.arguments),
+        "switch_project" => execute_switch_project(editor, &call.arguments),
         "lsp_diagnostics" => execute_lsp_diagnostics(editor, &call.arguments),
         "syntax_tree" => execute_syntax_tree(editor, &call.arguments),
         "dap_start" => execute_dap_start(editor, &call.arguments),
@@ -181,6 +186,7 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
         "kb_graph" => execute_kb_graph(editor, &call.arguments),
         "help_open" => execute_help_open(editor, &call.arguments),
+        "set_option" => execute_set_option(editor, &call.arguments),
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }

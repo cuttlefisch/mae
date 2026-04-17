@@ -63,6 +63,23 @@ pub enum LspIntent {
         line: u32,
         character: u32,
     },
+    /// Request `textDocument/codeAction`.
+    CodeAction {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+    },
+    /// Request `textDocument/rename`.
+    Rename {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+        new_name: String,
+    },
+    /// Request `textDocument/formatting`.
+    Format { uri: String, language_id: String },
 }
 
 /// Convert a filesystem path to a `file://` URI, matching `mae-lsp`'s

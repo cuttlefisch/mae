@@ -155,12 +155,89 @@ impl Editor {
                 );
                 true
             }
-            "theme" => {
+            "theme" | "set-theme" => {
                 if let Some(name) = args {
                     self.set_theme_by_name(name);
+                } else if command == "set-theme" {
+                    // No arg: open the interactive picker via dispatch.
+                    self.dispatch_builtin("set-theme");
                 } else {
                     let names = bundled_theme_names().join(", ");
                     self.set_status(format!("Usage: :theme <name>  Available: {}", names));
+                }
+                true
+            }
+            "set-splash-art" => {
+                if let Some(name) = args {
+                    self.splash_art = Some(name.to_string());
+                    self.set_status(format!("Splash art set to: {}", name));
+                } else {
+                    // No arg: open the interactive picker via dispatch.
+                    self.dispatch_builtin("set-splash-art");
+                }
+                true
+            }
+            "rename" => {
+                if let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let idx = self.active_buffer_idx();
+                    if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                        let new = std::path::PathBuf::from(new_path);
+                        match std::fs::rename(&old_path, &new) {
+                            Ok(()) => {
+                                self.buffers[idx].set_file_path(new.clone());
+                                self.buffers[idx].name =
+                                    new.file_name().map_or(new_path.to_string(), |n| {
+                                        n.to_string_lossy().to_string()
+                                    });
+                                self.set_status(format!(
+                                    "Renamed: {} → {}",
+                                    old_path.display(),
+                                    new.display()
+                                ));
+                            }
+                            Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                        }
+                    } else {
+                        self.set_status("Buffer has no file path");
+                    }
+                } else {
+                    self.set_status("Usage: :rename <new-path>");
+                }
+                true
+            }
+            "saveas" => {
+                if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let idx = self.active_buffer_idx();
+                    self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
+                    self.save_current_buffer();
+                } else {
+                    self.set_status("Usage: :saveas <path>");
+                }
+                true
+            }
+            "lsp-rename" => {
+                if let Some(new_name) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let idx = self.active_buffer_idx();
+                    let win = self.window_mgr.focused_window();
+                    let path_buf = self.buffers[idx].file_path().map(|p| p.to_path_buf());
+                    if let Some(ref p) = path_buf {
+                        let uri = crate::lsp_intent::path_to_uri(p);
+                        let language_id = crate::lsp_intent::language_id_from_path(p)
+                            .unwrap_or_else(|| "plaintext".to_string());
+                        self.pending_lsp_requests
+                            .push(crate::lsp_intent::LspIntent::Rename {
+                                uri,
+                                language_id,
+                                line: win.cursor_row as u32,
+                                character: win.cursor_col as u32,
+                                new_name: new_name.to_string(),
+                            });
+                        self.set_status(format!("LSP rename → '{}'", new_name));
+                    } else {
+                        self.set_status("LSP rename: buffer has no file path");
+                    }
+                } else {
+                    self.set_status("Usage: :lsp-rename <new-name>");
                 }
                 true
             }

@@ -19,6 +19,9 @@ impl Editor {
         let count = self.count_prefix.take();
         let n = count.unwrap_or(1);
 
+        // Track linewise vs characterwise for operator-pending mode
+        self.last_motion_linewise = Self::is_linewise_motion(name);
+
         match name {
             // Movement — operates on focused window + its buffer
             "move-up" => {
@@ -50,6 +53,120 @@ impl Editor {
             "move-to-line-end" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 self.window_mgr.focused_window_mut().move_to_line_end(buf);
+            }
+            "move-display-down" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_down(buf);
+                    }
+                } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        let line = buf.rope().line(win.cursor_row);
+                        let lt: String = line.chars().collect();
+                        let lt = lt.trim_end_matches('\n');
+                        let (wrap_row, _) =
+                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                        let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                        if wrap_row + 1 < total_rows {
+                            // Move to next display row within same buffer line.
+                            let next_start =
+                                crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w);
+                            win.cursor_col = next_start;
+                        } else {
+                            win.move_down(buf);
+                            win.cursor_col = 0;
+                        }
+                    }
+                }
+            }
+            "move-display-up" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_up(buf);
+                    }
+                } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        let line = buf.rope().line(win.cursor_row);
+                        let lt: String = line.chars().collect();
+                        let lt = lt.trim_end_matches('\n');
+                        let (wrap_row, _) =
+                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                        if wrap_row > 0 {
+                            let prev_start =
+                                crate::wrap::wrap_row_start_col(lt, wrap_row - 1, tw, bi, sb_w);
+                            win.cursor_col = prev_start;
+                        } else if win.cursor_row > 0 {
+                            win.move_up(buf);
+                            let prev_line = buf.rope().line(win.cursor_row);
+                            let plt: String = prev_line.chars().collect();
+                            let plt = plt.trim_end_matches('\n');
+                            let prev_rows = crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w);
+                            if prev_rows > 1 {
+                                let last_start = crate::wrap::wrap_row_start_col(
+                                    plt,
+                                    prev_rows - 1,
+                                    tw,
+                                    bi,
+                                    sb_w,
+                                );
+                                win.cursor_col = last_start;
+                            }
+                        }
+                    }
+                }
+            }
+            "move-display-line-start" => {
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    self.window_mgr.focused_window_mut().move_to_line_start();
+                } else {
+                    let buf = &self.buffers[self.active_buffer_idx()];
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
+                    let win = self.window_mgr.focused_window_mut();
+                    let line = buf.rope().line(win.cursor_row);
+                    let lt: String = line.chars().collect();
+                    let lt = lt.trim_end_matches('\n');
+                    let (wrap_row, _) =
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                    win.cursor_col = crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w);
+                }
+            }
+            "move-display-line-end" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let tw = self.text_area_width;
+                if !self.word_wrap || tw == 0 {
+                    self.window_mgr.focused_window_mut().move_to_line_end(buf);
+                } else {
+                    let sb_w = self.show_break.chars().count();
+                    let bi = self.break_indent;
+                    let win = self.window_mgr.focused_window_mut();
+                    let line = buf.rope().line(win.cursor_row);
+                    let lt: String = line.chars().collect();
+                    let lt = lt.trim_end_matches('\n');
+                    let line_len = lt.chars().count();
+                    let (wrap_row, _) =
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                    let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                    let end = if wrap_row + 1 < total_rows {
+                        // End of this wrap row = start of next row - 1
+                        crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w)
+                            .saturating_sub(1)
+                    } else {
+                        line_len.saturating_sub(1)
+                    };
+                    win.cursor_col = end;
+                }
             }
             "move-to-first-line" => {
                 self.record_jump();
@@ -282,6 +399,11 @@ impl Editor {
                     all_deleted.push_str(&deleted);
                 }
                 if !all_deleted.is_empty() {
+                    // Ensure linewise delete text ends with '\n' so paste
+                    // recognizes it as linewise.
+                    if !all_deleted.ends_with('\n') {
+                        all_deleted.push('\n');
+                    }
                     self.save_delete(all_deleted);
                 }
                 self.record_edit_with_count("delete-line", count);
@@ -344,6 +466,11 @@ impl Editor {
                     yanked.push_str(&self.buffers[idx].line_text(row));
                 }
                 if !yanked.is_empty() {
+                    // Ensure linewise yank always ends with '\n' so paste
+                    // recognizes it as linewise (last line may lack trailing newline).
+                    if !yanked.ends_with('\n') {
+                        yanked.push('\n');
+                    }
                     self.save_yank(yanked);
                     let yanked_count = end_row - start_row;
                     self.set_status(format!(
@@ -605,6 +732,21 @@ impl Editor {
             "help-next-link" => self.help_next_link(),
             "help-prev-link" => self.help_prev_link(),
             "help-close" => self.help_close(),
+            "help-search" => {
+                let nodes: Vec<(String, String)> = self
+                    .kb
+                    .list_ids(None)
+                    .iter()
+                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
+                    .collect();
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_help_search(&nodes),
+                );
+                self.mode = Mode::CommandPalette;
+            }
+            "help-reopen" => {
+                self.help_reopen();
+            }
 
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));
@@ -636,6 +778,26 @@ impl Editor {
                 self.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[win.buffer_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
+            }
+            "new-buffer" => {
+                let prev_idx = self.active_buffer_idx();
+                let mut buf = Buffer::new();
+                let n = self
+                    .buffers
+                    .iter()
+                    .filter(|b| b.name.starts_with("[scratch"))
+                    .count();
+                if n > 0 {
+                    buf.name = format!("[scratch-{}]", n);
+                }
+                let new_idx = self.buffers.len();
+                self.buffers.push(buf);
+                let win = self.window_mgr.focused_window_mut();
+                win.buffer_idx = new_idx;
+                win.cursor_row = 0;
+                win.cursor_col = 0;
+                self.alternate_buffer_idx = Some(prev_idx);
+                self.set_status("New buffer");
             }
             "kill-buffer" => {
                 let idx = self.active_buffer_idx();
@@ -671,22 +833,41 @@ impl Editor {
                     self.set_status(format!("Buffer killed — now: {}", name));
                 }
             }
+            "force-kill-buffer" => {
+                let idx = self.active_buffer_idx();
+                if self.buffers.len() <= 1 {
+                    self.lsp_notify_did_close_for_buffer(0);
+                    self.buffers[0] = Buffer::new();
+                    self.syntax.remove(0);
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                    self.set_status("Buffer killed — [scratch]");
+                } else {
+                    self.lsp_notify_did_close_for_buffer(idx);
+                    self.buffers.remove(idx);
+                    self.syntax.shift_after_remove(idx);
+                    for win in self.window_mgr.iter_windows_mut() {
+                        if win.buffer_idx == idx {
+                            win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
+                            win.cursor_row = 0;
+                            win.cursor_col = 0;
+                        } else if win.buffer_idx > idx {
+                            win.buffer_idx -= 1;
+                        }
+                    }
+                    let new_idx = self.active_buffer_idx();
+                    let name = self.buffers[new_idx].name.clone();
+                    self.set_status(format!("Buffer killed — now: {}", name));
+                }
+            }
             "switch-buffer" => {
-                let list: Vec<String> = self
-                    .buffers
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| {
-                        let modified = if b.modified { " [+]" } else { "" };
-                        let current = if i == self.active_buffer_idx() {
-                            ">"
-                        } else {
-                            " "
-                        };
-                        format!("{}{} {}{}", current, i, b.name, modified)
-                    })
-                    .collect();
-                self.set_status(list.join("  |  "));
+                let names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                self.command_palette = Some(crate::command_palette::CommandPalette::for_buffers(
+                    &name_refs,
+                ));
+                self.mode = crate::Mode::CommandPalette;
             }
             "find-file" => {
                 let root = std::env::current_dir().unwrap_or_default();
@@ -706,7 +887,7 @@ impl Editor {
                 self.file_browser = Some(crate::FileBrowser::open(&start));
                 self.mode = Mode::FileBrowser;
             }
-            "recent-files" => self.set_status("Not yet implemented: recent-files"),
+            "recent-files" => self.recent_files_palette(),
             "ai-prompt" => {
                 self.open_conversation_buffer();
             }
@@ -741,13 +922,20 @@ impl Editor {
                 self.mode = Mode::CommandPalette;
             }
             "set-theme" => {
-                // Stub: in full implementation, opens command-line for theme name.
-                // For now, set status with available themes.
-                let names = bundled_theme_names().join(", ");
-                self.set_status(format!("Available themes: {} — use :theme <name>", names));
+                let names = bundled_theme_names();
+                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                self.command_palette = Some(crate::command_palette::CommandPalette::for_themes(
+                    &name_refs,
+                ));
+                self.mode = Mode::CommandPalette;
             }
             "cycle-theme" => {
                 self.cycle_theme();
+            }
+            "set-splash-art" => {
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_splash_art());
+                self.mode = Mode::CommandPalette;
             }
 
             // Debug commands
@@ -755,13 +943,11 @@ impl Editor {
                 self.start_self_debug();
             }
             "debug-start" => {
-                // Concrete `dap_start_session(...)` is called from the
-                // command-line handler (`:debug-start <adapter> <program>`)
-                // or from the AI agent tool. Hitting this bare key-bound
-                // command without args just prompts for them.
-                self.set_status(
-                    "Usage: :debug-start <adapter> <program> — or use AI to start a DAP session",
-                );
+                // Pre-fill the command line so the user can type
+                // adapter + program args interactively.
+                self.mode = Mode::Command;
+                self.command_line = "debug-start ".to_string();
+                self.command_cursor = self.command_line.len();
             }
             "debug-stop" => {
                 if self.debug_state.is_some() {
@@ -797,8 +983,36 @@ impl Editor {
                 self.dap_toggle_breakpoint_at_cursor();
             }
             "debug-inspect" => {
-                if self.debug_state.is_some() {
-                    self.set_status("Debug inspect: use :debug-eval <expr> or AI agent");
+                if let Some(state) = &self.debug_state {
+                    // Show a summary of current debug state in status.
+                    let thread_info = if state.threads.is_empty() {
+                        "no threads".to_string()
+                    } else {
+                        let stopped: Vec<&str> = state
+                            .threads
+                            .iter()
+                            .filter(|t| t.stopped)
+                            .map(|t| t.name.as_str())
+                            .collect();
+                        if stopped.is_empty() {
+                            format!("{} threads (all running)", state.threads.len())
+                        } else {
+                            format!("{} stopped: {}", stopped.len(), stopped.join(", "))
+                        }
+                    };
+                    let frame_info = state
+                        .stack_frames
+                        .first()
+                        .map(|f| format!(" | top: {}:{}", f.name, f.line))
+                        .unwrap_or_default();
+                    let var_count: usize = state.variables.values().map(|v| v.len()).sum();
+                    self.set_status(format!(
+                        "Debug: {}{}  | {} vars across {} scopes",
+                        thread_info,
+                        frame_info,
+                        var_count,
+                        state.scopes.len()
+                    ));
                 } else {
                     self.set_status("No active debug session");
                 }
@@ -1208,6 +1422,21 @@ impl Editor {
 
             "lsp-show-diagnostics" => self.show_diagnostics_buffer(),
 
+            // LSP code actions (stubs — queue intent, client not yet wired)
+            "lsp-code-action" => {
+                self.lsp_request_code_action();
+            }
+            "lsp-rename" => {
+                // Pre-fill command line for user to enter new name
+                self.mode = crate::Mode::Command;
+                self.command_line = "lsp-rename ".to_string();
+                self.command_cursor = self.command_line.len();
+                self.set_status("Enter new name for symbol");
+            }
+            "lsp-format" => {
+                self.lsp_request_format();
+            }
+
             // Tree-sitter structural editing (Phase 4b M3)
             "syntax-select-node" => {
                 self.syntax_select_node();
@@ -1259,6 +1488,180 @@ impl Editor {
             "eval-region" => self.eval_visual_region(),
             "eval-buffer" => self.eval_current_buffer(),
             "open-scheme-repl" => self.open_scheme_repl(),
+
+            // +project (SPC p)
+            "project-find-file" => self.project_find_file(),
+            "project-search" => self.project_search(),
+            "project-browse" => self.project_browse(),
+            "project-recent-files" => self.project_recent_files(),
+            "project-switch" => self.project_switch_palette(),
+
+            // +search/syntax (SPC s) — search-buffer is an alias
+            "search-buffer" => {
+                self.dispatch_builtin("search-forward-start");
+                return true;
+            }
+
+            // +file expansions (SPC f)
+            "yank-file-path" => {
+                if let Some(path) = self.active_buffer().file_path() {
+                    let path_str = path.display().to_string();
+                    self.registers.insert('+', path_str.clone());
+                    self.set_status(format!("Yanked: {}", path_str));
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+            }
+            "rename-file" => {
+                let path_str = self
+                    .active_buffer()
+                    .file_path()
+                    .map(|p| p.display().to_string());
+                if let Some(ps) = path_str {
+                    self.mode = crate::Mode::Command;
+                    self.command_line = format!("rename {}", ps);
+                    self.command_cursor = self.command_line.len();
+                    self.set_status("Rename file: edit path and press Enter");
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+            }
+            "save-as" => {
+                self.mode = crate::Mode::Command;
+                self.command_line = "saveas ".to_string();
+                self.command_cursor = self.command_line.len();
+                self.set_status("Save as: enter path and press Enter");
+            }
+
+            // +buffer expansions (SPC b)
+            "kill-other-buffers" => {
+                let active = self.active_buffer_idx();
+                let mut killed = 0;
+                let mut i = 0;
+                while i < self.buffers.len() {
+                    if i != active && !self.buffers[i].modified {
+                        self.buffers.remove(i);
+                        if active > i {
+                            // Adjust the focused window's buffer_idx
+                            let win = self.window_mgr.focused_window_mut();
+                            if win.buffer_idx > 0 {
+                                win.buffer_idx -= 1;
+                            }
+                        }
+                        killed += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                self.set_status(format!("Killed {} buffer(s)", killed));
+            }
+            "save-all-buffers" => {
+                let mut saved = 0;
+                let mut errors = Vec::new();
+                for i in 0..self.buffers.len() {
+                    if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
+                        match self.buffers[i].save() {
+                            Ok(()) => saved += 1,
+                            Err(e) => errors.push(format!("{}: {}", self.buffers[i].name, e)),
+                        }
+                    }
+                }
+                if errors.is_empty() {
+                    self.set_status(format!("Saved {} buffer(s)", saved));
+                } else {
+                    self.set_status(format!("Saved {}, errors: {}", saved, errors.join(", ")));
+                }
+            }
+            "revert-buffer" => {
+                let idx = self.active_buffer_idx();
+                if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    match Buffer::from_file(&path) {
+                        Ok(buf) => {
+                            let name = buf.name.clone();
+                            self.buffers[idx] = buf;
+                            self.window_mgr.focused_window_mut().cursor_row = 0;
+                            self.window_mgr.focused_window_mut().cursor_col = 0;
+                            self.set_status(format!("Reverted: {}", name));
+                        }
+                        Err(e) => self.set_status(format!("Revert failed: {}", e)),
+                    }
+                } else {
+                    self.set_status("Buffer has no file path to revert from");
+                }
+            }
+
+            // +toggle (SPC t)
+            "toggle-line-numbers" => {
+                self.show_line_numbers = !self.show_line_numbers;
+                self.set_status(format!(
+                    "Line numbers: {}",
+                    if self.show_line_numbers { "on" } else { "off" }
+                ));
+            }
+            "toggle-relative-line-numbers" => {
+                self.relative_line_numbers = !self.relative_line_numbers;
+                self.set_status(format!(
+                    "Relative line numbers: {}",
+                    if self.relative_line_numbers {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                ));
+            }
+            "toggle-word-wrap" => {
+                self.word_wrap = !self.word_wrap;
+                self.set_status(format!(
+                    "Word wrap: {}",
+                    if self.word_wrap { "on" } else { "off" }
+                ));
+            }
+
+            // +git (SPC g)
+            "git-status" => self.git_status(),
+            "git-blame" => self.git_blame(),
+            "git-diff" => self.git_diff(),
+            "git-log" => self.git_log(),
+
+            // +notes (SPC n)
+            "kb-find" => {
+                let nodes: Vec<(String, String)> = self
+                    .kb
+                    .list_ids(None)
+                    .iter()
+                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
+                    .collect();
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_help_search(&nodes),
+                );
+                self.mode = Mode::CommandPalette;
+            }
+
+            // Operator-pending mode: bare d/c/y enter pending state
+            "operator-delete" => {
+                let win = self.window_mgr.focused_window();
+                self.pending_operator = Some("d".to_string());
+                self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
+            }
+            "operator-change" => {
+                let win = self.window_mgr.focused_window();
+                self.pending_operator = Some("c".to_string());
+                self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
+            }
+            "operator-yank" => {
+                let win = self.window_mgr.focused_window();
+                self.pending_operator = Some("y".to_string());
+                self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
+            }
+            "operator-surround" => {
+                let win = self.window_mgr.focused_window();
+                self.pending_operator = Some("s".to_string());
+                self.operator_start = Some((win.cursor_row, win.cursor_col));
+                self.operator_count = count;
+            }
 
             _ => return false,
         }

@@ -121,6 +121,16 @@ impl CommandRegistry {
         reg.register_builtin("move-right", "Move cursor right one character");
         reg.register_builtin("move-to-line-start", "Move cursor to start of line");
         reg.register_builtin("move-to-line-end", "Move cursor to end of line");
+        reg.register_builtin(
+            "move-display-down",
+            "Move cursor down one display line (gj)",
+        );
+        reg.register_builtin("move-display-up", "Move cursor up one display line (gk)");
+        reg.register_builtin(
+            "move-display-line-start",
+            "Move to start of display line (g0)",
+        );
+        reg.register_builtin("move-display-line-end", "Move to end of display line (g$)");
         reg.register_builtin("move-to-first-line", "Move cursor to first line");
         reg.register_builtin("move-to-last-line", "Move cursor to last line");
         reg.register_builtin("move-word-forward", "Move to start of next word (w)");
@@ -206,10 +216,7 @@ impl CommandRegistry {
         reg.register_builtin("substitute-char", "Substitute char under cursor (s)");
         reg.register_builtin("substitute-line", "Substitute entire line (S)");
         // Re-enter insert at last position
-        reg.register_builtin(
-            "reinsert-at-last-position",
-            "Re-enter insert mode at last insert-exit position (gi)",
-        );
+        reg.register_builtin("reinsert-at-last-position", "Insert at last edit position");
         // Jump list (Practical Vim ch. 9)
         reg.register_builtin(
             "jump-backward",
@@ -228,10 +235,7 @@ impl CommandRegistry {
             "change-forward",
             "Navigate forward through the change list (g,)",
         );
-        reg.register_builtin(
-            "show-changes-buffer",
-            "Open the *Changes* scratch buffer listing recorded edits (:changes)",
-        );
+        reg.register_builtin("show-changes-buffer", "Show change list");
         reg.register_builtin(
             "goto-file-under-cursor",
             "Open the filename under the cursor (gf)",
@@ -274,6 +278,24 @@ impl CommandRegistry {
         reg.register_builtin("paste-after", "Paste after cursor (p)");
         reg.register_builtin("paste-before", "Paste before cursor (P)");
 
+        // Operator-pending mode
+        reg.register_builtin(
+            "operator-delete",
+            "Enter operator-pending mode for delete (d + motion)",
+        );
+        reg.register_builtin(
+            "operator-change",
+            "Enter operator-pending mode for change (c + motion)",
+        );
+        reg.register_builtin(
+            "operator-yank",
+            "Enter operator-pending mode for yank (y + motion)",
+        );
+        reg.register_builtin(
+            "operator-surround",
+            "Surround motion range with delimiter (ys + motion + char)",
+        );
+
         // Undo/Redo
         reg.register_builtin("undo", "Undo last edit");
         reg.register_builtin("redo", "Redo last undone edit");
@@ -309,24 +331,17 @@ impl CommandRegistry {
         reg.register_builtin("next-buffer", "Cycle to next buffer");
         reg.register_builtin("prev-buffer", "Cycle to previous buffer");
         reg.register_builtin("find-file", "Open a file");
-        reg.register_builtin(
-            "file-browser",
-            "Open directory browser (ranger-style traversal)",
-        );
+        reg.register_builtin("file-browser", "Open directory browser");
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
+        reg.register_builtin("new-buffer", "Create a new empty scratch buffer");
+        reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("describe-key", "Show what a key does");
         reg.register_builtin("describe-command", "Show command documentation");
-        reg.register_builtin(
-            "show-registers",
-            "Open the *Registers* buffer (:reg / :registers)",
-        );
-        reg.register_builtin(
-            "prompt-register",
-            "Prompt for a register letter (\" + <char>)",
-        );
+        reg.register_builtin("show-registers", "Show named registers");
+        reg.register_builtin("prompt-register", "Select a register");
 
         // Surrounds (vim-surround ports)
         reg.register_builtin(
@@ -347,6 +362,7 @@ impl CommandRegistry {
         );
         reg.register_builtin("set-theme", "Set editor color theme");
         reg.register_builtin("cycle-theme", "Cycle to next color theme");
+        reg.register_builtin("set-splash-art", "Choose splash screen art style");
 
         // Scheme REPL (lisp machine primitives)
         reg.register_builtin("eval-line", "Evaluate current line as Scheme (SPC e l)");
@@ -489,15 +505,17 @@ impl CommandRegistry {
             "lsp-accept-completion",
             "Accept the selected completion item (Tab)",
         );
-        reg.register_builtin(
-            "lsp-dismiss-completion",
-            "Dismiss the completion popup (Esc already exits insert mode)",
-        );
+        reg.register_builtin("lsp-dismiss-completion", "Dismiss completion popup");
         reg.register_builtin("lsp-complete-next", "Select next completion item (Ctrl-n)");
         reg.register_builtin(
             "lsp-complete-prev",
             "Select previous completion item (Ctrl-p)",
         );
+
+        // LSP code actions (Phase 4a stubs)
+        reg.register_builtin("lsp-code-action", "Run LSP code action at cursor (SPC c a)");
+        reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
+        reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
 
         // Tree-sitter structural editing (Phase 4b M3)
         reg.register_builtin(
@@ -512,6 +530,52 @@ impl CommandRegistry {
             "syntax-contract-selection",
             "Contract Visual selection to the previous syntax node (SPC s c)",
         );
+
+        // Project commands (SPC p)
+        reg.register_builtin("project-find-file", "Find file in project (SPC p f)");
+        reg.register_builtin("project-search", "Search in project (SPC p s)");
+        reg.register_builtin("project-browse", "Browse project directory (SPC p d)");
+        reg.register_builtin("project-recent-files", "Recent files in project (SPC p r)");
+        reg.register_builtin("project-switch", "Switch to a recent project (SPC p p)");
+
+        // Search aliases
+        reg.register_builtin("search-buffer", "Search in current buffer (SPC s s)");
+
+        // File operations (expanded)
+        reg.register_builtin(
+            "yank-file-path",
+            "Copy buffer file path to clipboard (SPC f y)",
+        );
+        reg.register_builtin("rename-file", "Rename current file (SPC f R)");
+        reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
+
+        // Buffer operations (expanded)
+        reg.register_builtin(
+            "kill-other-buffers",
+            "Close all buffers except current (SPC b o)",
+        );
+        reg.register_builtin("save-all-buffers", "Save all modified buffers (SPC b S)");
+        reg.register_builtin("revert-buffer", "Reload buffer from disk (SPC b r)");
+
+        // Toggle commands
+        reg.register_builtin(
+            "toggle-line-numbers",
+            "Toggle line number display (SPC t l)",
+        );
+        reg.register_builtin(
+            "toggle-relative-line-numbers",
+            "Toggle relative line numbers (SPC t r)",
+        );
+        reg.register_builtin("toggle-word-wrap", "Toggle word wrap (SPC t w)");
+
+        // Git commands (shell-out stubs)
+        reg.register_builtin("git-status", "Show git status in scratch buffer (SPC g s)");
+        reg.register_builtin("git-blame", "Show git blame for current file (SPC g b)");
+        reg.register_builtin("git-diff", "Show git diff in scratch buffer (SPC g d)");
+        reg.register_builtin("git-log", "Show git log in scratch buffer (SPC g l)");
+
+        // Notes/KB commands
+        reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
 
         // Help / KB navigation
         reg.register_builtin("help", "Open the *Help* buffer at the knowledge-base index");
@@ -529,10 +593,9 @@ impl CommandRegistry {
             "help-prev-link",
             "Focus the previous link in the current help page",
         );
-        reg.register_builtin(
-            "help-close",
-            "Kill the *Help* buffer and return to the previous",
-        );
+        reg.register_builtin("help-close", "Close help buffer");
+        reg.register_builtin("help-search", "Search help topics");
+        reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
 
         reg
     }

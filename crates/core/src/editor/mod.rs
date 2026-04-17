@@ -5,12 +5,14 @@ mod diagnostics;
 mod dispatch;
 mod edit_ops;
 mod file_ops;
+mod git_ops;
 mod help_ops;
 mod jumps;
 mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+mod project_ops;
 mod register_ops;
 mod scheme_ops;
 mod search_ops;
@@ -128,6 +130,9 @@ pub struct Editor {
     /// Viewport height in lines, updated each frame from the renderer.
     /// Used by scroll commands (Ctrl-U/D/F/B, H/M/L, zz/zt/zb).
     pub viewport_height: usize,
+    /// Text area width in columns (after gutter), updated each frame.
+    /// Used by word-wrap aware cursor movement (gj/gk).
+    pub text_area_width: usize,
     /// Fuzzy file picker state. Some when the picker overlay is active.
     pub file_picker: Option<FilePicker>,
     /// Ranger-style directory browser. Some when the browser overlay is active.
@@ -210,6 +215,24 @@ pub struct Editor {
     /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
+    /// Saved help view state from the last `help_close`. `help-reopen`
+    /// restores this to resume exactly where the user left off.
+    pub last_help_state: Option<crate::help_view::HelpView>,
+    /// Which ASCII art to show on the splash screen. Default is "bat".
+    pub splash_art: Option<String>,
+    /// Pending operator for operator-pending mode (`d`, `c`, `y`).
+    /// When set, the next motion completes the operator.
+    pub pending_operator: Option<String>,
+    /// Cursor position (row, col) when operator-pending started.
+    pub operator_start: Option<(usize, usize)>,
+    /// Count prefix saved from the operator key (e.g. `2d` saves 2).
+    /// Multiplied with the motion's own count when the motion fires.
+    pub operator_count: Option<usize>,
+    /// True if the last dispatched motion was linewise (gg, G, {, }, etc.).
+    pub last_motion_linewise: bool,
+    /// Char offset range saved by `ys{motion}` for the subsequent char-await
+    /// that wraps the range with a delimiter pair.
+    pub pending_surround_range: Option<(usize, usize)>,
     /// Last f/F/t/T search: (char, command-name). `;` repeats same direction,
     /// `,` repeats opposite.
     pub last_find_char: Option<(char, String)>,
@@ -227,6 +250,25 @@ pub struct Editor {
     pub ai_session_tokens_in: u64,
     /// Cumulative completion tokens this session (all providers).
     pub ai_session_tokens_out: u64,
+    /// Visual bell: when set, the renderer inverts the status bar background
+    /// until this instant passes. Emacs `visible-bell` equivalent.
+    pub bell_until: Option<std::time::Instant>,
+    /// Detected project for the current working context.
+    pub project: Option<crate::project::Project>,
+    /// Recently opened files (bounded, deduplicated).
+    pub recent_files: crate::project::RecentFiles,
+    /// Recently used project roots (bounded, deduplicated).
+    pub recent_projects: crate::project::RecentProjects,
+    /// Toggle: show line numbers in the gutter. Default true.
+    pub show_line_numbers: bool,
+    /// Toggle: use relative line numbers. Default false.
+    pub relative_line_numbers: bool,
+    /// Toggle: wrap long lines. Default false.
+    pub word_wrap: bool,
+    /// Toggle: continuation lines preserve indentation. Default true.
+    pub break_indent: bool,
+    /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
+    pub show_break: String,
 }
 
 impl Default for Editor {
@@ -264,6 +306,7 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            text_area_width: 80,
             file_picker: None,
             file_browser: None,
             command_palette: None,
@@ -296,6 +339,13 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_help_state: None,
+            splash_art: Some("bat".to_string()),
+            pending_operator: None,
+            operator_start: None,
+            operator_count: None,
+            last_motion_linewise: false,
+            pending_surround_range: None,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -303,6 +353,15 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            bell_until: None,
+            project: None,
+            recent_files: crate::project::RecentFiles::default(),
+            recent_projects: crate::project::RecentProjects::default(),
+            show_line_numbers: true,
+            relative_line_numbers: false,
+            word_wrap: false,
+            break_indent: true,
+            show_break: "↪ ".to_string(),
         }
     }
 
@@ -335,6 +394,7 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            text_area_width: 80,
             file_picker: None,
             file_browser: None,
             command_palette: None,
@@ -378,6 +438,13 @@ impl Editor {
             macro_log: Vec::new(),
             last_macro_register: None,
             macro_replay_depth: 0,
+            last_help_state: None,
+            splash_art: None,
+            pending_operator: None,
+            operator_start: None,
+            operator_count: None,
+            last_motion_linewise: false,
+            pending_surround_range: None,
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),
@@ -385,6 +452,15 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            bell_until: None,
+            project: None,
+            recent_files: crate::project::RecentFiles::default(),
+            recent_projects: crate::project::RecentProjects::default(),
+            show_line_numbers: true,
+            relative_line_numbers: false,
+            word_wrap: false,
+            break_indent: true,
+            show_break: "↪ ".to_string(),
         }
     }
 
@@ -504,6 +580,19 @@ impl Editor {
         self.status_msg = msg.into();
     }
 
+    /// Trigger a visual bell — the renderer will briefly flash the status
+    /// bar. Emacs `visible-bell` equivalent. Duration: 150ms.
+    pub fn ring_bell(&mut self) {
+        self.bell_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+    }
+
+    /// Returns true if the visual bell is currently active.
+    pub fn bell_active(&self) -> bool {
+        self.bell_until
+            .map(|t| std::time::Instant::now() < t)
+            .unwrap_or(false)
+    }
+
     /// Consume the count prefix, returning the count (default 1).
     pub fn take_count(&mut self) -> usize {
         self.count_prefix.take().unwrap_or(1)
@@ -511,7 +600,7 @@ impl Editor {
 
     /// Default area for window operations when we don't have the real terminal size.
     /// The renderer will provide real dimensions at render time.
-    pub(crate) fn default_area(&self) -> Rect {
+    pub fn default_area(&self) -> Rect {
         Rect {
             x: 0,
             y: 0,

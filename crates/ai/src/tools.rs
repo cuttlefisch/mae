@@ -278,6 +278,16 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::Write),
         },
         ToolDefinition {
+            name: "project_info".into(),
+            description: "Get project state: name, root, config, recent files, and display settings (line numbers, relative line numbers, word wrap).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "project_files".into(),
             description: "List files in the project. Uses git ls-files if in a git repo, otherwise lists files recursively. Returns one path per line.".into(),
             parameters: ToolParameters {
@@ -740,6 +750,52 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Project management ---
+        ToolDefinition {
+            name: "switch_project".into(),
+            description: "Switch the active project to a new root directory. Detects project markers (.git, Cargo.toml, etc.) and updates the editor's project context. Adds the root to recent projects.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Absolute path to the project root directory".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Editor settings ---
+        ToolDefinition {
+            name: "set_option".into(),
+            description: "Set an editor option by name. Supported options: 'theme', 'splash_art', 'line_numbers' (true/false), 'relative_line_numbers' (true/false), 'word_wrap' (true/false).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "option".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Option name".into(),
+                            enum_values: Some(vec!["theme".into(), "splash_art".into(), "line_numbers".into(), "relative_line_numbers".into(), "word_wrap".into()]),
+                        },
+                    ),
+                    (
+                        "value".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "New value for the option".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["option".into(), "value".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
 
@@ -837,10 +893,11 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 33);
+        assert_eq!(tools.len(), 36);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
+        assert!(names.contains(&"set_option"));
         assert!(names.contains(&"cursor_info"));
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"file_read"));
@@ -854,6 +911,7 @@ mod tests {
         assert!(names.contains(&"close_buffer"));
         assert!(names.contains(&"create_file"));
         assert!(names.contains(&"project_files"));
+        assert!(names.contains(&"project_info"));
         assert!(names.contains(&"project_search"));
         assert!(names.contains(&"lsp_definition"));
         assert!(names.contains(&"lsp_references"));
@@ -872,6 +930,7 @@ mod tests {
         assert!(names.contains(&"kb_links_to"));
         assert!(names.contains(&"kb_graph"));
         assert!(names.contains(&"help_open"));
+        assert!(names.contains(&"switch_project"));
     }
 
     #[test]
