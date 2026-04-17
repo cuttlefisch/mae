@@ -768,11 +768,12 @@ Phase 3e (editor essentials) ✅ COMPLETE
 
 **Next priority order:**
 1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
-2. **Help browser + which-key QoL** — rich text rendering, interactive arg prompts
-3. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
-4. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-5. **Phase 8** (Org-Mode Editing) — full org-mode environment
-6. **C-o in insert mode** (M1 remaining item) — quick win
+2. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
+3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
+4. **Session & file management** — session save/restore, recent files, file watchers
+5. **LSP packaging review** — multi-language defaults, user-configurable server selection
+6. **Phase 8** (Org-Mode Editing) — full org-mode environment
+7. **C-o in insert mode** (M1 remaining item) — quick win
 
 ---
 

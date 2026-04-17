@@ -349,6 +349,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 }
                 (Some(theme), PalettePurpose::SetTheme) => {
                     editor.set_theme_by_name(&theme);
+                    crate::config::persist_editor_preference("theme", &theme);
                 }
                 (Some(node_id), PalettePurpose::HelpSearch) => {
                     editor.open_help_at(&node_id);
@@ -361,6 +362,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 (Some(art), PalettePurpose::SetSplashArt) => {
                     editor.splash_art = Some(art.clone());
                     editor.set_status(format!("Splash art set to: {}", art));
+                    crate::config::persist_editor_preference("splash_art", &art);
                 }
                 (None, _) => editor.set_status("No command selected"),
             }

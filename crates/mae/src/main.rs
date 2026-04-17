@@ -142,6 +142,17 @@ async fn main() -> io::Result<()> {
     };
     editor.message_log = message_log;
 
+    // Apply editor preferences from config file.
+    {
+        let cfg = config::load_config();
+        if let Some(ref theme) = cfg.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        if let Some(ref art) = cfg.editor.splash_art {
+            editor.splash_art = Some(art.clone());
+        }
+    }
+
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {

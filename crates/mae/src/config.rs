@@ -52,6 +52,7 @@ pub struct AiSection {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EditorSection {
     pub theme: Option<String>,
+    pub splash_art: Option<String>,
 }
 
 /// Return the path to the user config file, honoring XDG_CONFIG_HOME.
@@ -205,6 +206,25 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         timeout_secs,
         budget: file.budget.clone(),
     })
+}
+
+/// Update a single editor preference in the config file (load → modify → save).
+/// Silently logs on failure — preference persistence is best-effort.
+pub fn persist_editor_preference(key: &str, value: &str) {
+    let mut cfg = load_config();
+    match key {
+        "theme" => cfg.editor.theme = Some(value.to_string()),
+        "splash_art" => cfg.editor.splash_art = Some(value.to_string()),
+        _ => {
+            warn!(key, value, "unknown editor preference key");
+            return;
+        }
+    }
+    if let Err(e) = save_config(&cfg) {
+        warn!(key, value, error = %e, "failed to persist editor preference");
+    } else {
+        debug!(key, value, "persisted editor preference");
+    }
 }
 
 /// Run the first-run configuration wizard. Returns `Ok(true)` if a config
@@ -408,6 +428,9 @@ pub fn default_config_template() -> String {
 [editor]\n\
 # Bundled themes: default, gruvbox-dark, nord, tokyo-night, catppuccin, solarized-light, dracula\n\
 # theme = \"default\"\n\
+\n\
+# Splash screen art: \"cherry-blossom\" | \"hairbow\" | \"bat\"\n\
+# splash_art = \"cherry-blossom\"\n\
 ",
         config_path().display()
     )
@@ -441,6 +464,7 @@ mod tests {
             },
             editor: EditorSection {
                 theme: Some("gruvbox-dark".into()),
+                ..Default::default()
             },
         };
         let s = toml::to_string(&cfg).unwrap();

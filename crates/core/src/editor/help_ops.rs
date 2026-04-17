@@ -262,23 +262,55 @@ impl Editor {
     }
 
     pub fn help_next_link(&mut self) {
-        let link_count = match self.help_view() {
-            Some(v) => v.rendered_links.len(),
-            None => 0,
-        };
+        let cursor_byte = self.help_cursor_byte_offset();
         if let Some(view) = self.help_view_mut() {
-            view.focus_next_link(link_count);
+            view.focus_next_link(cursor_byte);
         }
+        self.help_move_cursor_to_focused_link();
     }
 
     pub fn help_prev_link(&mut self) {
-        let link_count = match self.help_view() {
-            Some(v) => v.rendered_links.len(),
-            None => 0,
-        };
+        let cursor_byte = self.help_cursor_byte_offset();
         if let Some(view) = self.help_view_mut() {
-            view.focus_prev_link(link_count);
+            view.focus_prev_link(cursor_byte);
         }
+        self.help_move_cursor_to_focused_link();
+    }
+
+    /// Move the cursor to the start of the currently focused link so the
+    /// viewport scrolls to show it and the user sees where they landed.
+    fn help_move_cursor_to_focused_link(&mut self) {
+        let byte_start = match self.help_view() {
+            Some(view) => match view.focused_link {
+                Some(idx) => match view.rendered_links.get(idx) {
+                    Some(link) => link.byte_start,
+                    None => return,
+                },
+                None => return,
+            },
+            None => return,
+        };
+        let idx = self.active_buffer_idx();
+        let rope = self.buffers[idx].rope().clone();
+        let row = rope.byte_to_line(byte_start);
+        let line_byte_start = rope.line_to_byte(row);
+        let col = byte_start - line_byte_start;
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = row;
+        win.cursor_col = col;
+    }
+
+    /// Compute the byte offset in the rope corresponding to the cursor position.
+    fn help_cursor_byte_offset(&self) -> usize {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let win = self.window_mgr.focused_window();
+        let rope = buf.rope();
+        let row = win.cursor_row.min(rope.len_lines().saturating_sub(1));
+        let line_start = rope.line_to_byte(row);
+        let line_len = rope.line(row).len_bytes();
+        let col_bytes = win.cursor_col.min(line_len);
+        line_start + col_bytes
     }
 
     /// Close the *Help* buffer if one exists, switching to the alternate
