@@ -12,6 +12,7 @@
 #   make clippy       — linting (cargo clippy)
 #   make clean        — remove build artefacts
 #   make uninstall    — remove installed binary
+#   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt check)
 #
 # Configuration (override on the command line or in the environment):
 #
@@ -32,7 +33,7 @@ TARGET_DIR := target
 RELEASE_BIN := $(TARGET_DIR)/release/$(BINARY)
 DEBUG_BIN   := $(TARGET_DIR)/debug/$(BINARY)
 
-.PHONY: all build dev install uninstall run test check fmt fmt-check clippy clean ci help
+.PHONY: all build dev install uninstall run test check fmt fmt-check clippy clean ci setup-hooks help
 
 # Default target: release build
 all: build
@@ -83,6 +84,11 @@ clippy:
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test)
 ci: fmt-check clippy check test
 	@echo "CI passed ✓"
+
+## setup-hooks: configure git to use version-controlled hooks
+setup-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks configured to use .githooks/"
 
 ## clean: remove all build artefacts
 clean:
