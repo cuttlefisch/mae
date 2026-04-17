@@ -1,17 +1,18 @@
 //! LSP-related AI tool implementations.
 //!
-//! Currently exposes `lsp_diagnostics`, which returns a structured JSON
-//! view of the editor's diagnostic store. This is the biggest feedback
-//! loop the AI has when editing code: "what errors did the language
-//! server report?"
+//! Exposes `lsp_diagnostics` (synchronous — reads the editor's diagnostic
+//! store) plus three *deferred* tools that issue async LSP requests:
 //!
-//! The dynamic LSP requests (definition / references / hover) are
-//! already reachable via the registry commands `command_lsp_goto_definition`,
-//! `command_lsp_find_references`, `command_lsp_hover` — their *results*
-//! currently land in the status bar. Promoting those to structured tool
-//! output requires a request/response round-trip through the async LSP
-//! task, which will land in a follow-up.
+//! - `lsp_definition` — textDocument/definition
+//! - `lsp_references` — textDocument/references
+//! - `lsp_hover` — textDocument/hover
+//!
+//! The deferred tools queue an `LspIntent` on the editor and return
+//! `Ok(())`. The executor marks the tool call as `Deferred`, and the
+//! main loop holds the AI reply channel until the matching
+//! `LspTaskEvent` arrives.
 
+use mae_core::lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 use mae_core::{DiagnosticSeverity, Editor};
 use serde_json::{json, Value};
 
@@ -107,6 +108,77 @@ pub fn execute_lsp_diagnostics(editor: &Editor, args: &Value) -> Result<String, 
         "files": files_json,
     });
     Ok(out.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Deferred LSP tools: queue an intent and return Ok(()) for deferred handling
+// ---------------------------------------------------------------------------
+
+/// Resolve LSP context for AI tools: buffer (by name or active), position
+/// (from args or cursor). Returns (uri, language_id, line, character).
+fn resolve_lsp_context(
+    editor: &Editor,
+    args: &Value,
+) -> Result<(String, String, u32, u32), String> {
+    let idx = resolve_buffer_idx(editor, args)?;
+    let buf = &editor.buffers[idx];
+    let path = buf
+        .file_path()
+        .ok_or("Buffer has no file path — LSP unavailable")?;
+    let language_id =
+        language_id_from_path(path).ok_or("No language server configured for this file type")?;
+    let uri = path_to_uri(path);
+
+    // Position: args override → cursor position of focused window
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_u64())
+        .map(|l| l.saturating_sub(1) as u32) // AI sends 1-indexed
+        .unwrap_or_else(|| editor.window_mgr.focused_window().cursor_row as u32);
+    let character = args
+        .get("character")
+        .and_then(|v| v.as_u64())
+        .map(|c| c.saturating_sub(1) as u32) // AI sends 1-indexed
+        .unwrap_or_else(|| editor.window_mgr.focused_window().cursor_col as u32);
+
+    Ok((uri, language_id, line, character))
+}
+
+/// Queue a `textDocument/definition` request for the AI.
+pub fn execute_lsp_definition(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
+    editor.pending_lsp_requests.push(LspIntent::GotoDefinition {
+        uri,
+        language_id,
+        line,
+        character,
+    });
+    Ok(())
+}
+
+/// Queue a `textDocument/references` request for the AI.
+pub fn execute_lsp_references(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
+    editor.pending_lsp_requests.push(LspIntent::FindReferences {
+        uri,
+        language_id,
+        line,
+        character,
+        include_declaration: true,
+    });
+    Ok(())
+}
+
+/// Queue a `textDocument/hover` request for the AI.
+pub fn execute_lsp_hover(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
+    editor.pending_lsp_requests.push(LspIntent::Hover {
+        uri,
+        language_id,
+        line,
+        character,
+    });
+    Ok(())
 }
 
 fn severity_str(s: DiagnosticSeverity) -> &'static str {
@@ -242,5 +314,89 @@ mod tests {
         assert_eq!(d["source"], "rustc");
         assert_eq!(d["code"], "E0432");
         assert_eq!(d["severity"], "error");
+    }
+
+    // --- Deferred LSP tools ---
+
+    #[test]
+    fn lsp_definition_queues_intent() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        execute_lsp_definition(&mut ed, &json!({})).unwrap();
+        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert!(matches!(
+            ed.pending_lsp_requests[0],
+            LspIntent::GotoDefinition { .. }
+        ));
+    }
+
+    #[test]
+    fn lsp_definition_with_position_override() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        execute_lsp_definition(&mut ed, &json!({"line": 5, "character": 10})).unwrap();
+        match &ed.pending_lsp_requests[0] {
+            LspIntent::GotoDefinition {
+                line, character, ..
+            } => {
+                assert_eq!(*line, 4); // 1-indexed → 0-indexed
+                assert_eq!(*character, 9);
+            }
+            other => panic!("expected GotoDefinition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn lsp_definition_errors_for_scratch_buffer() {
+        let mut ed = Editor::new();
+        let result = execute_lsp_definition(&mut ed, &json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no file path"));
+    }
+
+    #[test]
+    fn lsp_definition_errors_for_unknown_language() {
+        let mut ed = ed_with_file("/tmp/a.xyz");
+        let result = execute_lsp_definition(&mut ed, &json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("language server"));
+    }
+
+    #[test]
+    fn lsp_references_queues_intent() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        execute_lsp_references(&mut ed, &json!({})).unwrap();
+        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert!(matches!(
+            ed.pending_lsp_requests[0],
+            LspIntent::FindReferences { .. }
+        ));
+    }
+
+    #[test]
+    fn lsp_hover_queues_intent() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        execute_lsp_hover(&mut ed, &json!({})).unwrap();
+        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        assert!(matches!(
+            ed.pending_lsp_requests[0],
+            LspIntent::Hover { .. }
+        ));
+    }
+
+    #[test]
+    fn lsp_definition_with_buffer_name() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        let mut b = Buffer::new();
+        b.set_file_path(PathBuf::from("/tmp/b.py"));
+        // set_file_path overrides name, so set it after
+        b.name = "other".into();
+        ed.buffers.push(b);
+
+        execute_lsp_definition(&mut ed, &json!({"buffer_name": "other"})).unwrap();
+        match &ed.pending_lsp_requests[0] {
+            LspIntent::GotoDefinition { language_id, .. } => {
+                assert_eq!(language_id, "python");
+            }
+            other => panic!("expected GotoDefinition, got {:?}", other),
+        }
     }
 }

@@ -295,6 +295,111 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "lsp_definition".into(),
+            description: "Go to definition of the symbol at the given position. Returns JSON with locations (uri, line, character). Requires an LSP server for the file's language. Positions are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number (default: cursor line)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "character".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed column (default: cursor column)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer to query (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_references".into(),
+            description: "Find all references to the symbol at the given position. Returns JSON array of locations (uri, line, character). Requires an LSP server. Positions are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number (default: cursor line)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "character".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed column (default: cursor column)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer to query (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_hover".into(),
+            description: "Get hover information (type signature, documentation) for the symbol at the given position. Returns the hover text as a string. Requires an LSP server. Positions are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number (default: cursor line)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "character".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed column (default: cursor column)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer to query (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "lsp_diagnostics".into(),
             description: "Read diagnostics (errors, warnings, hints) reported by language servers. Returns JSON with per-file diagnostics plus global severity counts. Use scope='all' to include every file, scope='buffer' (default) for just the active buffer. Positions are 1-indexed.".into(),
             parameters: ToolParameters {
@@ -732,7 +837,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 33);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -750,6 +855,9 @@ mod tests {
         assert!(names.contains(&"create_file"));
         assert!(names.contains(&"project_files"));
         assert!(names.contains(&"project_search"));
+        assert!(names.contains(&"lsp_definition"));
+        assert!(names.contains(&"lsp_references"));
+        assert!(names.contains(&"lsp_hover"));
         assert!(names.contains(&"lsp_diagnostics"));
         assert!(names.contains(&"syntax_tree"));
         assert!(names.contains(&"dap_start"));

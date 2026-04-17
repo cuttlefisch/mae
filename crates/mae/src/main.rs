@@ -7,7 +7,10 @@ use std::panic;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use mae_ai::{ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent};
+use mae_ai::{
+    ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent, DeferredKind,
+    ExecuteResult, ToolResult,
+};
 use mae_core::{
     Buffer, CompletionItem as CoreCompletionItem, DapIntent, Diagnostic as CoreDiagnostic,
     DiagnosticSeverity as CoreSeverity, Editor, KeyPress, LspIntent, LspLocation, LspRange,
@@ -181,6 +184,14 @@ async fn main() -> io::Result<()> {
     let mut event_stream = EventStream::new();
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
+    // When an AI tool call is deferred (e.g. LSP request), we hold the
+    // reply channel here until the async result arrives.
+    let mut deferred_ai_reply: Option<(
+        DeferredKind,
+        String, // tool_call_id
+        tokio::sync::oneshot::Sender<ToolResult>,
+    )> = None;
+
     loop {
         // Update viewport dimensions and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
@@ -265,18 +276,27 @@ async fn main() -> io::Result<()> {
                             conv.push_tool_call(&call.name);
                         }
 
-                        let result = execute_tool(
+                        let exec_result = execute_tool(
                             &mut editor, &call, &all_tools, &permission_policy,
                         );
-                        debug!(tool = %call.name, success = result.success, "tool call complete");
 
-                        // Push tool result to conversation buffer
-                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
-                            conv.push_tool_result(result.success, &result.output);
-                        }
-
-                        if reply.send(result).is_err() {
-                            warn!(tool = %call.name, "tool result channel closed — AI session may have been cancelled");
+                        match exec_result {
+                            ExecuteResult::Immediate(result) => {
+                                debug!(tool = %call.name, success = result.success, "tool call complete");
+                                if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
+                                    conv.push_tool_result(result.success, &result.output);
+                                }
+                                if reply.send(result).is_err() {
+                                    warn!(tool = %call.name, "tool result channel closed — AI session may have been cancelled");
+                                }
+                            }
+                            ExecuteResult::Deferred { tool_call_id, kind } => {
+                                debug!(tool = %call.name, ?kind, "tool call deferred — awaiting async result");
+                                // Drain the LSP intent we just queued so it's
+                                // sent to the LSP task immediately.
+                                drain_lsp_intents(&mut editor, &lsp_command_tx);
+                                deferred_ai_reply = Some((kind, tool_call_id, reply));
+                            }
                         }
                     }
                     AiEvent::TextResponse(text) => {
@@ -358,6 +378,21 @@ async fn main() -> io::Result<()> {
                 }
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
+                // Check if this event completes a deferred AI tool call.
+                if let Some((kind, ref tool_call_id, _)) = deferred_ai_reply {
+                    if let Some(result) = try_complete_deferred(&lsp_event, kind, tool_call_id) {
+                        let (_, _, reply) = deferred_ai_reply.take().unwrap();
+                        debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed");
+                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
+                            conv.push_tool_result(result.success, &result.output);
+                        }
+                        if reply.send(result).is_err() {
+                            warn!("deferred tool result channel closed");
+                        }
+                        // Still let the normal handler apply editor-side effects
+                        // (e.g. jumping cursor for definition).
+                    }
+                }
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
@@ -556,6 +591,81 @@ fn handle_lsp_event(
             warn!(error = %message, "LSP error");
             editor.set_status(format!("[LSP] {}", message));
         }
+    }
+}
+
+/// Check if an incoming LSP event matches a pending deferred AI tool call.
+/// If so, format a structured JSON result and return it. The caller is
+/// responsible for sending it via the held oneshot reply channel.
+fn try_complete_deferred(
+    event: &LspTaskEvent,
+    kind: DeferredKind,
+    tool_call_id: &str,
+) -> Option<ToolResult> {
+    match (kind, event) {
+        (DeferredKind::LspDefinition, LspTaskEvent::DefinitionResult { locations, .. }) => {
+            let locs: Vec<serde_json::Value> = locations
+                .iter()
+                .map(|l| {
+                    serde_json::json!({
+                        "uri": l.uri,
+                        "path": l.uri.strip_prefix("file://").unwrap_or(&l.uri),
+                        "line": l.range.start.line + 1,
+                        "character": l.range.start.character + 1,
+                        "end_line": l.range.end.line + 1,
+                        "end_character": l.range.end.character + 1,
+                    })
+                })
+                .collect();
+            let output = if locs.is_empty() {
+                serde_json::json!({"locations": [], "message": "definition not found"})
+            } else {
+                serde_json::json!({"locations": locs})
+            };
+            Some(ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                success: true,
+                output: output.to_string(),
+            })
+        }
+        (DeferredKind::LspReferences, LspTaskEvent::ReferencesResult { locations, .. }) => {
+            let locs: Vec<serde_json::Value> = locations
+                .iter()
+                .map(|l| {
+                    serde_json::json!({
+                        "uri": l.uri,
+                        "path": l.uri.strip_prefix("file://").unwrap_or(&l.uri),
+                        "line": l.range.start.line + 1,
+                        "character": l.range.start.character + 1,
+                    })
+                })
+                .collect();
+            let count = locs.len();
+            Some(ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                success: true,
+                output: serde_json::json!({"count": count, "references": locs}).to_string(),
+            })
+        }
+        (DeferredKind::LspHover, LspTaskEvent::HoverResult { contents, .. }) => {
+            let output = if contents.is_empty() {
+                serde_json::json!({"contents": "", "message": "no hover info"})
+            } else {
+                serde_json::json!({"contents": contents})
+            };
+            Some(ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                success: true,
+                output: output.to_string(),
+            })
+        }
+        // Also handle LSP errors while a deferred call is pending
+        (_, LspTaskEvent::Error { message }) => Some(ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            success: false,
+            output: format!("LSP error: {}", message),
+        }),
+        _ => None,
     }
 }
 

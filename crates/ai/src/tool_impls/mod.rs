@@ -4,7 +4,7 @@ mod editor_tools;
 mod file;
 mod help;
 mod kb;
-mod lsp;
+pub(crate) mod lsp;
 mod project;
 mod syntax;
 
