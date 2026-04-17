@@ -22,7 +22,11 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
     if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
         let rr = Rect::new(win_rect.x, win_rect.y, win_rect.width, win_rect.height);
         let inner = inner_rect(rr);
-        let gutter_w = gutter_width(focused_buf.line_count());
+        let gutter_w = if editor.show_line_numbers {
+            gutter_width(focused_buf.line_count())
+        } else {
+            2
+        };
 
         if editor.mode == Mode::Command {
             let cursor_col = editor.command_line
@@ -46,9 +50,6 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 }
             }
         } else {
-            let screen_row = focused_win
-                .cursor_row
-                .saturating_sub(focused_win.scroll_offset) as u16;
             let line_text = if focused_win.cursor_row < focused_buf.line_count() {
                 let line = focused_buf.rope().line(focused_win.cursor_row);
                 let s: String = line.chars().collect();
@@ -58,12 +59,55 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
             };
             let display_col =
                 grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
-            let scroll_col =
-                grapheme::display_width_up_to_grapheme(&line_text, focused_win.col_offset);
-            let screen_col = gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
-            if screen_row < inner.height {
-                frame
-                    .set_cursor_position(Position::new(inner.x + screen_col, inner.y + screen_row));
+
+            let text_width = inner.width.saturating_sub(gutter_w as u16) as usize;
+            let wrap = editor.word_wrap && text_width > 0;
+
+            if wrap {
+                // Count display rows consumed by lines before the cursor line.
+                let mut screen_row: u16 = 0;
+                for ln in focused_win.scroll_offset..focused_win.cursor_row {
+                    if ln < focused_buf.line_count() {
+                        let line = focused_buf.rope().line(ln);
+                        let char_count = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                        let rows = if char_count == 0 {
+                            1
+                        } else {
+                            ((char_count - 1) / text_width + 1) as u16
+                        };
+                        screen_row += rows;
+                    } else {
+                        screen_row += 1;
+                    }
+                }
+                // Add wrapped row offset within the cursor's own line.
+                let wrap_row = if text_width > 0 {
+                    (display_col / text_width) as u16
+                } else {
+                    0
+                };
+                screen_row += wrap_row;
+                let screen_col = gutter_w as u16 + (display_col % text_width) as u16;
+                if screen_row < inner.height {
+                    frame.set_cursor_position(Position::new(
+                        inner.x + screen_col,
+                        inner.y + screen_row,
+                    ));
+                }
+            } else {
+                let screen_row = focused_win
+                    .cursor_row
+                    .saturating_sub(focused_win.scroll_offset) as u16;
+                let scroll_col =
+                    grapheme::display_width_up_to_grapheme(&line_text, focused_win.col_offset);
+                let screen_col =
+                    gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
+                if screen_row < inner.height {
+                    frame.set_cursor_position(Position::new(
+                        inner.x + screen_col,
+                        inner.y + screen_row,
+                    ));
+                }
             }
         }
     }
