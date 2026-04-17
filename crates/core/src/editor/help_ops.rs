@@ -241,6 +241,7 @@ impl Editor {
             }
         } else {
             self.set_status("No previous help page");
+            self.ring_bell();
         }
     }
 
@@ -258,6 +259,7 @@ impl Editor {
             }
         } else {
             self.set_status("No forward help page");
+            self.ring_bell();
         }
     }
 

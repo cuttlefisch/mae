@@ -39,7 +39,15 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         }
     };
 
-    let sl_style = ts(editor, "ui.statusline");
+    let sl_style = if editor.bell_active() {
+        // Visual bell: invert the status bar for one frame.
+        let base = ts(editor, "ui.statusline");
+        Style::default()
+            .fg(base.bg.unwrap_or(Color::Black))
+            .bg(base.fg.unwrap_or(Color::White))
+    } else {
+        ts(editor, "ui.statusline")
+    };
 
     let modified = if buf.modified { " [+]" } else { "" };
     let file_info = format!(" {}{}", buf.name, modified);

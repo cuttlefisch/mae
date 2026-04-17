@@ -27,6 +27,7 @@ impl Editor {
                     self.jump_to_next_match(true);
                 } else {
                     self.set_status("Pattern not found");
+                    self.ring_bell();
                 }
             }
             Err(e) => {
@@ -86,6 +87,7 @@ impl Editor {
             self.set_status(format!("[{}/{}]", idx, matches.len()));
         } else {
             self.set_status("Pattern not found");
+            self.ring_bell();
         }
     }
 
@@ -117,6 +119,7 @@ impl Editor {
             Some(m) => m,
             None => {
                 self.set_status("Pattern not found");
+                self.ring_bell();
                 return false;
             }
         };
@@ -250,6 +253,7 @@ impl Editor {
             self.recompute_search_matches();
         } else {
             self.set_status("Pattern not found");
+            self.ring_bell();
         }
     }
 }

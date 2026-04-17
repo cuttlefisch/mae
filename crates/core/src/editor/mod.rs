@@ -233,6 +233,9 @@ pub struct Editor {
     pub ai_session_tokens_in: u64,
     /// Cumulative completion tokens this session (all providers).
     pub ai_session_tokens_out: u64,
+    /// Visual bell: when set, the renderer inverts the status bar background
+    /// until this instant passes. Emacs `visible-bell` equivalent.
+    pub bell_until: Option<std::time::Instant>,
 }
 
 impl Default for Editor {
@@ -311,6 +314,7 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            bell_until: None,
         }
     }
 
@@ -395,6 +399,7 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            bell_until: None,
         }
     }
 
@@ -512,6 +517,19 @@ impl Editor {
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
+    }
+
+    /// Trigger a visual bell — the renderer will briefly flash the status
+    /// bar. Emacs `visible-bell` equivalent. Duration: 150ms.
+    pub fn ring_bell(&mut self) {
+        self.bell_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+    }
+
+    /// Returns true if the visual bell is currently active.
+    pub fn bell_active(&self) -> bool {
+        self.bell_until
+            .map(|t| std::time::Instant::now() < t)
+            .unwrap_or(false)
     }
 
     /// Consume the count prefix, returning the count (default 1).
