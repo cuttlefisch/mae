@@ -1,0 +1,8 @@
+#!/bin/sh
+# Pre-commit hook: catch formatting issues before they reach CI.
+# Install with: make setup-hooks
+
+if ! cargo fmt --check --quiet 2>/dev/null; then
+    echo "cargo fmt check failed. Run 'make fmt' to fix."
+    exit 1
+fi

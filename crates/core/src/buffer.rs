@@ -149,7 +149,17 @@ impl Buffer {
 
     pub fn save(&mut self) -> std::io::Result<()> {
         if let Some(ref path) = self.file_path {
-            fs::write(path, self.rope.to_string())?;
+            // Atomic save: write to a temp file in the same directory, then
+            // rename. This prevents data loss if the write is interrupted
+            // (disk full, crash, etc.). rename(2) is atomic on POSIX.
+            let parent = path.parent().unwrap_or(Path::new("."));
+            let tmp_path = parent.join(format!(".mae-save-{}.tmp", std::process::id()));
+            fs::write(&tmp_path, self.rope.to_string())?;
+            if let Err(e) = fs::rename(&tmp_path, path) {
+                // Clean up temp file on rename failure.
+                let _ = fs::remove_file(&tmp_path);
+                return Err(e);
+            }
             self.modified = false;
             Ok(())
         } else {
@@ -1174,6 +1184,32 @@ mod tests {
         let buf = Buffer::from_file(&path).unwrap();
         assert_eq!(buf.kind, BufferKind::Text);
         assert!(buf.conversation.is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_is_atomic_no_temp_file_left() {
+        let dir = std::env::temp_dir().join("mae_test_atomic_save");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("atomic.txt");
+        fs::write(&path, "original").unwrap();
+
+        let mut buf = Buffer::from_file(&path).unwrap();
+        buf.insert_text_at(0, "new ");
+        buf.save().unwrap();
+
+        // File should contain the new content.
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "new original");
+
+        // No temp file should remain.
+        let temps: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".mae-save-"))
+            .collect();
+        assert!(temps.is_empty(), "temp file left behind: {:?}", temps);
 
         let _ = fs::remove_dir_all(&dir);
     }

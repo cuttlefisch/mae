@@ -64,7 +64,9 @@ impl Editor {
     /// `+`/`*` = system clipboard + local mirror, lowercase = replace.
     fn write_named_register(&mut self, ch: char, text: &str) {
         if matches!(ch, '+' | '*') {
-            let _ = crate::clipboard::copy(text);
+            if let Err(e) = crate::clipboard::copy(text) {
+                self.set_status(format!("Clipboard copy failed: {}", e));
+            }
             self.registers.insert(ch, text.to_string());
             return;
         }
