@@ -228,7 +228,7 @@ async fn main() -> io::Result<()> {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
                 let gutter_w = if editor.show_line_numbers {
-                    mae_renderer::gutter_width(buf.line_count())
+                    mae_renderer::gutter_width(buf.display_line_count())
                 } else {
                     2
                 };

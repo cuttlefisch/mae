@@ -56,8 +56,9 @@ pub(crate) fn render_buffer(
     syntax_spans: Option<&[HighlightSpan]>,
 ) {
     let viewport_height = area.height as usize;
+    let display_lines = buf.display_line_count();
     let gutter_w = if editor.show_line_numbers {
-        gutter_width(buf.line_count())
+        gutter_width(display_lines)
     } else {
         2 // marker column + 1 padding
     };
@@ -134,7 +135,7 @@ pub(crate) fn render_buffer(
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
 
-    while display_row < viewport_height && line_idx < buf.line_count() {
+    while display_row < viewport_height && line_idx < display_lines {
         let line_text = buf.rope().line(line_idx);
         let full_display: String = line_text
             .chars()

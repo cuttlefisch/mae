@@ -25,7 +25,7 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
         let rr = Rect::new(win_rect.x, win_rect.y, win_rect.width, win_rect.height);
         let inner = inner_rect(rr);
         let gutter_w = if editor.show_line_numbers {
-            gutter_width(focused_buf.line_count())
+            gutter_width(focused_buf.display_line_count())
         } else {
             2
         };
