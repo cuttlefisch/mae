@@ -123,22 +123,13 @@ impl CommandPalette {
         }
     }
 
-    /// Splash art picker palette.
+    /// Splash art picker palette. More art variants will be added in a
+    /// follow-up PR — the infrastructure supports any number of entries.
     pub fn for_splash_art() -> Self {
-        let entries = vec![
-            PaletteEntry {
-                name: "cherry-blossom".to_string(),
-                doc: "Cherry blossom branches".to_string(),
-            },
-            PaletteEntry {
-                name: "hairbow".to_string(),
-                doc: "Decorative hairbow".to_string(),
-            },
-            PaletteEntry {
-                name: "bat".to_string(),
-                doc: "Night bat with spread wings".to_string(),
-            },
-        ];
+        let entries = vec![PaletteEntry {
+            name: "bat".to_string(),
+            doc: "Bat with spread wings".to_string(),
+        }];
         let filtered: Vec<usize> = (0..entries.len()).collect();
         CommandPalette {
             query: String::new(),

@@ -306,7 +306,7 @@ impl Editor {
             last_macro_register: None,
             macro_replay_depth: 0,
             last_help_state: None,
-            splash_art: Some("cherry-blossom".to_string()),
+            splash_art: Some("bat".to_string()),
             last_find_char: None,
             last_visual: None,
             pending_scheme_eval: Vec::new(),

@@ -541,7 +541,7 @@ impl Editor {
                 .into_iter()
                 .filter(|n| n.starts_with(prefix))
                 .collect(),
-            "set-splash-art" => ["cherry-blossom", "hairbow", "bat"]
+            "set-splash-art" => ["bat"]
                 .iter()
                 .filter(|n| n.starts_with(prefix))
                 .map(|n| n.to_string())

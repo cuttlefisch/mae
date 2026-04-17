@@ -9,70 +9,47 @@ use crate::theme_convert::ts;
 
 // ---------------------------------------------------------------------------
 // ASCII art variants
+//
+// Design constraints:
+//   - ~40-60 chars wide (centered in 80+ col terminals)
+//   - ~12-18 lines tall above the MAE logo
+//   - Only printable ASCII (no Unicode — must render in any terminal)
+//
+// Additional art can be added by defining a new const and adding an
+// entry to ALL_ARTS. User selects via :set-splash-art or SPC SPC.
 // ---------------------------------------------------------------------------
 
-const ART_CHERRY_BLOSSOM: &str = r#"
-           .
-        .:;:.
-      .:;;;;;:.            .::.
-      `;:::::;'          .;:::;.
-        `:::;'          .;:::::;.
-     .--.`:;'   .---.  .;:::::::;.
-    /    \  :  /     \.;:::::::::;.
-   ;      :  ;       ;`::::::::;'
-   ;      ;  ;       ;  `::::::;
-    \    /  : \     /     `:::;'
-     `--'   :  `---'        `:'
-     .--.   :   .---.
-    / _  \  :  /     \
-   ; / \  ; : ;       ;
-   ;| | |;  : ;       ;
-    \\_/ /  :  \     /
-     `--'   :   `---'
-            :
-            :
-     __  __    _     _____
-    |  \/  |  / \   | ____|
-    | |\/| | / _ \  |  _|
-    | |  | |/ ___ \ | |___
-    |_|  |_/_/   \_\|_____|
-"#;
-
-const ART_HAIRBOW: &str = r#"
-        *    .  *       .
-     .    *         *
-   *    .    *   .     *
-      .         .
-    .  *  .  *    .  *
-      *       *
-     _\|/_ _\|/_
-    (__  __X__  __)
-      /|  |  |\
-     / |  |  | \
-    *  |  |  |  *
-       |__|__|
-       (    )
-        \  /
-    .    \/    .
-     *       *
-
-     __  __    _     _____
-    |  \/  |  / \   | ____|
-    | |\/| | / _ \  |  _|
-    | |  | |/ ___ \ | |___
-    |_|  |_/_/   \_\|_____|
-"#;
-
+/// Bat — wings spread wide. Inspired by Vivian Aldridge's classic design.
 const ART_BAT: &str = r#"
-                   /\                 /\
-                  / \'._   (\_/)   _.'/ \
-                 /_.''._'--('.')--'_.''._\
-                 | \_ / `;=/ " \=;` \ _/ |
-                  \/ `\__|`\___/`|__/`  \/
-                         \(_)_(_)/
-                          " ` " `
+               _-.                       .-_
+            _..-'(                       )`-.._
+         ./'. '||\.       (\_/)       .//||` .'\.
+      ./'.|'.'||||\\|..    )o o(    ..|//||||`.'|.'\.
+   ./'..|'.|| |||||\'''''  `"'  ''''''/ ||||| ||.'|..'\.
+ ./'.||'.|||| ||||||||||||.     .|||||||||||| |||||.'||.'\.
+/'|||'.|||||| ||||||||||||{     }|||||||||||| ||||||.'|||\`\
+ '.||| ||||||| |||||||||||{     }||||||||||| |||||||.'|||.'
+'.||| |||||||| |/' `\`\||``     ``||/'' `\| ||||||||| |||.'
+|/' \./'    `\./        \!|\   /|!/        \./' `   `\./ `\|
+V    V        V          }' `V' `{          V        V    V
+`    `        `              V              '        '    '
+"#;
 
+struct SplashArt {
+    name: &'static str,
+    art: &'static str,
+    /// Line indices (within the art) that should use the accent color.
+    accent_lines: &'static [usize],
+}
 
+const ALL_ARTS: &[SplashArt] = &[SplashArt {
+    name: "bat",
+    art: ART_BAT,
+    accent_lines: &[],
+}];
+
+/// MAE logo appended to all art variants.
+const MAE_LOGO: &str = r#"
      __  __    _     _____
     |  \/  |  / \   | ____|
     | |\/| | / _ \  |  _|
@@ -85,6 +62,7 @@ const QUICK_ACTIONS: &[(&str, &str)] = &[
     ("SPC f f", "Find file"),
     ("SPC f d", "File browser"),
     ("SPC SPC", "Commands"),
+    ("SPC :", "Command line"),
     ("SPC a p", "AI prompt"),
     ("SPC h h", "Help"),
     ("SPC t s", "Set theme"),
@@ -104,32 +82,35 @@ pub(crate) fn should_show_splash(editor: &Editor) -> bool {
 
 /// Render the splash screen centered in the given area.
 pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
-    let art = match editor.splash_art.as_deref() {
-        Some("hairbow") => ART_HAIRBOW,
-        Some("bat") => ART_BAT,
-        _ => ART_CHERRY_BLOSSOM,
-    };
+    let selected = editor.splash_art.as_deref().unwrap_or("bat");
+    let splash = ALL_ARTS
+        .iter()
+        .find(|a| a.name == selected)
+        .unwrap_or(&ALL_ARTS[0]);
 
-    let art_style = ts(editor, "keyword");
+    let art_primary = ts(editor, "keyword");
+    let art_accent = ts(editor, "string");
     let logo_style = ts(editor, "function");
-    let key_style = ts(editor, "string");
+    let key_style = ts(editor, "type");
     let desc_style = ts(editor, "ui.text");
     let subtitle_style = ts(editor, "comment");
 
-    // Build all lines: art + subtitle + blank + quick actions
-    let art_lines: Vec<&str> = art.lines().collect();
     let mut lines: Vec<Line> = Vec::new();
 
-    // Separate the MAE logo (last 5 non-empty lines) from the art above it.
-    let logo_start = art_lines.len().saturating_sub(6);
-
+    // Art lines with two-tone coloring.
+    let art_lines: Vec<&str> = splash.art.lines().collect();
     for (i, line) in art_lines.iter().enumerate() {
-        let style = if i >= logo_start && line.contains("__") {
-            logo_style
+        let style = if splash.accent_lines.contains(&i) {
+            art_accent
         } else {
-            art_style
+            art_primary
         };
         lines.push(Line::styled(line.to_string(), style));
+    }
+
+    // MAE logo.
+    for line in MAE_LOGO.lines() {
+        lines.push(Line::styled(line.to_string(), logo_style));
     }
 
     lines.push(Line::styled(

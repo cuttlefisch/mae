@@ -3296,9 +3296,9 @@ fn cmdline_completes_command_names() {
 #[test]
 fn cmdline_completes_command_args() {
     let mut ed = Editor::new();
-    ed.command_line = "set-splash-art h".to_string();
+    ed.command_line = "set-splash-art b".to_string();
     let completions = ed.cmdline_completions();
-    assert_eq!(completions, vec!["hairbow"]);
+    assert_eq!(completions, vec!["bat"]);
 }
 
 #[test]
