@@ -3,6 +3,7 @@ use mae_core::Editor;
 use crate::tools::PermissionPolicy;
 use crate::types::*;
 
+use crate::tool_impls::lsp::{execute_lsp_definition, execute_lsp_hover, execute_lsp_references};
 use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
     execute_create_file, execute_cursor_info, execute_dap_continue, execute_dap_inspect_variable,
@@ -11,9 +12,6 @@ use crate::tool_impls::{
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
     execute_project_search, execute_switch_buffer, execute_syntax_tree, execute_window_layout,
-};
-use crate::tool_impls::lsp::{
-    execute_lsp_definition, execute_lsp_hover, execute_lsp_references,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -873,7 +871,12 @@ mod tests {
             "dap_start",
             serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
         );
-        let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &privileged_policy()));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &privileged_policy(),
+        ));
         assert!(result.success, "dap_start failed: {}", result.output);
         assert_eq!(editor.pending_dap_intents.len(), 1);
         assert!(editor.debug_state.is_some());
@@ -974,7 +977,12 @@ mod tests {
         b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
         let mut editor = Editor::with_buffer(b);
         let call = make_call("lsp_definition", serde_json::json!({}));
-        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
         match result {
             ExecuteResult::Deferred { kind, .. } => {
                 assert_eq!(kind, DeferredKind::LspDefinition);
@@ -990,8 +998,19 @@ mod tests {
         b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
         let mut editor = Editor::with_buffer(b);
         let call = make_call("lsp_references", serde_json::json!({}));
-        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
-        assert!(matches!(result, ExecuteResult::Deferred { kind: DeferredKind::LspReferences, .. }));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(matches!(
+            result,
+            ExecuteResult::Deferred {
+                kind: DeferredKind::LspReferences,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1000,15 +1019,31 @@ mod tests {
         b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
         let mut editor = Editor::with_buffer(b);
         let call = make_call("lsp_hover", serde_json::json!({}));
-        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
-        assert!(matches!(result, ExecuteResult::Deferred { kind: DeferredKind::LspHover, .. }));
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
+        assert!(matches!(
+            result,
+            ExecuteResult::Deferred {
+                kind: DeferredKind::LspHover,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn lsp_definition_returns_immediate_error_for_scratch() {
         let mut editor = Editor::new();
         let call = make_call("lsp_definition", serde_json::json!({}));
-        let result = execute_tool(&mut editor, &call, &all_tools(), &PermissionPolicy::default());
+        let result = execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        );
         let result = match result {
             ExecuteResult::Immediate(r) => r,
             ExecuteResult::Deferred { .. } => panic!("expected Immediate error for scratch buffer"),

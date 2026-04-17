@@ -116,7 +116,10 @@ pub fn execute_lsp_diagnostics(editor: &Editor, args: &Value) -> Result<String, 
 
 /// Resolve LSP context for AI tools: buffer (by name or active), position
 /// (from args or cursor). Returns (uri, language_id, line, character).
-fn resolve_lsp_context(editor: &Editor, args: &Value) -> Result<(String, String, u32, u32), String> {
+fn resolve_lsp_context(
+    editor: &Editor,
+    args: &Value,
+) -> Result<(String, String, u32, u32), String> {
     let idx = resolve_buffer_idx(editor, args)?;
     let buf = &editor.buffers[idx];
     let path = buf
@@ -144,29 +147,25 @@ fn resolve_lsp_context(editor: &Editor, args: &Value) -> Result<(String, String,
 /// Queue a `textDocument/definition` request for the AI.
 pub fn execute_lsp_definition(editor: &mut Editor, args: &Value) -> Result<(), String> {
     let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
-    editor
-        .pending_lsp_requests
-        .push(LspIntent::GotoDefinition {
-            uri,
-            language_id,
-            line,
-            character,
-        });
+    editor.pending_lsp_requests.push(LspIntent::GotoDefinition {
+        uri,
+        language_id,
+        line,
+        character,
+    });
     Ok(())
 }
 
 /// Queue a `textDocument/references` request for the AI.
 pub fn execute_lsp_references(editor: &mut Editor, args: &Value) -> Result<(), String> {
     let (uri, language_id, line, character) = resolve_lsp_context(editor, args)?;
-    editor
-        .pending_lsp_requests
-        .push(LspIntent::FindReferences {
-            uri,
-            language_id,
-            line,
-            character,
-            include_declaration: true,
-        });
+    editor.pending_lsp_requests.push(LspIntent::FindReferences {
+        uri,
+        language_id,
+        line,
+        character,
+        include_declaration: true,
+    });
     Ok(())
 }
 
@@ -335,7 +334,9 @@ mod tests {
         let mut ed = ed_with_file("/tmp/a.rs");
         execute_lsp_definition(&mut ed, &json!({"line": 5, "character": 10})).unwrap();
         match &ed.pending_lsp_requests[0] {
-            LspIntent::GotoDefinition { line, character, .. } => {
+            LspIntent::GotoDefinition {
+                line, character, ..
+            } => {
                 assert_eq!(*line, 4); // 1-indexed → 0-indexed
                 assert_eq!(*character, 9);
             }
