@@ -215,8 +215,7 @@ impl Buffer {
     /// a trailing newline. Use for display (line numbers, gutter width).
     pub fn display_line_count(&self) -> usize {
         let n = self.rope.len_lines();
-        if n > 1 && self.rope.len_chars() > 0 && self.rope.char(self.rope.len_chars() - 1) == '\n'
-        {
+        if n > 1 && self.rope.len_chars() > 0 && self.rope.char(self.rope.len_chars() - 1) == '\n' {
             n - 1
         } else {
             n
