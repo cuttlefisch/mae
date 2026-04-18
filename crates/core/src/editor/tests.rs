@@ -3908,3 +3908,54 @@ fn alternate_file_syncs_mode() {
     editor.dispatch_builtin("alternate-file");
     assert_eq!(editor.mode, Mode::ShellInsert);
 }
+
+#[test]
+fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "line1\nline2\nline3\n");
+    let mut editor = Editor::with_buffer(buf);
+    // Enter visual mode with anchor at row 2
+    {
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 2;
+        win.cursor_col = 3;
+    }
+    editor.enter_visual_mode(crate::VisualType::Char);
+    assert_eq!(editor.visual_anchor_row, 2);
+
+    // Truncate buffer to 1 line (simulating MCP edit)
+    let buf = &mut editor.buffers[0];
+    let total = buf.rope().len_chars();
+    let one_line = buf.rope().line_to_char(1);
+    buf.delete_range(one_line, total);
+
+    // Before clamp, anchor is stale
+    assert!(editor.visual_anchor_row > editor.buffers[0].line_count().saturating_sub(1));
+
+    editor.clamp_all_cursors();
+    assert!(editor.visual_anchor_row < editor.buffers[0].line_count());
+    assert!(editor.visual_anchor_col <= editor.buffers[0].line_len(editor.visual_anchor_row));
+}
+
+#[test]
+fn clamp_all_cursors_clamps_last_visual_past_eof() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "aaa\nbbb\nccc\nddd\n");
+    let mut editor = Editor::with_buffer(buf);
+    // Set up a saved visual selection at rows 2-3
+    editor.last_visual = Some((2, 1, 3, 2, crate::VisualType::Char));
+
+    // Truncate to 1 line
+    let buf = &mut editor.buffers[0];
+    let total = buf.rope().len_chars();
+    let one_line = buf.rope().line_to_char(1);
+    buf.delete_range(one_line, total);
+
+    editor.clamp_all_cursors();
+
+    let (ar, ac, cr, cc, _) = editor.last_visual.unwrap();
+    assert!(ar < editor.buffers[0].line_count());
+    assert!(cr < editor.buffers[0].line_count());
+    assert!(ac <= editor.buffers[0].line_len(ar));
+    assert!(cc <= editor.buffers[0].line_len(cr));
+}

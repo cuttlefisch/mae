@@ -60,6 +60,7 @@ pub fn execute_buffer_write(
         if !content.is_empty() {
             buf.insert_text_at(char_start, content);
         }
+        editor.recompute_search_matches();
         Ok(format!(
             "Replaced lines {}-{} ({} chars written)",
             start_line,
@@ -74,6 +75,7 @@ pub fn execute_buffer_write(
             buf.rope().line_to_char(start_idx)
         };
         buf.insert_text_at(char_pos, content);
+        editor.recompute_search_matches();
         Ok(format!(
             "Inserted at line {} ({} chars)",
             start_line,

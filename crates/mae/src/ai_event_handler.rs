@@ -20,6 +20,14 @@ pub type DeferredAiReply = Option<(
     tokio::time::Instant, // created_at
 )>;
 
+/// Type alias for the deferred MCP reply state held across loop iterations.
+/// Like `DeferredAiReply` but sends `McpToolResult` and has no tool_call_id.
+pub type DeferredMcpReply = Option<(
+    DeferredKind,
+    tokio::sync::oneshot::Sender<mae_mcp::McpToolResult>,
+    tokio::time::Instant, // created_at
+)>;
+
 /// Handle a single AI event. Shared between terminal and GUI loops.
 pub fn handle_ai_event(
     editor: &mut Editor,
@@ -166,11 +174,18 @@ pub fn timeout_deferred_reply(editor: &mut Editor, deferred_ai_reply: &mut Defer
 }
 
 /// Handle an MCP tool request from an external agent.
+///
+/// Immediate tools resolve and reply synchronously. Deferred tools (LSP-dependent)
+/// store the reply channel in `deferred_mcp_reply` and drain the queued LSP intent
+/// so the language server receives it immediately. The result is sent later when
+/// `try_resolve_deferred_mcp` matches the incoming LSP event.
 pub fn handle_mcp_request(
     editor: &mut Editor,
     mcp_req: mae_mcp::McpToolRequest,
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
+    lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
+    deferred_mcp_reply: &mut DeferredMcpReply,
 ) {
     debug!(tool = %mcp_req.tool_name, "MCP tool call");
     let fake_call = mae_ai::ToolCall {
@@ -179,18 +194,45 @@ pub fn handle_mcp_request(
         arguments: mcp_req.arguments,
     };
     let exec_result = execute_tool(editor, &fake_call, all_tools, permission_policy);
-    let result = match exec_result {
-        ExecuteResult::Immediate(result) => result,
-        ExecuteResult::Deferred { .. } => ToolResult {
-            tool_call_id: "mcp".to_string(),
-            success: false,
-            output: "Tool requires async resolution (not supported via MCP)".to_string(),
-        },
-    };
-    let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
-        success: result.success,
-        output: result.output,
-    });
+    match exec_result {
+        ExecuteResult::Immediate(result) => {
+            let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                success: result.success,
+                output: result.output,
+            });
+        }
+        ExecuteResult::Deferred { kind, .. } => {
+            if deferred_mcp_reply.is_some() {
+                let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                    success: false,
+                    output: "Another deferred MCP tool call is already pending".into(),
+                });
+            } else {
+                info!(?kind, "deferred MCP tool — awaiting LSP response");
+                crate::drain_lsp_intents(editor, lsp_command_tx);
+                *deferred_mcp_reply = Some((kind, mcp_req.reply, tokio::time::Instant::now()));
+            }
+        }
+    }
+}
+
+/// Check if a deferred MCP tool call has timed out (15s) and send an error
+/// result back to the MCP client if so.
+pub fn timeout_deferred_mcp_reply(deferred_mcp_reply: &mut DeferredMcpReply) {
+    if let Some((kind, _, created_at)) = deferred_mcp_reply.as_ref() {
+        if created_at.elapsed() > std::time::Duration::from_secs(15) {
+            let kind = *kind;
+            warn!(?kind, "deferred MCP tool call timed out after 15s");
+            let (_, reply, _) = deferred_mcp_reply.take().unwrap();
+            let _ = reply.send(mae_mcp::McpToolResult {
+                success: false,
+                output: format!(
+                    "LSP request timed out after 15 seconds ({:?}) — server may not be running",
+                    kind
+                ),
+            });
+        }
+    }
 }
 
 /// Check if an incoming LSP event completes a deferred AI tool call, and send
@@ -210,6 +252,27 @@ pub fn try_resolve_deferred(
             if reply.send(result).is_err() {
                 warn!("deferred tool result channel closed");
             }
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if an incoming LSP event completes a deferred MCP tool call, and send
+/// the result back to the MCP client if so. Returns true if resolved.
+pub fn try_resolve_deferred_mcp(
+    lsp_event: &mae_lsp::LspTaskEvent,
+    deferred_mcp_reply: &mut DeferredMcpReply,
+) -> bool {
+    if let Some((kind, _, _)) = deferred_mcp_reply.as_ref() {
+        let kind = *kind;
+        if let Some(result) = crate::try_complete_deferred(lsp_event, kind, "mcp") {
+            let (_, reply, _) = deferred_mcp_reply.take().unwrap();
+            debug!("deferred MCP tool call completed");
+            let _ = reply.send(mae_mcp::McpToolResult {
+                success: result.success,
+                output: result.output,
+            });
             return true;
         }
     }

@@ -313,6 +313,8 @@ async fn main() -> io::Result<()> {
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
+    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = None;
+    let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
     // Active shell terminals, keyed by buffer index.
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
@@ -418,6 +420,16 @@ async fn main() -> io::Result<()> {
         };
 
         ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(&mut deferred_mcp_reply);
+
+        // MCP session-scoped input lock: auto-unlock after 500ms of inactivity.
+        let mcp_idle_tick = async {
+            if last_mcp_activity.is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
 
         // Async event loop: select! over keyboard + AI + shell tick
         tokio::select! {
@@ -435,6 +447,7 @@ async fn main() -> io::Result<()> {
                                     && key.modifiers.contains(KeyModifiers::CONTROL))
                             {
                                 editor.input_locked = false;
+                                last_mcp_activity = None;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
@@ -468,6 +481,9 @@ async fn main() -> io::Result<()> {
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
+                if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
+                    last_mcp_activity = Some(tokio::time::Instant::now());
+                }
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
@@ -476,8 +492,23 @@ async fn main() -> io::Result<()> {
             _ = shell_tick => {
                 // Shell output tick — just re-render (top of loop handles it).
             }
+            _ = mcp_idle_tick => {
+                if let Some(ts) = last_mcp_activity {
+                    if ts.elapsed() > std::time::Duration::from_millis(500)
+                        && deferred_mcp_reply.is_none()
+                    {
+                        editor.input_locked = false;
+                        last_mcp_activity = None;
+                    }
+                }
+            }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                ai_event_handler::handle_mcp_request(&mut editor, mcp_req, &all_tools, &permission_policy);
+                editor.input_locked = true;
+                last_mcp_activity = Some(tokio::time::Instant::now());
+                ai_event_handler::handle_mcp_request(
+                    &mut editor, mcp_req, &all_tools, &permission_policy,
+                    &lsp_command_tx, &mut deferred_mcp_reply,
+                );
             }
         }
     }
@@ -1427,16 +1458,20 @@ async fn run_gui_loop(
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
+    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = None;
+    let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
     // Track modifier state across winit events (winit delivers modifiers
     // separately from key events).
     let mut ctrl_held = false;
     let mut alt_held = false;
+    let mut mcp_cancelled = false;
 
     info!("entering GUI event loop");
 
     loop {
         ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(&mut deferred_mcp_reply);
 
         // --- Pre-render bookkeeping (same as terminal loop) ---
         editor.clamp_all_cursors();
@@ -1461,6 +1496,7 @@ async fn run_gui_loop(
                 should_exit: &mut should_exit,
                 ctrl_held: &mut ctrl_held,
                 alt_held: &mut alt_held,
+                mcp_cancelled: &mut mcp_cancelled,
             },
         );
 
@@ -1508,6 +1544,19 @@ async fn run_gui_loop(
                 std::future::pending::<()>().await;
             }
         };
+        let mcp_idle_tick = async {
+            if last_mcp_activity.is_some() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
+        // Clear MCP cancel flag if set by WinitCallback during pump.
+        if mcp_cancelled {
+            last_mcp_activity = None;
+            mcp_cancelled = false;
+        }
 
         // Use a short timeout so we return to pump_app_events quickly.
         tokio::select! {
@@ -1521,13 +1570,31 @@ async fn run_gui_loop(
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
+                if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
+                    last_mcp_activity = Some(tokio::time::Instant::now());
+                }
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
                 handle_dap_event(&mut editor, dap_event);
             }
+            _ = mcp_idle_tick => {
+                if let Some(ts) = last_mcp_activity {
+                    if ts.elapsed() > Duration::from_millis(500)
+                        && deferred_mcp_reply.is_none()
+                    {
+                        editor.input_locked = false;
+                        last_mcp_activity = None;
+                    }
+                }
+            }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                ai_event_handler::handle_mcp_request(&mut editor, mcp_req, &all_tools, &permission_policy);
+                editor.input_locked = true;
+                last_mcp_activity = Some(tokio::time::Instant::now());
+                ai_event_handler::handle_mcp_request(
+                    &mut editor, mcp_req, &all_tools, &permission_policy,
+                    &lsp_command_tx, &mut deferred_mcp_reply,
+                );
             }
             _ = shell_tick => {}
             // Don't block forever — return to pump_app_events after 1ms if no events.
@@ -1557,6 +1624,7 @@ struct WinitCallback<'a> {
     should_exit: &'a mut bool,
     ctrl_held: &'a mut bool,
     alt_held: &'a mut bool,
+    mcp_cancelled: &'a mut bool,
 }
 
 #[cfg(feature = "gui")]
@@ -1602,6 +1670,7 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
                             self.editor.input_locked = false;
+                            *self.mcp_cancelled = true;
                             if let Some(tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
