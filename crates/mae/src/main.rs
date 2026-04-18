@@ -609,7 +609,7 @@ async fn run_headless_self_test(
                 match exec_result {
                     ExecuteResult::Immediate(result) => {
                         if let Some(conv) = find_conversation_buffer_mut(editor) {
-                            conv.push_tool_result(result.success, &result.output);
+                            conv.push_tool_result(result.success, &result.output, None);
                         }
                         if reply.send(result).is_err() {
                             warn!("self-test tool result channel closed");
@@ -630,7 +630,7 @@ async fn run_headless_self_test(
                             ),
                         };
                         if let Some(conv) = find_conversation_buffer_mut(editor) {
-                            conv.push_tool_result(result.success, &result.output);
+                            conv.push_tool_result(result.success, &result.output, None);
                         }
                         if reply.send(result).is_err() {
                             warn!("self-test deferred tool channel closed");
@@ -1447,6 +1447,7 @@ async fn run_gui_loop(
     use winit::platform::pump_events::EventLoopExtPumpEvents;
 
     let mut renderer = GuiRenderer::new();
+    editor.renderer_name = "gui".to_string();
     let mut event_loop = EventLoop::new().map_err(|e| io::Error::other(e.to_string()))?;
 
     // State shared between the winit callback and the outer loop.
@@ -1544,6 +1545,12 @@ async fn run_gui_loop(
                 std::future::pending::<()>().await;
             }
         };
+        // Clear MCP cancel flag if set by WinitCallback during pump.
+        if mcp_cancelled {
+            last_mcp_activity = None;
+            mcp_cancelled = false;
+        }
+
         let mcp_idle_tick = async {
             if last_mcp_activity.is_some() {
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1551,12 +1558,6 @@ async fn run_gui_loop(
                 std::future::pending::<()>().await;
             }
         };
-
-        // Clear MCP cancel flag if set by WinitCallback during pump.
-        if mcp_cancelled {
-            last_mcp_activity = None;
-            mcp_cancelled = false;
-        }
 
         // Use a short timeout so we return to pump_app_events quickly.
         tokio::select! {

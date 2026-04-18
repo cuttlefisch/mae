@@ -569,21 +569,33 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [x] Marker priority: Stopped > Breakpoint > Diagnostic (`resolve_gutter_marker`)
 - [x] Stopped-line bg shows through syntax highlights (`Style::patch` merge)
 
-### M3: State Inspection
-- [ ] `threads` → populate thread list
-- [ ] `stackTrace` → populate stack frames
-- [ ] `scopes` + `variables` → populate variable tree
-- [ ] Variable hover (show value at cursor)
-- [ ] Watch expressions
+### M3: State Inspection (debug panel)
+- [x] `*Debug*` buffer with `DebugView` + `DebugLineItem` line map
+- [x] `threads` → thread list with active marker + status
+- [x] `stackTrace` → stack frames with source:line, selected marker
+- [x] `scopes` + `variables` → scope-grouped variable tree with expand/collapse
+- [x] Variable expansion: `▶`/`▼` markers, lazy-loaded children via DAP
+- [x] `debug-panel` command + `SPC d p` keybinding
+- [x] Panel key handling: j/k navigate, Enter select/expand, q close, o toggle output
+- [x] Output log view toggle (o key)
+- [x] Auto-refresh on DAP events (`debug_panel_refresh_if_open`)
+- [x] GUI + terminal debug panel renderers
+- [ ] Variable hover (show value at cursor in source) — deferred
+- [ ] Watch expressions — deferred
 
-### M4: AI Debug Tools ✅ (754 tests)
+### M4: AI Debug Tools ✅
 - [x] AI tools: `dap_start`, `dap_set_breakpoint`, `dap_continue`, `dap_step`, `dap_inspect_variable`
+- [x] AI tools (new): `dap_remove_breakpoint`, `dap_list_variables`, `dap_expand_variable`, `dap_select_frame`, `dap_select_thread`, `dap_output`
+- [x] `dap_list_variables` includes expanded children from debug panel
+- [x] `dap_select_frame` updates `DebugView.selected_frame_id`
 - [x] Action-oriented design — read-side view already covered by `debug_state`
 - [x] Permission tiers: `dap_start` Privileged, breakpoint/continue/step Write, inspect ReadOnly
 - [x] Idempotent breakpoint set; explicit errors (not no-ops) on stale-state calls
 - [x] Shared `dap_start_with_adapter` entry point — command & AI tool agree on preconditions
 - [x] `StepKind` enum replaces stringly-typed step dispatch
 - [x] `DebugState::find_variable` encapsulates scope iteration (no leak to tool layer)
+- [x] `editor_state` reports `debug_panel_open` + `breakpoint_count`
+- [x] Self-test suite: `dap` category with 6 tests (conditional, skippable)
 - [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)` — deferred
 
 ---
@@ -973,7 +985,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 4a (LSP) ✅ M1-M4 ← biggest unlock for self-hosting
     │       │
-    │       └─→ Phase 4c (DAP) M1/M2/M4 ✅
+    │       └─→ Phase 4c (DAP) M1/M2/M3/M4 ✅
     │
     ├─→ Phase 4d + 5 (KB + help + SQLite) ✅
     │
@@ -991,11 +1003,11 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
-2. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
-3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-4. **Phase 8 M3-M7** (GUI) — cursor/gutter, variable fonts, images, PDF, mouse
-5. **Session & file management** — session save/restore, recent files, file watchers
+1. **Phase 8 M3** (GUI visual polish) — cursor/gutter/command-line rendering
+2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
+3. **Session persistence** — save/restore open buffers, window layout, cursor positions
+4. **Phase 8 M4-M7** (GUI) — variable fonts, images, PDF, mouse
+5. **Phase 4c M3 remaining** — variable hover, watch expressions
 6. **LSP packaging review** — multi-language defaults, user-configurable server selection
 7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
 8. **Phase 9** (Org-Mode Editing) — full org-mode environment
