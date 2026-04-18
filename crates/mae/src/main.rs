@@ -76,6 +76,7 @@ async fn main() -> io::Result<()> {
         println!("  --init-config [--force] Write a commented template and run wizard");
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
+        println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
         println!();
         println!("CONFIG:");
@@ -88,6 +89,7 @@ async fn main() -> io::Result<()> {
         println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
         println!("  ANTHROPIC_API_KEY   Claude API key");
         println!("  OPENAI_API_KEY      OpenAI API key");
+        println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
@@ -211,6 +213,24 @@ async fn main() -> io::Result<()> {
         tools
     };
     let permission_policy = config::resolve_permission_policy(&app_config);
+
+    let use_gui = args.iter().any(|a| a == "--gui");
+
+    if use_gui {
+        #[cfg(not(feature = "gui"))]
+        {
+            eprintln!("mae: GUI backend not compiled in. Rebuild with: cargo build --features gui");
+            std::process::exit(1);
+        }
+        #[cfg(feature = "gui")]
+        {
+            eprintln!("mae: GUI backend is Phase 8 M1 foundation only.");
+            eprintln!("  The winit event loop requires a different main() structure.");
+            eprintln!("  Full --gui support lands in Phase 8 M2.");
+            eprintln!("  For now, use the terminal backend (default).");
+            std::process::exit(1);
+        }
+    }
 
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
