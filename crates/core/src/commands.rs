@@ -554,6 +554,10 @@ impl CommandRegistry {
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
         reg.register_builtin("edit-config", "Open MAE config file for editing (SPC f c)");
         reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
+        reg.register_builtin(
+            "debug-mode",
+            "Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D)",
+        );
         reg.register_builtin("reload-config", "Reload config.toml and init.scm");
         reg.register_builtin(
             "describe-option",

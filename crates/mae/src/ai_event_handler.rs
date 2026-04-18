@@ -187,6 +187,9 @@ pub fn timeout_deferred_reply(editor: &mut Editor, deferred_ai_reply: &mut Defer
 /// store the reply channel in `deferred_mcp_reply` and drain the queued LSP intent
 /// so the language server receives it immediately. The result is sent later when
 /// `try_resolve_deferred_mcp` matches the incoming LSP event.
+/// Returns `true` if the tool resolved immediately (no deferred LSP wait).
+/// The caller should clear the MCP input lock when this returns `true` and
+/// `deferred_mcp_reply` is empty.
 pub fn handle_mcp_request(
     editor: &mut Editor,
     mcp_req: mae_mcp::McpToolRequest,
@@ -194,7 +197,7 @@ pub fn handle_mcp_request(
     permission_policy: &mae_ai::PermissionPolicy,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
     deferred_mcp_reply: &mut DeferredMcpReply,
-) {
+) -> bool {
     debug!(tool = %mcp_req.tool_name, "MCP tool call");
     let fake_call = mae_ai::ToolCall {
         id: "mcp".to_string(),
@@ -208,6 +211,7 @@ pub fn handle_mcp_request(
                 success: result.success,
                 output: result.output,
             });
+            true
         }
         ExecuteResult::Deferred { kind, .. } => {
             info!(
@@ -217,6 +221,7 @@ pub fn handle_mcp_request(
             );
             crate::drain_lsp_intents(editor, lsp_command_tx);
             deferred_mcp_reply.push((kind, mcp_req.reply, tokio::time::Instant::now()));
+            false
         }
     }
 }

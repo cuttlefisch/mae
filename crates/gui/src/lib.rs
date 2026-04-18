@@ -70,6 +70,10 @@ pub struct GuiRenderer {
     cell_height: f32,
     /// Timestamp of the last frame start, for FPS overlay.
     last_frame_start: Option<std::time::Instant>,
+    /// Configured font family (None = use default fallback chain).
+    font_family: Option<String>,
+    /// Configured font size (None = 14.0).
+    font_size: Option<f32>,
 }
 
 impl GuiRenderer {
@@ -85,7 +89,15 @@ impl GuiRenderer {
             cell_width: 0.0,
             cell_height: 0.0,
             last_frame_start: None,
+            font_family: None,
+            font_size: None,
         }
+    }
+
+    /// Set the font family and size before window initialization.
+    pub fn set_font_config(&mut self, family: Option<String>, size: Option<f32>) {
+        self.font_family = family;
+        self.font_size = size;
     }
 
     /// Initialize the window and Skia canvas. Called from the event loop.
@@ -100,7 +112,13 @@ impl GuiRenderer {
 
         let window = Rc::new(window);
         let size = window.inner_size();
-        let canvas = canvas::SkiaCanvas::new(size.width, size.height, window.clone())?;
+        let canvas = canvas::SkiaCanvas::new(
+            size.width,
+            size.height,
+            window.clone(),
+            self.font_family.as_deref(),
+            self.font_size,
+        )?;
 
         // Compute cell dimensions from the default monospace font.
         let (cw, ch) = canvas.cell_size();
@@ -320,10 +338,13 @@ impl Renderer for GuiRenderer {
 // ---------------------------------------------------------------------------
 
 fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
-    let mut targets: Vec<(usize, String)> = Vec::new();
+    let mut out = HashMap::new();
+
+    // First pass: collect cached spans without any String allocation.
+    let mut need_reparse: Vec<usize> = Vec::new();
     for win in editor.window_mgr.iter_windows() {
         let idx = win.buffer_idx;
-        if targets.iter().any(|(i, _)| *i == idx) {
+        if out.contains_key(&idx) || need_reparse.contains(&idx) {
             continue;
         }
         let Some(buf) = editor.buffers.get(idx) else {
@@ -335,13 +356,18 @@ fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<Highl
         if editor.syntax.language_of(idx).is_none() {
             continue;
         }
-        let source: String = buf.rope().chars().collect();
-        targets.push((idx, source));
+        // Fast path: use cached spans without Rope→String copy.
+        if let Some(spans) = editor.syntax.cached_spans(idx) {
+            out.insert(idx, spans.to_vec());
+        } else {
+            need_reparse.push(idx);
+        }
     }
 
-    let mut out = HashMap::new();
-    for (idx, src) in targets {
-        if let Some(spans) = editor.syntax.spans_for(idx, &src) {
+    // Second pass: only allocate String for buffers that need reparsing.
+    for idx in need_reparse {
+        let source: String = editor.buffers[idx].rope().chars().collect();
+        if let Some(spans) = editor.syntax.spans_for(idx, &source) {
             out.insert(idx, spans.to_vec());
         }
     }

@@ -76,6 +76,16 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
     let file_info = format!(" {}{}", buf.name, modified);
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
 
+    let debug_info: String = if editor.debug_mode {
+        let rss_mb = editor.perf_stats.rss_bytes as f64 / (1024.0 * 1024.0);
+        format!(
+            " [DBG] {:.0}MB {:.1}% {}μs ",
+            rss_mb, editor.perf_stats.cpu_percent, editor.perf_stats.avg_frame_time_us,
+        )
+    } else {
+        String::new()
+    };
+
     let ai_info: String = if editor.ai_session_tokens_in == 0 && editor.ai_session_tokens_out == 0 {
         String::new()
     } else {
@@ -94,6 +104,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
     let remaining = (area.width as usize)
         .saturating_sub(mode_str.len())
         .saturating_sub(file_info.len())
+        .saturating_sub(debug_info.len())
         .saturating_sub(ai_info.len())
         .saturating_sub(position.len());
 
@@ -101,6 +112,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         Span::styled(mode_str, mode_style),
         Span::styled(file_info, sl_style),
         Span::styled(" ".repeat(remaining), sl_style),
+        Span::styled(debug_info, sl_style),
         Span::styled(ai_info, sl_style),
         Span::styled(position, sl_style),
     ]);

@@ -4076,3 +4076,60 @@ fn mouse_right_click_is_noop() {
     assert_eq!(win.cursor_row, orig_row);
     assert_eq!(win.cursor_col, orig_col);
 }
+
+// --- Debug mode tests ---
+
+#[test]
+fn debug_mode_default_false() {
+    let editor = Editor::new();
+    assert!(!editor.debug_mode);
+}
+
+#[test]
+fn debug_mode_toggle_command() {
+    let mut editor = Editor::new();
+    assert!(!editor.debug_mode);
+    editor.dispatch_builtin("debug-mode");
+    assert!(editor.debug_mode);
+    editor.dispatch_builtin("debug-mode");
+    assert!(!editor.debug_mode);
+}
+
+#[test]
+fn debug_mode_enables_fps() {
+    let mut editor = Editor::new();
+    assert!(!editor.show_fps);
+    editor.dispatch_builtin("debug-mode");
+    assert!(editor.debug_mode);
+    assert!(editor.show_fps);
+}
+
+#[test]
+fn perf_stats_record_frame_averages() {
+    let mut stats = super::perf::PerfStats::default();
+    for i in 0..10 {
+        stats.record_frame((i + 1) * 1000);
+    }
+    // Average of 1000..10000 = 5500
+    assert_eq!(stats.avg_frame_time_us, 5500);
+    assert_eq!(stats.frame_time_us, 10000);
+}
+
+#[test]
+fn perf_stats_default_zeroed() {
+    let stats = super::perf::PerfStats::default();
+    assert_eq!(stats.rss_bytes, 0);
+    assert_eq!(stats.cpu_percent, 0.0);
+    assert_eq!(stats.frame_time_us, 0);
+    assert_eq!(stats.avg_frame_time_us, 0);
+}
+
+#[test]
+fn option_registry_has_debug_mode() {
+    let reg = crate::options::OptionRegistry::new();
+    let opt = reg.find("debug_mode").unwrap();
+    assert_eq!(opt.name, "debug_mode");
+    assert_eq!(opt.kind, crate::options::OptionKind::Bool);
+    // Also works via alias
+    assert!(reg.find("debug-mode").is_some());
+}

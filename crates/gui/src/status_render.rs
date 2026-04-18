@@ -123,7 +123,17 @@ pub fn render_status_bar(
         }
     };
 
-    let fps_info = if editor.show_fps {
+    let debug_info = if editor.debug_mode {
+        let rss_mb = editor.perf_stats.rss_bytes as f64 / (1024.0 * 1024.0);
+        format!(
+            " [DBG] {:.0}MB {:.1}% {}μs ",
+            rss_mb, editor.perf_stats.cpu_percent, editor.perf_stats.avg_frame_time_us,
+        )
+    } else {
+        String::new()
+    };
+
+    let fps_info = if editor.show_fps && !editor.debug_mode {
         match frame_ms {
             Some(ms) => format!(" {}ms ", ms),
             None => String::new(),
@@ -132,7 +142,7 @@ pub fn render_status_bar(
         String::new()
     };
 
-    let right_text = format!("{}{}{}", fps_info, ai_info, position);
+    let right_text = format!("{}{}{}{}", debug_info, fps_info, ai_info, position);
     let right_col = cols.saturating_sub(right_text.len());
     canvas.draw_text_at(row, right_col, &right_text, sl_fg);
 }

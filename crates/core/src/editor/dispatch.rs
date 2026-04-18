@@ -1801,6 +1801,16 @@ impl Editor {
                     if self.show_fps { "on" } else { "off" }
                 ));
             }
+            "debug-mode" => {
+                self.debug_mode = !self.debug_mode;
+                if self.debug_mode {
+                    self.show_fps = true;
+                }
+                self.set_status(format!(
+                    "Debug mode: {}",
+                    if self.debug_mode { "on" } else { "off" }
+                ));
+            }
 
             _ => return false,
         }

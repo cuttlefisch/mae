@@ -210,6 +210,8 @@ pub fn execute_tool(
         "ai_save",
         "ai_load",
         "rename_file",
+        "perf_stats",
+        "perf_benchmark",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -282,6 +284,8 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "ai_save" => execute_ai_save(editor, &call.arguments),
         "ai_load" => execute_ai_load(editor, &call.arguments),
         "rename_file" => execute_rename_file(editor, &call.arguments),
+        "perf_stats" => execute_perf_stats(editor),
+        "perf_benchmark" => execute_perf_benchmark(editor, &call.arguments),
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }
@@ -392,6 +396,105 @@ fn format_permissions_info(policy: &PermissionPolicy) -> String {
          Configure via MAE_AI_PERMISSIONS env var or [ai] auto_approve_tier in config.toml.\n\
          Agent tool approval (MCP) is separate — see [agents] auto_approve_tools in config.toml."
     )
+}
+
+fn execute_perf_stats(editor: &mut Editor) -> Result<String, String> {
+    editor.perf_stats.sample_process_stats();
+    let buffer_count = editor.buffers.len();
+    let total_lines: usize = editor.buffers.iter().map(|b| b.line_count()).sum();
+    let stats = serde_json::json!({
+        "rss_bytes": editor.perf_stats.rss_bytes,
+        "cpu_percent": editor.perf_stats.cpu_percent,
+        "frame_time_us": editor.perf_stats.frame_time_us,
+        "avg_frame_time_us": editor.perf_stats.avg_frame_time_us,
+        "buffer_count": buffer_count,
+        "total_lines": total_lines,
+        "debug_mode": editor.debug_mode,
+    });
+    Ok(serde_json::to_string_pretty(&stats).unwrap())
+}
+
+fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let benchmark = args
+        .get("benchmark")
+        .and_then(|v| v.as_str())
+        .unwrap_or("buffer_insert");
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+
+    let (duration_us, ops_per_sec) = match benchmark {
+        "buffer_insert" => {
+            let mut buf = mae_core::Buffer::new();
+            let start = std::time::Instant::now();
+            let mut win = mae_core::WindowManager::new(0);
+            for i in 0..size {
+                let line = format!("line {} — benchmark test content\n", i);
+                for ch in line.chars() {
+                    buf.insert_char(win.focused_window_mut(), ch);
+                }
+            }
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        "buffer_delete" => {
+            // Set up a buffer with `size` lines, then measure deletion.
+            let mut buf = mae_core::Buffer::new();
+            let mut win = mae_core::WindowManager::new(0);
+            for i in 0..size {
+                let line = format!("line {} — content to delete\n", i);
+                for ch in line.chars() {
+                    buf.insert_char(win.focused_window_mut(), ch);
+                }
+            }
+            let start = std::time::Instant::now();
+            for _ in 0..size {
+                if buf.line_count() > 1 {
+                    win.focused_window_mut().cursor_row = 0;
+                    win.focused_window_mut().cursor_col = 0;
+                    buf.delete_line(win.focused_window_mut());
+                }
+            }
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        "syntax_parse" => {
+            // Generate synthetic Rust source and parse it.
+            let mut source = String::new();
+            for i in 0..size {
+                source.push_str(&format!("fn func_{}(x: i32) -> i32 {{ x + {} }}\n", i, i));
+            }
+            let start = std::time::Instant::now();
+            let mut syntax_map = mae_core::syntax::SyntaxMap::new();
+            syntax_map.set_language(0, mae_core::syntax::Language::Rust);
+            let _ = syntax_map.spans_for(0, &source);
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        _ => return Err(format!("Unknown benchmark type: {}", benchmark)),
+    };
+
+    let _ = editor; // satisfy borrow checker
+    let result = serde_json::json!({
+        "benchmark": benchmark,
+        "size": size,
+        "duration_us": duration_us,
+        "ops_per_sec": ops_per_sec,
+    });
+    Ok(serde_json::to_string_pretty(&result).unwrap())
 }
 
 /// Build a structured JSON test plan for the self-test suite.
@@ -612,6 +715,30 @@ fn build_self_test_plan(filter: &str) -> String {
             "cleanup": [
                 "Close the main.rs buffer with close_buffer (name: 'main.rs')",
                 "Switch back to *AI* buffer"
+            ]
+        }));
+    }
+
+    if include("performance") {
+        categories.push(serde_json::json!({
+            "name": "performance",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "perf_stats",
+                    "args": {},
+                    "assert": "Returns JSON with rss_bytes field"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "buffer_insert", "size": 10000},
+                    "assert": "duration_us < 50000"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "syntax_parse", "size": 1000},
+                    "assert": "duration_us < 100000"
+                }
             ]
         }));
     }
@@ -1690,5 +1817,62 @@ mod tests {
             tools.iter().any(|t| t.name == "self_test_suite"),
             "self_test_suite should be in ai_specific_tools()"
         );
+    }
+
+    #[test]
+    fn self_test_plan_has_performance_category() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "self_test_suite",
+            serde_json::json!({"categories": "performance"}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+        assert!(categories.iter().any(|c| c["name"] == "performance"));
+    }
+
+    #[test]
+    fn perf_stats_returns_valid_json() {
+        let mut editor = Editor::new();
+        let call = make_call("perf_stats", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let stats: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(stats["rss_bytes"].is_number());
+        assert!(stats["buffer_count"].is_number());
+        assert!(stats["total_lines"].is_number());
+    }
+
+    #[test]
+    fn perf_benchmark_buffer_insert_measures_time() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "perf_benchmark",
+            serde_json::json!({"benchmark": "buffer_insert", "size": 100}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let bench: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(bench["benchmark"], "buffer_insert");
+        assert_eq!(bench["size"], 100);
+        assert!(bench["duration_us"].as_u64().unwrap() > 0);
+        assert!(bench["ops_per_sec"].as_u64().unwrap() > 0);
     }
 }

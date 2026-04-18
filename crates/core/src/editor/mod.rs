@@ -14,6 +14,7 @@ mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+pub mod perf;
 mod project_ops;
 mod register_ops;
 mod scheme_ops;
@@ -333,6 +334,11 @@ pub struct Editor {
     /// Registry of all configurable editor options — single source of truth
     /// for metadata, aliases, types, defaults, and config.toml paths.
     pub option_registry: OptionRegistry,
+    /// Debug mode: show RSS/CPU/frame time in status bar. Toggled via
+    /// `--debug` CLI flag, `:debug-mode`, or `SPC t D`.
+    pub debug_mode: bool,
+    /// Rolling performance statistics (frame time, RSS, CPU).
+    pub perf_stats: perf::PerfStats,
 }
 
 impl Default for Editor {
@@ -441,6 +447,8 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             option_registry: OptionRegistry::new(),
+            debug_mode: false,
+            perf_stats: perf::PerfStats::default(),
         }
     }
 
@@ -555,6 +563,8 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             option_registry: OptionRegistry::new(),
+            debug_mode: false,
+            perf_stats: perf::PerfStats::default(),
         }
     }
 
@@ -588,6 +598,7 @@ impl Editor {
             "font_size" => self.gui_font_size.to_string(),
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
+            "debug_mode" => self.debug_mode.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -633,6 +644,12 @@ impl Editor {
             }
             "splash_art" => {
                 self.splash_art = Some(value.to_string());
+            }
+            "debug_mode" => {
+                self.debug_mode = parse_option_bool(value)?;
+                if self.debug_mode {
+                    self.show_fps = true;
+                }
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

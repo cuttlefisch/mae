@@ -79,6 +79,7 @@ async fn main() -> io::Result<()> {
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --gui                   Launch with GUI backend (winit + skia)");
+        println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
@@ -279,6 +280,16 @@ async fn main() -> io::Result<()> {
         std::process::exit(exit_code);
     }
 
+    // --debug: enable debug mode (RSS/CPU/frame time in status bar)
+    if args.iter().any(|a| a == "--debug") {
+        editor.debug_mode = true;
+        editor.show_fps = true;
+        if std::env::var("MAE_LOG").is_err() && std::env::var("RUST_LOG").is_err() {
+            std::env::set_var("MAE_LOG", "debug");
+        }
+        info!("debug mode enabled via --debug flag");
+    }
+
     let use_gui = args.iter().any(|a| a == "--gui");
 
     if use_gui {
@@ -383,7 +394,13 @@ async fn main() -> io::Result<()> {
             }
         }
 
+        let frame_start = std::time::Instant::now();
         renderer.render(&mut editor, &shell_terminals)?;
+        let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+        editor.perf_stats.record_frame(frame_elapsed);
+        if editor.debug_mode {
+            editor.perf_stats.sample_process_stats();
+        }
 
         if !editor.running {
             info!("editor shutting down");
@@ -524,10 +541,15 @@ async fn main() -> io::Result<()> {
             Some(mcp_req) = mcp_tool_rx.recv() => {
                 editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
-                ai_event_handler::handle_mcp_request(
+                let immediate = ai_event_handler::handle_mcp_request(
                     &mut editor, mcp_req, &all_tools, &permission_policy,
                     &lsp_command_tx, &mut deferred_mcp_reply,
                 );
+                // Immediate tools: clear lock right away if no deferred calls pending.
+                if immediate && deferred_mcp_reply.is_empty() {
+                    editor.input_lock = mae_core::InputLock::None;
+                    last_mcp_activity = None;
+                }
             }
         }
     }
@@ -1466,6 +1488,10 @@ async fn run_gui_loop(
     use winit::platform::pump_events::EventLoopExtPumpEvents;
 
     let mut renderer = GuiRenderer::new();
+    renderer.set_font_config(
+        app_config.editor.font_family.clone(),
+        app_config.editor.font_size,
+    );
     editor.renderer_name = "gui".to_string();
     let mut event_loop = EventLoop::new().map_err(|e| io::Error::other(e.to_string()))?;
 
@@ -1490,6 +1516,8 @@ async fn run_gui_loop(
     let mut cursor_x: f64 = 0.0;
     let mut cursor_y: f64 = 0.0;
     let mut last_health_check = tokio::time::Instant::now();
+    // Accumulator for fractional pixel scroll (Wayland touchpad sends small deltas).
+    let mut scroll_accumulator: f64 = 0.0;
 
     info!("entering GUI event loop");
 
@@ -1535,6 +1563,7 @@ async fn run_gui_loop(
                 dirty: &mut dirty,
                 cursor_x: &mut cursor_x,
                 cursor_y: &mut cursor_y,
+                scroll_accumulator: &mut scroll_accumulator,
             },
         );
 
@@ -1639,17 +1668,33 @@ async fn run_gui_loop(
             Some(mcp_req) = mcp_tool_rx.recv() => {
                 editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
-                ai_event_handler::handle_mcp_request(
+                let immediate = ai_event_handler::handle_mcp_request(
                     &mut editor, mcp_req, &all_tools, &permission_policy,
                     &lsp_command_tx, &mut deferred_mcp_reply,
                 );
+                // Immediate tools: clear lock right away if no deferred calls pending.
+                if immediate && deferred_mcp_reply.is_empty() {
+                    editor.input_lock = mae_core::InputLock::None;
+                    last_mcp_activity = None;
+                }
                 dirty = true;
             }
             _ = shell_tick => {
-                dirty = true;
+                // Always redraw when shells are active. The PTY I/O thread
+                // writes directly to the Term grid via FairMutex — only
+                // metadata events (title/bell/exit) go through the mpsc
+                // channel that increments the generation counter.  Programs
+                // like htop produce continuous output without triggering
+                // ShellEvent, so we must redraw unconditionally at ~30fps.
+                if has_shells {
+                    dirty = true;
+                }
             }
-            // Don't block forever — return to pump_app_events after 100ms if no events.
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            // Fallback: don't block forever — return to pump_app_events for winit events.
+            // Without this, when no async channels have data AND no shells are active,
+            // ALL select branches block forever and the GUI becomes unresponsive.
+            // 16ms matches the vsync cadence set by pump_app_events(16ms).
+            _ = tokio::time::sleep(Duration::from_millis(16)) => {}
         }
 
         // Only request a redraw when something actually changed.
@@ -1685,6 +1730,7 @@ struct WinitCallback<'a> {
     dirty: &'a mut bool,
     cursor_x: &'a mut f64,
     cursor_y: &'a mut f64,
+    scroll_accumulator: &'a mut f64,
 }
 
 #[cfg(feature = "gui")]
@@ -1794,7 +1840,16 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as i16,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as i16,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                        // Accumulate fractional pixel deltas (Wayland touchpads
+                        // send small values per event that would truncate to 0).
+                        *self.scroll_accumulator += pos.y;
+                        let whole_lines = (*self.scroll_accumulator / 20.0) as i16;
+                        if whole_lines != 0 {
+                            *self.scroll_accumulator -= whole_lines as f64 * 20.0;
+                        }
+                        whole_lines
+                    }
                 };
                 if lines != 0 {
                     self.editor.handle_mouse_scroll(lines);
@@ -1802,8 +1857,14 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let frame_start = std::time::Instant::now();
                 if let Err(e) = self.renderer.render(self.editor, self.shell_terminals) {
                     warn!(error = %e, "GUI render error");
+                }
+                let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+                self.editor.perf_stats.record_frame(frame_elapsed);
+                if self.editor.debug_mode {
+                    self.editor.perf_stats.sample_process_stats();
                 }
             }
             _ => {}

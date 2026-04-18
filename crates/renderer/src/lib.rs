@@ -208,10 +208,13 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
 /// Compute tree-sitter highlight spans for every text buffer visible in the
 /// current window layout.
 fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
-    let mut targets: Vec<(usize, String)> = Vec::new();
+    let mut out = HashMap::new();
+
+    // First pass: collect cached spans without any String allocation.
+    let mut need_reparse: Vec<usize> = Vec::new();
     for win in editor.window_mgr.iter_windows() {
         let idx = win.buffer_idx;
-        if targets.iter().any(|(i, _)| *i == idx) {
+        if out.contains_key(&idx) || need_reparse.contains(&idx) {
             continue;
         }
         let Some(buf) = editor.buffers.get(idx) else {
@@ -223,13 +226,18 @@ fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<Highl
         if editor.syntax.language_of(idx).is_none() {
             continue;
         }
-        let source: String = buf.rope().chars().collect();
-        targets.push((idx, source));
+        // Fast path: use cached spans without Rope→String copy.
+        if let Some(spans) = editor.syntax.cached_spans(idx) {
+            out.insert(idx, spans.to_vec());
+        } else {
+            need_reparse.push(idx);
+        }
     }
 
-    let mut out = HashMap::new();
-    for (idx, src) in targets {
-        if let Some(spans) = editor.syntax.spans_for(idx, &src) {
+    // Second pass: only allocate String for buffers that need reparsing.
+    for idx in need_reparse {
+        let source: String = editor.buffers[idx].rope().chars().collect();
+        if let Some(spans) = editor.syntax.spans_for(idx, &source) {
             out.insert(idx, spans.to_vec());
         }
     }

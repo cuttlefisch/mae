@@ -21,6 +21,10 @@ pub struct SkiaCanvas {
     bold_font: Font,
     cell_width: f32,
     cell_height: f32,
+    /// Distance from cell top to the text baseline (= magnitude of ascent).
+    /// Skia's `draw_str` interprets the y coordinate as the baseline, so
+    /// characters with descenders (p, g, j, q, y) extend below this point.
+    ascent: f32,
     width: u32,
     height: u32,
     /// softbuffer surface for blitting raster pixels to the OS window.
@@ -29,27 +33,47 @@ pub struct SkiaCanvas {
 
 impl SkiaCanvas {
     /// Create a new Skia raster surface with monospace font metrics.
-    pub fn new(width: u32, height: u32, window: Rc<Window>) -> io::Result<Self> {
+    ///
+    /// `font_family` overrides the default font search order. Pass `None` to
+    /// use the built-in fallback chain (Nerd Font → JetBrains Mono → ...).
+    pub fn new(
+        width: u32,
+        height: u32,
+        window: Rc<Window>,
+        font_family: Option<&str>,
+        font_size_override: Option<f32>,
+    ) -> io::Result<Self> {
         let surface = surfaces::raster_n32_premul((width as i32, height as i32))
             .ok_or_else(|| io::Error::other("failed to create Skia surface"))?;
 
-        // Load a monospace font. Try system fonts, fall back to default.
+        // Load a monospace font. If a family is configured, try it first.
+        // The default chain prefers Nerd Font variants (icon/glyph support).
         let font_mgr = FontMgr::default();
-        let typeface = font_mgr
-            .match_family_style("JetBrains Mono", FontStyle::normal())
+        let typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
+            .or_else(|| {
+                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", FontStyle::normal())
+            })
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::normal()))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::normal()))
             .expect("no monospace font found on the system");
 
-        let bold_typeface = font_mgr
-            .match_family_style("JetBrains Mono", FontStyle::bold())
+        let bold_typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::bold()))
+            .or_else(|| {
+                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", FontStyle::bold())
+            })
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::bold()))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", FontStyle::bold()))
             .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::bold()))
             .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::bold()))
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
             .unwrap_or_else(|| typeface.clone());
 
-        let font_size = 14.0;
+        let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
         let bold_font = Font::from_typeface(bold_typeface, font_size);
 
@@ -57,6 +81,9 @@ impl SkiaCanvas {
         let (_, bounds) = font.measure_str("M", None);
         let cell_width = bounds.width().max(font_size * 0.6);
         let cell_height = font.spacing();
+        // Font metrics: ascent is negative in Skia (distance above baseline).
+        let (_, metrics) = font.metrics();
+        let ascent = (-metrics.ascent).max(font_size * 0.8);
 
         let context = softbuffer::Context::new(window.clone())
             .map_err(|e| io::Error::other(e.to_string()))?;
@@ -76,6 +103,7 @@ impl SkiaCanvas {
             bold_font,
             cell_width,
             cell_height,
+            ascent,
             width,
             height,
             sb_surface,
@@ -142,7 +170,7 @@ impl SkiaCanvas {
         if ch != ' ' {
             let mut fg_paint = Paint::new(fg, None);
             fg_paint.set_anti_alias(true);
-            let baseline = y + self.cell_height; // approximate baseline at bottom
+            let baseline = y + self.ascent;
             let text = ch.to_string();
             canvas.draw_str(&text, (x, baseline), &self.font, &fg_paint);
         }
@@ -152,7 +180,7 @@ impl SkiaCanvas {
     #[allow(dead_code)]
     pub fn draw_styled_line(&mut self, row: usize, cells: &StyledLine) {
         let y = row as f32 * self.cell_height;
-        let baseline = y + self.cell_height;
+        let baseline = y + self.ascent;
         let canvas = self.surface.canvas();
 
         for (col, cell) in cells.iter().enumerate() {
@@ -234,7 +262,7 @@ impl SkiaCanvas {
     pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
-        let baseline = y + self.cell_height;
+        let baseline = y + self.ascent;
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
         self.surface
@@ -246,7 +274,7 @@ impl SkiaCanvas {
     pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
-        let baseline = y + self.cell_height;
+        let baseline = y + self.ascent;
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
         self.surface

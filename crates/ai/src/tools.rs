@@ -958,7 +958,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
         // --- Editor settings ---
         ToolDefinition {
             name: "set_option".into(),
-            description: "Set an editor option by name. Supported options: 'theme', 'splash_art', 'line_numbers' (true/false), 'relative_line_numbers' (true/false), 'word_wrap' (true/false).".into(),
+            description: "Set an editor option by name. Supported options: 'theme' (string), 'splash_art' (string), 'line_numbers' (true/false), 'relative_line_numbers' (true/false), 'word_wrap' (true/false), 'font_size' (number), 'show_fps' (true/false), 'break_indent' (true/false), 'show_break' (string), 'debug_mode' (true/false).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -967,7 +967,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Option name".into(),
-                            enum_values: Some(vec!["theme".into(), "splash_art".into(), "line_numbers".into(), "relative_line_numbers".into(), "word_wrap".into()]),
+                            enum_values: Some(vec!["theme".into(), "splash_art".into(), "line_numbers".into(), "relative_line_numbers".into(), "word_wrap".into(), "font_size".into(), "show_fps".into(), "break_indent".into(), "show_break".into(), "debug_mode".into()]),
                         },
                     ),
                     (
@@ -1069,7 +1069,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                     "categories".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, performance".into(),
                         enum_values: None,
                     },
                 )]),
@@ -1147,6 +1147,44 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                 required: vec!["new_path".into()],
             },
             permission: Some(PermissionTier::Write),
+        },
+        // --- Performance tools ---
+        ToolDefinition {
+            name: "perf_stats".into(),
+            description: "Get current editor performance statistics: RSS memory, CPU usage, frame timing, buffer count, total lines.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "perf_benchmark".into(),
+            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "benchmark".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Benchmark type".into(),
+                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into()]),
+                        },
+                    ),
+                    (
+                        "size".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of lines/items for the benchmark (default: 1000)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["benchmark".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
         },
     ]
 }
@@ -1245,7 +1283,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 53);
+        assert_eq!(tools.len(), 55);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

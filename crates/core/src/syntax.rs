@@ -327,6 +327,21 @@ impl SyntaxMap {
         self.entries.get(&buf_idx).map(|s| s.language)
     }
 
+    /// Returns `true` if cached spans exist for this buffer (no reparse needed).
+    /// Used by renderers to skip the Rope→String allocation when the cache is
+    /// still valid.
+    pub fn has_cached_spans(&self, buf_idx: usize) -> bool {
+        self.entries
+            .get(&buf_idx)
+            .is_some_and(|s| s.spans.is_some())
+    }
+
+    /// Return cached spans without triggering a reparse. Returns `None` if
+    /// no cached spans exist (invalidated or never computed).
+    pub fn cached_spans(&self, buf_idx: usize) -> Option<&[HighlightSpan]> {
+        self.entries.get(&buf_idx).and_then(|s| s.spans.as_deref())
+    }
+
     /// Mark the buffer as dirty so the next `spans_for` reparses.
     pub fn invalidate(&mut self, buf_idx: usize) {
         if let Some(state) = self.entries.get_mut(&buf_idx) {

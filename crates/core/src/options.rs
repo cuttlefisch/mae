@@ -134,6 +134,15 @@ impl OptionRegistry {
                     default_value: "bat",
                     config_key: None,
                 },
+                OptionDef {
+                    name: "debug_mode",
+                    aliases: &["debug-mode"],
+                    doc:
+                        "Show RSS/CPU/frame-time in the status bar (Emacs --debug-init equivalent)",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.debug_mode"),
+                },
             ],
         }
     }

@@ -287,6 +287,7 @@ impl Editor {
         );
         normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
         normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
+        normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
         // +git
         normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
         normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");

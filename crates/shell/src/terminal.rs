@@ -73,6 +73,11 @@ pub struct ShellTerminal {
 
     /// PID of the child shell process.
     child_pid: u32,
+
+    /// Generation counter — incremented each time `poll_events()` receives
+    /// new data from the PTY. Renderers compare this to a cached value to
+    /// avoid needless redraws when the shell is idle.
+    generation: u64,
 }
 
 impl ShellTerminal {
@@ -158,6 +163,7 @@ impl ShellTerminal {
             title: String::new(),
             exited: false,
             child_pid,
+            generation: 0,
         })
     }
 
@@ -206,7 +212,16 @@ impl ShellTerminal {
             }
             events.push(event);
         }
+        if !events.is_empty() {
+            self.generation += 1;
+        }
         events
+    }
+
+    /// Generation counter — incremented each time new events arrive from the PTY.
+    /// Compare across frames to detect whether the shell produced new output.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Access the terminal state for rendering (locks the mutex).

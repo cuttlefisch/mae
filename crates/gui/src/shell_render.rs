@@ -103,8 +103,10 @@ fn render_shell_grid(
             continue;
         }
 
-        let mut fg_color = convert_color(indexed.cell.fg, content.colors, default_fg);
-        let mut bg_color = convert_color(indexed.cell.bg, content.colors, default_bg);
+        let mut fg_color =
+            convert_color(indexed.cell.fg, content.colors, default_fg, &editor.theme);
+        let mut bg_color =
+            convert_color(indexed.cell.bg, content.colors, default_bg, &editor.theme);
 
         if flags.contains(CellFlags::INVERSE) {
             std::mem::swap(&mut fg_color, &mut bg_color);
@@ -154,7 +156,17 @@ fn render_shell_grid(
 }
 
 /// Convert an alacritty_terminal Color to a Skia Color4f.
-fn convert_color(color: AColor, colors: &Colors, default: Color4f) -> Color4f {
+///
+/// Resolution order for named colors:
+/// 1. alacritty_terminal's own color overrides (from `colors`)
+/// 2. Editor theme palette (e.g. gruvbox's `red = "#cc241d"`)
+/// 3. Hardcoded xterm defaults
+fn convert_color(
+    color: AColor,
+    colors: &Colors,
+    default: Color4f,
+    theme: &mae_core::Theme,
+) -> Color4f {
     match color {
         AColor::Spec(rgb) => Color4f::new(
             rgb.r as f32 / 255.0,
@@ -171,7 +183,6 @@ fn convert_color(color: AColor, colors: &Colors, default: Color4f) -> Color4f {
                     1.0,
                 )
             } else {
-                // Use xterm-256 index approximation.
                 default
             }
         }
@@ -183,11 +194,53 @@ fn convert_color(color: AColor, colors: &Colors, default: Color4f) -> Color4f {
                     rgb.b as f32 / 255.0,
                     1.0,
                 )
+            } else if let Some(color) = resolve_named_from_theme(named, theme) {
+                color
             } else {
                 named_color_to_skia(named)
             }
         }
     }
+}
+
+/// Try to resolve a NamedColor via the editor theme palette.
+///
+/// Themes use different naming conventions (gruvbox: "purple"/"aqua",
+/// dracula: "pink"/"cyan", catppuccin: "mauve"/"teal"). We try the
+/// canonical ANSI name first, then common aliases.
+fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Option<Color4f> {
+    let candidates: &[&str] = match named {
+        NamedColor::Black | NamedColor::DimBlack => &["black", "bg0", "base", "crust"],
+        NamedColor::Red | NamedColor::DimRed => &["red", "maroon"],
+        NamedColor::Green | NamedColor::DimGreen => &["green"],
+        NamedColor::Yellow | NamedColor::DimYellow => &["yellow", "peach", "orange"],
+        NamedColor::Blue | NamedColor::DimBlue => &["blue", "sapphire"],
+        NamedColor::Magenta | NamedColor::DimMagenta => &["magenta", "purple", "pink", "mauve"],
+        NamedColor::Cyan | NamedColor::DimCyan => &["cyan", "aqua", "teal", "sky"],
+        NamedColor::White | NamedColor::DimWhite => &["white", "fg0", "fg1", "text", "fg"],
+        NamedColor::BrightBlack => &["bright_black", "bg3", "overlay0", "comment"],
+        NamedColor::BrightRed => &["bright_red", "red"],
+        NamedColor::BrightGreen => &["bright_green", "green"],
+        NamedColor::BrightYellow => &["bright_yellow", "yellow"],
+        NamedColor::BrightBlue => &["bright_blue", "blue", "lavender"],
+        NamedColor::BrightMagenta => {
+            &["bright_magenta", "bright_purple", "purple", "pink", "mauve"]
+        }
+        NamedColor::BrightCyan => &["bright_cyan", "bright_aqua", "aqua", "teal", "sky"],
+        NamedColor::BrightWhite => &["bright_white", "fg0", "text", "fg"],
+        NamedColor::Foreground | NamedColor::BrightForeground => {
+            &["fg", "fg1", "fg0", "text", "foreground"]
+        }
+        NamedColor::DimForeground => &["fg", "fg2", "fg3", "subtext0"],
+        NamedColor::Background => &["bg", "bg0", "base", "background"],
+        _ => return None,
+    };
+    for key in candidates {
+        if let Some(c) = theme.palette.get(*key) {
+            return Some(theme::theme_color_to_skia(c));
+        }
+    }
+    None
 }
 
 fn named_color_to_skia(named: NamedColor) -> Color4f {

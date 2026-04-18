@@ -2,12 +2,12 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C470%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C482%20passing-brightgreen.svg)](#)
 [![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/claude-code)
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,470 tests. GPL-3.0-or-later.
+runtime. 1,482 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 
@@ -37,45 +37,40 @@ resolve to the same command via the same dispatcher. There is no separate "AI
 mode", no simulated keystrokes, no shadow API:
 
 ```
-  Human (keys)     Scheme (eval)     AI / MCP (tool call)
-       │                │                    │
-       ▼                ▼                    ▼
-  ┌─────────┐    ┌───────────┐     ┌──────────────────┐
-  │ Keymap   │    │ (run-cmd) │     │  execute_tool()  │
-  │ Lookup   │    │ (define-  │     │  53 AI tools +   │
-  │          │    │  command) │     │  command_* proxy  │
-  └────┬─────┘    └─────┬─────┘     └───────┬──────────┘
-       │                │                    │
-       │    ┌───────────┘          ┌─────────┤
-       │    │                      │         │
-       ▼    ▼                      ▼         ▼
-  ┌──────────────────┐    ┌──────────────────────┐
-  │ dispatch_builtin │    │  Specialized tools    │
-  │  (280+ commands) │    │  buffer_read/write,   │
-  │                  │    │  lsp_*, dap_*, kb_*,  │
-  │  + execute_cmd   │    │  shell_exec, ...      │
-  │  (:w :q :e :set) │    │                      │
-  └────────┬─────────┘    └──────────┬───────────┘
-           │                         │
-           └───────────┬─────────────┘
+   Human (keys)      Scheme (eval)      AI / MCP (tool call)
+        │                  │                     │
+        ▼                  ▼                     ▼
+   ┌──────────┐    ┌─────────────┐    ┌────────────────────┐
+   │ Keymap    │    │ (run-cmd)   │    │  Tool wrappers     │
+   │ Lookup    │    │ (define-    │    │  → same functions  │
+   │           │    │  command)   │    │  as keybindings    │
+   └─────┬─────┘    └──────┬──────┘    └─────────┬──────────┘
+         │                 │                     │
+         └────────────┬────┴─────────────────────┘
+                      ▼
+         ┌───────────────────────────┐
+         │     Editor Core API       │
+         │  dispatch_builtin()       │
+         │  buffer.insert/delete()   │
+         │  lsp/dap/kb/shell ops     │
+         │                           │
+         │  280+ commands · same     │
+         │  functions for all actors │
+         └─────────────┬─────────────┘
                        ▼
-          ┌──────────────────────────┐
-          │      Editor State        │
-          │  Buffers · LSP · DAP     │
-          │  Shell · KB · Themes     │
-          └──────────────────────────┘
+         ┌───────────────────────────┐
+         │      Editor State         │
+         │  Buffers · LSP · DAP      │
+         │  Shell · KB · Themes      │
+         └───────────────────────────┘
 ```
 
-All three actors (human, Scheme, AI) converge on the same editor state.
-Keybindings, command palette, and Scheme's `(run-command)` route through
-`dispatch_builtin()` (280+ commands). The AI's `command_*` tools proxy through
-the same dispatch path. The AI also has 53 specialized tools for structured I/O
-(buffer reads, LSP queries, DAP inspection, KB search, etc.). Ex-commands
-(`:w`, `:q`, `:set`) have their own handler that delegates back to the same state.
-
-When you type `dd` to delete a line, the AI agent can invoke `delete-line` with
-the same effect. When a package author writes `(define my/summarize ...)`, it's
-immediately available to both the user's keybinding and the AI's tool palette.
+All three actors converge on the same Editor Core API. The AI's tools are thin
+wrappers — `buffer_read` calls the same `buffer.line()` the renderer uses;
+`lsp_definition` queues the same intent as pressing `gd`. When you type `dd` to
+delete a line, the AI agent invokes `delete-line` with the same effect. When a
+package author writes `(define my/summarize ...)`, it's immediately available to
+both the user's keybinding and the AI's tool palette.
 
 ## What Makes MAE Different
 
@@ -83,11 +78,10 @@ immediately available to both the user's keybinding and the AI's tool palette.
 
 Not a copilot sidebar. The AI calls the same 280+ commands you do. It reads
 LSP types, DAP debug state, tree-sitter parse trees, and the knowledge base —
-structured data, not just syntax. 53 specialized AI tools plus every editor
-command as a tool. Permission tiers (ReadOnly, Write, Shell, Privileged) let
-you control how far the agent can act autonomously.
-
-The AI's `command_*` tools proxy through the same `dispatch_builtin()` as keybindings.
+structured data, not just syntax. Every editor command is an AI tool; the AI's
+specialized tools (buffer I/O, LSP queries, DAP inspection) are thin wrappers
+around the same core API. Permission tiers (ReadOnly, Write, Shell, Privileged)
+let you control how far the agent can act autonomously.
 
 ### Built-in Documentation & Knowledge Base
 

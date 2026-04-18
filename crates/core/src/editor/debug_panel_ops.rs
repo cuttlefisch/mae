@@ -697,7 +697,7 @@ mod tests {
 
         ed.debug_panel_select();
 
-        let view = ed
+        let _view = ed
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
