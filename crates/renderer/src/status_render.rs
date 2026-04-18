@@ -11,7 +11,19 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
     let buf = &editor.buffers[win.buffer_idx];
 
     let recording_label: String;
-    let mode_str = if editor.macro_recording {
+    let mode_str = if editor.input_lock != mae_core::InputLock::None {
+        match editor.input_lock {
+            mae_core::InputLock::AiBusy => {
+                if editor.ai_streaming {
+                    " AI... "
+                } else {
+                    " AI BUSY "
+                }
+            }
+            mae_core::InputLock::McpBusy => " MCP... ",
+            mae_core::InputLock::None => unreachable!(),
+        }
+    } else if editor.macro_recording {
         recording_label = format!(" REC @{} ", editor.macro_register.unwrap_or('?'));
         recording_label.as_str()
     } else {
@@ -29,15 +41,24 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
             Mode::ShellInsert => " TERMINAL ",
         }
     };
-    let mode_style = match editor.mode {
-        Mode::Normal => ts(editor, "ui.statusline.mode.normal"),
-        Mode::Insert => ts(editor, "ui.statusline.mode.insert"),
-        Mode::Visual(_) => ts(editor, "ui.statusline.mode.normal"),
-        Mode::Command => ts(editor, "ui.statusline.mode.command"),
-        Mode::ConversationInput => ts(editor, "ui.statusline.mode.conversation"),
-        Mode::ShellInsert => ts(editor, "ui.statusline.mode.insert"),
-        Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
-            ts(editor, "ui.statusline.mode.command")
+    let mode_style = if editor.input_lock != mae_core::InputLock::None {
+        let key = match editor.input_lock {
+            mae_core::InputLock::AiBusy => "ui.statusline.mode.locked",
+            mae_core::InputLock::McpBusy => "ui.statusline.mode.mcp",
+            mae_core::InputLock::None => "ui.statusline.mode.normal",
+        };
+        ts(editor, key)
+    } else {
+        match editor.mode {
+            Mode::Normal => ts(editor, "ui.statusline.mode.normal"),
+            Mode::Insert => ts(editor, "ui.statusline.mode.insert"),
+            Mode::Visual(_) => ts(editor, "ui.statusline.mode.normal"),
+            Mode::Command => ts(editor, "ui.statusline.mode.command"),
+            Mode::ConversationInput => ts(editor, "ui.statusline.mode.conversation"),
+            Mode::ShellInsert => ts(editor, "ui.statusline.mode.insert"),
+            Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
+                ts(editor, "ui.statusline.mode.command")
+            }
         }
     };
 

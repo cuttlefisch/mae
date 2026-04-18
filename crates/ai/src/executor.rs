@@ -136,14 +136,18 @@ pub fn execute_tool(
         });
     }
 
-    // 4c. Handle input_lock (sets editor.input_locked).
+    // 4c. Handle input_lock (sets editor.input_lock).
     if call.name == "input_lock" {
         let locked = call
             .arguments
             .get("locked")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        editor.input_locked = locked;
+        editor.input_lock = if locked {
+            mae_core::InputLock::AiBusy
+        } else {
+            mae_core::InputLock::None
+        };
         let msg = if locked {
             "Input locked — user keystrokes discarded (Esc/Ctrl-C to cancel)"
         } else {

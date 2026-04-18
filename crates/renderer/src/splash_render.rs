@@ -61,6 +61,7 @@ const MAE_LOGO: &str = r#"
 const QUICK_ACTIONS: &[(&str, &str)] = &[
     ("SPC f f", "Find file"),
     ("SPC f d", "File browser"),
+    ("SPC f c", "Edit config"),
     ("SPC SPC", "Commands"),
     ("SPC :", "Command line"),
     ("SPC a p", "AI prompt"),
@@ -135,6 +136,12 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         format!("{:>width$}{}", "", subtitle, width = sub_pad),
         subtitle_style,
     ));
+    let version = concat!("v", env!("CARGO_PKG_VERSION"));
+    let ver_pad = center_block_pad(version.len());
+    lines.push(Line::styled(
+        format!("{:>w$}{}", "", version, w = ver_pad),
+        subtitle_style,
+    ));
     lines.push(Line::raw(""));
 
     // Quick actions — format all to the same fixed width, then center the block.
@@ -155,6 +162,37 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         ]));
     }
     lines.push(Line::raw(""));
+
+    // Recent files (up to 5).
+    let recent: Vec<&std::path::Path> = editor
+        .recent_files
+        .list()
+        .iter()
+        .take(5)
+        .map(|p| p.as_path())
+        .collect();
+    if !recent.is_empty() {
+        let header = "Recent Files";
+        let header_pad = center_block_pad(header.len());
+        lines.push(Line::styled(
+            format!("{:>w$}{}", "", header, w = header_pad),
+            subtitle_style,
+        ));
+        for (i, path) in recent.iter().enumerate() {
+            let display = path.display().to_string();
+            let truncated = if display.len() > 50 {
+                format!("...{}", &display[display.len() - 47..])
+            } else {
+                display
+            };
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(qa_pad)),
+                Span::styled(format!("  {}  ", i + 1), key_style),
+                Span::styled(truncated, desc_style),
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
 
     // Dismiss hint — single line, center within art_width.
     let dismiss = "Press any key to dismiss";

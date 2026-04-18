@@ -4,10 +4,10 @@
 //! input draining, viewport caching, event polling, and cleanup. This
 //! module provides shared implementations.
 
-use mae_core::{Editor, Mode};
+use mae_core::{Editor, InputLock, Mode};
 use mae_renderer::Renderer;
 use std::collections::HashMap;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::agents;
 use crate::config;
@@ -187,4 +187,53 @@ pub fn manage_shell_lifecycle(
     editor
         .shell_cwds
         .retain(|idx, _| shell_terminals.contains_key(idx));
+}
+
+/// Periodic health check (call every ~30s). Belt-and-suspenders cleanup for:
+/// - Shell terminals whose child process exited but weren't caught by `ChildExit`
+/// - Stale input locks when no AI session or MCP activity is active
+pub fn health_check(
+    editor: &mut Editor,
+    shell_terminals: &mut HashMap<usize, mae_shell::ShellTerminal>,
+    ai_event_active: bool,
+    mcp_activity_active: bool,
+) {
+    // Scan for shells with exited children that weren't cleaned up.
+    let zombies: Vec<usize> = shell_terminals
+        .iter()
+        .filter(|(_, shell)| shell.has_exited())
+        .map(|(idx, _)| *idx)
+        .collect();
+
+    for buf_idx in zombies {
+        warn!(buf_idx, "health check: found zombie shell — cleaning up");
+        if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
+            editor.mode = Mode::Normal;
+        }
+        if let Some(shell) = shell_terminals.remove(&buf_idx) {
+            shell.shutdown();
+        }
+        if buf_idx < editor.buffers.len() {
+            let name = editor.buffers[buf_idx].name.clone();
+            if !name.contains("[exited]") {
+                editor.buffers[buf_idx].name = format!("{} [exited]", name);
+            }
+        }
+    }
+
+    // Clear stale input locks when the process that set them is no longer active.
+    match editor.input_lock {
+        InputLock::AiBusy if !ai_event_active => {
+            warn!("health check: stale AiBusy lock — clearing");
+            editor.input_lock = InputLock::None;
+            editor.ai_streaming = false;
+            editor.set_status("AI lock cleared (session inactive)");
+        }
+        InputLock::McpBusy if !mcp_activity_active => {
+            warn!("health check: stale McpBusy lock — clearing");
+            editor.input_lock = InputLock::None;
+            editor.set_status("MCP lock cleared (no pending requests)");
+        }
+        _ => {}
+    }
 }

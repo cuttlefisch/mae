@@ -253,6 +253,24 @@ impl ShellTerminal {
         let _ = self.pty_tx.send(Msg::Shutdown);
     }
 
+    /// Scroll the terminal display by a given amount.
+    /// Used for scrollback navigation (Shift-PageUp/Down, Ctrl-Shift-j/k).
+    pub fn scroll_display(&self, scroll: alacritty_terminal::grid::Scroll) {
+        self.term.lock().scroll_display(scroll);
+    }
+
+    /// Scroll to the bottom of the terminal (live output).
+    pub fn scroll_to_bottom(&self) {
+        self.term
+            .lock()
+            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+    }
+
+    /// Get the current display offset (0 = at bottom/live, >0 = scrolled up).
+    pub fn display_offset(&self) -> usize {
+        self.term.lock().grid().display_offset()
+    }
+
     /// Read a line of text from the terminal grid (0-indexed from top of viewport).
     /// Uses renderable_content to extract the line.
     pub fn read_line(&self, line: usize) -> String {

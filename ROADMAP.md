@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,369 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M3 COMPLETE (1,470 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -839,11 +839,16 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Status bar | ✅ Done | M2 |
 | AI/LSP/DAP/MCP channels | ✅ Done | M2 |
 | Shell terminals | ✅ Done | M2 |
-| Cursor rendering | ❌ Not yet | M3 |
+| Cursor rendering | ✅ Done | M3 |
 | Line numbers / gutter | ❌ Not yet | M3 |
-| Command line display | ❌ Not yet | M3 |
+| Command line display | ✅ Done | M3 |
 | Syntax highlighting colors | ❌ Not yet | M3 |
-| Splash screen | ❌ Not yet | M3 |
+| Splash screen | ✅ Done | M3 |
+| Mouse (click, scroll) | ✅ Done | M3 |
+| Shell scrollback | ✅ Done | M3 |
+| Desktop launcher + icon | ✅ Done | M3 |
+| Font size config | ✅ Done | M3 |
+| FPS overlay | ✅ Done | M3 |
 | Variable-height lines | ❌ Not yet | M4 |
 | Mixed fonts (headings, prose) | ❌ Not yet | M4 |
 | Inline images (PNG/JPG/SVG) | ❌ Not yet | M5 |
@@ -851,13 +856,23 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | PDF preview | ❌ Not yet | M6 |
 | Mouse (click, drag, scroll) | ❌ Not yet | M7 |
 
-### M3: Visual Polish — Cursor, Gutter, Command Line
-- [ ] Cursor rendering (block/line per mode, blinking)
-- [ ] Line numbers and gutter (breakpoints, diagnostics)
-- [ ] Command line / status message display
-- [ ] Syntax highlighting via tree-sitter colors
-- [ ] Splash screen rendering
-- [ ] Visual mode selection highlighting
+### M3: Visual Polish — COMPLETE
+- [x] Cursor rendering in GUI (block/line per mode)
+- [x] Status bar + command line rendering
+- [x] Shell colors theme-aware
+- [x] Splash screen with recent files, config shortcut, version display
+- [x] Mouse basics (click to place cursor, wheel scroll)
+- [x] Shell scrollback (Shift-PageUp/PageDown)
+- [x] Input lock redesign (scoped, shell interaction allowed)
+- [x] Desktop launcher + SVG icon
+- [x] Font size configuration (config.toml + `:set font_size`)
+- [x] FPS overlay toggle (`SPC t F`)
+- [x] `:set` ex-command + `:edit-config` (`SPC f c`)
+- [x] ZZ/ZQ keybindings
+- [x] 30-second health check for zombie shell detection
+- [ ] Line numbers and gutter in GUI
+- [ ] Syntax highlighting colors in GUI
+- [ ] Visual mode selection highlighting in GUI
 
 ### M4: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
@@ -1003,10 +1018,10 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M3** (GUI visual polish) — cursor/gutter/command-line rendering
+1. **Phase 8 M4** (Variable-height lines & mixed fonts) — paragraph layout, headings, decorations
 2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
 3. **Session persistence** — save/restore open buffers, window layout, cursor positions
-4. **Phase 8 M4-M7** (GUI) — variable fonts, images, PDF, mouse
+4. **Phase 8 M5-M7** (GUI) — inline images, PDF, mouse gestures
 5. **Phase 4c M3 remaining** — variable hover, watch expressions
 6. **LSP packaging review** — multi-language defaults, user-configurable server selection
 7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land

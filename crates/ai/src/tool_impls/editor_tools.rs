@@ -67,39 +67,7 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
         .get("value")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'value' parameter")?;
-    match option {
-        "theme" => {
-            editor.set_theme_by_name(value);
-            Ok(format!("Theme set to: {}", editor.theme.name))
-        }
-        "splash_art" => {
-            editor.splash_art = Some(value.to_string());
-            Ok(format!("Splash art set to: {}", value))
-        }
-        "line_numbers" => {
-            editor.show_line_numbers = value == "true" || value == "on" || value == "1";
-            Ok(format!("Line numbers: {}", editor.show_line_numbers))
-        }
-        "relative_line_numbers" => {
-            editor.relative_line_numbers = value == "true" || value == "on" || value == "1";
-            Ok(format!(
-                "Relative line numbers: {}",
-                editor.relative_line_numbers
-            ))
-        }
-        "word_wrap" => {
-            editor.word_wrap = value == "true" || value == "on" || value == "1";
-            Ok(format!("Word wrap: {}", editor.word_wrap))
-        }
-        "show_fps" => {
-            editor.show_fps = value == "true" || value == "on" || value == "1";
-            Ok(format!("Show FPS: {}", editor.show_fps))
-        }
-        _ => Err(format!(
-            "Unknown option: '{}'. Supported: 'theme', 'splash_art', 'line_numbers', 'relative_line_numbers', 'word_wrap', 'show_fps'",
-            option
-        )),
-    }
+    editor.set_option(option, value)
 }
 
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {

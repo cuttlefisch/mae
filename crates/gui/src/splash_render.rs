@@ -43,6 +43,7 @@ const MAE_LOGO: &str = r#"
 const QUICK_ACTIONS: &[(&str, &str)] = &[
     ("SPC f f", "Find file"),
     ("SPC f d", "File browser"),
+    ("SPC f c", "Edit config"),
     ("SPC SPC", "Commands"),
     ("SPC :", "Command line"),
     ("SPC a p", "AI prompt"),
@@ -111,6 +112,9 @@ pub fn render_splash(
     let subtitle = "Modern AI Editor -- ai-native lisp machine";
     let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
     lines.push((format!("{:>w$}{}", "", subtitle, w = sub_pad), subtitle_fg));
+    let version = concat!("v", env!("CARGO_PKG_VERSION"));
+    let ver_pad = art_width.saturating_sub(version.len()) / 2;
+    lines.push((format!("{:>w$}{}", "", version, w = ver_pad), subtitle_fg));
     lines.push((String::new(), subtitle_fg));
 
     // Quick actions.
@@ -127,6 +131,26 @@ pub fn render_splash(
         lines.push((text, key_fg));
     }
     lines.push((String::new(), subtitle_fg));
+
+    // Recent files (up to 5).
+    let recent: Vec<&str> = editor
+        .recent_files
+        .list()
+        .iter()
+        .take(5)
+        .map(|p| p.to_str().unwrap_or("?"))
+        .collect();
+    if !recent.is_empty() {
+        let header = "Recent Files";
+        let header_pad = art_width.saturating_sub(header.len()) / 2;
+        lines.push((format!("{:>w$}{}", "", header, w = header_pad), subtitle_fg));
+        for (i, path) in recent.iter().enumerate() {
+            let label = format!("  {}  {}", i + 1, truncate_path(path, 50));
+            let label_pad = art_width.saturating_sub(label.len()) / 2;
+            lines.push((format!("{:>w$}{}", "", label, w = label_pad), key_fg));
+        }
+        lines.push((String::new(), subtitle_fg));
+    }
 
     // Dismiss hint.
     let dismiss = "Press any key to dismiss";
@@ -148,6 +172,14 @@ pub fn render_splash(
             break;
         }
         canvas.draw_text_at(row, left_pad, text, *fg);
+    }
+}
+
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        path.to_string()
+    } else {
+        format!("...{}", &path[path.len() - max_len + 3..])
     }
 }
 

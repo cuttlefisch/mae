@@ -30,10 +30,16 @@ pub fn render_shell_window(
     };
 
     let title_text = shell.title();
-    let title = if title_text.is_empty() {
-        " *Terminal* ".to_string()
+    let offset = shell.display_offset();
+    let base_title = if title_text.is_empty() {
+        "*Terminal*".to_string()
     } else {
-        format!(" {} ", title_text)
+        title_text.to_string()
+    };
+    let title = if offset > 0 {
+        format!(" {} [\u{2191}{}] ", base_title, offset)
+    } else {
+        format!(" {} ", base_title)
     };
 
     draw_window_border(
@@ -53,6 +59,7 @@ pub fn render_shell_window(
 
     render_shell_grid(
         canvas,
+        editor,
         shell,
         focused,
         inner_row,
@@ -65,6 +72,7 @@ pub fn render_shell_window(
 /// Render the alacritty terminal grid using Skia.
 fn render_shell_grid(
     canvas: &mut SkiaCanvas,
+    editor: &Editor,
     shell: &ShellTerminal,
     focused: bool,
     area_row: usize,
@@ -76,8 +84,8 @@ fn render_shell_grid(
     let content = term.renderable_content();
     let cursor_point = content.cursor.point;
 
-    let default_fg = Color4f::new(0.9, 0.9, 0.9, 1.0);
-    let default_bg = Color4f::new(0.1, 0.1, 0.1, 1.0);
+    let default_fg = theme::ts_fg(editor, "ui.text");
+    let default_bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     for indexed in content.display_iter {
         let line_idx = indexed.point.line.0;
@@ -138,7 +146,8 @@ fn render_shell_grid(
         let crow = area_row + cursor_point.line.0 as usize;
         let ccol = area_col + cursor_point.column.0;
         if crow < area_row + area_height && ccol < area_col + area_width {
-            let cursor_color = Color4f::new(0.9, 0.9, 0.9, 1.0);
+            let cursor_style = editor.theme.style("ui.cursor");
+            let cursor_color = theme::color_or(cursor_style.bg, theme::DEFAULT_FG);
             canvas.draw_rect_fill(crow, ccol, 1, 1, cursor_color);
         }
     }

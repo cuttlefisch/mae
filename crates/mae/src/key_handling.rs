@@ -107,7 +107,8 @@ pub fn handle_key(
 ) {
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
-    // input_locked is guaranteed false.
+    // input_lock is guaranteed None (or the mode is ShellInsert, which
+    // is allowed through the lock).
 
     if editor.mode != Mode::Command {
         editor.status_msg.clear();
@@ -1591,14 +1592,14 @@ pub fn handle_command_mode(
                 let categories = cmd.strip_prefix("self-test").unwrap().trim();
                 if let Some(tx) = ai_tx {
                     // Lock input so user keystrokes don't interfere with test state.
-                    editor.input_locked = true;
+                    editor.input_lock = mae_core::InputLock::AiBusy;
                     // Ensure *AI* buffer exists and is visible so the user
                     // can watch self-test progress (tool calls, results, report).
                     editor.open_conversation_buffer();
                     let prompt = build_self_test_prompt(categories);
                     if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
                         warn!("AI self-test prompt dropped");
-                        editor.input_locked = false;
+                        editor.input_lock = mae_core::InputLock::None;
                     }
                     info!(
                         "self-test started, categories={:?}",

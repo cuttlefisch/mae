@@ -62,6 +62,7 @@ pub struct AiSection {
 pub struct EditorSection {
     pub theme: Option<String>,
     pub splash_art: Option<String>,
+    pub font_size: Option<f32>,
 }
 
 fn default_true() -> bool {

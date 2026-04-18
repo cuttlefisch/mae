@@ -21,7 +21,20 @@ pub fn render_status_bar(
     let buf = &editor.buffers[win.buffer_idx];
 
     let recording_label: String;
-    let mode_str = if editor.macro_recording {
+    let mode_str = if editor.input_lock != mae_core::InputLock::None {
+        // Override mode label when input is locked by AI/MCP operations.
+        match editor.input_lock {
+            mae_core::InputLock::AiBusy => {
+                if editor.ai_streaming {
+                    " AI... "
+                } else {
+                    " AI BUSY "
+                }
+            }
+            mae_core::InputLock::McpBusy => " MCP... ",
+            mae_core::InputLock::None => unreachable!(),
+        }
+    } else if editor.macro_recording {
         recording_label = format!(" REC @{} ", editor.macro_register.unwrap_or('?'));
         recording_label.as_str()
     } else {
@@ -40,18 +53,27 @@ pub fn render_status_bar(
         }
     };
 
-    // Mode label colors.
-    let mode_style = editor.theme.style(match editor.mode {
-        Mode::Normal => "ui.statusline.mode.normal",
-        Mode::Insert => "ui.statusline.mode.insert",
-        Mode::Visual(_) => "ui.statusline.mode.normal",
-        Mode::Command => "ui.statusline.mode.command",
-        Mode::ConversationInput => "ui.statusline.mode.conversation",
-        Mode::ShellInsert => "ui.statusline.mode.insert",
-        Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
-            "ui.statusline.mode.command"
-        }
-    });
+    // Mode label colors — use locked theme when input is locked.
+    let mode_style = if editor.input_lock != mae_core::InputLock::None {
+        let key = match editor.input_lock {
+            mae_core::InputLock::AiBusy => "ui.statusline.mode.locked",
+            mae_core::InputLock::McpBusy => "ui.statusline.mode.mcp",
+            mae_core::InputLock::None => "ui.statusline.mode.normal",
+        };
+        editor.theme.style(key)
+    } else {
+        editor.theme.style(match editor.mode {
+            Mode::Normal => "ui.statusline.mode.normal",
+            Mode::Insert => "ui.statusline.mode.insert",
+            Mode::Visual(_) => "ui.statusline.mode.normal",
+            Mode::Command => "ui.statusline.mode.command",
+            Mode::ConversationInput => "ui.statusline.mode.conversation",
+            Mode::ShellInsert => "ui.statusline.mode.insert",
+            Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
+                "ui.statusline.mode.command"
+            }
+        })
+    };
     let mode_fg = theme::color_or(mode_style.fg, theme::DEFAULT_FG);
     let mode_bg = theme::color_or(mode_style.bg, theme::STATUS_BG);
 

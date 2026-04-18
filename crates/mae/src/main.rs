@@ -313,7 +313,7 @@ async fn main() -> io::Result<()> {
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
-    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = None;
+    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
     // Active shell terminals, keyed by buffer index.
@@ -324,8 +324,20 @@ async fn main() -> io::Result<()> {
         std::collections::HashMap::new();
     // Accumulated key presses for shell-insert keymap lookup.
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
+    let mut last_health_check = tokio::time::Instant::now();
 
     loop {
+        // Periodic health check (~30s): scan for zombie shells, stale locks.
+        if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
+            shell_lifecycle::health_check(
+                &mut editor,
+                &mut shell_terminals,
+                deferred_ai_reply.is_some(),
+                last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
+            );
+            last_health_check = tokio::time::Instant::now();
+        }
+
         // Clamp all window cursors to buffer bounds. This is a safety net:
         // MCP/AI tool calls and user key mashing can leave cursor_row past
         // the end of a modified buffer. Without this, rope.line(cursor_row)
@@ -420,7 +432,7 @@ async fn main() -> io::Result<()> {
         };
 
         ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
-        ai_event_handler::timeout_deferred_mcp_reply(&mut deferred_mcp_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(&mut editor, &mut deferred_mcp_reply);
 
         // MCP session-scoped input lock: auto-unlock after 500ms of inactivity.
         let mcp_idle_tick = async {
@@ -440,18 +452,22 @@ async fn main() -> io::Result<()> {
                         // except Esc/Ctrl-C which cancel and release the lock.
                         // Checked here (not in handle_key) so ShellInsert mode
                         // is also covered.
-                        if editor.input_locked {
+                        if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
                                 || (key.code == KeyCode::Char('c')
                                     && key.modifiers.contains(KeyModifiers::CONTROL))
                             {
-                                editor.input_locked = false;
+                                editor.input_lock = mae_core::InputLock::None;
+                                editor.ai_streaming = false;
                                 last_mcp_activity = None;
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
                                 editor.set_status("AI operation cancelled");
+                            } else if editor.mode == Mode::ShellInsert {
+                                // Allow shell input even during AI/MCP lock.
+                                handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_pending_keys);
                             }
                             // All other keys discarded while locked.
                         } else if editor.mode == Mode::ShellInsert {
@@ -495,15 +511,18 @@ async fn main() -> io::Result<()> {
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
-                        && deferred_mcp_reply.is_none()
+                        && deferred_mcp_reply.is_empty()
                     {
-                        editor.input_locked = false;
+                        if editor.input_lock == mae_core::InputLock::McpBusy {
+                            editor.set_status("MCP: input unlocked");
+                        }
+                        editor.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
                     }
                 }
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                editor.input_locked = true;
+                editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 ai_event_handler::handle_mcp_request(
                     &mut editor, mcp_req, &all_tools, &permission_policy,
@@ -1459,7 +1478,7 @@ async fn run_gui_loop(
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
-    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = None;
+    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
     // Track modifier state across winit events (winit delivers modifiers
@@ -1467,12 +1486,27 @@ async fn run_gui_loop(
     let mut ctrl_held = false;
     let mut alt_held = false;
     let mut mcp_cancelled = false;
+    let mut dirty = true;
+    let mut cursor_x: f64 = 0.0;
+    let mut cursor_y: f64 = 0.0;
+    let mut last_health_check = tokio::time::Instant::now();
 
     info!("entering GUI event loop");
 
     loop {
         ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
-        ai_event_handler::timeout_deferred_mcp_reply(&mut deferred_mcp_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(&mut editor, &mut deferred_mcp_reply);
+
+        // Periodic health check (~30s): scan for zombie shells, stale locks.
+        if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
+            shell_lifecycle::health_check(
+                &mut editor,
+                &mut shell_terminals,
+                deferred_ai_reply.is_some(),
+                last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
+            );
+            last_health_check = tokio::time::Instant::now();
+        }
 
         // --- Pre-render bookkeeping (same as terminal loop) ---
         editor.clamp_all_cursors();
@@ -1498,6 +1532,9 @@ async fn run_gui_loop(
                 ctrl_held: &mut ctrl_held,
                 alt_held: &mut alt_held,
                 mcp_cancelled: &mut mcp_cancelled,
+                dirty: &mut dirty,
+                cursor_x: &mut cursor_x,
+                cursor_y: &mut cursor_y,
             },
         );
 
@@ -1559,7 +1596,7 @@ async fn run_gui_loop(
             }
         };
 
-        // Use a short timeout so we return to pump_app_events quickly.
+        // Poll async channels; set dirty when state changes so we redraw.
         tokio::select! {
             biased;
 
@@ -1568,6 +1605,7 @@ async fn run_gui_loop(
                     &mut editor, ai_event, &all_tools, &permission_policy,
                     &mut deferred_ai_reply, &lsp_command_tx,
                 );
+                dirty = true;
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
@@ -1575,31 +1613,49 @@ async fn run_gui_loop(
                     last_mcp_activity = Some(tokio::time::Instant::now());
                 }
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
+                dirty = true;
             }
             Some(dap_event) = dap_event_rx.recv() => {
                 handle_dap_event(&mut editor, dap_event);
+                dirty = true;
             }
             _ = mcp_idle_tick => {
+                let was_locked = editor.input_lock;
                 if let Some(ts) = last_mcp_activity {
                     if ts.elapsed() > Duration::from_millis(500)
-                        && deferred_mcp_reply.is_none()
+                        && deferred_mcp_reply.is_empty()
                     {
-                        editor.input_locked = false;
+                        if editor.input_lock == mae_core::InputLock::McpBusy {
+                            editor.set_status("MCP: input unlocked");
+                        }
+                        editor.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
                     }
                 }
+                if was_locked != editor.input_lock {
+                    dirty = true;
+                }
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                editor.input_locked = true;
+                editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 ai_event_handler::handle_mcp_request(
                     &mut editor, mcp_req, &all_tools, &permission_policy,
                     &lsp_command_tx, &mut deferred_mcp_reply,
                 );
+                dirty = true;
             }
-            _ = shell_tick => {}
-            // Don't block forever — return to pump_app_events after 1ms if no events.
-            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+            _ = shell_tick => {
+                dirty = true;
+            }
+            // Don't block forever — return to pump_app_events after 100ms if no events.
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+
+        // Only request a redraw when something actually changed.
+        if dirty {
+            renderer.request_redraw();
+            dirty = false;
         }
     }
 
@@ -1626,6 +1682,9 @@ struct WinitCallback<'a> {
     ctrl_held: &'a mut bool,
     alt_held: &'a mut bool,
     mcp_cancelled: &'a mut bool,
+    dirty: &'a mut bool,
+    cursor_x: &'a mut f64,
+    cursor_y: &'a mut f64,
 }
 
 #[cfg(feature = "gui")]
@@ -1650,9 +1709,11 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
         match event {
             WindowEvent::CloseRequested => {
                 *self.should_exit = true;
+                *self.dirty = true;
             }
             WindowEvent::Resized(size) => {
                 self.renderer.handle_resize(size.width, size.height);
+                *self.dirty = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
                 let state = mods.state();
@@ -1662,20 +1723,32 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == winit::event::ElementState::Pressed =>
             {
+                *self.dirty = true;
                 if let Some(mae_core::InputEvent::Key(kp)) =
                     mae_gui::winit_event_to_input(&event, *self.ctrl_held, *self.alt_held)
                 {
-                    // Input lock: discard all keys except Esc/Ctrl-C.
-                    if self.editor.input_locked {
+                    // Input lock: allow Esc/Ctrl-C to cancel, shell input
+                    // to pass through, and discard everything else.
+                    if self.editor.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
-                            self.editor.input_locked = false;
+                            self.editor.input_lock = mae_core::InputLock::None;
+                            self.editor.ai_streaming = false;
                             *self.mcp_cancelled = true;
                             if let Some(tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
                             self.editor.set_status("AI operation cancelled");
+                        } else if self.editor.mode == Mode::ShellInsert {
+                            // Allow shell input even during AI/MCP lock.
+                            let ct_event = key_handling::keypress_to_crossterm(&kp);
+                            handle_shell_key(
+                                self.editor,
+                                ct_event,
+                                self.shell_terminals,
+                                self.shell_pending_keys,
+                            );
                         }
                     } else if self.editor.mode == Mode::ShellInsert {
                         let ct_event = key_handling::keypress_to_crossterm(&kp);
@@ -1696,6 +1769,38 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                *self.cursor_x = position.x;
+                *self.cursor_y = position.y;
+                // Don't set dirty — cursor movement alone doesn't need a redraw.
+            }
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                button,
+                ..
+            } => {
+                if let Some(mae_button) = mae_gui::winit_mouse_button(&button) {
+                    // Convert pixel position to cell coordinates.
+                    let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                    if cell_w > 0.0 && cell_h > 0.0 {
+                        let col = (*self.cursor_x / cell_w as f64) as u16;
+                        let row = (*self.cursor_y / cell_h as f64) as u16;
+                        self.editor
+                            .handle_mouse_click(row as usize, col as usize, mae_button);
+                        *self.dirty = true;
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as i16,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as i16,
+                };
+                if lines != 0 {
+                    self.editor.handle_mouse_scroll(lines);
+                    *self.dirty = true;
+                }
+            }
             WindowEvent::RedrawRequested => {
                 if let Err(e) = self.renderer.render(self.editor, self.shell_terminals) {
                     warn!(error = %e, "GUI render error");
@@ -1706,7 +1811,8 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.renderer.request_redraw();
+        // Intentionally empty — redraws are now driven by the dirty flag
+        // in the outer loop, not unconditionally every pump cycle.
     }
 }
 

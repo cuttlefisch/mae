@@ -54,7 +54,7 @@ use tracing::{info, trace_span};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-pub use input::{winit_event_to_input, winit_key_to_keypress};
+pub use input::{winit_event_to_input, winit_key_to_keypress, winit_mouse_button};
 
 /// GUI renderer implementing the `Renderer` trait.
 ///
@@ -144,6 +144,12 @@ impl GuiRenderer {
     /// Returns a reference to the window, if initialized.
     pub fn window(&self) -> Option<&Window> {
         self.window.as_deref()
+    }
+
+    /// Returns (cell_width, cell_height) in pixels. Used for mouse coordinate
+    /// translation (pixel position → cell coordinates).
+    pub fn cell_dimensions(&self) -> (f32, f32) {
+        (self.cell_width, self.cell_height)
     }
 }
 

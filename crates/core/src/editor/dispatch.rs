@@ -979,6 +979,11 @@ impl Editor {
                 self.command_palette = Some(CommandPalette::for_describe(&self.commands));
                 self.mode = Mode::CommandPalette;
             }
+            "describe-option" => {
+                // Open the *Options* buffer listing all options.
+                // (ex-command handler supports :describe-option <name> for specific options)
+                self.show_all_options();
+            }
             "set-theme" => {
                 let names = bundled_theme_names();
                 let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
@@ -1775,6 +1780,26 @@ impl Editor {
             }
             "ai-load" => {
                 self.set_status("Usage: :ai-load <path>");
+            }
+
+            "edit-config" => {
+                let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                    std::path::PathBuf::from(xdg)
+                } else if let Ok(home) = std::env::var("HOME") {
+                    std::path::PathBuf::from(home).join(".config")
+                } else {
+                    std::path::PathBuf::from(".config")
+                }
+                .join("mae")
+                .join("config.toml");
+                self.open_file(config_path.display().to_string());
+            }
+            "toggle-fps" => {
+                self.show_fps = !self.show_fps;
+                self.set_status(format!(
+                    "FPS overlay: {}",
+                    if self.show_fps { "on" } else { "off" }
+                ));
             }
 
             _ => return false,

@@ -4,7 +4,7 @@
 //! backend-agnostic input types. The GUI backend produces `InputEvent`
 //! values that the main loop consumes identically to crossterm events.
 
-use mae_core::{InputEvent, Key, KeyPress};
+use mae_core::{InputEvent, Key, KeyPress, MouseButton as MaeMouseButton};
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 
@@ -47,6 +47,18 @@ pub fn winit_event_to_input(event: &KeyEvent, ctrl: bool, alt: bool) -> Option<I
     }
 
     Some(InputEvent::Key(kp))
+}
+
+/// Convert a winit mouse button to MAE's MouseButton.
+///
+/// Returns `None` for buttons we don't handle (e.g. Back, Forward, Other).
+pub fn winit_mouse_button(button: &winit::event::MouseButton) -> Option<MaeMouseButton> {
+    match button {
+        winit::event::MouseButton::Left => Some(MaeMouseButton::Left),
+        winit::event::MouseButton::Right => Some(MaeMouseButton::Right),
+        winit::event::MouseButton::Middle => Some(MaeMouseButton::Middle),
+        _ => None,
+    }
 }
 
 /// Internal helper: translate a winit logical key to a mae Key.
@@ -166,6 +178,24 @@ mod tests {
                 Key::F(n)
             );
         }
+    }
+
+    #[test]
+    fn mouse_button_translation() {
+        use mae_core::MouseButton;
+        assert_eq!(
+            winit_mouse_button(&winit::event::MouseButton::Left),
+            Some(MouseButton::Left)
+        );
+        assert_eq!(
+            winit_mouse_button(&winit::event::MouseButton::Right),
+            Some(MouseButton::Right)
+        );
+        assert_eq!(
+            winit_mouse_button(&winit::event::MouseButton::Middle),
+            Some(MouseButton::Middle)
+        );
+        assert_eq!(winit_mouse_button(&winit::event::MouseButton::Back), None);
     }
 
     #[test]

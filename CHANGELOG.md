@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **GUI rendering backend** — winit + skia-safe, hardware-accelerated 2D (Phase 8 M1-M3)
+- GUI event loop with dirty-flag rendering (idle CPU ~0%)
+- Mouse support — click to place cursor, wheel scroll
+- Shell scrollback navigation (Shift-PageUp/PageDown)
+- Shell terminal theme-aware colors
+- Desktop application entry (`.desktop` + SVG icon) for GNOME/sway
+- Scoped input lock — shell interaction allowed during AI/MCP operations
+- MCP parallel deferred tool calls (Vec-based, unlimited concurrent)
+- Splash screen with recent files, config shortcut, version display
+- GUI font size configuration (`config.toml` + `:set font_size`)
+- FPS overlay toggle (`SPC t F`)
+- `:set` ex-command for vim-style option changes
+- `:edit-config` command (`SPC f c`)
+- ZZ/ZQ keybindings (save-and-quit / force-quit)
+- 30-second health check for zombie shell detection and stale lock clearing
+- Status bar indicators for AI streaming, MCP activity, input lock state
+- DAP debug panel + 6 AI debug tools
+- Observability: FPS overlay, tool timing, KB debugging node
+- `OptionRegistry` — single source of truth for editor option metadata
+- `describe-option` command (`SPC h o`) — introspect any editor option
+- `:set` with no args lists all options and current values
+- `:set-save` — persist option changes to `config.toml`
+
+### Changed
+- GUI is now the default build target (`make build` includes `--features gui`)
+- `make install` registers desktop entry and icon
+- `:set` handler, `set-option!`, and AI `set_option` tool all route through `OptionRegistry`
+- Command count increased from ~234 to ~280+
+
+### Fixed
+- GUI idle CPU usage (96% → ~0%) via dirty-flag render gating
+- MCP pseudo-deadlock when agent needs user input during locked state
+- Shell colors now respect editor theme instead of hardcoded values
+
 ### Bug Fixes
 
 - Horizontal scroll in split windows and AI timeout for Ollama ([c43f113](https://github.com/cuttlefisch/mae/commit/c43f11355987bfef004dcbd4237759d05518d4bc))

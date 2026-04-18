@@ -552,6 +552,17 @@ impl CommandRegistry {
         );
         reg.register_builtin("rename-file", "Rename current file (SPC f R)");
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
+        reg.register_builtin("edit-config", "Open MAE config file for editing (SPC f c)");
+        reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
+        reg.register_builtin("reload-config", "Reload config.toml and init.scm");
+        reg.register_builtin(
+            "describe-option",
+            "Show documentation for an editor option (SPC h o)",
+        );
+        reg.register_builtin(
+            "set-save",
+            "Set an option and persist to config.toml (:set-save <key> [value])",
+        );
 
         // Buffer operations (expanded)
         reg.register_builtin(
@@ -622,6 +633,17 @@ impl CommandRegistry {
         reg.register_builtin(
             "send-region-to-shell",
             "Send visual selection to a terminal buffer (SPC e S)",
+        );
+
+        // Shell scrollback navigation
+        reg.register_builtin("shell-scroll-page-up", "Scroll shell terminal up one page");
+        reg.register_builtin(
+            "shell-scroll-page-down",
+            "Scroll shell terminal down one page",
+        );
+        reg.register_builtin(
+            "shell-scroll-to-bottom",
+            "Scroll shell terminal to latest output",
         );
 
         // Ex-command parity: commands that were only inline in execute_command()

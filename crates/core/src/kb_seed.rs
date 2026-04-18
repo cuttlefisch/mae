@@ -18,6 +18,7 @@
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
 use crate::commands::CommandRegistry;
+use crate::options::OptionRegistry;
 
 /// Build the initial KB: hand-authored concept/index nodes + generated
 /// `cmd:*` nodes derived from the command registry.
@@ -25,6 +26,7 @@ pub fn seed_kb(registry: &CommandRegistry) -> KnowledgeBase {
     let mut kb = KnowledgeBase::new();
     install_static_nodes(&mut kb);
     install_command_nodes(&mut kb, registry);
+    install_option_nodes(&mut kb);
     kb
 }
 
@@ -54,6 +56,56 @@ fn install_command_nodes(kb: &mut KnowledgeBase, registry: &CommandRegistry) {
         let id = format!("cmd:{}", cmd.name);
         let title = format!("Command: {}", cmd.name);
         kb.insert(Node::new(id, title, NodeKind::Command, body));
+    }
+}
+
+/// Install an `option:<name>` node for every registered option.
+fn install_option_nodes(kb: &mut KnowledgeBase) {
+    let registry = OptionRegistry::new();
+    for def in registry.list() {
+        let aliases = if def.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n**Aliases:** {}",
+                def.aliases
+                    .iter()
+                    .map(|a| format!("`{}`", a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let config_line = match def.config_key {
+            Some(key) => format!("\n**Config key:** `{}`", key),
+            None => String::new(),
+        };
+        let body = format!(
+            "{doc}\n\n\
+             **Type:** {kind}  \n\
+             **Default:** `{default}`{aliases}{config}\n\n\
+             ## Usage\n\
+             ```\n\
+             :set {name} <value>       \" set from command line\n\
+             :set {name}               \" toggle (booleans) or show current value\n\
+             :set-save {name} <value>  \" set and persist to config.toml\n\
+             ```\n\
+             ```scheme\n\
+             (set-option! \"{scheme_name}\" \"<value>\")  ; set from Scheme\n\
+             ```\n\n\
+             See also: [[concept:options]], [[index]]",
+            doc = def.doc,
+            kind = def.kind,
+            default = def.default_value,
+            aliases = aliases,
+            config = config_line,
+            name = def.name,
+            scheme_name = def.aliases.first().unwrap_or(&def.name),
+        );
+        let id = format!("option:{}", def.name);
+        let title = format!("Option: {}", def.name);
+        kb.insert(
+            Node::new(id, title, NodeKind::Concept, body).with_tags(["option", "configuration"]),
+        );
     }
 }
 
@@ -166,6 +218,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_DEBUGGING,
         )
         .with_tags(["dap", "debugging", "ai"]),
+        Node::new(
+            "concept:gui",
+            "Concept: GUI Backend",
+            NodeKind::Concept,
+            CONCEPT_GUI,
+        )
+        .with_tags(["rendering", "gui"]),
     ]
 }
 
@@ -185,6 +244,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:agent-bootstrap|Agent Bootstrap]] — zero-config MCP tool discovery for AI agents
 - [[concept:self-test|AI Self-Test]] — validate editor tools and integrations via `:self-test`
 - [[concept:debugging|Debugging (DAP)]] — DAP client, debug panel, breakpoints, AI debug tools
+- [[concept:gui|GUI Backend]] — dual rendering (terminal + GUI), mouse, font config
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -346,7 +406,8 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `r` | [[cmd:recent-files]] | Recent files |\n\
 | `y` | [[cmd:yank-file-path]] | Yank file path |\n\
 | `R` | [[cmd:rename-file]] | Rename file |\n\
-| `S` | [[cmd:save-as]] | Save as |\n\n\
+| `S` | [[cmd:save-as]] | Save as |\n\
+| `c` | [[cmd:edit-config]] | Edit config |\n\n\
 ### SPC p — +project\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -394,7 +455,8 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `s` | [[cmd:set-theme]] | Set theme |\n\
 | `l` | [[cmd:toggle-line-numbers]] | Line numbers |\n\
 | `r` | [[cmd:toggle-relative-line-numbers]] | Relative numbers |\n\
-| `w` | [[cmd:toggle-word-wrap]] | Word wrap |\n\n\
+| `w` | [[cmd:toggle-word-wrap]] | Word wrap |\n\
+| `F` | [[cmd:toggle-fps]] | FPS overlay |\n\n\
 ### SPC a — +ai\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -406,7 +468,8 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `h` | [[cmd:help]] | Help index |\n\
 | `k` | [[cmd:describe-key]] | Describe key |\n\
 | `c` | [[cmd:describe-command]] | Describe command |\n\
-| `s` | [[cmd:help-search]] | Search help |\n\n\
+| `s` | [[cmd:help-search]] | Search help |\n\
+| `o` | [[cmd:describe-option]] | Describe option |\n\n\
 ### SPC d — +debug\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -552,7 +615,9 @@ const CONCEPT_OPTIONS: &str =
 | `word-wrap` | `true`/`false` | Soft-wrap long lines |\n\
 | `break-indent` | `true`/`false` | Indent wrapped continuation lines |\n\
 | `show-break` | string | Character prefix for wrapped lines (e.g. `↪`) |\n\
-| `theme` | theme name | Set the color theme |\n\n\
+| `theme` | theme name | Set the color theme |\n\
+| `show-fps` | `true`/`false` | Show FPS overlay in status bar |\n\
+| `font-size` | float (6-72) | GUI font size in points |\n\n\
 ## Usage from Scheme\n\
 ```scheme\n\
 ;; In init.scm:\n\
@@ -670,6 +735,29 @@ Use `debug_state` to inspect the current session state (threads, frames, breakpo
 - **ReadOnly** — inspection (`threads`, `stack_trace`, `scopes`, `variables`, `output`).\n\n\
 See also: [[concept:ai-as-peer]], [[cmd:debug-panel]], [[cmd:debug-start]], [[key:leader-keys]], [[index]]\n";
 
+const CONCEPT_GUI: &str =
+    "MAE has a **dual rendering backend** — terminal (ratatui/crossterm) and GUI \
+(winit + Skia 2D). Both backends share the same editor core, commands, and AI integration.\n\n\
+## Launching\n\
+- `mae --gui file.rs` — hardware-accelerated GUI window.\n\
+- `mae file.rs` — terminal mode (default).\n\
+- Desktop launcher: installed via `make install` to `~/.local/share/applications/mae.desktop`.\n\n\
+## GUI features\n\
+- **Mouse support:** click to place cursor, wheel scroll.\n\
+- **Font configuration:** `config.toml` `[editor] font_size = 14.0` or `:set font_size 16`.\n\
+- **Dirty-flag rendering:** GPU idle when nothing changes (~0% CPU).\n\
+- **Shell colors:** terminal emulator respects editor theme.\n\
+- **Shell scrollback:** Shift-PageUp/PageDown.\n\
+- **FPS overlay:** `SPC t F` or `:set show_fps true`.\n\n\
+## Architecture\n\
+The `Renderer` trait (in `mae-renderer`) defines the backend-agnostic HAL. The `mae-gui` \
+crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal \
+backend uses ratatui/crossterm. The binary selects the backend at startup based on `--gui`.\n\n\
+## Event loop\n\
+- **Terminal:** `crossterm::EventStream` + tokio `select!`.\n\
+- **GUI:** `winit::pump_app_events()` + tokio `select!` with dirty-flag gating.\n\n\
+See also: [[concept:terminal]], [[concept:mode]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,6 +791,7 @@ mod tests {
             "concept:agent-bootstrap",
             "concept:self-test",
             "concept:debugging",
+            "concept:gui",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
@@ -715,6 +804,7 @@ mod tests {
         let links = kb.links_from("index");
         assert!(links.contains(&"concept:buffer".to_string()));
         assert!(links.contains(&"concept:ai-as-peer".to_string()));
+        assert!(links.contains(&"concept:gui".to_string()));
     }
 
     #[test]

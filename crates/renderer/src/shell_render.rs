@@ -26,10 +26,16 @@ pub(crate) fn render_shell_window(
     };
 
     let title_text = shell.title();
-    let title = if title_text.is_empty() {
-        " *Terminal* ".to_string()
+    let offset = shell.display_offset();
+    let base_title = if title_text.is_empty() {
+        "*Terminal*".to_string()
     } else {
-        format!(" {} ", title_text)
+        title_text.to_string()
+    };
+    let title = if offset > 0 {
+        format!(" {} [\u{2191}{}] ", base_title, offset)
+    } else {
+        format!(" {} ", base_title)
     };
 
     let block = Block::default()

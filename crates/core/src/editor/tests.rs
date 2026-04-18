@@ -3959,3 +3959,120 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
     assert!(ac <= editor.buffers[0].line_len(ar));
     assert!(cc <= editor.buffers[0].line_len(cr));
 }
+
+// ---------------------------------------------------------------------------
+// Mouse handling (Phase 8 — Step 8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mouse_click_left_places_cursor() {
+    let mut editor = Editor::new();
+    // Insert some text so we have rows/cols to click on.
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'H');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'e');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'l');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'l');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'o');
+
+    // Gutter is 5 cols wide when show_line_numbers is true (default).
+    // Click at row 1 (content row 0 after border offset), col 5+2 = col 7.
+    editor.handle_mouse_click(1, 7, crate::input::MouseButton::Left);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 0);
+    assert_eq!(win.cursor_col, 2);
+}
+
+#[test]
+fn mouse_click_in_gutter_ignored() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'A');
+
+    // Click in gutter area (col < 5).
+    let orig_row = editor.window_mgr.focused_window().cursor_row;
+    let orig_col = editor.window_mgr.focused_window().cursor_col;
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, orig_row);
+    assert_eq!(win.cursor_col, orig_col);
+}
+
+#[test]
+fn mouse_click_clamps_to_line_length() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'A');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'B');
+
+    // Click far past end of line — should clamp to last char.
+    editor.handle_mouse_click(1, 100, crate::input::MouseButton::Left);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 0);
+    // Line "AB" has len 2, max col = 1.
+    assert!(win.cursor_col <= 1);
+}
+
+#[test]
+fn mouse_scroll_up_decreases_offset() {
+    let mut editor = Editor::new();
+    // Set an initial scroll offset.
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 30;
+
+    editor.handle_mouse_scroll(2); // positive = scroll up
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.scroll_offset, 24); // 30 - 2*3 = 24
+}
+
+#[test]
+fn mouse_scroll_down_increases_offset() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 0;
+
+    editor.handle_mouse_scroll(-2); // negative = scroll down
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.scroll_offset, 6); // 0 + 2*3 = 6
+}
+
+#[test]
+fn mouse_scroll_up_saturates_at_zero() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 2;
+
+    editor.handle_mouse_scroll(5); // Would go to 2 - 15 = negative
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.scroll_offset, 0);
+}
+
+#[test]
+fn mouse_scroll_zero_delta_is_noop() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 10;
+
+    editor.handle_mouse_scroll(0);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.scroll_offset, 10);
+}
+
+#[test]
+fn mouse_right_click_is_noop() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'X');
+    let orig_row = editor.window_mgr.focused_window().cursor_row;
+    let orig_col = editor.window_mgr.focused_window().cursor_col;
+
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Right);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, orig_row);
+    assert_eq!(win.cursor_col, orig_col);
+}

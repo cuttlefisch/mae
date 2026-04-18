@@ -11,6 +11,9 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 - **Language:** Rust (core) + Scheme R7RS-small (extensions)
 - **License:** GPL-3.0-or-later
 - **Build:** `make check` / `make build` / `make test` / `make ci` from workspace root
+  - `make build` now builds with GUI by default (`--features gui`)
+  - `make build-tui` for terminal-only build
+  - `make ci` still excludes GUI (skia system deps)
 - **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`.
 
 ## Crate Layout
@@ -104,7 +107,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M2 COMPLETE (1,369 tests)
+### Phase 8: GUI Rendering Backend — M1-M3 COMPLETE (1,470 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -121,7 +124,13 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Ex-command registry parity: 6 commands registered for AI access ✅
 - LSP AI tools: deferred async resolution for definition/references/hover/symbols ✅
 - Event loop refactor: shared `ai_event_handler` + `shell_lifecycle` modules ✅
-- **Next: cursor/gutter/command-line rendering (M3), variable-height lines (M4), inline images (M5), PDF preview (M6), mouse (M7)**
+- GUI visual polish: cursor, status bar, splash screen, mouse, shell scrollback ✅
+- Desktop launcher (.desktop + SVG icon) for GNOME/sway ✅
+- Font size config, FPS overlay, :set/:edit-config, ZZ/ZQ ✅
+- OptionRegistry: single source of truth for all editor options ✅
+- `describe-option` command + `SPC h o` binding ✅
+- `:set-save` — persist option changes to config.toml ✅
+- **Next: line numbers/gutter in GUI (M3 remaining), variable-height lines (M4), inline images (M5), PDF preview (M6), mouse gestures (M7)**
 
 ## Key Design Decisions Already Made
 
