@@ -55,6 +55,14 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to read (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
                 ]),
                 required: vec![],
             },
@@ -87,6 +95,14 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "New content (empty string to delete lines)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to write to (default: active buffer)".into(),
                             enum_values: None,
                         },
                     ),
@@ -428,6 +444,52 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Override the active buffer when scope='buffer'.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_workspace_symbol".into(),
+            description: "Search for symbols across the workspace by name. Returns JSON array of {name, kind, path, line, character, container_name}. Requires an LSP server. Use this to find functions, structs, types, etc. by name without knowing which file they're in.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Symbol name or prefix to search for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "language_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Language server to query (e.g. 'rust', 'python', 'typescript'). Required because workspace/symbol is server-specific.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into(), "language_id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_document_symbols".into(),
+            description: "List all symbols (functions, structs, methods, etc.) in a document. Returns a hierarchical JSON tree of {name, kind, line, end_line, detail, children}. Requires an LSP server. Use this to understand file structure without reading all the code.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer to query (default: active buffer)".into(),
                             enum_values: None,
                         },
                     ),
@@ -969,7 +1031,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 40);
+        assert_eq!(tools.len(), 42);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

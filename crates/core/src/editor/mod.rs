@@ -632,6 +632,25 @@ impl Editor {
         true
     }
 
+    /// Sync `self.mode` to the active buffer's kind after a focus/buffer change.
+    /// Shell buffers → ShellInsert. If leaving a buffer-specific mode (ShellInsert,
+    /// ConversationInput) for a non-matching buffer, reset to Normal.
+    /// Preserves Insert/Visual/etc. for text buffers.
+    pub fn sync_mode_to_buffer(&mut self) {
+        let idx = self.active_buffer_idx();
+        let kind = self.buffers[idx].kind;
+        match kind {
+            crate::BufferKind::Shell => {
+                self.mode = Mode::ShellInsert;
+            }
+            _ => {
+                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
+                    self.mode = Mode::Normal;
+                }
+            }
+        }
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
     }

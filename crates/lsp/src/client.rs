@@ -449,6 +449,54 @@ impl LspClient {
         Ok(HoverResponse::from_value(result))
     }
 
+    /// workspace/symbol — search for symbols across the workspace.
+    pub async fn request_workspace_symbol(
+        &self,
+        query: &str,
+    ) -> Result<WorkspaceSymbolResponse, String> {
+        let params = WorkspaceSymbolParams {
+            query: query.to_string(),
+        };
+        let resp = self
+            .request(
+                "workspace/symbol",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(15),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(WorkspaceSymbolResponse::from_value(result))
+    }
+
+    /// textDocument/documentSymbol — list symbols in a document.
+    pub async fn request_document_symbols(
+        &self,
+        uri: &str,
+    ) -> Result<DocumentSymbolResponse, String> {
+        let params = DocumentSymbolParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+        };
+        let resp = self
+            .request(
+                "textDocument/documentSymbol",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(10),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(DocumentSymbolResponse::from_value(result))
+    }
+
     /// Send shutdown request and exit notification for graceful teardown.
     pub async fn shutdown(&mut self) -> Result<(), String> {
         let _ = self

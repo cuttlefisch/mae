@@ -181,6 +181,41 @@ pub fn execute_lsp_hover(editor: &mut Editor, args: &Value) -> Result<(), String
     Ok(())
 }
 
+/// Queue a `workspace/symbol` request for the AI.
+pub fn execute_lsp_workspace_symbol(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'query' argument")?;
+    let language_id = args
+        .get("language_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'language_id' argument")?;
+    editor
+        .pending_lsp_requests
+        .push(LspIntent::WorkspaceSymbol {
+            language_id: language_id.to_string(),
+            query: query.to_string(),
+        });
+    Ok(())
+}
+
+/// Queue a `textDocument/documentSymbol` request for the AI.
+pub fn execute_lsp_document_symbols(editor: &mut Editor, args: &Value) -> Result<(), String> {
+    let idx = resolve_buffer_idx(editor, args)?;
+    let buf = &editor.buffers[idx];
+    let path = buf
+        .file_path()
+        .ok_or("Buffer has no file path — LSP unavailable")?;
+    let language_id =
+        language_id_from_path(path).ok_or("No language server configured for this file type")?;
+    let uri = path_to_uri(path);
+    editor
+        .pending_lsp_requests
+        .push(LspIntent::DocumentSymbols { uri, language_id });
+    Ok(())
+}
+
 fn severity_str(s: DiagnosticSeverity) -> &'static str {
     match s {
         DiagnosticSeverity::Error => "error",
@@ -398,5 +433,63 @@ mod tests {
             }
             other => panic!("expected GotoDefinition, got {:?}", other),
         }
+    }
+
+    // --- Workspace symbol ---
+
+    #[test]
+    fn workspace_symbol_queues_intent() {
+        let mut ed = Editor::new();
+        execute_lsp_workspace_symbol(
+            &mut ed,
+            &json!({"query": "MyStruct", "language_id": "rust"}),
+        )
+        .unwrap();
+        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        match &ed.pending_lsp_requests[0] {
+            LspIntent::WorkspaceSymbol { query, language_id } => {
+                assert_eq!(query, "MyStruct");
+                assert_eq!(language_id, "rust");
+            }
+            other => panic!("expected WorkspaceSymbol, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn workspace_symbol_missing_query_errors() {
+        let mut ed = Editor::new();
+        let result = execute_lsp_workspace_symbol(&mut ed, &json!({"language_id": "rust"}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn workspace_symbol_missing_language_id_errors() {
+        let mut ed = Editor::new();
+        let result = execute_lsp_workspace_symbol(&mut ed, &json!({"query": "foo"}));
+        assert!(result.is_err());
+    }
+
+    // --- Document symbols ---
+
+    #[test]
+    fn document_symbols_queues_intent() {
+        let mut ed = ed_with_file("/tmp/a.rs");
+        execute_lsp_document_symbols(&mut ed, &json!({})).unwrap();
+        assert_eq!(ed.pending_lsp_requests.len(), 1);
+        match &ed.pending_lsp_requests[0] {
+            LspIntent::DocumentSymbols { uri, language_id } => {
+                assert!(uri.contains("/tmp/a.rs"));
+                assert_eq!(language_id, "rust");
+            }
+            other => panic!("expected DocumentSymbols, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn document_symbols_errors_for_scratch_buffer() {
+        let mut ed = Editor::new();
+        let result = execute_lsp_document_symbols(&mut ed, &json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no file path"));
     }
 }

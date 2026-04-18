@@ -957,6 +957,12 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             language_id,
             position: Position { line, character },
         },
+        LspIntent::WorkspaceSymbol { language_id, query } => {
+            LspCommand::WorkspaceSymbol { language_id, query }
+        }
+        LspIntent::DocumentSymbols { uri, language_id } => {
+            LspCommand::DocumentSymbols { uri, language_id }
+        }
         // Stubs: these intents are queued but the LSP client doesn't
         // handle them yet. Log and ignore until Phase 4a M5.
         LspIntent::CodeAction { .. } | LspIntent::Rename { .. } | LspIntent::Format { .. } => {
@@ -1058,6 +1064,11 @@ fn handle_lsp_event(
                 .collect();
             editor.apply_completion_result(core_items);
         }
+        // Workspace/document symbol results are only consumed by the deferred
+        // AI tool flow (try_complete_deferred). If no deferred call is pending
+        // they are silently dropped here.
+        LspTaskEvent::WorkspaceSymbolResult { .. } => {}
+        LspTaskEvent::DocumentSymbolResult { .. } => {}
         LspTaskEvent::Error { message } => {
             warn!(error = %message, "LSP error");
             editor.set_status(format!("[LSP] {}", message));
@@ -1128,6 +1139,55 @@ fn try_complete_deferred(
                 tool_call_id: tool_call_id.to_string(),
                 success: true,
                 output: output.to_string(),
+            })
+        }
+        (DeferredKind::LspWorkspaceSymbol, LspTaskEvent::WorkspaceSymbolResult { symbols }) => {
+            let syms: Vec<serde_json::Value> = symbols
+                .iter()
+                .map(|s| {
+                    let mut obj = serde_json::json!({
+                        "name": s.name,
+                        "kind": s.kind.label(),
+                        "path": s.location.uri.strip_prefix("file://").unwrap_or(&s.location.uri),
+                        "line": s.location.range.start.line + 1,
+                        "character": s.location.range.start.character + 1,
+                    });
+                    if let Some(ref cn) = s.container_name {
+                        obj["container_name"] = serde_json::json!(cn);
+                    }
+                    obj
+                })
+                .collect();
+            let count = syms.len();
+            Some(ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                success: true,
+                output: serde_json::json!({"count": count, "symbols": syms}).to_string(),
+            })
+        }
+        (DeferredKind::LspDocumentSymbols, LspTaskEvent::DocumentSymbolResult { symbols, .. }) => {
+            fn format_doc_symbol(s: &mae_lsp::protocol::DocumentSymbol) -> serde_json::Value {
+                let mut obj = serde_json::json!({
+                    "name": s.name,
+                    "kind": s.kind.label(),
+                    "line": s.range.start.line + 1,
+                    "end_line": s.range.end.line + 1,
+                });
+                if let Some(ref d) = s.detail {
+                    obj["detail"] = serde_json::json!(d);
+                }
+                if !s.children.is_empty() {
+                    obj["children"] = serde_json::Value::Array(
+                        s.children.iter().map(format_doc_symbol).collect(),
+                    );
+                }
+                obj
+            }
+            let syms: Vec<serde_json::Value> = symbols.iter().map(format_doc_symbol).collect();
+            Some(ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                success: true,
+                output: serde_json::json!({"symbols": syms}).to_string(),
             })
         }
         // Also handle LSP errors while a deferred call is pending

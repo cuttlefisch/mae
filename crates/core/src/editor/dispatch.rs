@@ -719,18 +719,22 @@ impl Editor {
             "focus-left" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Left, area);
+                self.sync_mode_to_buffer();
             }
             "focus-right" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Right, area);
+                self.sync_mode_to_buffer();
             }
             "focus-up" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Up, area);
+                self.sync_mode_to_buffer();
             }
             "focus-down" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Down, area);
+                self.sync_mode_to_buffer();
             }
 
             // Diagnostics
@@ -1415,6 +1419,7 @@ impl Editor {
                         win.cursor_col = 0;
                         let name = self.buffers[alt_idx].name.clone();
                         self.set_status(format!("Buffer: {}", name));
+                        self.sync_mode_to_buffer();
                     }
                 }
             }

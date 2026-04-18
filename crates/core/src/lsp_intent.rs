@@ -80,6 +80,10 @@ pub enum LspIntent {
     },
     /// Request `textDocument/formatting`.
     Format { uri: String, language_id: String },
+    /// Request `workspace/symbol`.
+    WorkspaceSymbol { language_id: String, query: String },
+    /// Request `textDocument/documentSymbol`.
+    DocumentSymbols { uri: String, language_id: String },
 }
 
 /// Convert a filesystem path to a `file://` URI, matching `mae-lsp`'s

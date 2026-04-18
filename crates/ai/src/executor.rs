@@ -3,7 +3,10 @@ use mae_core::Editor;
 use crate::tools::PermissionPolicy;
 use crate::types::*;
 
-use crate::tool_impls::lsp::{execute_lsp_definition, execute_lsp_hover, execute_lsp_references};
+use crate::tool_impls::lsp::{
+    execute_lsp_definition, execute_lsp_document_symbols, execute_lsp_hover,
+    execute_lsp_references, execute_lsp_workspace_symbol,
+};
 use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
     execute_create_file, execute_cursor_info, execute_dap_continue, execute_dap_inspect_variable,
@@ -22,6 +25,8 @@ pub enum DeferredKind {
     LspDefinition,
     LspReferences,
     LspHover,
+    LspWorkspaceSymbol,
+    LspDocumentSymbols,
 }
 
 /// Result of executing a tool call — either immediately available or
@@ -73,6 +78,8 @@ pub fn execute_tool(
         "lsp_definition" => Some(DeferredKind::LspDefinition),
         "lsp_references" => Some(DeferredKind::LspReferences),
         "lsp_hover" => Some(DeferredKind::LspHover),
+        "lsp_workspace_symbol" => Some(DeferredKind::LspWorkspaceSymbol),
+        "lsp_document_symbols" => Some(DeferredKind::LspDocumentSymbols),
         _ => None,
     };
 
@@ -81,6 +88,12 @@ pub fn execute_tool(
             DeferredKind::LspDefinition => execute_lsp_definition(editor, &call.arguments),
             DeferredKind::LspReferences => execute_lsp_references(editor, &call.arguments),
             DeferredKind::LspHover => execute_lsp_hover(editor, &call.arguments),
+            DeferredKind::LspWorkspaceSymbol => {
+                execute_lsp_workspace_symbol(editor, &call.arguments)
+            }
+            DeferredKind::LspDocumentSymbols => {
+                execute_lsp_document_symbols(editor, &call.arguments)
+            }
         };
         return match result {
             Ok(()) => ExecuteResult::Deferred {
@@ -143,6 +156,7 @@ pub fn execute_tool(
         "shell_read_output",
         "shell_send_input",
         "ai_permissions",
+        "set_option",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)

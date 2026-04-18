@@ -322,6 +322,26 @@ impl Conversation {
         self.rendered_lines().len()
     }
 
+    /// Split the input prompt into spans for cursor rendering.
+    ///
+    /// Returns `(prefix, before_cursor, cursor_char, after_cursor)` where
+    /// `cursor_char` is the character under the cursor or `" "` at end of line.
+    /// The renderer applies `ui.cursor` style to `cursor_char`.
+    pub fn input_cursor_spans(&self) -> (&str, &str, String, &str) {
+        let input = &self.input_line;
+        let cursor_byte = self.input_cursor.min(input.len());
+        let before = &input[..cursor_byte];
+        if cursor_byte < input.len() {
+            let rest = &input[cursor_byte..];
+            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            let cursor_ch = input[cursor_byte..cursor_byte + ch_len].to_string();
+            let after = &input[cursor_byte + ch_len..];
+            ("> ", before, cursor_ch, after)
+        } else {
+            ("> ", before, " ".to_string(), "")
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Input readline editing
     // -----------------------------------------------------------------------
@@ -717,5 +737,61 @@ mod tests {
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"entries\""));
         assert!(json.contains("\"User\""));
+    }
+
+    // ---- input_cursor_spans tests ----
+
+    #[test]
+    fn cursor_spans_empty_input() {
+        let conv = Conversation::new();
+        let (prefix, before, cursor, after) = conv.input_cursor_spans();
+        assert_eq!(prefix, "> ");
+        assert_eq!(before, "");
+        assert_eq!(cursor, " "); // block cursor at end
+        assert_eq!(after, "");
+    }
+
+    #[test]
+    fn cursor_spans_at_end() {
+        let mut conv = Conversation::new();
+        conv.input_line = "hello".into();
+        conv.input_cursor = 5;
+        let (_, before, cursor, after) = conv.input_cursor_spans();
+        assert_eq!(before, "hello");
+        assert_eq!(cursor, " "); // block at end
+        assert_eq!(after, "");
+    }
+
+    #[test]
+    fn cursor_spans_in_middle() {
+        let mut conv = Conversation::new();
+        conv.input_line = "hello".into();
+        conv.input_cursor = 2;
+        let (_, before, cursor, after) = conv.input_cursor_spans();
+        assert_eq!(before, "he");
+        assert_eq!(cursor, "l");
+        assert_eq!(after, "lo");
+    }
+
+    #[test]
+    fn cursor_spans_at_start() {
+        let mut conv = Conversation::new();
+        conv.input_line = "abc".into();
+        conv.input_cursor = 0;
+        let (_, before, cursor, after) = conv.input_cursor_spans();
+        assert_eq!(before, "");
+        assert_eq!(cursor, "a");
+        assert_eq!(after, "bc");
+    }
+
+    #[test]
+    fn cursor_spans_multibyte() {
+        let mut conv = Conversation::new();
+        conv.input_line = "héllo".into();
+        conv.input_cursor = 1; // before 'é' (byte offset 1)
+        let (_, before, cursor, after) = conv.input_cursor_spans();
+        assert_eq!(before, "h");
+        assert_eq!(cursor, "é");
+        assert_eq!(after, "llo");
     }
 }

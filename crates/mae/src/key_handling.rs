@@ -524,6 +524,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 (Some(buf_name), PalettePurpose::SwitchBuffer) => {
                     if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
                         editor.switch_to_buffer(idx);
+                        editor.sync_mode_to_buffer();
                     }
                 }
                 (Some(path), PalettePurpose::RecentFile) => {
