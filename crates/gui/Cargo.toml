@@ -11,4 +11,5 @@ mae-renderer = { path = "../renderer" }
 mae-shell = { path = "../shell" }
 winit = "0.30"
 skia-safe = "0.82"
+softbuffer = "0.4"
 tracing = { workspace = true }

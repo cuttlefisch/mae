@@ -1,14 +1,17 @@
 //! Skia surface management and frame composition.
 //!
-//! Manages the GPU-accelerated Skia surface that backs the editor window.
-//! Each frame: clear → draw text lines → draw status → present.
+//! Manages the Skia raster surface that backs the editor window.
+//! Each frame: clear → draw text lines → draw status → present via softbuffer.
 
 use std::io;
+use std::num::NonZeroU32;
+use std::rc::Rc;
 
 use mae_core::{NamedColor, Theme, ThemeColor};
 use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface};
+use winit::window::Window;
 
-/// Skia rendering surface and font state.
+/// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
     surface: Surface,
     font: Font,
@@ -16,11 +19,13 @@ pub struct SkiaCanvas {
     cell_height: f32,
     width: u32,
     height: u32,
+    /// softbuffer surface for blitting raster pixels to the OS window.
+    sb_surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
 }
 
 impl SkiaCanvas {
     /// Create a new Skia raster surface with monospace font metrics.
-    pub fn new(width: u32, height: u32) -> io::Result<Self> {
+    pub fn new(width: u32, height: u32, window: Rc<Window>) -> io::Result<Self> {
         let surface = surfaces::raster_n32_premul((width as i32, height as i32))
             .ok_or_else(|| io::Error::other("failed to create Skia surface"))?;
 
@@ -41,6 +46,18 @@ impl SkiaCanvas {
         let cell_width = bounds.width().max(font_size * 0.6);
         let cell_height = font.spacing();
 
+        let context = softbuffer::Context::new(window.clone())
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let mut sb_surface = softbuffer::Surface::new(&context, window)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
+        sb_surface
+            .resize(
+                NonZeroU32::new(width).unwrap_or(NonZeroU32::new(1).unwrap()),
+                NonZeroU32::new(height).unwrap_or(NonZeroU32::new(1).unwrap()),
+            )
+            .map_err(|e| io::Error::other(e.to_string()))?;
+
         Ok(SkiaCanvas {
             surface,
             font,
@@ -48,6 +65,7 @@ impl SkiaCanvas {
             cell_height,
             width,
             height,
+            sb_surface,
         })
     }
 
@@ -63,6 +81,9 @@ impl SkiaCanvas {
         if let Some(new_surface) = surfaces::raster_n32_premul((width as i32, height as i32)) {
             self.surface = new_surface;
         }
+        let w = NonZeroU32::new(width).unwrap_or(NonZeroU32::new(1).unwrap());
+        let h = NonZeroU32::new(height).unwrap_or(NonZeroU32::new(1).unwrap());
+        let _ = self.sb_surface.resize(w, h);
     }
 
     /// Begin a new frame: clear the surface with the theme's background color.
@@ -121,12 +142,36 @@ impl SkiaCanvas {
         canvas.draw_str(text, (0.0, y + self.cell_height), &self.font, &fg_paint);
     }
 
-    /// End the frame (flush pending Skia operations).
+    /// End the frame: blit the Skia raster pixels to the OS window via softbuffer.
     pub fn end_frame(&mut self) {
-        // Raster surface: no GPU flush needed; the frame is complete
-        // when the last draw call returns. For a GPU-backed surface (future),
-        // this would be `gpu_direct_context.flush_and_submit()`.
-        let _ = &self.surface;
+        // Read Skia pixel data (premultiplied BGRA on little-endian).
+        let image_info = self.surface.image_info();
+        let row_bytes = image_info.min_row_bytes();
+        let total_bytes = row_bytes * self.height as usize;
+        let mut pixels = vec![0u8; total_bytes];
+        self.surface
+            .read_pixels(&image_info, &mut pixels, row_bytes, (0, 0));
+
+        // softbuffer wants u32 pixels in 0x00RRGGBB format.
+        let Ok(mut buffer) = self.sb_surface.buffer_mut() else {
+            return;
+        };
+
+        let pixel_count = (self.width * self.height) as usize;
+        for i in 0..pixel_count.min(buffer.len()) {
+            let offset = i * 4;
+            if offset + 3 >= pixels.len() {
+                break;
+            }
+            // Skia raster_n32_premul on little-endian is BGRA byte order.
+            let b = pixels[offset] as u32;
+            let g = pixels[offset + 1] as u32;
+            let r = pixels[offset + 2] as u32;
+            // softbuffer format: 0x00RRGGBB
+            buffer[i] = (r << 16) | (g << 8) | b;
+        }
+
+        let _ = buffer.present();
     }
 }
 

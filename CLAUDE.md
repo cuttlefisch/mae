@@ -102,13 +102,17 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1 COMPLETE (1,329 tests)
+### Phase 8: GUI Rendering Backend — M1-M2 COMPLETE (1,329 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
 - Configurable shell exit sequence: shell-insert keymap (not hardcoded) ✅
 - Configurable AI permission tier: config.toml + `MAE_AI_PERMISSIONS` env var ✅
-- **Next: variable-height lines (M2), inline images (M3), PDF preview (M4), mouse (M5)**
+- GUI event loop: winit `pump_app_events()` + tokio select!, softbuffer presentation ✅
+- Full keyboard input in GUI: all modes, shell-insert, modifier tracking ✅
+- CI exclusion: `mae-gui` excluded from workspace CI (skia system deps) ✅
+- init.scm fix: inject editor state before Scheme evaluation ✅
+- **Next: cursor/gutter/command-line rendering (M3), variable-height lines (M4), inline images (M5), PDF preview (M6), mouse (M7)**
 
 ## Key Design Decisions Already Made
 

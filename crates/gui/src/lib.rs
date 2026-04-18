@@ -29,6 +29,7 @@ mod theme;
 
 use std::collections::HashMap;
 use std::io;
+use std::rc::Rc;
 
 use mae_core::Editor;
 use mae_renderer::Renderer;
@@ -45,7 +46,7 @@ pub use input::{winit_event_to_input, winit_key_to_keypress};
 /// The window is created on first `render()` call (lazy initialization to
 /// match the terminal backend's pattern).
 pub struct GuiRenderer {
-    window: Option<Window>,
+    window: Option<Rc<Window>>,
     canvas: Option<canvas::SkiaCanvas>,
     cols: u16,
     rows: u16,
@@ -78,8 +79,9 @@ impl GuiRenderer {
             .create_window(attrs)
             .map_err(|e| io::Error::other(e.to_string()))?;
 
+        let window = Rc::new(window);
         let size = window.inner_size();
-        let canvas = canvas::SkiaCanvas::new(size.width, size.height)?;
+        let canvas = canvas::SkiaCanvas::new(size.width, size.height, window.clone())?;
 
         // Compute cell dimensions from the default monospace font.
         let (cw, ch) = canvas.cell_size();
@@ -122,7 +124,7 @@ impl GuiRenderer {
 
     /// Returns a reference to the window, if initialized.
     pub fn window(&self) -> Option<&Window> {
-        self.window.as_ref()
+        self.window.as_deref()
     }
 }
 

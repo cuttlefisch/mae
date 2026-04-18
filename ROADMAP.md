@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-5 complete, Phase 6 M1-M4 COMPLETE + MCP bridge + file auto-reload + agent bootstrap (1290+ tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,329+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -800,24 +800,64 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] Configurable shell exit sequence (shell-insert keymap, not hardcoded)
 - [x] Configurable AI permission tier (config + env var)
 
-### M2: Variable-Height Lines & Mixed Fonts
+### M2: Event Loop & Presentation — COMPLETE
+- [x] winit `pump_app_events()` integrated with tokio `current_thread` runtime
+- [x] Full keyboard input: all editor modes, shell-insert, modifier tracking
+- [x] softbuffer pixel presentation (Skia raster → OS window surface)
+- [x] AI/LSP/DAP/MCP channel draining in GUI loop (same as terminal)
+- [x] Shell terminal spawn/poll/close in GUI mode
+- [x] Window resize handling
+- [x] CI fix: `--exclude mae-gui` for workspace builds (skia system deps)
+- [x] init.scm fix: inject editor state before Scheme file evaluation
+
+### GUI Feature Status
+
+| Feature | Status | Milestone |
+|---------|--------|-----------|
+| Window + monospace text | ✅ Done | M1-M2 |
+| Keyboard input (all modes) | ✅ Done | M2 |
+| Window resize | ✅ Done | M2 |
+| Status bar | ✅ Done | M2 |
+| AI/LSP/DAP/MCP channels | ✅ Done | M2 |
+| Shell terminals | ✅ Done | M2 |
+| Cursor rendering | ❌ Not yet | M3 |
+| Line numbers / gutter | ❌ Not yet | M3 |
+| Command line display | ❌ Not yet | M3 |
+| Syntax highlighting colors | ❌ Not yet | M3 |
+| Splash screen | ❌ Not yet | M3 |
+| Variable-height lines | ❌ Not yet | M4 |
+| Mixed fonts (headings, prose) | ❌ Not yet | M4 |
+| Inline images (PNG/JPG/SVG) | ❌ Not yet | M5 |
+| Org-mode image preview | ❌ Not yet | M5 |
+| PDF preview | ❌ Not yet | M6 |
+| Mouse (click, drag, scroll) | ❌ Not yet | M7 |
+
+### M3: Visual Polish — Cursor, Gutter, Command Line
+- [ ] Cursor rendering (block/line per mode, blinking)
+- [ ] Line numbers and gutter (breakpoints, diagnostics)
+- [ ] Command line / status message display
+- [ ] Syntax highlighting via tree-sitter colors
+- [ ] Splash screen rendering
+- [ ] Visual mode selection highlighting
+
+### M4: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
 - [ ] Headings rendered at larger font sizes
 - [ ] Code blocks rendered in monospace, prose in proportional
 - [ ] Bold/italic/underline/strikethrough font decorations
 - [ ] Line-height varies per line type (heading, code, prose)
 
-### M3: Inline Images
+### M5: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
 - [ ] Org-mode `[[file:image.png]]` auto-preview
 - [ ] Image scaling to fit viewport width
 
-### M4: PDF Preview
+### M6: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
 - [ ] `:pdf <file>` opens a PDF preview buffer
 - [ ] Scroll through pages, zoom in/out
 
-### M5: Mouse & Selection
+### M7: Mouse & Selection
 - [ ] Click to place cursor
 - [ ] Click-drag to select text
 - [ ] Scrollbar (vertical)
@@ -947,7 +987,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
 1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
 2. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
 3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-4. **Phase 8 M2-M5** (GUI) — variable fonts, images, PDF, mouse
+4. **Phase 8 M3-M7** (GUI) — cursor/gutter, variable fonts, images, PDF, mouse
 5. **Session & file management** — session save/restore, recent files, file watchers
 6. **LSP packaging review** — multi-language defaults, user-configurable server selection
 7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
