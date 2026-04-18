@@ -105,21 +105,9 @@ pub fn handle_key(
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
-    // Input lock: during AI operations (e.g. self-test), discard all input
-    // except Ctrl-C / Escape which cancels the AI and releases the lock.
-    if editor.input_locked {
-        if key.code == KeyCode::Esc
-            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-        {
-            editor.input_locked = false;
-            if let Some(tx) = ai_tx {
-                let _ = tx.try_send(AiCommand::Cancel);
-            }
-            editor.set_status("AI operation cancelled");
-        }
-        // All other keys silently discarded
-        return;
-    }
+    // Input lock is now checked at the event loop level (main.rs) so it
+    // covers all modes including ShellInsert. By the time we get here,
+    // input_locked is guaranteed false.
 
     if editor.mode != Mode::Command {
         editor.status_msg.clear();

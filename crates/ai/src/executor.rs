@@ -134,6 +134,26 @@ pub fn execute_tool(
         });
     }
 
+    // 4c. Handle input_lock (sets editor.input_locked).
+    if call.name == "input_lock" {
+        let locked = call
+            .arguments
+            .get("locked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        editor.input_locked = locked;
+        let msg = if locked {
+            "Input locked — user keystrokes discarded (Esc/Ctrl-C to cancel)"
+        } else {
+            "Input unlocked — user keystrokes re-enabled"
+        };
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            success: true,
+            output: msg.to_string(),
+        });
+    }
+
     // 5. Dispatch synchronous tools
     let ai_tool_names = [
         "buffer_read",
@@ -173,6 +193,7 @@ pub fn execute_tool(
         "shell_send_input",
         "ai_permissions",
         "self_test_suite",
+        "input_lock",
         "set_option",
         "ai_save",
         "ai_load",

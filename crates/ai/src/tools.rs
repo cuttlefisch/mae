@@ -962,6 +962,24 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Input lock ---
+        ToolDefinition {
+            name: "input_lock".into(),
+            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state, and unlock when done.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "locked".into(),
+                    ToolProperty {
+                        prop_type: "boolean".into(),
+                        description: "true to lock input, false to unlock".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["locked".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Conversation persistence ---
         ToolDefinition {
             name: "ai_save".into(),
@@ -1112,7 +1130,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 46);
+        assert_eq!(tools.len(), 47);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

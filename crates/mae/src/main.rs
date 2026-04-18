@@ -418,7 +418,24 @@ async fn main() -> io::Result<()> {
             maybe_event = event_stream.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
-                        if editor.mode == Mode::ShellInsert {
+                        // Input lock: during AI operations, discard all input
+                        // except Esc/Ctrl-C which cancel and release the lock.
+                        // Checked here (not in handle_key) so ShellInsert mode
+                        // is also covered.
+                        if editor.input_locked {
+                            use crossterm::event::{KeyCode, KeyModifiers};
+                            if key.code == KeyCode::Esc
+                                || (key.code == KeyCode::Char('c')
+                                    && key.modifiers.contains(KeyModifiers::CONTROL))
+                            {
+                                editor.input_locked = false;
+                                if let Some(ref tx) = ai_command_tx {
+                                    let _ = tx.try_send(AiCommand::Cancel);
+                                }
+                                editor.set_status("AI operation cancelled");
+                            }
+                            // All other keys discarded while locked.
+                        } else if editor.mode == Mode::ShellInsert {
                             handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
@@ -1572,7 +1589,18 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 if let Some(mae_core::InputEvent::Key(kp)) =
                     mae_gui::winit_event_to_input(&event, *self.ctrl_held, *self.alt_held)
                 {
-                    if self.editor.mode == Mode::ShellInsert {
+                    // Input lock: discard all keys except Esc/Ctrl-C.
+                    if self.editor.input_locked {
+                        if kp.key == mae_core::Key::Escape
+                            || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
+                        {
+                            self.editor.input_locked = false;
+                            if let Some(tx) = self.ai_command_tx {
+                                let _ = tx.try_send(AiCommand::Cancel);
+                            }
+                            self.editor.set_status("AI operation cancelled");
+                        }
+                    } else if self.editor.mode == Mode::ShellInsert {
                         let ct_event = key_handling::keypress_to_crossterm(&kp);
                         handle_shell_key(
                             self.editor,
