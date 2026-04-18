@@ -471,6 +471,10 @@ impl CommandRegistry {
             "Toggle breakpoint on current line",
         );
         reg.register_builtin("debug-inspect", "Inspect variable or evaluate expression");
+        reg.register_builtin(
+            "debug-panel",
+            "Toggle debug panel showing threads, stack, and variables (SPC d p)",
+        );
 
         // LSP (Phase 4a)
         reg.register_builtin(

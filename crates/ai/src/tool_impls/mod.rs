@@ -14,7 +14,9 @@ pub use buffer::{
     execute_list_buffers,
 };
 pub use dap::{
-    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_continue, execute_dap_expand_variable, execute_dap_inspect_variable,
+    execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
+    execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
     execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{

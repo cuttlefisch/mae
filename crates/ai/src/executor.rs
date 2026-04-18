@@ -10,7 +10,9 @@ use crate::tool_impls::lsp::{
 use crate::tool_impls::{
     execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
     execute_close_buffer, execute_command_list, execute_create_file, execute_cursor_info,
-    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_continue, execute_dap_expand_variable, execute_dap_inspect_variable,
+    execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
+    execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
     execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
     execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_links_from,
     execute_kb_links_to, execute_kb_list, execute_kb_search, execute_list_buffers,
@@ -181,6 +183,12 @@ pub fn execute_tool(
         "dap_continue",
         "dap_step",
         "dap_inspect_variable",
+        "dap_remove_breakpoint",
+        "dap_list_variables",
+        "dap_expand_variable",
+        "dap_select_frame",
+        "dap_select_thread",
+        "dap_output",
         "kb_get",
         "kb_search",
         "kb_list",
@@ -249,6 +257,12 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "dap_continue" => execute_dap_continue(editor),
         "dap_step" => execute_dap_step(editor, &call.arguments),
         "dap_inspect_variable" => execute_dap_inspect_variable(editor, &call.arguments),
+        "dap_remove_breakpoint" => execute_dap_remove_breakpoint(editor, &call.arguments),
+        "dap_list_variables" => execute_dap_list_variables(editor),
+        "dap_expand_variable" => execute_dap_expand_variable(editor, &call.arguments),
+        "dap_select_frame" => execute_dap_select_frame(editor, &call.arguments),
+        "dap_select_thread" => execute_dap_select_thread(editor, &call.arguments),
+        "dap_output" => execute_dap_output(editor, &call.arguments),
         "kb_get" => execute_kb_get(editor, &call.arguments),
         "kb_search" => execute_kb_search(editor, &call.arguments),
         "kb_list" => execute_kb_list(editor, &call.arguments),
@@ -435,7 +449,8 @@ fn build_self_test_plan(filter: &str) -> String {
                     "terminal", "send-to-shell",
                     "agent-list", "agent-setup", "self-test",
                     "lsp-goto-definition", "lsp-find-references", "lsp-hover", "lsp-show-diagnostics",
-                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint"
+                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint",
+                    "debug-panel"
                 ]
             }
         }));
@@ -592,6 +607,50 @@ fn build_self_test_plan(filter: &str) -> String {
             ],
             "cleanup": [
                 "Close the main.rs buffer with close_buffer (name: 'main.rs')",
+                "Switch back to *AI* buffer"
+            ]
+        }));
+    }
+
+    if include("dap") {
+        categories.push(serde_json::json!({
+            "name": "dap",
+            "conditional": true,
+            "precondition": "Call debug_state first. If it returns 'No active debug session', run dap_start with adapter='lldb' and program='/bin/ls' (or skip if lldb unavailable). If dap_start fails, SKIP this entire category.",
+            "tests": [
+                {
+                    "tool": "debug_state",
+                    "args": {},
+                    "assert": "Returns JSON with 'target' and 'active_thread_id' fields (or 'No active debug session' before start)"
+                },
+                {
+                    "tool": "dap_set_breakpoint",
+                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
+                    "assert": "Returns JSON with 'all_lines_for_source' containing [1]"
+                },
+                {
+                    "tool": "dap_list_variables",
+                    "args": {},
+                    "assert": "Returns JSON object (may be empty scopes if not stopped at breakpoint)"
+                },
+                {
+                    "tool": "dap_output",
+                    "args": {"lines": 10},
+                    "assert": "Returns JSON with 'total_lines', 'returned_lines', 'output' fields"
+                },
+                {
+                    "tool": "dap_remove_breakpoint",
+                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
+                    "assert": "Returns JSON with 'remaining_lines' as empty array"
+                },
+                {
+                    "tool": "dap_continue",
+                    "args": {},
+                    "assert": "Returns 'continue' or error 'not stopped' (both acceptable)"
+                }
+            ],
+            "cleanup": [
+                "Call command_ debug-stop to tear down the session",
                 "Switch back to *AI* buffer"
             ]
         }));

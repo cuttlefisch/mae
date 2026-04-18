@@ -156,6 +156,213 @@ pub fn execute_dap_inspect_variable(editor: &Editor, args: &Value) -> Result<Str
     }
 }
 
+/// Remove a breakpoint at `source:line`.
+///
+/// Args:
+/// - `source` (string, required): source file path.
+/// - `line` (integer, required): 1-indexed line number.
+///
+/// Returns JSON with the remaining line set for that source.
+pub fn execute_dap_remove_breakpoint(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let source = args
+        .get("source")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'source' argument")?;
+    let line = args
+        .get("line")
+        .and_then(|v| v.as_i64())
+        .ok_or("Missing 'line' argument (1-indexed)")?;
+    if line < 1 {
+        return Err("'line' must be >= 1".into());
+    }
+
+    let lines = editor.dap_remove_breakpoint(source.to_string(), line);
+    Ok(json!({
+        "source": source,
+        "removed_line": line,
+        "remaining_lines": lines,
+    })
+    .to_string())
+}
+
+/// List all variables in the current frame's scopes.
+///
+/// Returns JSON with scope → variable list mapping. Includes expanded
+/// children from the debug panel's `DebugView.child_variables` so the AI
+/// can see results of prior `dap_expand_variable` calls.
+pub fn execute_dap_list_variables(editor: &Editor) -> Result<String, String> {
+    let state = editor
+        .debug_state
+        .as_ref()
+        .ok_or("No active debug session")?;
+
+    // Grab child_variables from the debug view (if the panel is open).
+    let child_vars = editor
+        .buffers
+        .iter()
+        .find(|b| b.kind == mae_core::buffer::BufferKind::Debug)
+        .and_then(|b| b.debug_view.as_ref())
+        .map(|v| &v.child_variables);
+
+    let mut scopes_out = serde_json::Map::new();
+    for scope in &state.scopes {
+        let vars = state
+            .variables
+            .get(&scope.name)
+            .map(|vars| {
+                vars.iter()
+                    .map(|v| render_variable_json(v, child_vars))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        scopes_out.insert(scope.name.clone(), json!(vars));
+    }
+    serde_json::to_string_pretty(&scopes_out).map_err(|e| e.to_string())
+}
+
+/// Render a variable to JSON, recursing into expanded children.
+fn render_variable_json(
+    v: &mae_core::debug::Variable,
+    child_vars: Option<&std::collections::HashMap<i64, Vec<mae_core::debug::Variable>>>,
+) -> Value {
+    let mut obj = json!({
+        "name": v.name,
+        "value": v.value,
+        "type": v.var_type,
+        "variables_reference": v.variables_reference,
+    });
+    if v.variables_reference > 0 {
+        if let Some(children_map) = child_vars {
+            if let Some(children) = children_map.get(&v.variables_reference) {
+                let child_json: Vec<Value> = children
+                    .iter()
+                    .map(|c| render_variable_json(c, child_vars))
+                    .collect();
+                obj["children"] = json!(child_json);
+            }
+        }
+    }
+    obj
+}
+
+/// Get children of a nested variable by its `variables_reference`.
+///
+/// Args:
+/// - `variables_reference` (integer, required): the parent's reference.
+/// - `scope` (string, required): scope name for the request.
+///
+/// Queues a DAP request and returns immediately. The AI should call
+/// `debug_state` or `dap_list_variables` after a moment to see results.
+pub fn execute_dap_expand_variable(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    if editor.debug_state.is_none() {
+        return Err("No active debug session".into());
+    }
+    let var_ref = args
+        .get("variables_reference")
+        .and_then(|v| v.as_i64())
+        .ok_or("Missing 'variables_reference' argument")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'scope' argument")?;
+
+    editor.dap_request_variables(scope.to_string(), var_ref);
+    Ok(format!(
+        "Requested children for variables_reference={} in scope '{}'",
+        var_ref, scope
+    ))
+}
+
+/// Switch to a different stack frame.
+///
+/// Args:
+/// - `frame_id` (integer, required): the frame id to select.
+///
+/// Queues a scopes request for the new frame.
+pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    if editor.debug_state.is_none() {
+        return Err("No active debug session".into());
+    }
+    let frame_id = args
+        .get("frame_id")
+        .and_then(|v| v.as_i64())
+        .ok_or("Missing 'frame_id' argument")?;
+
+    // Verify the frame exists.
+    let frame_exists = editor
+        .debug_state
+        .as_ref()
+        .map(|s| s.stack_frames.iter().any(|f| f.id == frame_id))
+        .unwrap_or(false);
+    if !frame_exists {
+        return Err(format!("No frame with id {}", frame_id));
+    }
+
+    // Update selected_frame_id in the debug view so the panel tracks the AI's selection.
+    if let Some(buf) = editor
+        .buffers
+        .iter_mut()
+        .find(|b| b.kind == mae_core::buffer::BufferKind::Debug)
+    {
+        if let Some(view) = buf.debug_view.as_mut() {
+            view.selected_frame_id = Some(frame_id);
+        }
+    }
+
+    editor.dap_request_scopes(frame_id);
+    Ok(format!("Selected frame {} and requested scopes", frame_id))
+}
+
+/// Switch the active thread.
+///
+/// Args:
+/// - `thread_id` (integer, required): the thread id to select.
+pub fn execute_dap_select_thread(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let state = editor
+        .debug_state
+        .as_mut()
+        .ok_or("No active debug session")?;
+    let thread_id = args
+        .get("thread_id")
+        .and_then(|v| v.as_i64())
+        .ok_or("Missing 'thread_id' argument")?;
+
+    if !state.set_active_thread(thread_id) {
+        return Err(format!("No thread with id {}", thread_id));
+    }
+
+    // Refresh to get stack trace for the new thread.
+    editor.dap_refresh();
+    Ok(format!("Switched to thread {}", thread_id))
+}
+
+/// Read recent debug output log.
+///
+/// Args:
+/// - `lines` (integer, optional): number of recent lines to return (default 50).
+pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, String> {
+    let state = editor
+        .debug_state
+        .as_ref()
+        .ok_or("No active debug session")?;
+
+    let max_lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+
+    let total = state.output_log.len();
+    let start = total.saturating_sub(max_lines);
+    let lines: Vec<&str> = state.output_log[start..]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    Ok(json!({
+        "total_lines": total,
+        "returned_lines": lines.len(),
+        "output": lines,
+    })
+    .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

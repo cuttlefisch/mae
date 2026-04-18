@@ -240,6 +240,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC d o"), "debug-step-out");
         normal.bind(parse_key_seq_spaced("SPC d b"), "debug-toggle-breakpoint");
         normal.bind(parse_key_seq_spaced("SPC d v"), "debug-inspect");
+        normal.bind(parse_key_seq_spaced("SPC d p"), "debug-panel");
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");

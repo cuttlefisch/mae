@@ -688,6 +688,121 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "dap_remove_breakpoint".into(),
+            description: "Remove a breakpoint at source:line. Returns remaining lines for that source.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "source".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Source file path".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number of breakpoint to remove".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["source".into(), "line".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_list_variables".into(),
+            description: "List all variables in the current frame's scopes. Returns JSON mapping scope names to variable arrays with name/value/type/variables_reference.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "dap_expand_variable".into(),
+            description: "Request children of a nested variable. Queues a DAP request; call debug_state or dap_list_variables after to see results.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "variables_reference".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "The parent variable's variables_reference (must be > 0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Scope name for the request (e.g. 'Locals')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["variables_reference".into(), "scope".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_select_frame".into(),
+            description: "Switch to a different stack frame by id. Queues a scopes request for the new frame.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "frame_id".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Stack frame id to select".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["frame_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_select_thread".into(),
+            description: "Switch the active thread. Triggers a stack trace refresh for the new thread.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "thread_id".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Thread id to switch to".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["thread_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_output".into(),
+            description: "Read recent debug output log lines. Returns JSON with output array and total line count.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "lines".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Number of recent lines to return (default 50)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // ---- Knowledge base (shared with :help) ----
         //
         // The KB is the source of truth for command/concept/key
@@ -1130,7 +1245,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 47);
+        assert_eq!(tools.len(), 53);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -1160,6 +1275,12 @@ mod tests {
         assert!(names.contains(&"dap_continue"));
         assert!(names.contains(&"dap_step"));
         assert!(names.contains(&"dap_inspect_variable"));
+        assert!(names.contains(&"dap_remove_breakpoint"));
+        assert!(names.contains(&"dap_list_variables"));
+        assert!(names.contains(&"dap_expand_variable"));
+        assert!(names.contains(&"dap_select_frame"));
+        assert!(names.contains(&"dap_select_thread"));
+        assert!(names.contains(&"dap_output"));
         assert!(names.contains(&"kb_get"));
         assert!(names.contains(&"kb_search"));
         assert!(names.contains(&"kb_list"));

@@ -958,6 +958,77 @@ fn handle_normal_mode(
         }
     }
 
+    // Debug panel: intercept navigation and action keys.
+    // j/k move between interactive items, Enter selects/expands,
+    // c/n/s/S drive execution, o toggles output, r refreshes, q closes.
+    let is_debug = {
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].kind == BufferKind::Debug
+    };
+    if is_debug && pending_keys.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('j') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                    view.move_down();
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('k') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                    view.move_up();
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Enter => {
+                editor.debug_panel_select();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('q') if !ctrl => {
+                editor.close_debug_panel();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('o') if !ctrl => {
+                editor.debug_toggle_output();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('r') if !ctrl => {
+                editor.dap_refresh();
+                editor.debug_panel_refresh_if_open();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('c') if !ctrl => {
+                editor.dap_continue();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('n') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::Over);
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('s') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::In);
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('S') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::Out);
+                editor.count_prefix = None;
+                return;
+            }
+            _ => {} // Fall through to normal keymap
+        }
+    }
+
     // In Normal mode, intercept j/k/G/gg for conversation buffer scrolling
     // and `i` to re-enter ConversationInput mode.
     let is_conv = {

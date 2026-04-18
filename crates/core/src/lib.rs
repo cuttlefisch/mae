@@ -5,6 +5,7 @@ pub mod commands;
 pub mod conversation;
 pub mod dap_intent;
 pub mod debug;
+pub mod debug_view;
 pub mod editor;
 pub mod file_browser;
 pub mod file_picker;
@@ -32,6 +33,7 @@ pub use dap_intent::{DapIntent, DapSpawnConfig, StepKind};
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };
+pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
     CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor,
     LspLocation, LspRange,

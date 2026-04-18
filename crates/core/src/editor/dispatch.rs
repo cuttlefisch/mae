@@ -1076,6 +1076,11 @@ impl Editor {
                 }
             }
 
+            // Debug panel
+            "debug-panel" => {
+                self.toggle_debug_panel();
+            }
+
             // Visual mode
             "enter-visual-char" => match self.mode {
                 Mode::Visual(VisualType::Char) => self.mode = Mode::Normal,
@@ -1429,7 +1434,39 @@ impl Editor {
                 self.lsp_request_definition();
             }
             "lsp-find-references" => self.lsp_request_references(),
-            "lsp-hover" => self.lsp_request_hover(),
+            "lsp-hover" => {
+                self.lsp_request_hover();
+                // Also show debug variable value if stopped.
+                if let Some(state) = &self.debug_state {
+                    if state.is_stopped() {
+                        let buf = &self.buffers[self.active_buffer_idx()];
+                        let win = self.window_mgr.focused_window();
+                        let offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+                        if let Some(pattern) = crate::search::word_at_offset(buf.rope(), offset) {
+                            // word_at_offset returns `\bword\b`; extract the raw word.
+                            let word = pattern
+                                .strip_prefix("\\b")
+                                .and_then(|s| s.strip_suffix("\\b"))
+                                .unwrap_or(&pattern);
+                            if let Some((_scope, var)) = state.find_variable(word, None) {
+                                let type_str = var
+                                    .var_type
+                                    .as_deref()
+                                    .map(|t| format!(": {}", t))
+                                    .unwrap_or_default();
+                                let debug_info =
+                                    format!("[Debug] {}{} = {}", var.name, type_str, var.value);
+                                let existing = std::mem::take(&mut self.status_msg);
+                                if existing.is_empty() {
+                                    self.status_msg = debug_info;
+                                } else {
+                                    self.status_msg = format!("{} | {}", existing, debug_info);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // LSP completion (Phase 4a M4)
             "lsp-complete" => self.lsp_request_completion(),
