@@ -251,17 +251,27 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "close_buffer".into(),
-            description: "Close a buffer by name. Fails if the buffer has unsaved changes.".into(),
+            description: "Close a buffer by name. Fails if the buffer has unsaved changes unless force=true.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "name".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Buffer name to close (default: active buffer)".into(),
-                        enum_values: None,
-                    },
-                )]),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to close (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "force".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "If true, close even if the buffer has unsaved changes (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::Write),
@@ -934,6 +944,77 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Self-test suite ---
+        ToolDefinition {
+            name: "self_test_suite".into(),
+            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. Use this to validate that all editor tools work end-to-end. No arguments needed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "categories".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Conversation persistence ---
+        ToolDefinition {
+            name: "ai_save".into(),
+            description: "Save the current AI conversation to a JSON file. Returns the number of entries saved.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path to save conversation to".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "ai_load".into(),
+            description: "Load an AI conversation from a JSON file. Replaces the current conversation.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path to load conversation from".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- File management ---
+        ToolDefinition {
+            name: "rename_file".into(),
+            description: "Rename the current buffer's file on disk and update the buffer path.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "new_path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New file path".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["new_path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
 
@@ -1031,7 +1112,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 42);
+        assert_eq!(tools.len(), 46);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

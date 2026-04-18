@@ -11,6 +11,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 - **Language:** Rust (core) + Scheme R7RS-small (extensions)
 - **License:** GPL-3.0-or-later
 - **Build:** `make check` / `make build` / `make test` / `make ci` from workspace root
+- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`.
 
 ## Crate Layout
 
@@ -81,7 +82,8 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Tree-sitter syntax highlighting: 15 languages, structural selection ✅
 - Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
 - Knowledge base: in-memory graph, SQLite persistence, org-mode parser, help system, AI KB tools ✅
-- **Next: async LSP AI tools (4a M5), debug panel UI (4c M3)**
+- LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols` ✅
+- **Next: debug panel UI (4c M3)**
 
 ### Phase 5: Knowledge Base — COMPLETE
 - SQLite-backed graph store with FTS5
@@ -102,7 +104,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M2 COMPLETE (1,329 tests)
+### Phase 8: GUI Rendering Backend — M1-M2 COMPLETE (1,369 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -112,6 +114,13 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Full keyboard input in GUI: all modes, shell-insert, modifier tracking ✅
 - CI exclusion: `mae-gui` excluded from workspace CI (skia system deps) ✅
 - init.scm fix: inject editor state before Scheme evaluation ✅
+- Self-test suite: `:self-test`, `self_test_suite` MCP tool, `--self-test` CLI flag ✅
+- Input lock during AI operations (Esc/Ctrl-C to cancel) ✅
+- CWD-based project detection at startup ✅
+- AI tool parity: `ai_save`, `ai_load`, `rename_file`, `close_buffer` force param ✅
+- Ex-command registry parity: 6 commands registered for AI access ✅
+- LSP AI tools: deferred async resolution for definition/references/hover/symbols ✅
+- Event loop refactor: shared `ai_event_handler` + `shell_lifecycle` modules ✅
 - **Next: cursor/gutter/command-line rendering (M3), variable-height lines (M4), inline images (M5), PDF preview (M6), mouse (M7)**
 
 ## Key Design Decisions Already Made

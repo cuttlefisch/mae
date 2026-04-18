@@ -105,6 +105,22 @@ pub fn handle_key(
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
+    // Input lock: during AI operations (e.g. self-test), discard all input
+    // except Ctrl-C / Escape which cancels the AI and releases the lock.
+    if editor.input_locked {
+        if key.code == KeyCode::Esc
+            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            editor.input_locked = false;
+            if let Some(tx) = ai_tx {
+                let _ = tx.try_send(AiCommand::Cancel);
+            }
+            editor.set_status("AI operation cancelled");
+        }
+        // All other keys silently discarded
+        return;
+    }
+
     if editor.mode != Mode::Command {
         editor.status_msg.clear();
     }
@@ -1267,8 +1283,7 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
         warn!("AI prompt submitted but no AI provider configured");
         editor.set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
         if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
-            conv.streaming = false;
-            conv.streaming_start = None;
+            conv.end_streaming();
         }
     }
     editor.mode = Mode::Normal;
@@ -1512,6 +1527,35 @@ pub fn handle_command_mode(
                 return;
             }
 
+            // :self-test [categories] — AI-driven e2e validation
+            if cmd == "self-test" || cmd.starts_with("self-test ") {
+                let categories = cmd.strip_prefix("self-test").unwrap().trim();
+                if let Some(tx) = ai_tx {
+                    // Lock input so user keystrokes don't interfere with test state.
+                    editor.input_locked = true;
+                    // Ensure *AI* buffer exists and is visible so the user
+                    // can watch self-test progress (tool calls, results, report).
+                    editor.open_conversation_buffer();
+                    let prompt = build_self_test_prompt(categories);
+                    if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
+                        warn!("AI self-test prompt dropped");
+                        editor.input_locked = false;
+                    }
+                    info!(
+                        "self-test started, categories={:?}",
+                        if categories.is_empty() {
+                            "all"
+                        } else {
+                            categories
+                        }
+                    );
+                    editor.set_status("[AI BUSY — Esc to cancel] Running self-test...");
+                } else {
+                    editor.set_status("AI not configured — cannot run self-test");
+                }
+                return;
+            }
+
             // :eval <scheme> — Scheme REPL
             if let Some(code) = cmd.strip_prefix("eval ") {
                 let code = code.trim();
@@ -1644,5 +1688,51 @@ pub fn handle_command_mode(
             editor.cmdline_insert_char(ch);
         }
         _ => {}
+    }
+}
+
+/// Build the self-test prompt from the embedded template.
+///
+/// If `categories` is empty, all test categories run. Otherwise only the
+/// named categories execute and everything else is reported as SKIP.
+pub fn build_self_test_prompt(categories: &str) -> String {
+    let base = include_str!("self_test_prompt.md");
+    if categories.is_empty() {
+        format!(
+            "You are running MAE's self-test suite. Execute ALL test categories.\n\n{}",
+            base
+        )
+    } else {
+        format!(
+            "You are running MAE's self-test suite. Execute ONLY these categories: {}. \
+             Report all others as SKIP.\n\n{}",
+            categories, base
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_self_test_prompt_all_categories() {
+        let prompt = build_self_test_prompt("");
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("Execute ALL test categories"));
+        assert!(prompt.contains("self_test_suite"));
+    }
+
+    #[test]
+    fn build_self_test_prompt_filtered() {
+        let prompt = build_self_test_prompt("editing");
+        assert!(prompt.contains("Execute ONLY these categories: editing"));
+        assert!(prompt.contains("Report all others as SKIP"));
+    }
+
+    #[test]
+    fn build_self_test_prompt_multi_category() {
+        let prompt = build_self_test_prompt("editing,help");
+        assert!(prompt.contains("Execute ONLY these categories: editing,help"));
     }
 }

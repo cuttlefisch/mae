@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,329+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,369 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -50,8 +50,8 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | # | Feature | Phase |
 |---|---------|-------|
 | 5 | System clipboard (`"+y`, `"+p`) | 3h M5 ✅ |
-| 6 | Auto-reload on external change | future |
-| 7 | `:set` options | future |
+| 6 | Auto-reload on external change | Phase 6 ✅ |
+| 7 | `:set` options (`set-option!`) | Phase 6 M1b ✅ |
 | 8 | Mouse support | future |
 | 9 | `:read !cmd` | future |
 | 10 | Multiple cursors | future |
@@ -809,6 +809,13 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] Window resize handling
 - [x] CI fix: `--exclude mae-gui` for workspace builds (skia system deps)
 - [x] init.scm fix: inject editor state before Scheme file evaluation
+- [x] Self-test infrastructure: `:self-test`, `self_test_suite` MCP tool, `--self-test` CLI flag
+- [x] Input lock during AI operations (Esc/Ctrl-C to cancel)
+- [x] CWD-based project detection at startup (no file arg needed)
+- [x] `close_buffer` force parameter, `ai_save`/`ai_load`/`rename_file` AI tools
+- [x] 6 ex-commands registered for AI parity (`nohlsearch`, `kb-save`, `kb-load`, `kb-ingest`, `ai-save`, `ai-load`)
+- [x] LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols`
+- [x] Event loop refactor: shared `ai_event_handler` + `shell_lifecycle` modules (eliminates terminal/GUI duplication)
 
 ### GUI Feature Status
 
@@ -1009,4 +1016,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 4d+5  | 70+ ✅ | KB in-memory + SQLite + org parser + help buffer + AI KB tools |
 | 6     | 146 ✅ | shell terminal, hooks, options, MCP bridge, file auto-reload |
 | 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
-| **Total** | **~1,329** | All passing, 0 failures |
+| 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
+| **Total** | **~1,369** | All passing, 0 failures |

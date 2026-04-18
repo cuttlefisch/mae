@@ -69,6 +69,12 @@ impl Default for Conversation {
 }
 
 impl Conversation {
+    /// Mark streaming as finished and clear the start timestamp.
+    pub fn end_streaming(&mut self) {
+        self.streaming = false;
+        self.streaming_start = None;
+    }
+
     pub fn new() -> Self {
         Conversation {
             entries: Vec::new(),

@@ -620,6 +620,33 @@ impl CommandRegistry {
             "Send visual selection to a terminal buffer (SPC e S)",
         );
 
+        // Ex-command parity: commands that were only inline in execute_command()
+        // are now registered so the AI can invoke them via command_* tools.
+        reg.register_builtin(
+            "nohlsearch",
+            "Clear search highlights (alias for clear-search-highlight)",
+        );
+        reg.register_builtin(
+            "kb-save",
+            "Save knowledge base to SQLite file (:kb-save <path>)",
+        );
+        reg.register_builtin(
+            "kb-load",
+            "Load knowledge base from SQLite file (:kb-load <path>)",
+        );
+        reg.register_builtin(
+            "kb-ingest",
+            "Ingest org files from directory into knowledge base (:kb-ingest <dir>)",
+        );
+        reg.register_builtin(
+            "ai-save",
+            "Save AI conversation to JSON file (:ai-save <path>)",
+        );
+        reg.register_builtin(
+            "ai-load",
+            "Load AI conversation from JSON file (:ai-load <path>)",
+        );
+
         // Agent bootstrap
         reg.register_builtin(
             "agent-list",
@@ -628,6 +655,12 @@ impl CommandRegistry {
         reg.register_builtin(
             "agent-setup",
             "Bootstrap an AI agent: write .mcp.json and approval settings (:agent-setup <name>)",
+        );
+
+        // Self-test
+        reg.register_builtin(
+            "self-test",
+            "Run AI-driven self-test to validate editor tools and integrations (:self-test [categories])",
         );
 
         reg
@@ -715,5 +748,22 @@ mod tests {
         let reg = CommandRegistry::with_builtins();
         assert!(reg.contains("agent-list"));
         assert!(reg.contains("agent-setup"));
+    }
+
+    #[test]
+    fn with_builtins_has_self_test() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("self-test"));
+    }
+
+    #[test]
+    fn with_builtins_has_ex_command_parity() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("nohlsearch"));
+        assert!(reg.contains("kb-save"));
+        assert!(reg.contains("kb-load"));
+        assert!(reg.contains("kb-ingest"));
+        assert!(reg.contains("ai-save"));
+        assert!(reg.contains("ai-load"));
     }
 }

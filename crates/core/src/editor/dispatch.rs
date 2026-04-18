@@ -955,8 +955,7 @@ impl Editor {
                 // Actual channel cancel is handled by the binary (AiCommand::Cancel).
                 let status = match self.conversation_mut() {
                     Some(conv) if conv.streaming => {
-                        conv.streaming = false;
-                        conv.streaming_start = None;
+                        conv.end_streaming();
                         conv.push_system("[cancelled]");
                         "[AI] Cancelled"
                     }
@@ -1151,7 +1150,7 @@ impl Editor {
                 self.record_jump();
                 self.search_word_at_cursor_backward();
             }
-            "clear-search-highlight" => {
+            "clear-search-highlight" | "nohlsearch" => {
                 self.search_state.highlight_active = false;
             }
             // gn / gN — select next/previous match as a visual selection.
@@ -1721,6 +1720,24 @@ impl Editor {
                 self.pending_operator = Some("s".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
                 self.operator_count = count;
+            }
+
+            // Ex-command parity: these commands normally take args via `:cmd <arg>`.
+            // When dispatched without args (from keybinding or AI), show usage.
+            "kb-save" => {
+                self.set_status("Usage: :kb-save <path>");
+            }
+            "kb-load" => {
+                self.set_status("Usage: :kb-load <path>");
+            }
+            "kb-ingest" => {
+                self.set_status("Usage: :kb-ingest <directory>");
+            }
+            "ai-save" => {
+                self.set_status("Usage: :ai-save <path>");
+            }
+            "ai-load" => {
+                self.set_status("Usage: :ai-load <path>");
             }
 
             _ => return false,

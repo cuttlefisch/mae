@@ -1,7 +1,9 @@
 mod agents;
+mod ai_event_handler;
 mod bootstrap;
 mod config;
 mod key_handling;
+mod shell_lifecycle;
 
 use std::io;
 use std::panic;
@@ -78,6 +80,7 @@ async fn main() -> io::Result<()> {
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
+        println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -169,6 +172,16 @@ async fn main() -> io::Result<()> {
     };
     editor.message_log = message_log;
 
+    // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
+    if editor.project.is_none() {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Some(root) = mae_core::detect_project_root(&cwd) {
+                editor.recent_projects.push(root.clone());
+                editor.project = Some(mae_core::Project::from_root(root));
+            }
+        }
+    }
+
     // Apply editor preferences from config file.
     let app_config = config::load_config();
     if let Some(ref theme) = app_config.editor.theme {
@@ -217,6 +230,8 @@ async fn main() -> io::Result<()> {
     let permission_policy = config::resolve_permission_policy(&app_config);
 
     // MCP bridge: Unix socket for external agents (Claude Code, etc.)
+    // Clean stale sockets from crashed MAE sessions before binding our own.
+    cleanup_stale_mcp_sockets();
     let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
     let (mcp_tool_tx, mut mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
     {
@@ -231,6 +246,37 @@ async fn main() -> io::Result<()> {
         let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
         tokio::spawn(server.run(mcp_tools));
         info!(socket = %mcp_socket_path, "MCP server started");
+    }
+
+    // --self-test [categories] — headless AI self-test.
+    if args.iter().any(|a| a == "--self-test") {
+        let categories = args
+            .iter()
+            .position(|a| a == "--self-test")
+            .and_then(|i| args.get(i + 1))
+            .filter(|a| !a.starts_with('-'))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        if ai_command_tx.is_none() {
+            eprintln!("mae: --self-test requires an AI provider. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+            std::process::exit(1);
+        }
+
+        let exit_code = run_headless_self_test(
+            &mut editor,
+            &mut ai_event_rx,
+            ai_command_tx.as_ref().unwrap(),
+            &lsp_command_tx,
+            &all_tools,
+            &permission_policy,
+            categories,
+        )
+        .await;
+
+        // Clean up MCP socket.
+        let _ = std::fs::remove_file(&mcp_socket_path);
+        std::process::exit(exit_code);
     }
 
     let use_gui = args.iter().any(|a| a == "--gui");
@@ -266,13 +312,7 @@ async fn main() -> io::Result<()> {
     let mut event_stream = EventStream::new();
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
-    // When an AI tool call is deferred (e.g. LSP request), we hold the
-    // reply channel here until the async result arrives.
-    let mut deferred_ai_reply: Option<(
-        DeferredKind,
-        String, // tool_call_id
-        tokio::sync::oneshot::Sender<ToolResult>,
-    )> = None;
+    let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
 
     // Active shell terminals, keyed by buffer index.
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
@@ -347,169 +387,17 @@ async fn main() -> io::Result<()> {
         drain_lsp_intents(&mut editor, &lsp_command_tx);
         drain_dap_intents(&mut editor, &dap_command_tx);
 
-        // Drain pending agent setup requests (:agent-setup / :agent-list).
-        if let Some(agent_name) = editor.pending_agent_setup.take() {
-            if agent_name == "__list__" {
-                let list = agents::agent_list_display();
-                editor.set_status(format!("Available agents:\n{}", list));
-            } else {
-                let root = editor
-                    .project
-                    .as_ref()
-                    .map(|p| p.root.clone())
-                    .or_else(|| std::env::current_dir().ok());
-                match root {
-                    Some(root) => match agents::setup_agent(&agent_name, &root) {
-                        Ok(msg) => editor.set_status(msg),
-                        Err(msg) => editor.set_status(msg),
-                    },
-                    None => editor.set_status("No project root or working directory available"),
-                }
-            }
-        }
-
-        // Spawn any pending shell terminals.
-        let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
-        let had_shell_spawns = !shell_spawns.is_empty();
-        for buf_idx in shell_spawns {
-            let (inner_cols, inner_rows) = shell_dims_for_buffer(&editor, &renderer, buf_idx);
-            let cwd = editor.project.as_ref().map(|p| p.root.clone());
-            let mut extra_env = std::collections::HashMap::new();
-            extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
-            match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
-                Ok(shell) => {
-                    debug!(
-                        buf_idx,
-                        cols = inner_cols,
-                        rows = inner_rows,
-                        "shell terminal spawned"
-                    );
-                    shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
-                    shell_terminals.insert(buf_idx, shell);
-                }
-                Err(e) => {
-                    error!(buf_idx, error = %e, "failed to spawn shell terminal");
-                    editor.set_status(format!("Terminal spawn failed: {}", e));
-                }
-            }
-        }
-
-        // Auto-write .mcp.json and agent settings on first shell spawn (idempotent).
-        if had_shell_spawns {
-            let root = editor
-                .project
-                .as_ref()
-                .map(|p| p.root.clone())
-                .or_else(|| std::env::current_dir().ok());
-            if let Some(root) = root {
-                if app_config.agents.auto_mcp_json_effective() {
-                    let shim = agents::resolve_shim_path();
-                    if let Err(e) = agents::write_mcp_json(&root, &shim) {
-                        debug!(error = %e, "failed to write .mcp.json");
-                    }
-                }
-                if app_config.agents.auto_approve_tools_effective() {
-                    if let Err(e) = agents::write_agent_settings(&root) {
-                        debug!(error = %e, "failed to write agent settings");
-                    }
-                }
-            }
-        }
-
-        // Dynamic resize: check each shell's owning window dims each tick.
-        // Handles focus changes, split creation/closing, and terminal resize.
-        for (buf_idx, shell) in &shell_terminals {
-            let dims = shell_dims_for_buffer(&editor, &renderer, *buf_idx);
-            if shell_last_dims.get(buf_idx) != Some(&dims) {
-                shell.resize(dims.0, dims.1);
-                shell_last_dims.insert(*buf_idx, dims);
-            }
-        }
-
-        // Reset any pending shell terminals (clear screen after stuck programs).
-        let shell_resets: Vec<usize> = editor.pending_shell_resets.drain(..).collect();
-        for buf_idx in shell_resets {
-            if let Some(shell) = shell_terminals.get(&buf_idx) {
-                shell.reset();
-            }
-        }
-
-        // Close any pending shell terminals.
-        let shell_closes: Vec<usize> = editor.pending_shell_closes.drain(..).collect();
-        for buf_idx in shell_closes {
-            if let Some(shell) = shell_terminals.remove(&buf_idx) {
-                shell.shutdown();
-            }
-            // Force-close the buffer.
-            editor.execute_command("force-kill-buffer");
-        }
-
-        // Poll shell terminal events (wakeup, title, exit).
-        let mut exited_shells: Vec<usize> = Vec::new();
-        for (buf_idx, shell) in shell_terminals.iter_mut() {
-            let events = shell.poll_events();
-            for event in events {
-                match event {
-                    mae_shell::ShellEvent::Bell => editor.ring_bell(),
-                    mae_shell::ShellEvent::Title(t) => {
-                        editor.set_status(format!("Terminal: {}", t));
-                    }
-                    mae_shell::ShellEvent::ChildExit(code) => {
-                        info!(buf_idx, code, "shell process exited");
-                        exited_shells.push(*buf_idx);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Handle exited shells: switch mode, clean up, keep buffer with status.
-        for buf_idx in exited_shells {
-            // If we're currently focused on this shell buffer, switch back to Normal.
-            if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
-                editor.mode = Mode::Normal;
-            }
-            // Shut down and remove the dead shell terminal.
-            if let Some(shell) = shell_terminals.remove(&buf_idx) {
-                shell.shutdown();
-            }
-            // Keep the buffer alive (user can close manually with SPC o c or :kill-buffer).
-            // Mark the buffer name so it's clear the process exited.
-            if buf_idx < editor.buffers.len() {
-                let name = editor.buffers[buf_idx].name.clone();
-                if !name.contains("[exited]") {
-                    editor.buffers[buf_idx].name = format!("{} [exited]", name);
-                }
-            }
-            editor.set_status("Terminal process exited");
-        }
-
-        // Drain pending shell inputs (from AI tools / Scheme).
-        let shell_inputs: Vec<(usize, String)> = editor.pending_shell_inputs.drain(..).collect();
-        for (buf_idx, text) in shell_inputs {
-            if let Some(shell) = shell_terminals.get(&buf_idx) {
-                shell.write_str(&text);
-            }
-        }
-
-        // Cache shell viewport snapshots for AI tool access.
-        // The AI executor can't access ShellTerminal directly, so we
-        // snapshot the viewport into Editor on each tick.
-        for (buf_idx, shell) in shell_terminals.iter() {
-            let viewport = shell.read_viewport(100);
-            editor.shell_viewports.insert(*buf_idx, viewport);
-            // Cache CWD for Scheme access.
-            if let Some(cwd) = shell.cwd() {
-                editor.shell_cwds.insert(*buf_idx, cwd);
-            }
-        }
-        // Remove viewports/cwds for shells that no longer exist.
-        editor
-            .shell_viewports
-            .retain(|idx, _| shell_terminals.contains_key(idx));
-        editor
-            .shell_cwds
-            .retain(|idx, _| shell_terminals.contains_key(idx));
+        shell_lifecycle::drain_agent_setup(&mut editor);
+        shell_lifecycle::spawn_pending_shells(
+            &mut editor,
+            &mut shell_terminals,
+            &mut shell_last_dims,
+            &renderer,
+            &mcp_socket_path,
+            &app_config,
+        );
+        shell_lifecycle::resize_shells(&editor, &renderer, &shell_terminals, &mut shell_last_dims);
+        shell_lifecycle::manage_shell_lifecycle(&mut editor, &mut shell_terminals);
 
         // When shell terminals are active, poll for new output at ~30fps.
         // Without this, shell output only renders on the next keypress.
@@ -522,6 +410,8 @@ async fn main() -> io::Result<()> {
                 std::future::pending::<()>().await;
             }
         };
+
+        ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
 
         // Async event loop: select! over keyboard + AI + shell tick
         tokio::select! {
@@ -548,135 +438,13 @@ async fn main() -> io::Result<()> {
                 }
             }
             Some(ai_event) = ai_event_rx.recv() => {
-                match ai_event {
-                    AiEvent::ToolCallRequest { call, reply } => {
-                        debug!(tool = %call.name, call_id = %call.id, "executing tool call");
-
-                        // Push tool call to conversation buffer
-                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
-                            conv.push_tool_call(&call.name);
-                        }
-
-                        let exec_result = execute_tool(
-                            &mut editor, &call, &all_tools, &permission_policy,
-                        );
-
-                        match exec_result {
-                            ExecuteResult::Immediate(result) => {
-                                debug!(tool = %call.name, success = result.success, "tool call complete");
-                                if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
-                                    conv.push_tool_result(result.success, &result.output);
-                                }
-                                if reply.send(result).is_err() {
-                                    warn!(tool = %call.name, "tool result channel closed — AI session may have been cancelled");
-                                }
-                            }
-                            ExecuteResult::Deferred { tool_call_id, kind } => {
-                                debug!(tool = %call.name, ?kind, "tool call deferred — awaiting async result");
-                                // Drain the LSP intent we just queued so it's
-                                // sent to the LSP task immediately.
-                                drain_lsp_intents(&mut editor, &lsp_command_tx);
-                                deferred_ai_reply = Some((kind, tool_call_id, reply));
-                            }
-                        }
-                    }
-                    AiEvent::TextResponse(text) => {
-                        // Route to conversation buffer if one exists
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.push_assistant(&text);
-                        } else {
-                            let display = if text.len() > 120 {
-                                format!("[AI] {}...", &text[..117])
-                            } else {
-                                format!("[AI] {}", text)
-                            };
-                            editor.set_status(display);
-                        }
-                    }
-                    AiEvent::StreamChunk(text) => {
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.append_streaming_chunk(&text);
-                        }
-                    }
-                    AiEvent::SessionComplete(_text) => {
-                        info!("AI session complete");
-                        // Don't push text here — TextResponse already did that.
-                        // Just mark streaming as done.
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.streaming = false;
-                            conv_buf.streaming_start = None;
-                        }
-                        editor.set_status("[AI] Done");
-                    }
-                    AiEvent::Error(msg) => {
-                        error!(error = %msg, "AI error");
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.push_system(format!("Error: {}", msg));
-                            conv_buf.streaming = false;
-                            conv_buf.streaming_start = None;
-                        }
-                        editor.set_status(format!("[AI error] {}", msg));
-                    }
-                    AiEvent::CostUpdate { session_usd, last_call_usd, tokens_in, tokens_out } => {
-                        editor.ai_session_cost_usd = session_usd;
-                        editor.ai_session_tokens_in = tokens_in;
-                        editor.ai_session_tokens_out = tokens_out;
-                        debug!(
-                            session_usd,
-                            last_call_usd,
-                            tokens_in,
-                            tokens_out,
-                            "AI cost update"
-                        );
-                    }
-                    AiEvent::BudgetWarning { session_usd, threshold_usd } => {
-                        let msg = format!(
-                            "AI budget warning: session spend ${:.4} crossed ${:.2} threshold. \
-                             Hard cap (if set) will abort the next turn.",
-                            session_usd, threshold_usd
-                        );
-                        warn!(session_usd, threshold_usd, "AI budget threshold crossed");
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.push_system(msg.clone());
-                        }
-                        editor.set_status(msg);
-                    }
-                    AiEvent::BudgetExceeded { session_usd, cap_usd } => {
-                        let msg = format!(
-                            "AI budget exceeded: session spend ${:.4} reached cap ${:.2}. \
-                             Raise `ai.budget.session_hard_cap_usd` in config.toml or restart \
-                             the editor to reset.",
-                            session_usd, cap_usd
-                        );
-                        error!(session_usd, cap_usd, "AI session hard cap reached");
-                        if let Some(conv_buf) = find_conversation_buffer_mut(&mut editor) {
-                            conv_buf.push_system(msg.clone());
-                            conv_buf.streaming = false;
-                            conv_buf.streaming_start = None;
-                        }
-                        editor.set_status(msg);
-                    }
-                }
+                ai_event_handler::handle_ai_event(
+                    &mut editor, ai_event, &all_tools, &permission_policy,
+                    &mut deferred_ai_reply, &lsp_command_tx,
+                );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
-                // Check if this event completes a deferred AI tool call.
-                if let Some((kind, ref tool_call_id, _)) = deferred_ai_reply {
-                    if let Some(result) = try_complete_deferred(&lsp_event, kind, tool_call_id) {
-                        let (_, _, reply) = match deferred_ai_reply.take() {
-                            Some(val) => val,
-                            None => continue,
-                        };
-                        debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed");
-                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
-                            conv.push_tool_result(result.success, &result.output);
-                        }
-                        if reply.send(result).is_err() {
-                            warn!("deferred tool result channel closed");
-                        }
-                        // Still let the normal handler apply editor-side effects
-                        // (e.g. jumping cursor for definition).
-                    }
-                }
+                ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
@@ -686,31 +454,7 @@ async fn main() -> io::Result<()> {
                 // Shell output tick — just re-render (top of loop handles it).
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                // MCP tool call from external agent (Claude Code in terminal).
-                debug!(tool = %mcp_req.tool_name, "MCP tool call");
-                let fake_call = mae_ai::ToolCall {
-                    id: "mcp".to_string(),
-                    name: mcp_req.tool_name.clone(),
-                    arguments: mcp_req.arguments,
-                };
-                let exec_result = execute_tool(
-                    &mut editor, &fake_call, &all_tools, &permission_policy,
-                );
-                let result = match exec_result {
-                    ExecuteResult::Immediate(result) => result,
-                    ExecuteResult::Deferred { .. } => {
-                        // MCP doesn't support deferred — return error.
-                        ToolResult {
-                            tool_call_id: "mcp".to_string(),
-                            success: false,
-                            output: "Tool requires async resolution (not supported via MCP)".to_string(),
-                        }
-                    }
-                };
-                let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
-                    success: result.success,
-                    output: result.output,
-                });
+                ai_event_handler::handle_mcp_request(&mut editor, mcp_req, &all_tools, &permission_policy);
             }
         }
     }
@@ -723,6 +467,178 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
+/// Remove stale MCP socket files from crashed MAE sessions.
+///
+/// Scans `/tmp/mae-*.sock` and removes any whose PID no longer exists.
+/// Called on startup so that stale sockets from SIGKILL'd or crashed
+/// sessions don't accumulate.
+fn cleanup_stale_mcp_sockets() {
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with("mae-") || !name_str.ends_with(".sock") {
+            continue;
+        }
+        // Extract PID from mae-{PID}.sock
+        let pid_str = &name_str[4..name_str.len() - 5];
+        if let Ok(pid) = pid_str.parse::<u32>() {
+            // Check if the process is still alive via /proc
+            if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
+                let path = entry.path();
+                if std::fs::remove_file(&path).is_ok() {
+                    info!(path = %path.display(), "removed stale MCP socket");
+                }
+            }
+        }
+    }
+}
+
+/// Headless AI self-test: sends the self-test prompt, handles tool calls,
+/// prints the report to stdout, and returns an exit code (0 = all pass,
+/// 1 = any failures, 2 = AI error / no response).
+async fn run_headless_self_test(
+    editor: &mut Editor,
+    ai_event_rx: &mut tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_command_tx: &tokio::sync::mpsc::Sender<AiCommand>,
+    lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
+    all_tools: &[mae_ai::ToolDefinition],
+    permission_policy: &mae_ai::PermissionPolicy,
+    categories: &str,
+) -> i32 {
+    use key_handling::build_self_test_prompt;
+
+    let prompt = build_self_test_prompt(categories);
+    eprintln!("mae: sending self-test prompt to AI agent...");
+
+    if ai_command_tx.try_send(AiCommand::Prompt(prompt)).is_err() {
+        eprintln!("mae: failed to send self-test prompt (channel full or closed)");
+        return 2;
+    }
+
+    // Collect all text output from the AI session.
+    let mut full_report = String::new();
+    let timeout = tokio::time::Duration::from_secs(300); // 5 minute timeout
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            eprintln!("mae: self-test timed out after 5 minutes");
+            return 2;
+        }
+
+        let event = tokio::select! {
+            ev = ai_event_rx.recv() => ev,
+            _ = tokio::time::sleep(remaining) => {
+                eprintln!("mae: self-test timed out after 5 minutes");
+                return 2;
+            }
+        };
+
+        match event {
+            Some(AiEvent::ToolCallRequest { call, reply }) => {
+                debug!(tool = %call.name, call_id = %call.id, "self-test tool call");
+                eprintln!("  [tool] {}", call.name);
+
+                // Push tool call to conversation buffer for report extraction.
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    conv.push_tool_call(&call.name);
+                }
+
+                let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
+
+                match exec_result {
+                    ExecuteResult::Immediate(result) => {
+                        if let Some(conv) = find_conversation_buffer_mut(editor) {
+                            conv.push_tool_result(result.success, &result.output);
+                        }
+                        if reply.send(result).is_err() {
+                            warn!("self-test tool result channel closed");
+                        }
+                    }
+                    ExecuteResult::Deferred { tool_call_id, kind } => {
+                        // For headless mode, drain LSP intents and wait for
+                        // the result synchronously. This is a simplification —
+                        // deferred tools (LSP) may not resolve without a running
+                        // LSP server, but that's expected in headless mode.
+                        drain_lsp_intents(editor, lsp_command_tx);
+                        let result = ToolResult {
+                            tool_call_id,
+                            success: false,
+                            output: format!(
+                                "Deferred tool ({:?}) not supported in headless mode",
+                                kind
+                            ),
+                        };
+                        if let Some(conv) = find_conversation_buffer_mut(editor) {
+                            conv.push_tool_result(result.success, &result.output);
+                        }
+                        if reply.send(result).is_err() {
+                            warn!("self-test deferred tool channel closed");
+                        }
+                    }
+                }
+            }
+            Some(AiEvent::TextResponse(text)) => {
+                full_report.push_str(&text);
+                if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                    conv_buf.push_assistant(&text);
+                }
+            }
+            Some(AiEvent::StreamChunk(text)) => {
+                full_report.push_str(&text);
+                if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                    conv_buf.append_streaming_chunk(&text);
+                }
+            }
+            Some(AiEvent::SessionComplete(_)) => {
+                if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                    conv_buf.end_streaming();
+                }
+                break;
+            }
+            Some(AiEvent::Error(msg)) => {
+                eprintln!("mae: AI error during self-test: {}", msg);
+                return 2;
+            }
+            Some(_) => {
+                // CostUpdate, BudgetWarning, etc. — ignore in headless mode.
+            }
+            None => {
+                eprintln!("mae: AI event channel closed unexpectedly");
+                return 2;
+            }
+        }
+    }
+
+    // Print report to stdout.
+    println!("{}", full_report);
+
+    // Parse pass/fail/skip counts from the report.
+    let fail_count = full_report.matches("[FAIL]").count();
+    let pass_count = full_report.matches("[PASS]").count();
+    let skip_count = full_report.matches("[SKIP]").count();
+
+    eprintln!(
+        "mae: self-test complete — {} passed, {} failed, {} skipped",
+        pass_count, fail_count, skip_count
+    );
+
+    if fail_count > 0 {
+        1
+    } else if pass_count == 0 {
+        eprintln!("mae: warning — no PASS results found in report");
+        2
+    } else {
+        0
+    }
+}
+
 /// Handle a key event while in ShellInsert mode.
 ///
 /// Keys are checked against the "shell-insert" keymap first. If the key
@@ -733,7 +649,11 @@ async fn main() -> io::Result<()> {
 ///
 /// Falls back to full terminal dimensions if the buffer isn't visible
 /// in any window (shouldn't happen in practice).
-fn shell_dims_for_buffer(editor: &Editor, renderer: &dyn Renderer, buf_idx: usize) -> (u16, u16) {
+pub(crate) fn shell_dims_for_buffer(
+    editor: &Editor,
+    renderer: &dyn Renderer,
+    buf_idx: usize,
+) -> (u16, u16) {
     let (term_w, term_h) = renderer.size().unwrap_or((80, 24));
     let window_area = mae_core::WinRect {
         x: 0,
@@ -871,7 +791,10 @@ fn keypress_to_pty_bytes(kp: &KeyPress) -> Vec<u8> {
 
 /// Drain all pending LSP intents from the editor and forward them to the LSP task.
 /// Safe to call every loop iteration — the Vec is cleared in place.
-fn drain_lsp_intents(editor: &mut Editor, lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>) {
+pub(crate) fn drain_lsp_intents(
+    editor: &mut Editor,
+    lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>,
+) {
     if editor.pending_lsp_requests.is_empty() {
         return;
     }
@@ -1079,7 +1002,7 @@ fn handle_lsp_event(
 /// Check if an incoming LSP event matches a pending deferred AI tool call.
 /// If so, format a structured JSON result and return it. The caller is
 /// responsible for sending it via the held oneshot reply channel.
-fn try_complete_deferred(
+pub(crate) fn try_complete_deferred(
     event: &LspTaskEvent,
     kind: DeferredKind,
     tool_call_id: &str,
@@ -1480,11 +1403,7 @@ async fn run_gui_loop(
     let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
-    let mut deferred_ai_reply: Option<(
-        DeferredKind,
-        String,
-        tokio::sync::oneshot::Sender<ToolResult>,
-    )> = None;
+    let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
 
     // Track modifier state across winit events (winit delivers modifiers
     // separately from key events).
@@ -1494,6 +1413,8 @@ async fn run_gui_loop(
     info!("entering GUI event loop");
 
     loop {
+        ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
+
         // --- Pre-render bookkeeping (same as terminal loop) ---
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
@@ -1542,150 +1463,17 @@ async fn run_gui_loop(
         drain_lsp_intents(&mut editor, &lsp_command_tx);
         drain_dap_intents(&mut editor, &dap_command_tx);
 
-        if let Some(agent_name) = editor.pending_agent_setup.take() {
-            if agent_name == "__list__" {
-                let list = agents::agent_list_display();
-                editor.set_status(format!("Available agents:\n{}", list));
-            } else {
-                let root = editor
-                    .project
-                    .as_ref()
-                    .map(|p| p.root.clone())
-                    .or_else(|| std::env::current_dir().ok());
-                match root {
-                    Some(root) => match agents::setup_agent(&agent_name, &root) {
-                        Ok(msg) => editor.set_status(msg),
-                        Err(msg) => editor.set_status(msg),
-                    },
-                    None => editor.set_status("No project root or working directory available"),
-                }
-            }
-        }
-
-        // Spawn pending shell terminals.
-        let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
-        let had_shell_spawns = !shell_spawns.is_empty();
-        for buf_idx in shell_spawns {
-            let (inner_cols, inner_rows) = shell_dims_for_buffer(&editor, &renderer, buf_idx);
-            let cwd = editor.project.as_ref().map(|p| p.root.clone());
-            let mut extra_env = std::collections::HashMap::new();
-            extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
-            match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
-                Ok(shell) => {
-                    debug!(
-                        buf_idx,
-                        cols = inner_cols,
-                        rows = inner_rows,
-                        "shell terminal spawned (GUI)"
-                    );
-                    shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
-                    shell_terminals.insert(buf_idx, shell);
-                }
-                Err(e) => {
-                    error!(buf_idx, error = %e, "failed to spawn shell terminal (GUI)");
-                    editor.set_status(format!("Terminal spawn failed: {}", e));
-                }
-            }
-        }
-
-        if had_shell_spawns {
-            let root = editor
-                .project
-                .as_ref()
-                .map(|p| p.root.clone())
-                .or_else(|| std::env::current_dir().ok());
-            if let Some(root) = root {
-                if app_config.agents.auto_mcp_json_effective() {
-                    let shim = agents::resolve_shim_path();
-                    if let Err(e) = agents::write_mcp_json(&root, &shim) {
-                        debug!(error = %e, "failed to write .mcp.json");
-                    }
-                }
-                if app_config.agents.auto_approve_tools_effective() {
-                    if let Err(e) = agents::write_agent_settings(&root) {
-                        debug!(error = %e, "failed to write agent settings");
-                    }
-                }
-            }
-        }
-
-        // Dynamic resize: check each shell's owning window dims each tick.
-        for (buf_idx, shell) in &shell_terminals {
-            let dims = shell_dims_for_buffer(&editor, &renderer, *buf_idx);
-            if shell_last_dims.get(buf_idx) != Some(&dims) {
-                shell.resize(dims.0, dims.1);
-                shell_last_dims.insert(*buf_idx, dims);
-            }
-        }
-
-        // Reset / close / poll shell terminals.
-        let shell_resets: Vec<usize> = editor.pending_shell_resets.drain(..).collect();
-        for buf_idx in shell_resets {
-            if let Some(shell) = shell_terminals.get(&buf_idx) {
-                shell.reset();
-            }
-        }
-
-        let shell_closes: Vec<usize> = editor.pending_shell_closes.drain(..).collect();
-        for buf_idx in shell_closes {
-            if let Some(shell) = shell_terminals.remove(&buf_idx) {
-                shell.shutdown();
-            }
-            editor.execute_command("force-kill-buffer");
-        }
-
-        let mut exited_shells: Vec<usize> = Vec::new();
-        for (buf_idx, shell) in shell_terminals.iter_mut() {
-            for event in shell.poll_events() {
-                match event {
-                    mae_shell::ShellEvent::Bell => editor.ring_bell(),
-                    mae_shell::ShellEvent::Title(t) => {
-                        editor.set_status(format!("Terminal: {}", t));
-                    }
-                    mae_shell::ShellEvent::ChildExit(code) => {
-                        info!(buf_idx, code, "shell process exited (GUI)");
-                        exited_shells.push(*buf_idx);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        for buf_idx in exited_shells {
-            if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
-                editor.mode = Mode::Normal;
-            }
-            if let Some(shell) = shell_terminals.remove(&buf_idx) {
-                shell.shutdown();
-            }
-            if buf_idx < editor.buffers.len() {
-                let name = editor.buffers[buf_idx].name.clone();
-                if !name.contains("[exited]") {
-                    editor.buffers[buf_idx].name = format!("{} [exited]", name);
-                }
-            }
-            editor.set_status("Terminal process exited");
-        }
-
-        let shell_inputs: Vec<(usize, String)> = editor.pending_shell_inputs.drain(..).collect();
-        for (buf_idx, text) in shell_inputs {
-            if let Some(shell) = shell_terminals.get(&buf_idx) {
-                shell.write_str(&text);
-            }
-        }
-
-        for (buf_idx, shell) in shell_terminals.iter() {
-            let viewport = shell.read_viewport(100);
-            editor.shell_viewports.insert(*buf_idx, viewport);
-            if let Some(cwd) = shell.cwd() {
-                editor.shell_cwds.insert(*buf_idx, cwd);
-            }
-        }
-        editor
-            .shell_viewports
-            .retain(|idx, _| shell_terminals.contains_key(idx));
-        editor
-            .shell_cwds
-            .retain(|idx, _| shell_terminals.contains_key(idx));
+        shell_lifecycle::drain_agent_setup(&mut editor);
+        shell_lifecycle::spawn_pending_shells(
+            &mut editor,
+            &mut shell_terminals,
+            &mut shell_last_dims,
+            &renderer,
+            &mcp_socket_path,
+            &app_config,
+        );
+        shell_lifecycle::resize_shells(&editor, &renderer, &shell_terminals, &mut shell_last_dims);
+        shell_lifecycle::manage_shell_lifecycle(&mut editor, &mut shell_terminals);
 
         // --- Poll async channels (AI/LSP/DAP/MCP) with short timeout ---
         let has_shells = !shell_terminals.is_empty();
@@ -1702,44 +1490,20 @@ async fn run_gui_loop(
             biased;
 
             Some(ai_event) = ai_event_rx.recv() => {
-                handle_ai_event_gui(&mut editor, ai_event, &all_tools, &permission_policy, &mut deferred_ai_reply);
+                ai_event_handler::handle_ai_event(
+                    &mut editor, ai_event, &all_tools, &permission_policy,
+                    &mut deferred_ai_reply, &lsp_command_tx,
+                );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
-                if let Some((kind, ref tool_call_id, _)) = deferred_ai_reply {
-                    if let Some(result) = try_complete_deferred(&lsp_event, kind, tool_call_id) {
-                        let (_, _, reply) = deferred_ai_reply.take().unwrap();
-                        debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed (GUI)");
-                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
-                            conv.push_tool_result(result.success, &result.output);
-                        }
-                        let _ = reply.send(result);
-                    }
-                }
+                ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
                 handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
                 handle_dap_event(&mut editor, dap_event);
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
-                debug!(tool = %mcp_req.tool_name, "MCP tool call (GUI)");
-                let fake_call = mae_ai::ToolCall {
-                    id: "mcp".to_string(),
-                    name: mcp_req.tool_name.clone(),
-                    arguments: mcp_req.arguments,
-                };
-                let exec_result = execute_tool(&mut editor, &fake_call, &all_tools, &permission_policy);
-                let result = match exec_result {
-                    ExecuteResult::Immediate(result) => result,
-                    ExecuteResult::Deferred { .. } => ToolResult {
-                        tool_call_id: "mcp".to_string(),
-                        success: false,
-                        output: "Tool requires async resolution (not supported via MCP)".to_string(),
-                    },
-                };
-                let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
-                    success: result.success,
-                    output: result.output,
-                });
+                ai_event_handler::handle_mcp_request(&mut editor, mcp_req, &all_tools, &permission_policy);
             }
             _ = shell_tick => {}
             // Don't block forever — return to pump_app_events after 1ms if no events.
@@ -1751,120 +1515,6 @@ async fn run_gui_loop(
     renderer.cleanup()?;
     info!("mae (GUI) exited cleanly");
     Ok(())
-}
-
-/// Handle AI events in the GUI loop (same logic as the terminal loop's AI branch).
-#[cfg(feature = "gui")]
-fn handle_ai_event_gui(
-    editor: &mut Editor,
-    ai_event: AiEvent,
-    all_tools: &[mae_ai::ToolDefinition],
-    permission_policy: &mae_ai::PermissionPolicy,
-    deferred_ai_reply: &mut Option<(
-        DeferredKind,
-        String,
-        tokio::sync::oneshot::Sender<ToolResult>,
-    )>,
-) {
-    match ai_event {
-        AiEvent::ToolCallRequest { call, reply } => {
-            debug!(tool = %call.name, call_id = %call.id, "executing tool call (GUI)");
-            if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_tool_call(&call.name);
-            }
-            let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
-            match exec_result {
-                ExecuteResult::Immediate(result) => {
-                    debug!(tool = %call.name, success = result.success, "tool call complete (GUI)");
-                    if let Some(conv) = find_conversation_buffer_mut(editor) {
-                        conv.push_tool_result(result.success, &result.output);
-                    }
-                    let _ = reply.send(result);
-                }
-                ExecuteResult::Deferred { tool_call_id, kind } => {
-                    debug!(tool = %call.name, ?kind, "tool call deferred (GUI)");
-                    *deferred_ai_reply = Some((kind, tool_call_id, reply));
-                }
-            }
-        }
-        AiEvent::TextResponse(text) => {
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.push_assistant(&text);
-            } else {
-                let display = if text.len() > 120 {
-                    format!("[AI] {}...", &text[..117])
-                } else {
-                    format!("[AI] {}", text)
-                };
-                editor.set_status(display);
-            }
-        }
-        AiEvent::StreamChunk(text) => {
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.append_streaming_chunk(&text);
-            }
-        }
-        AiEvent::SessionComplete(_) => {
-            info!("AI session complete (GUI)");
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.streaming = false;
-                conv_buf.streaming_start = None;
-            }
-            editor.set_status("[AI] Done");
-        }
-        AiEvent::Error(msg) => {
-            error!(error = %msg, "AI error (GUI)");
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.push_system(format!("Error: {}", msg));
-                conv_buf.streaming = false;
-                conv_buf.streaming_start = None;
-            }
-            editor.set_status(format!("[AI error] {}", msg));
-        }
-        AiEvent::CostUpdate {
-            session_usd,
-            last_call_usd: _,
-            tokens_in,
-            tokens_out,
-        } => {
-            editor.ai_session_cost_usd = session_usd;
-            editor.ai_session_tokens_in = tokens_in;
-            editor.ai_session_tokens_out = tokens_out;
-        }
-        AiEvent::BudgetWarning {
-            session_usd,
-            threshold_usd,
-        } => {
-            let msg = format!(
-                "AI budget warning: session spend ${:.4} crossed ${:.2} threshold.",
-                session_usd, threshold_usd
-            );
-            warn!(
-                session_usd,
-                threshold_usd, "AI budget threshold crossed (GUI)"
-            );
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.push_system(msg.clone());
-            }
-            editor.set_status(msg);
-        }
-        AiEvent::BudgetExceeded {
-            session_usd,
-            cap_usd,
-        } => {
-            let msg = format!(
-                "AI budget exceeded: session spend ${:.4} reached cap ${:.2}.",
-                session_usd, cap_usd
-            );
-            error!(session_usd, cap_usd, "AI session hard cap reached (GUI)");
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.push_system(msg.clone());
-                conv_buf.streaming = false;
-                conv_buf.streaming_start = None;
-            }
-            editor.set_status(msg);
-        }
-    }
 }
 
 /// Winit callback struct used with `pump_app_events()`.

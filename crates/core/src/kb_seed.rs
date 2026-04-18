@@ -152,6 +152,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_AGENT_BOOTSTRAP,
         )
         .with_tags(["agents", "mcp", "ai"]),
+        Node::new(
+            "concept:self-test",
+            "Concept: AI Self-Test",
+            NodeKind::Concept,
+            CONCEPT_SELF_TEST,
+        )
+        .with_tags(["ai", "testing", "tools"]),
     ]
 }
 
@@ -169,6 +176,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:hooks|Hooks]] — Scheme extension points for editor events
 - [[concept:options|Editor Options]] — configuring MAE from Scheme
 - [[concept:agent-bootstrap|Agent Bootstrap]] — zero-config MCP tool discovery for AI agents
+- [[concept:self-test|AI Self-Test]] — validate editor tools and integrations via `:self-test`
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -587,6 +595,34 @@ MAE's own tool permissions are separate from agent approval. Use the \
 tier the AI auto-approves up to.\n\n\
 See also: [[concept:terminal]], [[concept:ai-as-peer]], [[index]]\n";
 
+const CONCEPT_SELF_TEST: &str =
+    "The **self-test** command (`:self-test`) tells the AI agent to exercise its own tool \
+surface and report what works, what's broken, and what's unavailable.\n\n\
+## Usage\n\
+- `:self-test` — run all test categories.\n\
+- `:self-test introspection` — run only the introspection category.\n\
+- `:self-test editing,help` — run multiple specific categories.\n\n\
+## Categories\n\
+| Category | What it tests |\n\
+|----------|---------------|\n\
+| **introspection** | `cursor_info`, `editor_state`, `list_buffers`, `window_layout`, `command_list`, `ai_permissions` |\n\
+| **editing** | `create_file`, `buffer_write`, `buffer_read`, `open_file`, `switch_buffer`, `close_buffer` |\n\
+| **help** | `kb_search`, `kb_get`, `kb_list`, `kb_graph`, `kb_links_from`, `kb_links_to`, `help_open` |\n\
+| **project** | `project_info`, `project_files`, `project_search` (needs git repo) |\n\
+| **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\n\
+## Reading results\n\
+Results appear in the `*AI*` conversation buffer:\n\
+- **[PASS]** — tool returned expected data.\n\
+- **[FAIL]** — tool returned unexpected data or errored.\n\
+- **[SKIP]** — prerequisite not met (e.g. no LSP server).\n\n\
+The self-test also validates the command palette (key commands must exist) and \
+runs a connected help-navigation walkthrough (search → get → graph → open).\n\n\
+## Why this exists\n\
+Unit tests validate individual components. The self-test validates the full \
+AI↔editor integration: tool dispatch, permission checks, KB graph integrity, \
+and command registration. It catches wiring bugs that unit tests can't reach.\n\n\
+See also: [[concept:ai-as-peer]], [[concept:command]], [[concept:knowledge-base]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +654,7 @@ mod tests {
             "concept:hooks",
             "concept:options",
             "concept:agent-bootstrap",
+            "concept:self-test",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

@@ -301,6 +301,10 @@ pub struct Editor {
     /// The binary drains this and calls `agents::setup_agent()`.
     /// `Some("__list__")` is the sentinel for `:agent-list`.
     pub pending_agent_setup: Option<String>,
+    /// When true, user keyboard input is discarded (except Esc / Ctrl-C
+    /// which cancel the AI operation and release the lock). Set by
+    /// `:self-test` and other AI operations to prevent race conditions.
+    pub input_locked: bool,
 }
 
 impl Default for Editor {
@@ -403,6 +407,7 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
+            input_locked: false,
         }
     }
 
@@ -511,6 +516,7 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
+            input_locked: false,
         }
     }
 

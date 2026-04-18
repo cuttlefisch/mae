@@ -22,7 +22,8 @@ pub use editor_tools::{
     execute_window_layout,
 };
 pub use file::{
-    execute_close_buffer, execute_create_file, execute_open_file, execute_switch_buffer,
+    execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
+    execute_rename_file, execute_switch_buffer,
 };
 pub use help::execute_help_open;
 pub use kb::{
