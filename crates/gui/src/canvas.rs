@@ -1,20 +1,24 @@
 //! Skia surface management and frame composition.
 //!
 //! Manages the Skia raster surface that backs the editor window.
-//! Each frame: clear → draw text lines → draw status → present via softbuffer.
+//! Each frame: clear -> draw styled cells -> present via softbuffer.
 
 use std::io;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-use mae_core::{NamedColor, Theme, ThemeColor};
+use mae_core::Theme;
 use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface};
 use winit::window::Window;
+
+use crate::text::StyledLine;
+use crate::theme::{self, fill_paint, DEFAULT_BG};
 
 /// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
     surface: Surface,
     font: Font,
+    bold_font: Font,
     cell_width: f32,
     cell_height: f32,
     width: u32,
@@ -38,8 +42,16 @@ impl SkiaCanvas {
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::normal()))
             .expect("no monospace font found on the system");
 
+        let bold_typeface = font_mgr
+            .match_family_style("JetBrains Mono", FontStyle::bold())
+            .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::bold()))
+            .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::bold()))
+            .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
+            .unwrap_or_else(|| typeface.clone());
+
         let font_size = 14.0;
         let font = Font::from_typeface(typeface, font_size);
+        let bold_font = Font::from_typeface(bold_typeface, font_size);
 
         // Measure a reference character for cell dimensions.
         let (_, bounds) = font.measure_str("M", None);
@@ -61,6 +73,7 @@ impl SkiaCanvas {
         Ok(SkiaCanvas {
             surface,
             font,
+            bold_font,
             cell_width,
             cell_height,
             width,
@@ -72,6 +85,12 @@ impl SkiaCanvas {
     /// Return (cell_width, cell_height) in pixels.
     pub fn cell_size(&self) -> (f32, f32) {
         (self.cell_width, self.cell_height)
+    }
+
+    /// Return the surface dimensions in pixels.
+    #[allow(dead_code)]
+    pub fn pixel_size(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 
     /// Resize the surface.
@@ -89,57 +108,197 @@ impl SkiaCanvas {
     /// Begin a new frame: clear the surface with the theme's background color.
     pub fn begin_frame(&mut self, theme: &Theme) {
         let bg_style = theme.style("ui.background");
-        let bg = bg_style
-            .bg
-            .map(|c| theme_color_to_skia(&c))
-            .unwrap_or_else(|| Color4f::new(0.1, 0.1, 0.1, 1.0));
+        let bg = theme::color_or(bg_style.bg, DEFAULT_BG);
         self.surface.canvas().clear(bg);
     }
 
-    /// Draw a single line of text at the given visual row.
-    pub fn draw_text_line(&mut self, row: usize, text: &str, theme: &Theme) {
-        let fg_style = theme.style("ui.text");
-        let fg = fg_style
-            .fg
-            .map(|c| theme_color_to_skia(&c))
-            .unwrap_or_else(|| Color4f::new(0.9, 0.9, 0.9, 1.0));
-        let mut paint = Paint::new(fg, None);
-        paint.set_anti_alias(true);
+    // -----------------------------------------------------------------------
+    // Cell-level drawing methods
+    // -----------------------------------------------------------------------
 
-        let x = 0.0;
-        let y = (row as f32 + 1.0) * self.cell_height; // baseline
-
-        let canvas = self.surface.canvas();
-        canvas.draw_str(text, (x, y), &self.font, &paint);
-    }
-
-    /// Draw the status line at the given visual row.
-    pub fn draw_status_line(&mut self, row: usize, text: &str, theme: &Theme) {
-        let status_style = theme.style("ui.statusline");
-        let status_bg = status_style
-            .bg
-            .map(|c| theme_color_to_skia(&c))
-            .unwrap_or_else(|| Color4f::new(0.2, 0.2, 0.2, 1.0));
-        let status_fg = status_style
-            .fg
-            .map(|c| theme_color_to_skia(&c))
-            .unwrap_or_else(|| Color4f::new(0.9, 0.9, 0.9, 1.0));
-
+    /// Draw a single character at (row, col) with optional bg rect.
+    #[allow(dead_code)]
+    pub fn draw_cell(
+        &mut self,
+        row: usize,
+        col: usize,
+        ch: char,
+        fg: Color4f,
+        bg: Option<Color4f>,
+    ) {
+        let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
         let canvas = self.surface.canvas();
 
-        // Background rectangle.
-        let mut bg_paint = Paint::new(status_bg, None);
-        bg_paint.set_style(skia_safe::PaintStyle::Fill);
-        canvas.draw_rect(
-            skia_safe::Rect::from_xywh(0.0, y, self.width as f32, self.cell_height),
-            &bg_paint,
-        );
+        // Background rect if specified.
+        if let Some(bg_color) = bg {
+            let bg_paint = fill_paint(bg_color);
+            canvas.draw_rect(
+                skia_safe::Rect::from_xywh(x, y, self.cell_width, self.cell_height),
+                &bg_paint,
+            );
+        }
 
-        // Status text.
-        let mut fg_paint = Paint::new(status_fg, None);
-        fg_paint.set_anti_alias(true);
-        canvas.draw_str(text, (0.0, y + self.cell_height), &self.font, &fg_paint);
+        if ch != ' ' {
+            let mut fg_paint = Paint::new(fg, None);
+            fg_paint.set_anti_alias(true);
+            let baseline = y + self.cell_height; // approximate baseline at bottom
+            let text = ch.to_string();
+            canvas.draw_str(&text, (x, baseline), &self.font, &fg_paint);
+        }
+    }
+
+    /// Draw a line of individually-styled cells at the given row.
+    #[allow(dead_code)]
+    pub fn draw_styled_line(&mut self, row: usize, cells: &StyledLine) {
+        let y = row as f32 * self.cell_height;
+        let baseline = y + self.cell_height;
+        let canvas = self.surface.canvas();
+
+        for (col, cell) in cells.iter().enumerate() {
+            let x = col as f32 * self.cell_width;
+
+            // Background rect if specified.
+            if let Some(bg_color) = cell.bg {
+                let bg_paint = fill_paint(bg_color);
+                canvas.draw_rect(
+                    skia_safe::Rect::from_xywh(x, y, self.cell_width, self.cell_height),
+                    &bg_paint,
+                );
+            }
+
+            if cell.ch == ' ' && !cell.underline {
+                continue;
+            }
+
+            let font = if cell.bold {
+                &self.bold_font
+            } else {
+                &self.font
+            };
+            let mut fg_paint = Paint::new(cell.fg, None);
+            fg_paint.set_anti_alias(true);
+            if cell.bold && std::ptr::eq(font, &self.font) {
+                // Fallback bold simulation if bold font is same as normal.
+                fg_paint.set_style(skia_safe::PaintStyle::StrokeAndFill);
+                fg_paint.set_stroke_width(0.5);
+            }
+
+            if cell.italic {
+                canvas.save();
+                // Simulate italic with a slight skew.
+                let mut skew_matrix = skia_safe::Matrix::new_identity();
+                skew_matrix.pre_skew((-0.2, 0.0), None);
+                canvas.concat(&skew_matrix);
+                let skewed_x = x + self.cell_width * 0.15; // compensate offset
+                canvas.draw_str(cell.ch.to_string(), (skewed_x, baseline), font, &fg_paint);
+                canvas.restore();
+            } else {
+                canvas.draw_str(cell.ch.to_string(), (x, baseline), font, &fg_paint);
+            }
+
+            if cell.underline {
+                let underline_y = baseline + 1.0;
+                fg_paint.set_style(skia_safe::PaintStyle::Stroke);
+                fg_paint.set_stroke_width(1.0);
+                canvas.draw_line(
+                    (x, underline_y),
+                    (x + self.cell_width, underline_y),
+                    &fg_paint,
+                );
+            }
+        }
+    }
+
+    /// Fill a rectangular cell region with a solid color.
+    pub fn draw_rect_fill(&mut self, row: usize, col: usize, w: usize, h: usize, color: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let pw = w as f32 * self.cell_width;
+        let ph = h as f32 * self.cell_height;
+        let paint = fill_paint(color);
+        self.surface
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(x, y, pw, ph), &paint);
+    }
+
+    /// Fill a pixel-precise rectangle.
+    pub fn draw_pixel_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color4f) {
+        let paint = fill_paint(color);
+        self.surface
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
+    }
+
+    /// Draw text at a specific (row, col) cell position with given fg color.
+    pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let baseline = y + self.cell_height;
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+        self.surface
+            .canvas()
+            .draw_str(text, (x, baseline), &self.font, &paint);
+    }
+
+    /// Draw text at a specific (row, col) with bold font.
+    pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let baseline = y + self.cell_height;
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+        self.surface
+            .canvas()
+            .draw_str(text, (x, baseline), &self.bold_font, &paint);
+    }
+
+    /// Draw a horizontal line across a full row (cell-based).
+    #[allow(dead_code)]
+    pub fn draw_hline(&mut self, row: usize, col_start: usize, col_end: usize, color: Color4f) {
+        let y = row as f32 * self.cell_height + self.cell_height / 2.0;
+        let x1 = col_start as f32 * self.cell_width;
+        let x2 = col_end as f32 * self.cell_width;
+        let mut paint = Paint::new(color, None);
+        paint.set_stroke_width(1.0);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        self.surface.canvas().draw_line((x1, y), (x2, y), &paint);
+    }
+
+    /// Draw a vertical line across rows (cell-based).
+    pub fn draw_vline(&mut self, col: usize, row_start: usize, row_end: usize, color: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y1 = row_start as f32 * self.cell_height;
+        let y2 = row_end as f32 * self.cell_height;
+        let mut paint = Paint::new(color, None);
+        paint.set_stroke_width(1.0);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        self.surface.canvas().draw_line((x, y1), (x, y2), &paint);
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy draw methods (kept for compatibility during transition)
+    // -----------------------------------------------------------------------
+
+    /// Draw a single line of text at the given visual row.
+    #[allow(dead_code)]
+    pub fn draw_text_line(&mut self, row: usize, text: &str, theme: &Theme) {
+        let fg_style = theme.style("ui.text");
+        let fg = theme::color_or(fg_style.fg, theme::DEFAULT_FG);
+        self.draw_text_at(row, 0, text, fg);
+    }
+
+    /// Draw the status line at the given visual row.
+    #[allow(dead_code)]
+    pub fn draw_status_line(&mut self, row: usize, text: &str, theme: &Theme) {
+        let status_style = theme.style("ui.statusline");
+        let status_bg = theme::color_or(status_style.bg, theme::STATUS_BG);
+        let status_fg = theme::color_or(status_style.fg, theme::DEFAULT_FG);
+
+        let cols = (self.width as f32 / self.cell_width) as usize;
+        self.draw_rect_fill(row, 0, cols, 1, status_bg);
+        self.draw_text_at(row, 0, text, status_fg);
     }
 
     /// End the frame: blit the Skia raster pixels to the OS window via softbuffer.
@@ -175,38 +334,33 @@ impl SkiaCanvas {
     }
 }
 
-/// Convert a mae_core ThemeColor to a Skia Color4f.
-fn theme_color_to_skia(color: &ThemeColor) -> Color4f {
-    match color {
-        ThemeColor::Rgb(r, g, b) => {
-            Color4f::new(*r as f32 / 255.0, *g as f32 / 255.0, *b as f32 / 255.0, 1.0)
-        }
-        ThemeColor::Named(named) => {
-            let (r, g, b) = named_color_to_rgb(named);
-            Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
-        }
-    }
+/// Cell-based rectangle for layout computation.
+#[derive(Debug, Clone, Copy)]
+pub struct CellRect {
+    pub row: usize,
+    pub col: usize,
+    pub width: usize,
+    pub height: usize,
 }
 
-/// Map ANSI named colors to approximate RGB values (xterm-256 standard).
-fn named_color_to_rgb(c: &NamedColor) -> (u8, u8, u8) {
-    match c {
-        NamedColor::Black => (0, 0, 0),
-        NamedColor::Red => (205, 0, 0),
-        NamedColor::Green => (0, 205, 0),
-        NamedColor::Yellow => (205, 205, 0),
-        NamedColor::Blue => (0, 0, 238),
-        NamedColor::Magenta => (205, 0, 205),
-        NamedColor::Cyan => (0, 205, 205),
-        NamedColor::White => (229, 229, 229),
-        NamedColor::DarkGray => (127, 127, 127),
-        NamedColor::LightRed => (255, 0, 0),
-        NamedColor::LightGreen => (0, 255, 0),
-        NamedColor::LightYellow => (255, 255, 0),
-        NamedColor::LightBlue => (92, 92, 255),
-        NamedColor::LightMagenta => (255, 0, 255),
-        NamedColor::LightCyan => (0, 255, 255),
-        NamedColor::Gray => (192, 192, 192),
+impl CellRect {
+    pub fn new(row: usize, col: usize, width: usize, height: usize) -> Self {
+        Self {
+            row,
+            col,
+            width,
+            height,
+        }
+    }
+
+    /// Inner rect with 1-cell border removed.
+    pub fn inner(&self) -> Self {
+        Self {
+            row: self.row + 1,
+            col: self.col + 1,
+            width: self.width.saturating_sub(2),
+            height: self.height.saturating_sub(2),
+        }
     }
 }
 
@@ -215,29 +369,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_color_rgb_conversion() {
-        let color = ThemeColor::Rgb(255, 128, 0);
-        let skia = theme_color_to_skia(&color);
-        assert!((skia.r - 1.0).abs() < 0.01);
-        assert!((skia.g - 0.502).abs() < 0.01);
-        assert!((skia.b - 0.0).abs() < 0.01);
+    fn cell_rect_inner() {
+        let r = CellRect::new(0, 0, 80, 24);
+        let inner = r.inner();
+        assert_eq!(inner.row, 1);
+        assert_eq!(inner.col, 1);
+        assert_eq!(inner.width, 78);
+        assert_eq!(inner.height, 22);
     }
 
     #[test]
-    fn named_color_black() {
-        let color = ThemeColor::Named(NamedColor::Black);
-        let skia = theme_color_to_skia(&color);
-        assert!((skia.r - 0.0).abs() < 0.01);
-        assert!((skia.g - 0.0).abs() < 0.01);
-        assert!((skia.b - 0.0).abs() < 0.01);
+    fn cell_rect_inner_small() {
+        let r = CellRect::new(5, 10, 2, 2);
+        let inner = r.inner();
+        assert_eq!(inner.width, 0);
+        assert_eq!(inner.height, 0);
     }
 
     #[test]
-    fn named_color_white() {
-        let color = ThemeColor::Named(NamedColor::White);
-        let skia = theme_color_to_skia(&color);
-        assert!(skia.r > 0.8);
-        assert!(skia.g > 0.8);
-        assert!(skia.b > 0.8);
+    fn styled_cell_draw_basic() {
+        // Just verify StyledCell/StyledLine types work with canvas API.
+        let cell = crate::text::StyledCell::new('X', Color4f::new(1.0, 1.0, 1.0, 1.0));
+        assert_eq!(cell.ch, 'X');
     }
 }
