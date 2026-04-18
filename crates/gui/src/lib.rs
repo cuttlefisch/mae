@@ -37,7 +37,7 @@ use tracing::info;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-pub use input::winit_key_to_keypress;
+pub use input::{winit_event_to_input, winit_key_to_keypress};
 
 /// GUI renderer implementing the `Renderer` trait.
 ///
@@ -118,6 +118,11 @@ impl GuiRenderer {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    /// Returns a reference to the window, if initialized.
+    pub fn window(&self) -> Option<&Window> {
+        self.window.as_ref()
     }
 }
 

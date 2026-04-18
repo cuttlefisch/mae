@@ -147,8 +147,10 @@ async fn main() -> io::Result<()> {
         eprintln!("warning: first-run wizard failed: {}", e);
     }
 
-    let mut editor = if args.len() > 1 {
-        let path = &args[1];
+    // Find the first positional argument (not a flag).
+    let file_arg = args.iter().skip(1).find(|a| !a.starts_with('-'));
+
+    let mut editor = if let Some(path) = file_arg {
         match Buffer::from_file(std::path::Path::new(path)) {
             Ok(buf) => {
                 info!(path, "opened file from CLI argument");
@@ -214,6 +216,23 @@ async fn main() -> io::Result<()> {
     };
     let permission_policy = config::resolve_permission_policy(&app_config);
 
+    // MCP bridge: Unix socket for external agents (Claude Code, etc.)
+    let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
+    let (mcp_tool_tx, mut mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
+    {
+        let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+            .iter()
+            .map(|t| mae_mcp::protocol::ToolInfo {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+            })
+            .collect();
+        let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
+        tokio::spawn(server.run(mcp_tools));
+        info!(socket = %mcp_socket_path, "MCP server started");
+    }
+
     let use_gui = args.iter().any(|a| a == "--gui");
 
     if use_gui {
@@ -224,11 +243,22 @@ async fn main() -> io::Result<()> {
         }
         #[cfg(feature = "gui")]
         {
-            eprintln!("mae: GUI backend is Phase 8 M1 foundation only.");
-            eprintln!("  The winit event loop requires a different main() structure.");
-            eprintln!("  Full --gui support lands in Phase 8 M2.");
-            eprintln!("  For now, use the terminal backend (default).");
-            std::process::exit(1);
+            return run_gui_loop(
+                editor,
+                scheme,
+                ai_event_rx,
+                ai_command_tx,
+                lsp_event_rx,
+                lsp_command_tx,
+                dap_event_rx,
+                dap_command_tx,
+                mcp_tool_rx,
+                mcp_socket_path,
+                all_tools,
+                permission_policy,
+                app_config,
+            )
+            .await;
         }
     }
 
@@ -249,23 +279,6 @@ async fn main() -> io::Result<()> {
         std::collections::HashMap::new();
     // Accumulated key presses for shell-insert keymap lookup.
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
-
-    // MCP bridge: Unix socket for external agents (Claude Code, etc.)
-    let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
-    let (mcp_tool_tx, mut mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
-    {
-        let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
-            .iter()
-            .map(|t| mae_mcp::protocol::ToolInfo {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
-            })
-            .collect();
-        let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
-        tokio::spawn(server.run(mcp_tools));
-        info!(socket = %mcp_socket_path, "MCP server started");
-    }
 
     loop {
         // Update viewport dimensions and scroll before rendering
@@ -1306,6 +1319,506 @@ fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
                 .collect();
             editor.apply_dap_breakpoints_set(source_path, entries);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GUI event loop (Phase 8 M2)
+// ---------------------------------------------------------------------------
+
+/// Run the GUI event loop using winit's `pump_app_events()`.
+///
+/// This integrates winit into the existing tokio `current_thread` runtime:
+/// each iteration pumps winit events (window/keyboard/resize), then yields
+/// to tokio::select! to drain AI/LSP/DAP/MCP channels.
+///
+/// Platform notes:
+/// - Linux/Windows: pump_app_events works well.
+/// - macOS: documented as "best effort" — full macOS support is a future milestone.
+#[cfg(feature = "gui")]
+#[allow(clippy::too_many_arguments)]
+async fn run_gui_loop(
+    mut editor: Editor,
+    mut scheme: SchemeRuntime,
+    mut ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    mut lsp_event_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
+    lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
+    mut dap_event_rx: tokio::sync::mpsc::Receiver<DapTaskEvent>,
+    dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+    mut mcp_tool_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mcp_socket_path: String,
+    all_tools: Vec<mae_ai::ToolDefinition>,
+    permission_policy: mae_ai::PermissionPolicy,
+    app_config: config::Config,
+) -> io::Result<()> {
+    use mae_gui::GuiRenderer;
+    use mae_renderer::Renderer;
+    use std::time::Duration;
+    use winit::event_loop::EventLoop;
+    use winit::platform::pump_events::EventLoopExtPumpEvents;
+
+    let mut renderer = GuiRenderer::new();
+    let mut event_loop = EventLoop::new().map_err(|e| io::Error::other(e.to_string()))?;
+
+    // State shared between the winit callback and the outer loop.
+    let mut should_exit = false;
+    let mut pending_keys: Vec<KeyPress> = Vec::new();
+    let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
+        std::collections::HashMap::new();
+    let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
+    let mut deferred_ai_reply: Option<(
+        DeferredKind,
+        String,
+        tokio::sync::oneshot::Sender<ToolResult>,
+    )> = None;
+
+    // Track modifier state across winit events (winit delivers modifiers
+    // separately from key events).
+    let mut ctrl_held = false;
+    let mut alt_held = false;
+
+    info!("entering GUI event loop");
+
+    loop {
+        // --- Pre-render bookkeeping (same as terminal loop) ---
+        let viewport_height = renderer.viewport_height()?;
+        editor.viewport_height = viewport_height;
+        editor
+            .window_mgr
+            .focused_window_mut()
+            .ensure_scroll(viewport_height);
+
+        // --- Pump winit events (non-blocking, ~16ms timeout for 60fps) ---
+        let pump_status = event_loop.pump_app_events(
+            Some(Duration::from_millis(16)),
+            &mut WinitCallback {
+                renderer: &mut renderer,
+                editor: &mut editor,
+                scheme: &mut scheme,
+                pending_keys: &mut pending_keys,
+                shell_terminals: &mut shell_terminals,
+                shell_pending_keys: &mut shell_pending_keys,
+                ai_command_tx: &ai_command_tx,
+                should_exit: &mut should_exit,
+                ctrl_held: &mut ctrl_held,
+                alt_held: &mut alt_held,
+            },
+        );
+
+        if should_exit
+            || matches!(
+                pump_status,
+                winit::platform::pump_events::PumpStatus::Exit(..)
+            )
+        {
+            break;
+        }
+
+        if !editor.running {
+            info!("editor shutting down (GUI)");
+            if let Some(ref tx) = ai_command_tx {
+                let _ = tx.try_send(AiCommand::Shutdown);
+            }
+            let _ = lsp_command_tx.try_send(LspCommand::Shutdown);
+            let _ = dap_command_tx.try_send(DapCommand::Shutdown);
+            break;
+        }
+
+        // --- Drain editor intents (LSP / DAP / agents / shells) ---
+        drain_lsp_intents(&mut editor, &lsp_command_tx);
+        drain_dap_intents(&mut editor, &dap_command_tx);
+
+        if let Some(agent_name) = editor.pending_agent_setup.take() {
+            if agent_name == "__list__" {
+                let list = agents::agent_list_display();
+                editor.set_status(format!("Available agents:\n{}", list));
+            } else {
+                let root = editor
+                    .project
+                    .as_ref()
+                    .map(|p| p.root.clone())
+                    .or_else(|| std::env::current_dir().ok());
+                match root {
+                    Some(root) => match agents::setup_agent(&agent_name, &root) {
+                        Ok(msg) => editor.set_status(msg),
+                        Err(msg) => editor.set_status(msg),
+                    },
+                    None => editor.set_status("No project root or working directory available"),
+                }
+            }
+        }
+
+        // Spawn pending shell terminals.
+        let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
+        let had_shell_spawns = !shell_spawns.is_empty();
+        for buf_idx in shell_spawns {
+            let (term_w, _) = renderer.size().unwrap_or((120, 40));
+            let inner_cols = term_w.saturating_sub(4);
+            let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
+            let cwd = editor.project.as_ref().map(|p| p.root.clone());
+            let mut extra_env = std::collections::HashMap::new();
+            extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
+            match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
+                Ok(shell) => {
+                    debug!(buf_idx, "shell terminal spawned (GUI)");
+                    shell_terminals.insert(buf_idx, shell);
+                }
+                Err(e) => {
+                    error!(buf_idx, error = %e, "failed to spawn shell terminal (GUI)");
+                    editor.set_status(format!("Terminal spawn failed: {}", e));
+                }
+            }
+        }
+
+        if had_shell_spawns && app_config.agents.auto_mcp_json_effective() {
+            let root = editor
+                .project
+                .as_ref()
+                .map(|p| p.root.clone())
+                .or_else(|| std::env::current_dir().ok());
+            if let Some(root) = root {
+                let shim = agents::resolve_shim_path();
+                if let Err(e) = agents::write_mcp_json(&root, &shim) {
+                    debug!(error = %e, "failed to write .mcp.json");
+                }
+            }
+        }
+
+        // Reset / close / poll shell terminals.
+        let shell_resets: Vec<usize> = editor.pending_shell_resets.drain(..).collect();
+        for buf_idx in shell_resets {
+            if let Some(shell) = shell_terminals.get(&buf_idx) {
+                shell.reset();
+            }
+        }
+
+        let shell_closes: Vec<usize> = editor.pending_shell_closes.drain(..).collect();
+        for buf_idx in shell_closes {
+            if let Some(shell) = shell_terminals.remove(&buf_idx) {
+                shell.shutdown();
+            }
+            editor.execute_command("force-kill-buffer");
+        }
+
+        let mut exited_shells: Vec<usize> = Vec::new();
+        for (buf_idx, shell) in shell_terminals.iter_mut() {
+            for event in shell.poll_events() {
+                match event {
+                    mae_shell::ShellEvent::Bell => editor.ring_bell(),
+                    mae_shell::ShellEvent::Title(t) => {
+                        editor.set_status(format!("Terminal: {}", t));
+                    }
+                    mae_shell::ShellEvent::ChildExit(code) => {
+                        info!(buf_idx, code, "shell process exited (GUI)");
+                        exited_shells.push(*buf_idx);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for buf_idx in exited_shells {
+            if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
+                editor.mode = Mode::Normal;
+            }
+            if let Some(shell) = shell_terminals.remove(&buf_idx) {
+                shell.shutdown();
+            }
+            if buf_idx < editor.buffers.len() {
+                let name = editor.buffers[buf_idx].name.clone();
+                if !name.contains("[exited]") {
+                    editor.buffers[buf_idx].name = format!("{} [exited]", name);
+                }
+            }
+            editor.set_status("Terminal process exited");
+        }
+
+        let shell_inputs: Vec<(usize, String)> = editor.pending_shell_inputs.drain(..).collect();
+        for (buf_idx, text) in shell_inputs {
+            if let Some(shell) = shell_terminals.get(&buf_idx) {
+                shell.write_str(&text);
+            }
+        }
+
+        for (buf_idx, shell) in shell_terminals.iter() {
+            let viewport = shell.read_viewport(100);
+            editor.shell_viewports.insert(*buf_idx, viewport);
+            if let Some(cwd) = shell.cwd() {
+                editor.shell_cwds.insert(*buf_idx, cwd);
+            }
+        }
+        editor
+            .shell_viewports
+            .retain(|idx, _| shell_terminals.contains_key(idx));
+        editor
+            .shell_cwds
+            .retain(|idx, _| shell_terminals.contains_key(idx));
+
+        // --- Poll async channels (AI/LSP/DAP/MCP) with short timeout ---
+        let has_shells = !shell_terminals.is_empty();
+        let shell_tick = async {
+            if has_shells {
+                tokio::time::sleep(Duration::from_millis(33)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
+        // Use a short timeout so we return to pump_app_events quickly.
+        tokio::select! {
+            biased;
+
+            Some(ai_event) = ai_event_rx.recv() => {
+                handle_ai_event_gui(&mut editor, ai_event, &all_tools, &permission_policy, &mut deferred_ai_reply);
+            }
+            Some(lsp_event) = lsp_event_rx.recv() => {
+                if let Some((kind, ref tool_call_id, _)) = deferred_ai_reply {
+                    if let Some(result) = try_complete_deferred(&lsp_event, kind, tool_call_id) {
+                        let (_, _, reply) = deferred_ai_reply.take().unwrap();
+                        debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed (GUI)");
+                        if let Some(conv) = find_conversation_buffer_mut(&mut editor) {
+                            conv.push_tool_result(result.success, &result.output);
+                        }
+                        let _ = reply.send(result);
+                    }
+                }
+                handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
+            }
+            Some(dap_event) = dap_event_rx.recv() => {
+                handle_dap_event(&mut editor, dap_event);
+            }
+            Some(mcp_req) = mcp_tool_rx.recv() => {
+                debug!(tool = %mcp_req.tool_name, "MCP tool call (GUI)");
+                let fake_call = mae_ai::ToolCall {
+                    id: "mcp".to_string(),
+                    name: mcp_req.tool_name.clone(),
+                    arguments: mcp_req.arguments,
+                };
+                let exec_result = execute_tool(&mut editor, &fake_call, &all_tools, &permission_policy);
+                let result = match exec_result {
+                    ExecuteResult::Immediate(result) => result,
+                    ExecuteResult::Deferred { .. } => ToolResult {
+                        tool_call_id: "mcp".to_string(),
+                        success: false,
+                        output: "Tool requires async resolution (not supported via MCP)".to_string(),
+                    },
+                };
+                let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                    success: result.success,
+                    output: result.output,
+                });
+            }
+            _ = shell_tick => {}
+            // Don't block forever — return to pump_app_events after 1ms if no events.
+            _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+        }
+    }
+
+    let _ = std::fs::remove_file(&mcp_socket_path);
+    renderer.cleanup()?;
+    info!("mae (GUI) exited cleanly");
+    Ok(())
+}
+
+/// Handle AI events in the GUI loop (same logic as the terminal loop's AI branch).
+#[cfg(feature = "gui")]
+fn handle_ai_event_gui(
+    editor: &mut Editor,
+    ai_event: AiEvent,
+    all_tools: &[mae_ai::ToolDefinition],
+    permission_policy: &mae_ai::PermissionPolicy,
+    deferred_ai_reply: &mut Option<(
+        DeferredKind,
+        String,
+        tokio::sync::oneshot::Sender<ToolResult>,
+    )>,
+) {
+    match ai_event {
+        AiEvent::ToolCallRequest { call, reply } => {
+            debug!(tool = %call.name, call_id = %call.id, "executing tool call (GUI)");
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_tool_call(&call.name);
+            }
+            let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
+            match exec_result {
+                ExecuteResult::Immediate(result) => {
+                    debug!(tool = %call.name, success = result.success, "tool call complete (GUI)");
+                    if let Some(conv) = find_conversation_buffer_mut(editor) {
+                        conv.push_tool_result(result.success, &result.output);
+                    }
+                    let _ = reply.send(result);
+                }
+                ExecuteResult::Deferred { tool_call_id, kind } => {
+                    debug!(tool = %call.name, ?kind, "tool call deferred (GUI)");
+                    *deferred_ai_reply = Some((kind, tool_call_id, reply));
+                }
+            }
+        }
+        AiEvent::TextResponse(text) => {
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.push_assistant(&text);
+            } else {
+                let display = if text.len() > 120 {
+                    format!("[AI] {}...", &text[..117])
+                } else {
+                    format!("[AI] {}", text)
+                };
+                editor.set_status(display);
+            }
+        }
+        AiEvent::StreamChunk(text) => {
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.append_streaming_chunk(&text);
+            }
+        }
+        AiEvent::SessionComplete(_) => {
+            info!("AI session complete (GUI)");
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.streaming = false;
+                conv_buf.streaming_start = None;
+            }
+            editor.set_status("[AI] Done");
+        }
+        AiEvent::Error(msg) => {
+            error!(error = %msg, "AI error (GUI)");
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.push_system(format!("Error: {}", msg));
+                conv_buf.streaming = false;
+                conv_buf.streaming_start = None;
+            }
+            editor.set_status(format!("[AI error] {}", msg));
+        }
+        AiEvent::CostUpdate {
+            session_usd,
+            last_call_usd: _,
+            tokens_in,
+            tokens_out,
+        } => {
+            editor.ai_session_cost_usd = session_usd;
+            editor.ai_session_tokens_in = tokens_in;
+            editor.ai_session_tokens_out = tokens_out;
+        }
+        AiEvent::BudgetWarning {
+            session_usd,
+            threshold_usd,
+        } => {
+            let msg = format!(
+                "AI budget warning: session spend ${:.4} crossed ${:.2} threshold.",
+                session_usd, threshold_usd
+            );
+            warn!(
+                session_usd,
+                threshold_usd, "AI budget threshold crossed (GUI)"
+            );
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.push_system(msg.clone());
+            }
+            editor.set_status(msg);
+        }
+        AiEvent::BudgetExceeded {
+            session_usd,
+            cap_usd,
+        } => {
+            let msg = format!(
+                "AI budget exceeded: session spend ${:.4} reached cap ${:.2}.",
+                session_usd, cap_usd
+            );
+            error!(session_usd, cap_usd, "AI session hard cap reached (GUI)");
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.push_system(msg.clone());
+                conv_buf.streaming = false;
+                conv_buf.streaming_start = None;
+            }
+            editor.set_status(msg);
+        }
+    }
+}
+
+/// Winit callback struct used with `pump_app_events()`.
+///
+/// Borrows all state from the outer loop. Handles window creation on `Resumed`,
+/// keyboard input translation, resize, and close-requested.
+#[cfg(feature = "gui")]
+struct WinitCallback<'a> {
+    renderer: &'a mut mae_gui::GuiRenderer,
+    editor: &'a mut Editor,
+    scheme: &'a mut SchemeRuntime,
+    pending_keys: &'a mut Vec<KeyPress>,
+    shell_terminals: &'a mut std::collections::HashMap<usize, mae_shell::ShellTerminal>,
+    shell_pending_keys: &'a mut Vec<KeyPress>,
+    ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    should_exit: &'a mut bool,
+    ctrl_held: &'a mut bool,
+    alt_held: &'a mut bool,
+}
+
+#[cfg(feature = "gui")]
+impl winit::application::ApplicationHandler for WinitCallback<'_> {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.renderer.window().is_none() {
+            if let Err(e) = self.renderer.init_window(event_loop) {
+                error!(error = %e, "failed to init GUI window");
+                *self.should_exit = true;
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        use winit::event::WindowEvent;
+
+        match event {
+            WindowEvent::CloseRequested => {
+                *self.should_exit = true;
+            }
+            WindowEvent::Resized(size) => {
+                self.renderer.handle_resize(size.width, size.height);
+            }
+            WindowEvent::ModifiersChanged(mods) => {
+                let state = mods.state();
+                *self.ctrl_held = state.control_key();
+                *self.alt_held = state.alt_key();
+            }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == winit::event::ElementState::Pressed =>
+            {
+                if let Some(mae_core::InputEvent::Key(kp)) =
+                    mae_gui::winit_event_to_input(&event, *self.ctrl_held, *self.alt_held)
+                {
+                    if self.editor.mode == Mode::ShellInsert {
+                        let ct_event = key_handling::keypress_to_crossterm(&kp);
+                        handle_shell_key(
+                            self.editor,
+                            ct_event,
+                            self.shell_terminals,
+                            self.shell_pending_keys,
+                        );
+                    } else {
+                        key_handling::handle_key_from_keypress(
+                            self.editor,
+                            self.scheme,
+                            kp,
+                            self.pending_keys,
+                            self.ai_command_tx,
+                        );
+                    }
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Err(e) = self.renderer.render(self.editor, self.shell_terminals) {
+                    warn!(error = %e, "GUI render error");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.renderer.request_redraw();
     }
 }
 

@@ -30,7 +30,6 @@ pub fn winit_key_to_keypress(event: &KeyEvent) -> Option<KeyPress> {
 
 /// Convert a winit KeyEvent to an InputEvent, applying modifier state.
 /// Used by the GUI event loop (main.rs with --gui flag).
-#[allow(dead_code)]
 pub fn winit_event_to_input(event: &KeyEvent, ctrl: bool, alt: bool) -> Option<InputEvent> {
     let mut kp = winit_key_to_keypress(event)?;
     kp.ctrl = ctrl;

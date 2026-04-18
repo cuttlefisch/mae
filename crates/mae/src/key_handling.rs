@@ -1,4 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+#[cfg(feature = "gui")]
+use crossterm::event::{KeyEventKind, KeyEventState};
 use mae_ai::AiCommand;
 use mae_core::{
     BufferKind, CommandSource, Editor, Key, KeyPress, LookupResult, Mode, PalettePurpose,
@@ -7,6 +9,63 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
 use crate::bootstrap::load_ai_config;
+
+/// Convert a mae_core `KeyPress` into a synthetic crossterm `KeyEvent`.
+///
+/// Used by the GUI backend so it can reuse the existing `handle_key` logic
+/// without duplicating every mode handler. The crossterm event is synthetic
+/// (no real terminal event) but has the correct `KeyCode` + modifiers.
+#[cfg(feature = "gui")]
+pub fn keypress_to_crossterm(kp: &KeyPress) -> KeyEvent {
+    let code = match kp.key {
+        Key::Char(ch) => KeyCode::Char(ch),
+        Key::Escape => KeyCode::Esc,
+        Key::Enter => KeyCode::Enter,
+        Key::Backspace => KeyCode::Backspace,
+        Key::Tab => KeyCode::Tab,
+        Key::Up => KeyCode::Up,
+        Key::Down => KeyCode::Down,
+        Key::Left => KeyCode::Left,
+        Key::Right => KeyCode::Right,
+        Key::Home => KeyCode::Home,
+        Key::End => KeyCode::End,
+        Key::PageUp => KeyCode::PageUp,
+        Key::PageDown => KeyCode::PageDown,
+        Key::Delete => KeyCode::Delete,
+        Key::F(n) => KeyCode::F(n),
+    };
+
+    let mut modifiers = KeyModifiers::NONE;
+    if kp.ctrl {
+        modifiers |= KeyModifiers::CONTROL;
+    }
+    if kp.alt {
+        modifiers |= KeyModifiers::ALT;
+    }
+
+    KeyEvent {
+        code,
+        modifiers,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }
+}
+
+/// Handle a `KeyPress` from the GUI backend by converting to crossterm format.
+///
+/// This lets the GUI event loop share the full key dispatch pipeline with
+/// the terminal backend without duplicating mode handlers.
+#[cfg(feature = "gui")]
+pub fn handle_key_from_keypress(
+    editor: &mut Editor,
+    scheme: &mut SchemeRuntime,
+    kp: KeyPress,
+    pending_keys: &mut Vec<KeyPress>,
+    ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+) {
+    let key_event = keypress_to_crossterm(&kp);
+    handle_key(editor, scheme, key_event, pending_keys, ai_tx);
+}
 
 /// Convert a crossterm KeyEvent into a mae_core KeyPress.
 pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
