@@ -55,6 +55,14 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to read (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
                 ]),
                 required: vec![],
             },
@@ -87,6 +95,14 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "New content (empty string to delete lines)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to write to (default: active buffer)".into(),
                             enum_values: None,
                         },
                     ),
@@ -235,17 +251,27 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "close_buffer".into(),
-            description: "Close a buffer by name. Fails if the buffer has unsaved changes.".into(),
+            description: "Close a buffer by name. Fails if the buffer has unsaved changes unless force=true.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "name".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Buffer name to close (default: active buffer)".into(),
-                        enum_values: None,
-                    },
-                )]),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name to close (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "force".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "If true, close even if the buffer has unsaved changes (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::Write),
@@ -428,6 +454,52 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Override the active buffer when scope='buffer'.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_workspace_symbol".into(),
+            description: "Search for symbols across the workspace by name. Returns JSON array of {name, kind, path, line, character, container_name}. Requires an LSP server. Use this to find functions, structs, types, etc. by name without knowing which file they're in.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Symbol name or prefix to search for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "language_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Language server to query (e.g. 'rust', 'python', 'typescript'). Required because workspace/symbol is server-specific.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into(), "language_id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lsp_document_symbols".into(),
+            description: "List all symbols (functions, structs, methods, etc.) in a document. Returns a hierarchical JSON tree of {name, kind, line, end_line, detail, children}. Requires an LSP server. Use this to understand file structure without reading all the code.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer to query (default: active buffer)".into(),
                             enum_values: None,
                         },
                     ),
@@ -861,6 +933,106 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Shell),
         },
+        // --- Permission introspection ---
+        ToolDefinition {
+            name: "ai_permissions".into(),
+            description: "Show the current AI permission tier and what each tier allows. Returns the auto-approved tier, available tiers with descriptions, and agent trust configuration status.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Self-test suite ---
+        ToolDefinition {
+            name: "self_test_suite".into(),
+            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. Use this to validate that all editor tools work end-to-end. No arguments needed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "categories".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Input lock ---
+        ToolDefinition {
+            name: "input_lock".into(),
+            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state, and unlock when done.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "locked".into(),
+                    ToolProperty {
+                        prop_type: "boolean".into(),
+                        description: "true to lock input, false to unlock".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["locked".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Conversation persistence ---
+        ToolDefinition {
+            name: "ai_save".into(),
+            description: "Save the current AI conversation to a JSON file. Returns the number of entries saved.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path to save conversation to".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "ai_load".into(),
+            description: "Load an AI conversation from a JSON file. Replaces the current conversation.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path to load conversation from".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- File management ---
+        ToolDefinition {
+            name: "rename_file".into(),
+            description: "Rename the current buffer's file on disk and update the buffer path.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "new_path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New file path".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["new_path".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
 
@@ -958,7 +1130,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 39);
+        assert_eq!(tools.len(), 47);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

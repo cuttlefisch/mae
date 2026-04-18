@@ -719,18 +719,22 @@ impl Editor {
             "focus-left" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Left, area);
+                self.sync_mode_to_buffer();
             }
             "focus-right" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Right, area);
+                self.sync_mode_to_buffer();
             }
             "focus-up" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Up, area);
+                self.sync_mode_to_buffer();
             }
             "focus-down" => {
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Down, area);
+                self.sync_mode_to_buffer();
             }
 
             // Diagnostics
@@ -780,6 +784,10 @@ impl Editor {
                 } else {
                     self.set_status("Not a terminal buffer");
                 }
+            }
+            "shell-normal-mode" => {
+                self.mode = Mode::Normal;
+                self.set_status("Terminal: normal mode");
             }
             "terminal-close" => {
                 let idx = self.active_buffer_idx();
@@ -947,8 +955,7 @@ impl Editor {
                 // Actual channel cancel is handled by the binary (AiCommand::Cancel).
                 let status = match self.conversation_mut() {
                     Some(conv) if conv.streaming => {
-                        conv.streaming = false;
-                        conv.streaming_start = None;
+                        conv.end_streaming();
                         conv.push_system("[cancelled]");
                         "[AI] Cancelled"
                     }
@@ -1143,7 +1150,7 @@ impl Editor {
                 self.record_jump();
                 self.search_word_at_cursor_backward();
             }
-            "clear-search-highlight" => {
+            "clear-search-highlight" | "nohlsearch" => {
                 self.search_state.highlight_active = false;
             }
             // gn / gN — select next/previous match as a visual selection.
@@ -1411,6 +1418,7 @@ impl Editor {
                         win.cursor_col = 0;
                         let name = self.buffers[alt_idx].name.clone();
                         self.set_status(format!("Buffer: {}", name));
+                        self.sync_mode_to_buffer();
                     }
                 }
             }
@@ -1712,6 +1720,24 @@ impl Editor {
                 self.pending_operator = Some("s".to_string());
                 self.operator_start = Some((win.cursor_row, win.cursor_col));
                 self.operator_count = count;
+            }
+
+            // Ex-command parity: these commands normally take args via `:cmd <arg>`.
+            // When dispatched without args (from keybinding or AI), show usage.
+            "kb-save" => {
+                self.set_status("Usage: :kb-save <path>");
+            }
+            "kb-load" => {
+                self.set_status("Usage: :kb-load <path>");
+            }
+            "kb-ingest" => {
+                self.set_status("Usage: :kb-ingest <directory>");
+            }
+            "ai-save" => {
+                self.set_status("Usage: :ai-save <path>");
+            }
+            "ai-load" => {
+                self.set_status("Usage: :ai-load <path>");
             }
 
             _ => return false,

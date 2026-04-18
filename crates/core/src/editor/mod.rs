@@ -301,6 +301,10 @@ pub struct Editor {
     /// The binary drains this and calls `agents::setup_agent()`.
     /// `Some("__list__")` is the sentinel for `:agent-list`.
     pub pending_agent_setup: Option<String>,
+    /// When true, user keyboard input is discarded (except Esc / Ctrl-C
+    /// which cancel the AI operation and release the lock). Set by
+    /// `:self-test` and other AI operations to prevent race conditions.
+    pub input_locked: bool,
 }
 
 impl Default for Editor {
@@ -403,6 +407,7 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
+            input_locked: false,
         }
     }
 
@@ -511,6 +516,7 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
+            input_locked: false,
         }
     }
 
@@ -529,6 +535,55 @@ impl Editor {
             Mode::ShellInsert => return None, // Keys handled by binary shell layer
         };
         self.keymaps.get(name)
+    }
+
+    /// Clamp all window cursors to their buffer bounds. Safety net against
+    /// stale cursor positions after buffer mutations (MCP tools, AI edits).
+    /// Also clamps visual anchors and last_visual so rendering never panics.
+    pub fn clamp_all_cursors(&mut self) {
+        for win in self.window_mgr.iter_windows_mut() {
+            let buf_idx = win.buffer_idx;
+            if buf_idx < self.buffers.len() {
+                win.clamp_cursor(&self.buffers[buf_idx]);
+            }
+        }
+
+        // Clamp visual anchor to focused buffer bounds.
+        let idx = self.active_buffer_idx();
+        let line_count = self.buffers[idx].line_count();
+        if line_count == 0 {
+            self.visual_anchor_row = 0;
+            self.visual_anchor_col = 0;
+        } else {
+            let max_row = line_count.saturating_sub(1);
+            if self.visual_anchor_row > max_row {
+                self.visual_anchor_row = max_row;
+            }
+            let max_col = self.buffers[idx].line_len(self.visual_anchor_row);
+            if self.visual_anchor_col > max_col {
+                self.visual_anchor_col = max_col;
+            }
+        }
+
+        // Clamp last_visual so `gv` reselect never panics.
+        if let Some((ref mut ar, ref mut ac, ref mut cr, ref mut cc, _)) = self.last_visual {
+            if line_count == 0 {
+                *ar = 0;
+                *ac = 0;
+                *cr = 0;
+                *cc = 0;
+            } else {
+                let max_row = line_count.saturating_sub(1);
+                if *ar > max_row {
+                    *ar = max_row;
+                }
+                *ac = (*ac).min(self.buffers[idx].line_len(*ar));
+                if *cr > max_row {
+                    *cr = max_row;
+                }
+                *cc = (*cc).min(self.buffers[idx].line_len(*cr));
+            }
+        }
     }
 
     /// Convenience: index of the active (focused window's) buffer.
@@ -630,6 +685,25 @@ impl Editor {
         // `n`/`N` navigation are correct.
         self.recompute_search_matches();
         true
+    }
+
+    /// Sync `self.mode` to the active buffer's kind after a focus/buffer change.
+    /// Shell buffers → ShellInsert. If leaving a buffer-specific mode (ShellInsert,
+    /// ConversationInput) for a non-matching buffer, reset to Normal.
+    /// Preserves Insert/Visual/etc. for text buffers.
+    pub fn sync_mode_to_buffer(&mut self) {
+        let idx = self.active_buffer_idx();
+        let kind = self.buffers[idx].kind;
+        match kind {
+            crate::BufferKind::Shell => {
+                self.mode = Mode::ShellInsert;
+            }
+            _ => {
+                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
+                    self.mode = Mode::Normal;
+                }
+            }
+        }
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {

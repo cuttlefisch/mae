@@ -246,6 +246,8 @@ pub fn load_init_file(scheme: &mut SchemeRuntime, editor: &mut Editor) {
     for path in candidates {
         if path.exists() {
             info!(path = %path.display(), "loading init file");
+            // Inject editor state so init.scm can reference *buffer-name* etc.
+            scheme.inject_editor_state(editor);
             match scheme.load_file(&path) {
                 Ok(()) => {
                     scheme.apply_to_editor(editor);

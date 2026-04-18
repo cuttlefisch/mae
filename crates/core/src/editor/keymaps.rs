@@ -420,10 +420,17 @@ impl Editor {
         visual.bind(parse_key_seq_spaced("SPC e r"), "eval-region");
         visual.bind(parse_key_seq_spaced("SPC e S"), "send-region-to-shell");
 
+        // Shell-insert keymap: minimal — only the escape sequence is bound.
+        // All other keys are forwarded to the PTY by the main loop.
+        // Users can add custom bindings via (define-key "shell-insert" ...).
+        let mut shell_insert = Keymap::new("shell-insert");
+        shell_insert.bind(parse_key_seq_spaced("C-\\ C-n"), "shell-normal-mode");
+
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);
         maps.insert("visual".to_string(), visual);
         maps.insert("command".to_string(), Keymap::new("command"));
+        maps.insert("shell-insert".to_string(), shell_insert);
 
         maps
     }

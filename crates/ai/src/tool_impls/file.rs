@@ -71,9 +71,11 @@ pub fn execute_close_buffer(
         editor.active_buffer_idx()
     };
 
-    if editor.buffers[idx].modified {
+    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    if editor.buffers[idx].modified && !force {
         return Err(format!(
-            "Buffer '{}' has unsaved changes",
+            "Buffer '{}' has unsaved changes (use force=true to close anyway)",
             editor.buffers[idx].name
         ));
     }
@@ -81,8 +83,68 @@ pub fn execute_close_buffer(
     let name = editor.buffers[idx].name.clone();
     // Switch to this buffer first so kill-buffer acts on it
     editor.switch_to_buffer(idx);
-    editor.dispatch_builtin("kill-buffer");
+    if force {
+        editor.dispatch_builtin("force-kill-buffer");
+    } else {
+        editor.dispatch_builtin("kill-buffer");
+    }
     Ok(format!("Closed buffer '{}'", name))
+}
+
+pub fn execute_ai_save(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'path' argument")?;
+
+    let p = Path::new(path);
+    match editor.ai_save(p) {
+        Ok(n) => Ok(format!("Saved {} entries to {}", n, p.display())),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn execute_ai_load(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'path' argument")?;
+
+    let p = Path::new(path);
+    match editor.ai_load(p) {
+        Ok(n) => Ok(format!("Loaded {} entries from {}", n, p.display())),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn execute_rename_file(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let new_path = args
+        .get("new_path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'new_path' argument")?;
+
+    let idx = editor.active_buffer_idx();
+    let old_path = editor.buffers[idx]
+        .file_path()
+        .map(|p| p.to_path_buf())
+        .ok_or("Buffer has no file path")?;
+
+    let new = PathBuf::from(new_path);
+    std::fs::rename(&old_path, &new).map_err(|e| format!("Rename failed: {}", e))?;
+
+    editor.buffers[idx].set_file_path(new.clone());
+    editor.buffers[idx].name = new
+        .file_name()
+        .map_or(new_path.to_string(), |n| n.to_string_lossy().to_string());
+
+    Ok(format!(
+        "Renamed: {} → {}",
+        old_path.display(),
+        new.display()
+    ))
 }
 
 pub fn execute_create_file(

@@ -686,6 +686,229 @@ pub struct CompletionParams {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace Symbol (workspace/symbol)
+// ---------------------------------------------------------------------------
+
+/// Params for `workspace/symbol`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorkspaceSymbolParams {
+    pub query: String,
+}
+
+/// LSP symbol kind (subset from the spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolKind {
+    File = 1,
+    Module = 2,
+    Namespace = 3,
+    Package = 4,
+    Class = 5,
+    Method = 6,
+    Property = 7,
+    Field = 8,
+    Constructor = 9,
+    Enum = 10,
+    Interface = 11,
+    Function = 12,
+    Variable = 13,
+    Constant = 14,
+    String = 15,
+    Struct = 23,
+    Event = 24,
+    TypeParameter = 26,
+    Unknown = 0,
+}
+
+impl SymbolKind {
+    pub fn from_i64(n: i64) -> Self {
+        match n {
+            1 => Self::File,
+            2 => Self::Module,
+            3 => Self::Namespace,
+            4 => Self::Package,
+            5 => Self::Class,
+            6 => Self::Method,
+            7 => Self::Property,
+            8 => Self::Field,
+            9 => Self::Constructor,
+            10 => Self::Enum,
+            11 => Self::Interface,
+            12 => Self::Function,
+            13 => Self::Variable,
+            14 => Self::Constant,
+            15 => Self::String,
+            23 => Self::Struct,
+            24 => Self::Event,
+            26 => Self::TypeParameter,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Module => "module",
+            Self::Namespace => "namespace",
+            Self::Package => "package",
+            Self::Class => "class",
+            Self::Method => "method",
+            Self::Property => "property",
+            Self::Field => "field",
+            Self::Constructor => "constructor",
+            Self::Enum => "enum",
+            Self::Interface => "interface",
+            Self::Function => "function",
+            Self::Variable => "variable",
+            Self::Constant => "constant",
+            Self::String => "string",
+            Self::Struct => "struct",
+            Self::Event => "event",
+            Self::TypeParameter => "type_parameter",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// A symbol returned from `workspace/symbol`.
+#[derive(Debug, Clone)]
+pub struct SymbolInformation {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub location: Location,
+    pub container_name: Option<String>,
+}
+
+/// Parsed `workspace/symbol` response.
+#[derive(Debug, Clone)]
+pub struct WorkspaceSymbolResponse {
+    pub symbols: Vec<SymbolInformation>,
+}
+
+impl WorkspaceSymbolResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return WorkspaceSymbolResponse { symbols: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            let symbols = arr.iter().filter_map(parse_symbol_information).collect();
+            return WorkspaceSymbolResponse { symbols };
+        }
+        WorkspaceSymbolResponse { symbols: vec![] }
+    }
+}
+
+fn parse_symbol_information(v: &serde_json::Value) -> Option<SymbolInformation> {
+    let obj = v.as_object()?;
+    let name = obj.get("name")?.as_str()?.to_string();
+    let kind = obj
+        .get("kind")
+        .and_then(|k| k.as_i64())
+        .map(SymbolKind::from_i64)
+        .unwrap_or(SymbolKind::Unknown);
+    let location = obj.get("location").and_then(|l| {
+        let lo = l.as_object()?;
+        let uri = lo.get("uri")?.as_str()?.to_string();
+        let range = lo.get("range").and_then(parse_range)?;
+        Some(Location { uri, range })
+    })?;
+    let container_name = obj
+        .get("containerName")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    Some(SymbolInformation {
+        name,
+        kind,
+        location,
+        container_name,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Document Symbol (textDocument/documentSymbol)
+// ---------------------------------------------------------------------------
+
+/// Params for `textDocument/documentSymbol`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocumentSymbolParams {
+    #[serde(rename = "textDocument")]
+    pub text_document: TextDocumentIdentifier,
+}
+
+/// A document symbol — can be hierarchical (children) or flat (SymbolInformation).
+#[derive(Debug, Clone)]
+pub struct DocumentSymbol {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub range: Range,
+    pub selection_range: Range,
+    pub detail: Option<String>,
+    pub children: Vec<DocumentSymbol>,
+}
+
+/// Parsed `textDocument/documentSymbol` response.
+#[derive(Debug, Clone)]
+pub struct DocumentSymbolResponse {
+    pub symbols: Vec<DocumentSymbol>,
+}
+
+impl DocumentSymbolResponse {
+    /// Parse from JSON — handles both hierarchical DocumentSymbol[] and flat SymbolInformation[].
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return DocumentSymbolResponse { symbols: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            // Try hierarchical DocumentSymbol first (has selectionRange)
+            if arr.first().and_then(|x| x.get("selectionRange")).is_some() {
+                let symbols = arr.iter().filter_map(parse_document_symbol).collect();
+                return DocumentSymbolResponse { symbols };
+            }
+            // Fall back to flat SymbolInformation → convert to DocumentSymbol
+            let symbols = arr
+                .iter()
+                .filter_map(parse_symbol_information)
+                .map(|si| DocumentSymbol {
+                    name: si.name,
+                    kind: si.kind,
+                    range: si.location.range,
+                    selection_range: si.location.range,
+                    detail: si.container_name,
+                    children: vec![],
+                })
+                .collect();
+            return DocumentSymbolResponse { symbols };
+        }
+        DocumentSymbolResponse { symbols: vec![] }
+    }
+}
+
+fn parse_document_symbol(v: &serde_json::Value) -> Option<DocumentSymbol> {
+    let obj = v.as_object()?;
+    let name = obj.get("name")?.as_str()?.to_string();
+    let kind = obj
+        .get("kind")
+        .and_then(|k| k.as_i64())
+        .map(SymbolKind::from_i64)
+        .unwrap_or(SymbolKind::Unknown);
+    let range = obj.get("range").and_then(parse_range)?;
+    let selection_range = obj.get("selectionRange").and_then(parse_range)?;
+    let detail = obj.get("detail").and_then(|s| s.as_str()).map(String::from);
+    let children = obj
+        .get("children")
+        .and_then(|c| c.as_array())
+        .map(|arr| arr.iter().filter_map(parse_document_symbol).collect())
+        .unwrap_or_default();
+    Some(DocumentSymbol {
+        name,
+        kind,
+        range,
+        selection_range,
+        detail,
+        children,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Text document sync kind (from server capabilities)
 // ---------------------------------------------------------------------------
 
@@ -1134,5 +1357,97 @@ mod tests {
         let (start, _end, text) = item.text_edit.as_ref().unwrap();
         assert_eq!(start.character, 3);
         assert_eq!(text, "main()");
+    }
+
+    // --- WorkspaceSymbolResponse ---
+
+    #[test]
+    fn workspace_symbol_response_array() {
+        let v = serde_json::json!([
+            {
+                "name": "MyStruct",
+                "kind": 23,
+                "location": {
+                    "uri": "file:///src/lib.rs",
+                    "range": {"start": {"line": 10, "character": 0}, "end": {"line": 10, "character": 8}}
+                },
+                "containerName": "mymod"
+            }
+        ]);
+        let resp = WorkspaceSymbolResponse::from_value(v);
+        assert_eq!(resp.symbols.len(), 1);
+        assert_eq!(resp.symbols[0].name, "MyStruct");
+        assert_eq!(resp.symbols[0].kind, SymbolKind::Struct);
+        assert_eq!(resp.symbols[0].container_name.as_deref(), Some("mymod"));
+    }
+
+    #[test]
+    fn workspace_symbol_response_null() {
+        let resp = WorkspaceSymbolResponse::from_value(serde_json::Value::Null);
+        assert!(resp.symbols.is_empty());
+    }
+
+    #[test]
+    fn symbol_kind_labels() {
+        assert_eq!(SymbolKind::Function.label(), "function");
+        assert_eq!(SymbolKind::Struct.label(), "struct");
+        assert_eq!(SymbolKind::Module.label(), "module");
+        assert_eq!(SymbolKind::Enum.label(), "enum");
+    }
+
+    // --- DocumentSymbolResponse ---
+
+    #[test]
+    fn document_symbol_response_hierarchical() {
+        let v = serde_json::json!([
+            {
+                "name": "main",
+                "kind": 12,
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 5, "character": 1}},
+                "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}},
+                "detail": "fn()",
+                "children": [
+                    {
+                        "name": "x",
+                        "kind": 13,
+                        "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 10}},
+                        "selectionRange": {"start": {"line": 1, "character": 8}, "end": {"line": 1, "character": 9}}
+                    }
+                ]
+            }
+        ]);
+        let resp = DocumentSymbolResponse::from_value(v);
+        assert_eq!(resp.symbols.len(), 1);
+        assert_eq!(resp.symbols[0].name, "main");
+        assert_eq!(resp.symbols[0].kind, SymbolKind::Function);
+        assert_eq!(resp.symbols[0].detail.as_deref(), Some("fn()"));
+        assert_eq!(resp.symbols[0].children.len(), 1);
+        assert_eq!(resp.symbols[0].children[0].name, "x");
+        assert_eq!(resp.symbols[0].children[0].kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn document_symbol_response_flat_fallback() {
+        let v = serde_json::json!([
+            {
+                "name": "foo",
+                "kind": 12,
+                "location": {
+                    "uri": "file:///a.rs",
+                    "range": {"start": {"line": 0, "character": 0}, "end": {"line": 2, "character": 1}}
+                }
+            }
+        ]);
+        let resp = DocumentSymbolResponse::from_value(v);
+        assert_eq!(resp.symbols.len(), 1);
+        assert_eq!(resp.symbols[0].name, "foo");
+        assert_eq!(resp.symbols[0].kind, SymbolKind::Function);
+        assert!(resp.symbols[0].children.is_empty());
+    }
+
+    #[test]
+    fn document_symbol_response_null() {
+        let resp = DocumentSymbolResponse::from_value(serde_json::Value::Null);
+        assert!(resp.symbols.is_empty());
     }
 }

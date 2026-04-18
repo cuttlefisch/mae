@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
-use mae_ai::{BudgetConfig, ProviderConfig};
+use mae_ai::{BudgetConfig, PermissionPolicy, PermissionTier, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -42,6 +42,13 @@ pub struct AiSection {
     pub timeout_secs: Option<u64>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
+    /// Permission tier for AI/MCP tool execution:
+    ///   "readonly"  — buffer reads only
+    ///   "standard"  — reads + edits
+    ///   "trusted"   — reads + edits + shell (default, container-first)
+    ///   "full"      — everything including quit/force-quit
+    /// Env override: MAE_AI_PERMISSIONS (highest precedence).
+    pub auto_approve_tier: Option<String>,
     /// Per-session spend guardrails. Both fields optional — setting
     /// neither disables budgeting, setting only the warn threshold
     /// keeps the session running with visibility but no hard limits.
@@ -67,12 +74,19 @@ pub struct AgentsSection {
     /// Set to `false` or `MAE_AGENTS_AUTO_MCP=0` to disable.
     #[serde(default = "default_true")]
     pub auto_mcp_json: bool,
+    /// Automatically configure spawned agents to trust MAE's MCP tools.
+    /// Writes agent-specific settings (e.g. `.claude/settings.local.json`)
+    /// so tools run without per-call approval prompts.
+    /// Set to `false` or `MAE_AGENTS_AUTO_APPROVE=0` to disable.
+    #[serde(default = "default_true")]
+    pub auto_approve_tools: bool,
 }
 
 impl Default for AgentsSection {
     fn default() -> Self {
         Self {
             auto_mcp_json: true,
+            auto_approve_tools: true,
         }
     }
 }
@@ -84,6 +98,14 @@ impl AgentsSection {
             return val != "0";
         }
         self.auto_mcp_json
+    }
+
+    /// Resolve with env var override: `MAE_AGENTS_AUTO_APPROVE=0` disables.
+    pub fn auto_approve_tools_effective(&self) -> bool {
+        if let Ok(val) = std::env::var("MAE_AGENTS_AUTO_APPROVE") {
+            return val != "0";
+        }
+        self.auto_approve_tools
     }
 }
 
@@ -238,6 +260,27 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         timeout_secs,
         budget: file.budget.clone(),
     })
+}
+
+/// Resolve AI permission policy with precedence: env > file > default (trusted).
+pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
+    let tier_str = std::env::var("MAE_AI_PERMISSIONS")
+        .ok()
+        .or_else(|| config.ai.auto_approve_tier.clone())
+        .unwrap_or_else(|| "trusted".into());
+    let tier = match tier_str.as_str() {
+        "readonly" => PermissionTier::ReadOnly,
+        "standard" => PermissionTier::Write,
+        "trusted" => PermissionTier::Shell,
+        "full" => PermissionTier::Privileged,
+        _ => {
+            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'trusted'");
+            PermissionTier::Shell
+        }
+    };
+    PermissionPolicy {
+        auto_approve_up_to: tier,
+    }
 }
 
 /// Update a single editor preference in the config file (load → modify → save).
@@ -441,6 +484,11 @@ pub fn default_config_template() -> String {
 # Ollama doesn't need a key.\n\
 # api_key = \"...\"\n\
 \n\
+# Permission tier for AI/MCP tool execution.\n\
+# Tiers: \"readonly\", \"standard\", \"trusted\" (default), \"full\"\n\
+# Env override: MAE_AI_PERMISSIONS=full\n\
+# auto_approve_tier = \"trusted\"\n\
+\n\
 # HTTP timeout in seconds. Increase for slow local inference.\n\
 # timeout_secs = 300\n\
 \n\
@@ -469,6 +517,12 @@ pub fn default_config_template() -> String {
 # Claude Code and other MCP clients will auto-discover MAE's tools.\n\
 # Set to false to disable. Env override: MAE_AGENTS_AUTO_MCP=0\n\
 # auto_mcp_json = true\n\
+\n\
+# Automatically configure spawned agents to trust MAE's MCP tools.\n\
+# Writes agent-specific settings (e.g. .claude/settings.local.json)\n\
+# so MCP tools run without per-call approval prompts.\n\
+# Set to false to disable. Env override: MAE_AGENTS_AUTO_APPROVE=0\n\
+# auto_approve_tools = true\n\
 ",
         config_path().display()
     )
@@ -576,5 +630,146 @@ mod tests {
         assert_eq!(resolved.model, "env-model");
         std::env::remove_var("MAE_AI_MODEL");
         std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    // --- Permission policy resolution tests ---
+
+    #[test]
+    fn resolve_permission_default_is_trusted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config::default();
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+    }
+
+    #[test]
+    fn resolve_permission_from_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Privileged);
+    }
+
+    #[test]
+    fn resolve_permission_env_overrides_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AI_PERMISSIONS", "readonly");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+    }
+
+    #[test]
+    fn resolve_permission_all_tiers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let tiers = [
+            ("readonly", PermissionTier::ReadOnly),
+            ("standard", PermissionTier::Write),
+            ("trusted", PermissionTier::Shell),
+            ("full", PermissionTier::Privileged),
+        ];
+        for (name, expected) in tiers {
+            let cfg = Config {
+                ai: AiSection {
+                    auto_approve_tier: Some(name.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let policy = resolve_permission_policy(&cfg);
+            assert_eq!(
+                policy.auto_approve_up_to, expected,
+                "tier '{}' mismatch",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_permission_unknown_tier_defaults_to_trusted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("bogus".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+    }
+
+    #[test]
+    fn config_with_permission_tier_round_trips() {
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.ai.auto_approve_tier.as_deref(), Some("full"));
+    }
+
+    // --- Agent auto-approve tests ---
+
+    #[test]
+    fn auto_approve_tools_defaults_to_true() {
+        let cfg = Config::default();
+        assert!(cfg.agents.auto_approve_tools);
+    }
+
+    #[test]
+    fn auto_approve_tools_env_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AGENTS_AUTO_APPROVE", "0");
+        let cfg = Config::default();
+        assert!(!cfg.agents.auto_approve_tools_effective());
+        std::env::remove_var("MAE_AGENTS_AUTO_APPROVE");
+    }
+
+    #[test]
+    fn auto_approve_tools_config_false() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AGENTS_AUTO_APPROVE");
+        let s = r#"
+            [agents]
+            auto_approve_tools = false
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert!(!cfg.agents.auto_approve_tools_effective());
+    }
+
+    #[test]
+    fn auto_approve_tools_round_trips() {
+        let cfg = Config {
+            agents: AgentsSection {
+                auto_mcp_json: true,
+                auto_approve_tools: false,
+            },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert!(!back.agents.auto_approve_tools);
     }
 }

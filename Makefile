@@ -35,7 +35,7 @@ RELEASE_BIN  := $(TARGET_DIR)/release/$(BINARY)
 RELEASE_SHIM := $(TARGET_DIR)/release/$(SHIM_BINARY)
 DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 
-.PHONY: all build dev install uninstall run test check fmt fmt-check clippy clean ci setup-hooks help
+.PHONY: all build dev install uninstall run test check fmt fmt-check clippy clean ci setup-hooks self-test help
 
 # Default target: release build
 all: build
@@ -95,6 +95,10 @@ ci: fmt-check clippy check test
 setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks configured to use .githooks/"
+
+## self-test: run AI-driven e2e self-test headless (requires AI provider)
+self-test: build
+	$(RELEASE_BIN) --self-test $(CATS)
 
 ## clean: remove all build artefacts
 clean:

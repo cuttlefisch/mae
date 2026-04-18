@@ -11,6 +11,7 @@ pub mod file_picker;
 pub mod grapheme;
 pub mod help_view;
 pub mod hooks;
+pub mod input;
 pub mod kb_seed;
 pub mod keymap;
 pub mod lsp_intent;
@@ -39,6 +40,7 @@ pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowse
 pub use file_picker::FilePicker;
 pub use help_view::{HelpLinkSpan, HelpView};
 pub use hooks::HookRegistry;
+pub use input::InputEvent;
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };

@@ -7,6 +7,48 @@
 //! The key insight: `MAE_MCP_SOCKET` is inherited from the PTY environment
 //! (already injected by the shell spawn code), NOT placed in `.mcp.json`.
 //! This makes the file static (no PID) and reusable across MAE restarts.
+//!
+//! # Adding support for a new AI agent
+//!
+//! MAE's agent bootstrap is agent-agnostic. The Claude Code implementation
+//! serves as the reference. To add a new agent:
+//!
+//! **Step 1: Register the agent** — Add an [`AgentDef`] to [`builtin_agents()`]:
+//! ```ignore
+//! AgentDef {
+//!     name: "my-agent",
+//!     binary: "myagent",
+//!     description: "My Agent CLI",
+//!     strategy: BootstrapStrategy::McpJson { server_name: "mae-editor" },
+//! }
+//! ```
+//! `McpJson` works for any agent that reads `.mcp.json` (MCP standard).
+//!
+//! **Step 2: Add a settings writer** (if the agent has its own permission
+//! system) — implement `write_<agent>_settings(project_root) -> io::Result<()>`:
+//! - Read-merge-write: never clobber the user's existing settings.
+//! - Idempotent: skip write if content is unchanged (avoid mtime churn).
+//! - Reject invalid existing files: return `Err`, don't overwrite.
+//! - Approve all MAE tools at once: don't enumerate 275+ tools individually.
+//! - Create parent dirs: the settings directory may not exist yet.
+//!
+//! See [`write_claude_settings()`] for the canonical implementation.
+//!
+//! **Step 3: Register in dispatcher** — Add the writer to
+//! [`write_agent_settings()`] so it runs on shell spawn.
+//!
+//! ## Claude Code specifics (not universal)
+//!
+//! - Wildcard `mcp__mae-editor` in `permissions.allow` approves all tools
+//!   from the server. Other agents may use different trust patterns.
+//! - Settings live in `{project}/.claude/settings.local.json`. Other agents
+//!   use different paths.
+//!
+//! ## What's universal
+//!
+//! - `.mcp.json` is the MCP standard — any MCP-aware agent reads it.
+//! - `MAE_MCP_SOCKET` env var is inherited by all PTY children.
+//! - `mae-mcp-shim` bridges Unix socket ↔ stdio for any agent.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -110,7 +152,89 @@ pub fn write_mcp_json(project_root: &Path, shim_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Write Claude Code's `.claude/settings.local.json` to auto-approve MAE tools.
+///
+/// Uses the `mcp__mae-editor` wildcard pattern which approves all tools from
+/// the `mae-editor` MCP server. This is Claude Code's convention — other agents
+/// may use different patterns (see module-level docs for adding new agents).
+///
+/// Read-merge-write: preserves existing entries (Bash permissions, deny list, etc.).
+/// Idempotent: skips write if content is unchanged.
+pub fn write_claude_settings(project_root: &Path) -> io::Result<()> {
+    let claude_dir = project_root.join(".claude");
+    std::fs::create_dir_all(&claude_dir)?;
+    let settings_path = claude_dir.join("settings.local.json");
+
+    let mut root = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)?;
+        serde_json::from_str::<serde_json::Value>(&contents).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    ".claude/settings.local.json contains invalid JSON, not overwriting: {}",
+                    e
+                ),
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = root.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            ".claude/settings.local.json root is not a JSON object",
+        )
+    })?;
+
+    // Ensure permissions.allow contains "mcp__mae-editor".
+    let perms = obj
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(perms_obj) = perms.as_object_mut() {
+        let allow = perms_obj
+            .entry("allow")
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(allow_arr) = allow.as_array_mut() {
+            let entry = serde_json::json!("mcp__mae-editor");
+            if !allow_arr.contains(&entry) {
+                allow_arr.push(entry);
+            }
+        }
+    }
+
+    // Skip write if unchanged.
+    let new_contents = serde_json::to_string_pretty(&root).map_err(io::Error::other)?;
+    if settings_path.exists() {
+        let existing = std::fs::read_to_string(&settings_path)?;
+        if existing == new_contents {
+            return Ok(());
+        }
+    }
+
+    std::fs::write(&settings_path, new_contents)?;
+    Ok(())
+}
+
+/// Write agent-specific settings files for all known agents.
+///
+/// Called alongside `write_mcp_json()` on shell spawn when
+/// `auto_approve_tools` is enabled. Each agent gets its own
+/// settings writer — see module docs for how to add new agents.
+pub fn write_agent_settings(project_root: &Path) -> io::Result<()> {
+    for agent in builtin_agents() {
+        // Future agents: add their settings writer as new branches here.
+        if agent.name == "claude-code" {
+            write_claude_settings(project_root)?;
+        }
+    }
+    Ok(())
+}
+
 /// Bootstrap a named agent. Returns a status message on success.
+///
+/// Writes both `.mcp.json` (tool discovery) and agent-specific settings
+/// (tool approval) to the project root.
 pub fn setup_agent(name: &str, project_root: &Path) -> Result<String, String> {
     let agents = builtin_agents();
     let agent = agents.iter().find(|a| a.name == name).ok_or_else(|| {
@@ -126,8 +250,15 @@ pub fn setup_agent(name: &str, project_root: &Path) -> Result<String, String> {
         BootstrapStrategy::McpJson { server_name } => {
             write_mcp_json(project_root, &shim)
                 .map_err(|e| format!("Failed to write .mcp.json: {}", e))?;
+            // Also write agent-specific settings for tool approval.
+            if let Err(e) = write_agent_settings(project_root) {
+                return Err(format!(
+                    "Wrote .mcp.json but failed to write agent settings: {}",
+                    e
+                ));
+            }
             Ok(format!(
-                "Wrote .mcp.json with '{}' server (shim: {})",
+                "Wrote .mcp.json with '{}' server + agent settings (shim: {})",
                 server_name,
                 shim.display()
             ))
@@ -288,5 +419,108 @@ mod tests {
         let result = setup_agent("claude-code", dir.path());
         assert!(result.is_ok());
         assert!(dir.path().join(".mcp.json").exists());
+        // setup_agent now also writes agent settings.
+        assert!(dir.path().join(".claude/settings.local.json").exists());
+    }
+
+    #[test]
+    fn test_write_claude_settings_creates_new() {
+        let dir = TempDir::new().unwrap();
+        write_claude_settings(dir.path()).unwrap();
+
+        let path = dir.path().join(".claude/settings.local.json");
+        assert!(path.exists());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let allow = val["permissions"]["allow"].as_array().unwrap();
+        assert!(allow.contains(&serde_json::json!("mcp__mae-editor")));
+    }
+
+    #[test]
+    fn test_write_claude_settings_merges_existing() {
+        let dir = TempDir::new().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let existing = serde_json::json!({
+            "permissions": {
+                "allow": ["Bash(npm test)"],
+                "deny": ["Bash(rm -rf /)"]
+            },
+            "enableAllProjectMcpServers": false
+        });
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        write_claude_settings(dir.path()).unwrap();
+
+        let contents = std::fs::read_to_string(claude_dir.join("settings.local.json")).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let allow = val["permissions"]["allow"].as_array().unwrap();
+        // Our entry added.
+        assert!(allow.contains(&serde_json::json!("mcp__mae-editor")));
+        // Existing entries preserved.
+        assert!(allow.contains(&serde_json::json!("Bash(npm test)")));
+        // Deny list preserved.
+        assert_eq!(val["permissions"]["deny"][0], "Bash(rm -rf /)");
+        // Other keys preserved.
+        assert_eq!(val["enableAllProjectMcpServers"], false);
+    }
+
+    #[test]
+    fn test_write_claude_settings_no_duplicate() {
+        let dir = TempDir::new().unwrap();
+        write_claude_settings(dir.path()).unwrap();
+        write_claude_settings(dir.path()).unwrap();
+
+        let path = dir.path().join(".claude/settings.local.json");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        let allow = val["permissions"]["allow"].as_array().unwrap();
+        let count = allow
+            .iter()
+            .filter(|v| *v == &serde_json::json!("mcp__mae-editor"))
+            .count();
+        assert_eq!(count, 1, "should not duplicate mcp__mae-editor entry");
+    }
+
+    #[test]
+    fn test_write_claude_settings_idempotent() {
+        let dir = TempDir::new().unwrap();
+        write_claude_settings(dir.path()).unwrap();
+        let path = dir.path().join(".claude/settings.local.json");
+        let mtime1 = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        write_claude_settings(dir.path()).unwrap();
+        let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        assert_eq!(
+            mtime1, mtime2,
+            "file should not be rewritten when content is unchanged"
+        );
+    }
+
+    #[test]
+    fn test_write_claude_settings_rejects_invalid_json() {
+        let dir = TempDir::new().unwrap();
+        let claude_dir = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(claude_dir.join("settings.local.json"), "not valid json").unwrap();
+
+        let result = write_claude_settings(dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid JSON"));
+    }
+
+    #[test]
+    fn test_write_agent_settings_dispatcher() {
+        let dir = TempDir::new().unwrap();
+        write_agent_settings(dir.path()).unwrap();
+        // Claude Code settings should be written.
+        assert!(dir.path().join(".claude/settings.local.json").exists());
     }
 }

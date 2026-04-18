@@ -3,15 +3,19 @@ use mae_core::Editor;
 use crate::tools::PermissionPolicy;
 use crate::types::*;
 
-use crate::tool_impls::lsp::{execute_lsp_definition, execute_lsp_hover, execute_lsp_references};
+use crate::tool_impls::lsp::{
+    execute_lsp_definition, execute_lsp_document_symbols, execute_lsp_hover,
+    execute_lsp_references, execute_lsp_workspace_symbol,
+};
 use crate::tool_impls::{
-    execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
-    execute_create_file, execute_cursor_info, execute_dap_continue, execute_dap_inspect_variable,
-    execute_dap_set_breakpoint, execute_dap_start, execute_dap_step, execute_debug_state,
-    execute_editor_state, execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph,
-    execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
-    execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
-    execute_project_info, execute_project_search, execute_set_option, execute_shell_list,
+    execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
+    execute_close_buffer, execute_command_list, execute_create_file, execute_cursor_info,
+    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
+    execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_links_from,
+    execute_kb_links_to, execute_kb_list, execute_kb_search, execute_list_buffers,
+    execute_lsp_diagnostics, execute_open_file, execute_project_files, execute_project_info,
+    execute_project_search, execute_rename_file, execute_set_option, execute_shell_list,
     execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
     execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
@@ -22,6 +26,8 @@ pub enum DeferredKind {
     LspDefinition,
     LspReferences,
     LspHover,
+    LspWorkspaceSymbol,
+    LspDocumentSymbols,
 }
 
 /// Result of executing a tool call — either immediately available or
@@ -73,6 +79,8 @@ pub fn execute_tool(
         "lsp_definition" => Some(DeferredKind::LspDefinition),
         "lsp_references" => Some(DeferredKind::LspReferences),
         "lsp_hover" => Some(DeferredKind::LspHover),
+        "lsp_workspace_symbol" => Some(DeferredKind::LspWorkspaceSymbol),
+        "lsp_document_symbols" => Some(DeferredKind::LspDocumentSymbols),
         _ => None,
     };
 
@@ -81,6 +89,12 @@ pub fn execute_tool(
             DeferredKind::LspDefinition => execute_lsp_definition(editor, &call.arguments),
             DeferredKind::LspReferences => execute_lsp_references(editor, &call.arguments),
             DeferredKind::LspHover => execute_lsp_hover(editor, &call.arguments),
+            DeferredKind::LspWorkspaceSymbol => {
+                execute_lsp_workspace_symbol(editor, &call.arguments)
+            }
+            DeferredKind::LspDocumentSymbols => {
+                execute_lsp_document_symbols(editor, &call.arguments)
+            }
         };
         return match result {
             Ok(()) => ExecuteResult::Deferred {
@@ -95,7 +109,52 @@ pub fn execute_tool(
         };
     }
 
-    // 4. Dispatch synchronous tools
+    // 4. Handle ai_permissions specially (needs access to policy).
+    if call.name == "ai_permissions" {
+        let output = format_permissions_info(policy);
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            success: true,
+            output,
+        });
+    }
+
+    // 4b. Handle self_test_suite (returns structured test plan).
+    if call.name == "self_test_suite" {
+        let filter = call
+            .arguments
+            .get("categories")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let output = build_self_test_plan(filter);
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            success: true,
+            output,
+        });
+    }
+
+    // 4c. Handle input_lock (sets editor.input_locked).
+    if call.name == "input_lock" {
+        let locked = call
+            .arguments
+            .get("locked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        editor.input_locked = locked;
+        let msg = if locked {
+            "Input locked — user keystrokes discarded (Esc/Ctrl-C to cancel)"
+        } else {
+            "Input unlocked — user keystrokes re-enabled"
+        };
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            success: true,
+            output: msg.to_string(),
+        });
+    }
+
+    // 5. Dispatch synchronous tools
     let ai_tool_names = [
         "buffer_read",
         "buffer_write",
@@ -132,6 +191,13 @@ pub fn execute_tool(
         "shell_list",
         "shell_read_output",
         "shell_send_input",
+        "ai_permissions",
+        "self_test_suite",
+        "input_lock",
+        "set_option",
+        "ai_save",
+        "ai_load",
+        "rename_file",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -194,9 +260,358 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "shell_list" => execute_shell_list(editor),
         "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
         "shell_send_input" => execute_shell_send_input(editor, &call.arguments),
-        // shell_exec is handled async in the session, not here
+        "shell_exec" => execute_shell_exec_sync(&call.arguments),
+        "ai_save" => execute_ai_save(editor, &call.arguments),
+        "ai_load" => execute_ai_load(editor, &call.arguments),
+        "rename_file" => execute_rename_file(editor, &call.arguments),
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
+}
+
+/// Synchronous shell_exec for MCP callers and other non-session paths.
+///
+/// The AI session handles shell_exec async (see `AgentSession::execute_shell`),
+/// but MCP tool calls bypass the session and go through `execute_tool` directly.
+/// This synchronous version uses `std::process::Command` so MCP agents can
+/// run shell commands without the async session context.
+fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String, String> {
+    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    if command.is_empty() {
+        return Err("Missing 'command' argument".into());
+    }
+
+    // Same blocklist as session's async version.
+    let blocked_patterns = ["rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", ">(){ :"];
+    for pattern in &blocked_patterns {
+        if command.contains(pattern) {
+            return Err(format!(
+                "Command blocked: contains dangerous pattern '{}'",
+                pattern
+            ));
+        }
+    }
+
+    let timeout_secs = args
+        .get("timeout_secs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30)
+        .min(120);
+
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to execute: {}", e))?;
+
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                break child
+                    .wait_with_output()
+                    .map_err(|e| format!("Wait failed: {}", e))?
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return Err(format!("Command timed out after {}s", timeout_secs));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("Wait failed: {}", e)),
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let status = output.status.code().unwrap_or(-1);
+
+    let mut out = format!("exit_code: {}\n", status);
+    if !stdout.is_empty() {
+        let stdout_str = if stdout.len() > 10_000 {
+            format!("{}...[truncated]", &stdout[..10_000])
+        } else {
+            stdout.to_string()
+        };
+        out.push_str(&format!("stdout:\n{}\n", stdout_str));
+    }
+    if !stderr.is_empty() {
+        let stderr_str = if stderr.len() > 5_000 {
+            format!("{}...[truncated]", &stderr[..5_000])
+        } else {
+            stderr.to_string()
+        };
+        out.push_str(&format!("stderr:\n{}\n", stderr_str));
+    }
+
+    if output.status.success() {
+        Ok(out)
+    } else {
+        Err(out)
+    }
+}
+
+fn format_permissions_info(policy: &PermissionPolicy) -> String {
+    let tier_name = match policy.auto_approve_up_to {
+        PermissionTier::ReadOnly => "readonly",
+        PermissionTier::Write => "standard",
+        PermissionTier::Shell => "trusted",
+        PermissionTier::Privileged => "full",
+    };
+
+    format!(
+        "Current auto-approve tier: {tier_name}\n\n\
+         Permission tiers (lowest to highest):\n\
+         - readonly: Read buffer contents, cursor state, file listings, project search\n\
+         - standard: Modify buffers, edit files, save, undo/redo\n\
+         - trusted: Execute shell commands (default)\n\
+         - full: Quit editor, modify config, privileged operations\n\n\
+         Tools at or below the '{tier_name}' tier run without prompting.\n\
+         Configure via MAE_AI_PERMISSIONS env var or [ai] auto_approve_tier in config.toml.\n\
+         Agent tool approval (MCP) is separate — see [agents] auto_approve_tools in config.toml."
+    )
+}
+
+/// Build a structured JSON test plan for the self-test suite.
+///
+/// Returns a JSON object that any MCP-connected agent can parse and execute
+/// mechanically — no prose interpretation required.
+fn build_self_test_plan(filter: &str) -> String {
+    let filters: Vec<&str> = if filter.is_empty() {
+        vec![]
+    } else {
+        filter.split(',').map(|s| s.trim()).collect()
+    };
+    let include = |name: &str| filters.is_empty() || filters.contains(&name);
+
+    let mut categories = Vec::new();
+
+    if include("introspection") {
+        categories.push(serde_json::json!({
+            "name": "introspection",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "Returns JSON with cursor_row, mode, line_count fields"
+                },
+                {
+                    "tool": "editor_state",
+                    "args": {},
+                    "assert": "Returns JSON with mode, theme, buffer_count >= 1"
+                },
+                {
+                    "tool": "list_buffers",
+                    "args": {},
+                    "assert": "Returns at least 1 buffer"
+                },
+                {
+                    "tool": "window_layout",
+                    "args": {},
+                    "assert": "Returns JSON with at least 1 window"
+                },
+                {
+                    "tool": "command_list",
+                    "args": {},
+                    "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt"
+                },
+                {
+                    "tool": "ai_permissions",
+                    "args": {},
+                    "assert": "Returns text with current auto-approve tier"
+                }
+            ],
+            "command_palette_check": {
+                "description": "After running command_list, verify these commands exist",
+                "required_commands": [
+                    "save", "quit", "force-quit", "undo", "redo",
+                    "help", "help-follow-link", "help-search",
+                    "ai-prompt", "ai-cancel",
+                    "terminal", "send-to-shell",
+                    "agent-list", "agent-setup", "self-test",
+                    "lsp-goto-definition", "lsp-find-references", "lsp-hover", "lsp-show-diagnostics",
+                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint"
+                ]
+            }
+        }));
+    }
+
+    if include("editing") {
+        categories.push(serde_json::json!({
+            "name": "editing",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "create_file",
+                    "args": {"path": "/tmp/mae-self-test-editing.txt", "content": "hello world"},
+                    "assert": "Success, file created"
+                },
+                {
+                    "tool": "open_file",
+                    "args": {"path": "/tmp/mae-self-test-editing.txt"},
+                    "assert": "Buffer opened"
+                },
+                {
+                    "tool": "buffer_read",
+                    "args": {"start_line": 1, "end_line": 1},
+                    "assert": "Contains 'hello world'"
+                },
+                {
+                    "tool": "buffer_write",
+                    "args": {"start_line": 1, "end_line": 1, "content": "hello MAE"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "buffer_read",
+                    "args": {"start_line": 1, "end_line": 1},
+                    "assert": "Contains 'hello MAE' (verifies write)"
+                },
+                {
+                    "tool": "list_buffers",
+                    "args": {},
+                    "assert": "Test file buffer appears in list"
+                },
+                {
+                    "tool": "switch_buffer",
+                    "args": {"name": "*AI*"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "close_buffer",
+                    "args": {"name": "mae-self-test-editing.txt", "force": true},
+                    "assert": "Success (force=true closes even if modified)"
+                }
+            ]
+        }));
+    }
+
+    if include("help") {
+        categories.push(serde_json::json!({
+            "name": "help",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "kb_search",
+                    "args": {"query": "buffer"},
+                    "assert": "Returns at least 1 result"
+                },
+                {
+                    "tool": "kb_list",
+                    "args": {"prefix": "concept:"},
+                    "assert": "Returns at least 5 concept nodes"
+                },
+                {
+                    "tool": "kb_get",
+                    "args": {"id": "concept:buffer"},
+                    "assert": "Returns node with title, body, links"
+                },
+                {
+                    "tool": "kb_links_from",
+                    "args": {"id": "concept:buffer"},
+                    "assert": "Returns at least 1 outgoing link"
+                },
+                {
+                    "tool": "kb_links_to",
+                    "args": {"id": "concept:buffer"},
+                    "assert": "Returns at least 1 incoming link (from index)"
+                },
+                {
+                    "tool": "kb_graph",
+                    "args": {"id": "concept:buffer", "depth": 1},
+                    "assert": "Returns nodes and edges arrays"
+                },
+                {
+                    "tool": "help_open",
+                    "args": {"id": "index"},
+                    "assert": "Opens *Help* buffer for the user"
+                },
+                {
+                    "tool": "switch_buffer",
+                    "args": {"name": "*AI*"},
+                    "assert": "Switch back to *AI* after help tests (important: subsequent tests need a non-Help buffer active)"
+                }
+            ],
+            "help_navigation_e2e": {
+                "description": "Connected walkthrough: kb_search 'buffer' -> kb_get first result -> verify [[...]] links in body -> kb_graph on that node (>= 2 nodes) -> help_open index -> switch_buffer back to *AI*",
+                "report_as": "help_navigation_e2e"
+            }
+        }));
+    }
+
+    if include("project") {
+        categories.push(serde_json::json!({
+            "name": "project",
+            "conditional": true,
+            "precondition": "Call project_info first. If it fails or returns no root, SKIP this entire category.",
+            "tests": [
+                {
+                    "tool": "project_info",
+                    "args": {},
+                    "assert": "Returns JSON with root field"
+                },
+                {
+                    "tool": "project_files",
+                    "args": {"pattern": "*.rs"},
+                    "assert": "Returns at least 1 file"
+                },
+                {
+                    "tool": "project_search",
+                    "args": {"pattern": "fn main", "max_results": 5},
+                    "assert": "Returns at least 1 match"
+                }
+            ]
+        }));
+    }
+
+    if include("lsp") {
+        categories.push(serde_json::json!({
+            "name": "lsp",
+            "conditional": true,
+            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'crates/mae/src/main.rs' (relative to project root) to trigger LSP didOpen. Wait a moment, then call lsp_diagnostics with scope 'all'. If it returns an error about no LSP server, SKIP this entire category.",
+            "tests": [
+                {
+                    "tool": "open_file",
+                    "args": {"path": "crates/mae/src/main.rs"},
+                    "assert": "Buffer opened (triggers LSP didOpen)"
+                },
+                {
+                    "tool": "lsp_diagnostics",
+                    "args": {"scope": "all"},
+                    "assert": "Returns JSON (may be empty diagnostics)"
+                },
+                {
+                    "tool": "lsp_document_symbols",
+                    "args": {},
+                    "assert": "Returns symbol list or error"
+                }
+            ],
+            "cleanup": [
+                "Close the main.rs buffer with close_buffer (name: 'main.rs')",
+                "Switch back to *AI* buffer"
+            ]
+        }));
+    }
+
+    let plan = serde_json::json!({
+        "version": 1,
+        "description": "MAE self-test plan. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test.",
+        "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
+        "cleanup": [
+            "Close any test buffers opened (close_buffer with name 'mae-self-test-editing.txt')",
+            "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
+            "Switch back to *AI* buffer (switch_buffer) so the user sees the report",
+            "Do NOT quit the editor",
+            "Do NOT close the *AI* or *Help* buffers"
+        ],
+        "categories": categories
+    });
+
+    serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]
@@ -641,6 +1056,65 @@ mod tests {
     }
 
     #[test]
+    fn close_buffer_modified_with_force() {
+        let mut editor = Editor::new();
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, 'x');
+        assert!(editor.buffers[0].modified);
+
+        // With force=true, close should succeed even though buffer is modified
+        let call = make_call("close_buffer", serde_json::json!({"force": true}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(
+            result.success,
+            "close_buffer with force failed: {}",
+            result.output
+        );
+    }
+
+    #[test]
+    fn self_test_suite_lsp_has_open_file() {
+        let mut editor = Editor::new();
+        let call = make_call("self_test_suite", serde_json::json!({"categories": "lsp"}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        let cats = plan["categories"].as_array().unwrap();
+        let lsp_cat = &cats[0];
+        let tests = lsp_cat["tests"].as_array().unwrap();
+        // First test should be open_file to trigger LSP didOpen
+        assert_eq!(tests[0]["tool"], "open_file");
+    }
+
+    #[test]
+    fn ai_save_load_rename_tools_exist() {
+        let tools = ai_specific_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"ai_save"),
+            "ai_save should be in ai_specific_tools()"
+        );
+        assert!(
+            names.contains(&"ai_load"),
+            "ai_load should be in ai_specific_tools()"
+        );
+        assert!(
+            names.contains(&"rename_file"),
+            "rename_file should be in ai_specific_tools()"
+        );
+    }
+
+    #[test]
     fn buffer_read_by_name() {
         let mut editor = Editor::new();
         let mut b = mae_core::Buffer::new();
@@ -1063,5 +1537,95 @@ mod tests {
         };
         assert!(!result.success);
         assert!(result.output.contains("no file path"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_returns_tier_info() {
+        let mut editor = Editor::new();
+        let call = make_call("ai_permissions", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        assert!(result.output.contains("trusted"));
+        assert!(result.output.contains("Permission tiers"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_reflects_policy() {
+        let mut editor = Editor::new();
+        let call = make_call("ai_permissions", serde_json::json!({}));
+        let policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::ReadOnly,
+        };
+        let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
+        assert!(result.success);
+        assert!(result.output.contains("readonly"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_exists_in_definitions() {
+        let tools = ai_specific_tools();
+        assert!(
+            tools.iter().any(|t| t.name == "ai_permissions"),
+            "ai_permissions should be in ai_specific_tools()"
+        );
+    }
+
+    #[test]
+    fn self_test_suite_returns_all_categories() {
+        let mut editor = Editor::new();
+        let call = make_call("self_test_suite", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(plan["version"], 1);
+        let cats = plan["categories"].as_array().unwrap();
+        let names: Vec<&str> = cats.iter().map(|c| c["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"introspection"));
+        assert!(names.contains(&"editing"));
+        assert!(names.contains(&"help"));
+        assert!(names.contains(&"project"));
+        assert!(names.contains(&"lsp"));
+    }
+
+    #[test]
+    fn self_test_suite_filters_categories() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "self_test_suite",
+            serde_json::json!({"categories": "editing,help"}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        let cats = plan["categories"].as_array().unwrap();
+        assert_eq!(cats.len(), 2);
+        let names: Vec<&str> = cats.iter().map(|c| c["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"editing"));
+        assert!(names.contains(&"help"));
+        assert!(!names.contains(&"introspection"));
+    }
+
+    #[test]
+    fn self_test_suite_exists_in_definitions() {
+        let tools = ai_specific_tools();
+        assert!(
+            tools.iter().any(|t| t.name == "self_test_suite"),
+            "self_test_suite should be in ai_specific_tools()"
+        );
     }
 }

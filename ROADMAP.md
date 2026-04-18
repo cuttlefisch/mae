@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-5 complete, Phase 6 M1-M4 COMPLETE + MCP bridge + file auto-reload + agent bootstrap (1290+ tests). All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,369 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -50,8 +50,8 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | # | Feature | Phase |
 |---|---------|-------|
 | 5 | System clipboard (`"+y`, `"+p`) | 3h M5 ✅ |
-| 6 | Auto-reload on external change | future |
-| 7 | `:set` options | future |
+| 6 | Auto-reload on external change | Phase 6 ✅ |
+| 7 | `:set` options (`set-option!`) | Phase 6 M1b ✅ |
 | 8 | Mouse support | future |
 | 9 | `:read !cmd` | future |
 | 10 | Multiple cursors | future |
@@ -783,7 +783,97 @@ docs to help users effectively. Builds on the existing KB + help buffer.
 
 ---
 
-## Phase 8: Org-Mode Editing
+## Phase 8: GUI Rendering Backend
+
+GUI window via winit + skia-safe. Gives MAE direct OS-level key access
+(no host terminal intercepting keybindings), GPU-accelerated rendering,
+and the foundation for variable-height lines, inline images, and PDF preview.
+
+### M1: Foundation — COMPLETE
+- [x] `Renderer` trait extracted from terminal backend (trait-based HAL)
+- [x] `InputEvent` type — backend-agnostic input abstraction in mae-core
+- [x] `TerminalRenderer` implements `Renderer` trait (drop-in)
+- [x] `mae-gui` crate: winit window + Skia raster surface + monospace text
+- [x] winit key → KeyPress translation (`input.rs`)
+- [x] Skia canvas: surface management, text drawing, status line, theme colors
+- [x] Optional `gui` feature flag in mae binary (`--gui` flag)
+- [x] Configurable shell exit sequence (shell-insert keymap, not hardcoded)
+- [x] Configurable AI permission tier (config + env var)
+
+### M2: Event Loop & Presentation — COMPLETE
+- [x] winit `pump_app_events()` integrated with tokio `current_thread` runtime
+- [x] Full keyboard input: all editor modes, shell-insert, modifier tracking
+- [x] softbuffer pixel presentation (Skia raster → OS window surface)
+- [x] AI/LSP/DAP/MCP channel draining in GUI loop (same as terminal)
+- [x] Shell terminal spawn/poll/close in GUI mode
+- [x] Window resize handling
+- [x] CI fix: `--exclude mae-gui` for workspace builds (skia system deps)
+- [x] init.scm fix: inject editor state before Scheme file evaluation
+- [x] Self-test infrastructure: `:self-test`, `self_test_suite` MCP tool, `--self-test` CLI flag
+- [x] Input lock during AI operations (Esc/Ctrl-C to cancel)
+- [x] CWD-based project detection at startup (no file arg needed)
+- [x] `close_buffer` force parameter, `ai_save`/`ai_load`/`rename_file` AI tools
+- [x] 6 ex-commands registered for AI parity (`nohlsearch`, `kb-save`, `kb-load`, `kb-ingest`, `ai-save`, `ai-load`)
+- [x] LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols`
+- [x] Event loop refactor: shared `ai_event_handler` + `shell_lifecycle` modules (eliminates terminal/GUI duplication)
+
+### GUI Feature Status
+
+| Feature | Status | Milestone |
+|---------|--------|-----------|
+| Window + monospace text | ✅ Done | M1-M2 |
+| Keyboard input (all modes) | ✅ Done | M2 |
+| Window resize | ✅ Done | M2 |
+| Status bar | ✅ Done | M2 |
+| AI/LSP/DAP/MCP channels | ✅ Done | M2 |
+| Shell terminals | ✅ Done | M2 |
+| Cursor rendering | ❌ Not yet | M3 |
+| Line numbers / gutter | ❌ Not yet | M3 |
+| Command line display | ❌ Not yet | M3 |
+| Syntax highlighting colors | ❌ Not yet | M3 |
+| Splash screen | ❌ Not yet | M3 |
+| Variable-height lines | ❌ Not yet | M4 |
+| Mixed fonts (headings, prose) | ❌ Not yet | M4 |
+| Inline images (PNG/JPG/SVG) | ❌ Not yet | M5 |
+| Org-mode image preview | ❌ Not yet | M5 |
+| PDF preview | ❌ Not yet | M6 |
+| Mouse (click, drag, scroll) | ❌ Not yet | M7 |
+
+### M3: Visual Polish — Cursor, Gutter, Command Line
+- [ ] Cursor rendering (block/line per mode, blinking)
+- [ ] Line numbers and gutter (breakpoints, diagnostics)
+- [ ] Command line / status message display
+- [ ] Syntax highlighting via tree-sitter colors
+- [ ] Splash screen rendering
+- [ ] Visual mode selection highlighting
+
+### M4: Variable-Height Lines & Mixed Fonts
+- [ ] Paragraph-based text layout (Skia SkParagraph)
+- [ ] Headings rendered at larger font sizes
+- [ ] Code blocks rendered in monospace, prose in proportional
+- [ ] Bold/italic/underline/strikethrough font decorations
+- [ ] Line-height varies per line type (heading, code, prose)
+
+### M5: Inline Images
+- [ ] PNG/JPG/SVG rendering inline with text lines
+- [ ] Org-mode `[[file:image.png]]` auto-preview
+- [ ] Image scaling to fit viewport width
+
+### M6: PDF Preview
+- [ ] pdfium-render integration for PDF page rendering
+- [ ] `:pdf <file>` opens a PDF preview buffer
+- [ ] Scroll through pages, zoom in/out
+
+### M7: Mouse & Selection
+- [ ] Click to place cursor
+- [ ] Click-drag to select text
+- [ ] Scrollbar (vertical)
+- [ ] Mouse wheel scroll
+- [ ] Selection highlighting
+
+---
+
+## Phase 9: Org-Mode Editing
 
 Full org-mode editing support — MAE as a first-class org-mode environment.
 Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
@@ -818,7 +908,7 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 
 ---
 
-## Phase 9: Package System Architecture Review
+## Phase 10: Package System Architecture Review
 
 Architecture decision record — not implementation. The editor is accumulating
 domain-specific subsystems (git_ops, org-mode, project management, LSP server
@@ -893,20 +983,22 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 7 (embedded docs) ← parallel with Phase 6
     │
-    ├─→ Phase 8 (org-mode editing) ← builds on Phase 5 org parser
+    ├─→ Phase 8 (GUI backend) ← direct key access, rich rendering
     │
-    └─→ Phase 9 (package system ADR) ← before Phase 6+ features calcify boundaries
+    ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
+    │
+    └─→ Phase 10 (package system ADR) ← before features calcify boundaries
 ```
 
 **Next priority order:**
 1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
 2. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
 3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-4. **Session & file management** — session save/restore, recent files, file watchers
-5. **LSP packaging review** — multi-language defaults, user-configurable server selection
-6. **Phase 9** (Package System ADR) — decide package architecture before more subsystems land
-7. **Phase 8** (Org-Mode Editing) — full org-mode environment
-8. **C-o in insert mode** (M1 remaining item) — quick win
+4. **Phase 8 M3-M7** (GUI) — cursor/gutter, variable fonts, images, PDF, mouse
+5. **Session & file management** — session save/restore, recent files, file watchers
+6. **LSP packaging review** — multi-language defaults, user-configurable server selection
+7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+8. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 
@@ -922,4 +1014,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 4b    | 29 ✅ | tree-sitter + syntax highlighting + structural ops |
 | 4c    | 80 ✅ | DAP client, manager, AI debug tools, gutter rendering |
 | 4d+5  | 70+ ✅ | KB in-memory + SQLite + org parser + help buffer + AI KB tools |
-| **Total** | **~1,148** | All passing, 0 failures |
+| 6     | 146 ✅ | shell terminal, hooks, options, MCP bridge, file auto-reload |
+| 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
+| 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
+| **Total** | **~1,369** | All passing, 0 failures |

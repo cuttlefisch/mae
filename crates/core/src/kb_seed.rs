@@ -152,6 +152,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_AGENT_BOOTSTRAP,
         )
         .with_tags(["agents", "mcp", "ai"]),
+        Node::new(
+            "concept:self-test",
+            "Concept: AI Self-Test",
+            NodeKind::Concept,
+            CONCEPT_SELF_TEST,
+        )
+        .with_tags(["ai", "testing", "tools"]),
     ]
 }
 
@@ -169,6 +176,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:hooks|Hooks]] — Scheme extension points for editor events
 - [[concept:options|Editor Options]] — configuring MAE from Scheme
 - [[concept:agent-bootstrap|Agent Bootstrap]] — zero-config MCP tool discovery for AI agents
+- [[concept:self-test|AI Self-Test]] — validate editor tools and integrations via `:self-test`
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -561,20 +569,59 @@ can discover the editor's MCP tools with zero manual setup.\n\n\
    ```json\n\
    { \"mcpServers\": { \"mae-editor\": { \"command\": \"/path/to/mae-mcp-shim\" } } }\n\
    ```\n\
-4. Claude Code reads `.mcp.json` automatically, spawns the shim.\n\
-5. The shim inherits `MAE_MCP_SOCKET` from the shell env and connects.\n\n\
+4. MAE also writes agent-specific settings to auto-approve tools \
+(e.g. `.claude/settings.local.json` for Claude Code).\n\
+5. The agent reads `.mcp.json`, spawns the shim, and gets full tool access.\n\
+6. The shim inherits `MAE_MCP_SOCKET` from the shell env and connects.\n\n\
 ## Commands\n\
-- `:agent-setup <name>` — manually write `.mcp.json` for a specific agent\n\
+- `:agent-setup <name>` — write `.mcp.json` and approval settings for an agent\n\
 - `:agent-list` — show all agents MAE can bootstrap\n\
-- `mae --setup-agents [DIR]` — CLI: write `.mcp.json` without starting the editor\n\n\
+- `mae --setup-agents [DIR]` — CLI: write configs without starting the editor\n\n\
 ## Configuration\n\
 In `~/.config/mae/config.toml`:\n\
 ```toml\n\
 [agents]\n\
-auto_mcp_json = false  # disable auto-write\n\
+auto_mcp_json = true       # write .mcp.json on terminal spawn\n\
+auto_approve_tools = true  # write agent settings for tool approval\n\
 ```\n\
-Or: `MAE_AGENTS_AUTO_MCP=0`\n\n\
+Env var overrides: `MAE_AGENTS_AUTO_MCP=0`, `MAE_AGENTS_AUTO_APPROVE=0`\n\n\
+## Adding a new agent\n\
+The bootstrap system is agent-agnostic. See the doc comments in `agents.rs` \
+for how to add support for new AI agents. Claude Code is the reference \
+implementation.\n\n\
+## AI permission tiers (internal)\n\
+MAE's own tool permissions are separate from agent approval. Use the \
+`ai_permissions` tool or `MAE_AI_PERMISSIONS` env var to control what \
+tier the AI auto-approves up to.\n\n\
 See also: [[concept:terminal]], [[concept:ai-as-peer]], [[index]]\n";
+
+const CONCEPT_SELF_TEST: &str =
+    "The **self-test** command (`:self-test`) tells the AI agent to exercise its own tool \
+surface and report what works, what's broken, and what's unavailable.\n\n\
+## Usage\n\
+- `:self-test` — run all test categories.\n\
+- `:self-test introspection` — run only the introspection category.\n\
+- `:self-test editing,help` — run multiple specific categories.\n\n\
+## Categories\n\
+| Category | What it tests |\n\
+|----------|---------------|\n\
+| **introspection** | `cursor_info`, `editor_state`, `list_buffers`, `window_layout`, `command_list`, `ai_permissions` |\n\
+| **editing** | `create_file`, `buffer_write`, `buffer_read`, `open_file`, `switch_buffer`, `close_buffer` |\n\
+| **help** | `kb_search`, `kb_get`, `kb_list`, `kb_graph`, `kb_links_from`, `kb_links_to`, `help_open` |\n\
+| **project** | `project_info`, `project_files`, `project_search` (needs git repo) |\n\
+| **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\n\
+## Reading results\n\
+Results appear in the `*AI*` conversation buffer:\n\
+- **[PASS]** — tool returned expected data.\n\
+- **[FAIL]** — tool returned unexpected data or errored.\n\
+- **[SKIP]** — prerequisite not met (e.g. no LSP server).\n\n\
+The self-test also validates the command palette (key commands must exist) and \
+runs a connected help-navigation walkthrough (search → get → graph → open).\n\n\
+## Why this exists\n\
+Unit tests validate individual components. The self-test validates the full \
+AI↔editor integration: tool dispatch, permission checks, KB graph integrity, \
+and command registration. It catches wiring bugs that unit tests can't reach.\n\n\
+See also: [[concept:ai-as-peer]], [[concept:command]], [[concept:knowledge-base]], [[index]]\n";
 
 #[cfg(test)]
 mod tests {
@@ -607,6 +654,7 @@ mod tests {
             "concept:hooks",
             "concept:options",
             "concept:agent-bootstrap",
+            "concept:self-test",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

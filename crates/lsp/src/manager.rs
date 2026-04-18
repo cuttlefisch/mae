@@ -66,6 +66,10 @@ pub enum LspCommand {
         language_id: String,
         position: Position,
     },
+    /// Search for symbols across the workspace.
+    WorkspaceSymbol { language_id: String, query: String },
+    /// List symbols in a document.
+    DocumentSymbols { uri: String, language_id: String },
     /// Shut down all clients.
     Shutdown,
 }
@@ -111,6 +115,15 @@ pub enum LspTaskEvent {
         uri: String,
         items: Vec<CompletionItem>,
         is_incomplete: bool,
+    },
+    /// Workspace symbol response.
+    WorkspaceSymbolResult {
+        symbols: Vec<crate::protocol::SymbolInformation>,
+    },
+    /// Document symbol response.
+    DocumentSymbolResult {
+        uri: String,
+        symbols: Vec<crate::protocol::DocumentSymbol>,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -254,6 +267,26 @@ impl LspManager {
     ) -> Result<CompletionResponse, String> {
         let client = self.ensure_client(language_id).await?;
         client.request_completion(uri, position).await
+    }
+
+    pub async fn workspace_symbol(
+        &mut self,
+        language_id: &str,
+        query: &str,
+    ) -> Result<Vec<crate::protocol::SymbolInformation>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_workspace_symbol(query).await?;
+        Ok(resp.symbols)
+    }
+
+    pub async fn document_symbols(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+    ) -> Result<Vec<crate::protocol::DocumentSymbol>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_document_symbols(uri).await?;
+        Ok(resp.symbols)
     }
 
     pub async fn shutdown_all(&mut self) {
@@ -459,6 +492,30 @@ async fn handle_command(
                 let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
             }
         },
+        LspCommand::WorkspaceSymbol { language_id, query } => {
+            match manager.workspace_symbol(&language_id, &query).await {
+                Ok(symbols) => {
+                    let _ = event_tx
+                        .send(LspTaskEvent::WorkspaceSymbolResult { symbols })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+                }
+            }
+        }
+        LspCommand::DocumentSymbols { uri, language_id } => {
+            match manager.document_symbols(&language_id, &uri).await {
+                Ok(symbols) => {
+                    let _ = event_tx
+                        .send(LspTaskEvent::DocumentSymbolResult { uri, symbols })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+                }
+            }
+        }
         LspCommand::Shutdown => {
             manager.shutdown_all().await;
         }

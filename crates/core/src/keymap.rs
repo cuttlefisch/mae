@@ -227,6 +227,16 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
     let mut chars = s.chars().peekable();
 
     while chars.peek().is_some() {
+        // Handle <Token> bracketed syntax (e.g. <F1>, <Esc>, <C-x>)
+        if chars.peek() == Some(&'<') {
+            chars.next(); // consume '<'
+            let token: String = chars.by_ref().take_while(|&c| c != '>').collect();
+            if let Some(kp) = parse_macro_token(&token) {
+                result.push(kp);
+            }
+            continue;
+        }
+
         // Check for modifier prefix
         let next_two: String = chars.clone().take(2).collect();
         if next_two == "C-" {
@@ -821,5 +831,45 @@ mod tests {
         let keys = deserialize_macro("<bogus>j");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].key, Key::Char('j'));
+    }
+
+    // --- parse_key_seq bracket syntax ---
+
+    #[test]
+    fn parse_key_seq_bracket_f_keys() {
+        let keys = parse_key_seq("<F1>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::F(1));
+
+        let keys = parse_key_seq("<F12>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::F(12));
+    }
+
+    #[test]
+    fn parse_key_seq_bracket_specials() {
+        let keys = parse_key_seq("<Esc>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Escape);
+
+        let keys = parse_key_seq("<CR>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Enter);
+    }
+
+    #[test]
+    fn parse_key_seq_bracket_ctrl() {
+        let keys = parse_key_seq("<C-x>");
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].ctrl);
+        assert_eq!(keys[0].key, Key::Char('x'));
+    }
+
+    #[test]
+    fn parse_key_seq_spaced_bracket_in_shell_keymap() {
+        // This is how define-key from Scheme passes "<F1>"
+        let keys = parse_key_seq_spaced("<F1>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::F(1));
     }
 }

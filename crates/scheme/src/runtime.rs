@@ -367,8 +367,12 @@ impl SchemeRuntime {
         for (map_name, key_str, cmd_name) in state.keymap_bindings.drain(..) {
             if let Some(keymap) = editor.keymaps.get_mut(&map_name) {
                 let seq = parse_key_seq_spaced(&key_str);
-                if !seq.is_empty() {
-                    debug!(keymap = %map_name, key = %key_str, command = %cmd_name, "applying scheme keybinding");
+                if seq.is_empty() {
+                    warn!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                          "scheme keybinding produced empty key sequence, skipping");
+                } else {
+                    debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                           keys = seq.len(), "applying scheme keybinding");
                     keymap.bind(seq, &cmd_name);
                 }
             } else {

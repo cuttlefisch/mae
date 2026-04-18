@@ -62,6 +62,9 @@ Note: LSP tools require a language server running for the file's language. Use t
 ### Shell Access
 - `shell_exec` — Execute a shell command. Params: command, timeout_ms. Returns stdout/stderr/exit_code. Use for: git, cargo, grep, file operations, running tests.
 
+### Self-Test
+- `self_test_suite` — Get the structured self-test plan as JSON. Params: categories (optional, comma-separated: introspection, editing, help, project, lsp). Returns test categories with tools to call, args, and assertions. Execute each test, report [PASS]/[FAIL]/[SKIP]. This is triggered by the `:self-test` command — do NOT search the codebase for tests, just call this tool and execute the plan.
+
 ### Editor Commands (command_* prefix)
 Every editor command is available as a tool prefixed with `command_`. Hyphens become underscores.
 Examples: `command_save`, `command_undo`, `command_redo`, `command_move_down`, `command_split_vertical`, `command_view_messages`, `command_cycle_theme`.
