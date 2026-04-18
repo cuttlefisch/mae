@@ -608,6 +608,10 @@ impl CommandRegistry {
             "Close the current terminal and its shell process",
         );
         reg.register_builtin(
+            "shell-normal-mode",
+            "Exit ShellInsert mode and return to Normal mode",
+        );
+        reg.register_builtin(
             "send-to-shell",
             "Send current line to a terminal buffer (SPC e s)",
         );

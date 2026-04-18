@@ -781,6 +781,10 @@ impl Editor {
                     self.set_status("Not a terminal buffer");
                 }
             }
+            "shell-normal-mode" => {
+                self.mode = Mode::Normal;
+                self.set_status("Terminal: normal mode");
+            }
             "terminal-close" => {
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].kind == crate::BufferKind::Shell {

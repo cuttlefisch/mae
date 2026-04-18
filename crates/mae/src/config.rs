@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
-use mae_ai::{BudgetConfig, ProviderConfig};
+use mae_ai::{BudgetConfig, PermissionPolicy, PermissionTier, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -42,6 +42,13 @@ pub struct AiSection {
     pub timeout_secs: Option<u64>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
+    /// Permission tier for AI/MCP tool execution:
+    ///   "readonly"  — buffer reads only
+    ///   "standard"  — reads + edits
+    ///   "trusted"   — reads + edits + shell (default, container-first)
+    ///   "full"      — everything including quit/force-quit
+    /// Env override: MAE_AI_PERMISSIONS (highest precedence).
+    pub auto_approve_tier: Option<String>,
     /// Per-session spend guardrails. Both fields optional — setting
     /// neither disables budgeting, setting only the warn threshold
     /// keeps the session running with visibility but no hard limits.
@@ -238,6 +245,27 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         timeout_secs,
         budget: file.budget.clone(),
     })
+}
+
+/// Resolve AI permission policy with precedence: env > file > default (trusted).
+pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
+    let tier_str = std::env::var("MAE_AI_PERMISSIONS")
+        .ok()
+        .or_else(|| config.ai.auto_approve_tier.clone())
+        .unwrap_or_else(|| "trusted".into());
+    let tier = match tier_str.as_str() {
+        "readonly" => PermissionTier::ReadOnly,
+        "standard" => PermissionTier::Write,
+        "trusted" => PermissionTier::Shell,
+        "full" => PermissionTier::Privileged,
+        _ => {
+            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'trusted'");
+            PermissionTier::Shell
+        }
+    };
+    PermissionPolicy {
+        auto_approve_up_to: tier,
+    }
 }
 
 /// Update a single editor preference in the config file (load → modify → save).
@@ -441,6 +469,11 @@ pub fn default_config_template() -> String {
 # Ollama doesn't need a key.\n\
 # api_key = \"...\"\n\
 \n\
+# Permission tier for AI/MCP tool execution.\n\
+# Tiers: \"readonly\", \"standard\", \"trusted\" (default), \"full\"\n\
+# Env override: MAE_AI_PERMISSIONS=full\n\
+# auto_approve_tier = \"trusted\"\n\
+\n\
 # HTTP timeout in seconds. Increase for slow local inference.\n\
 # timeout_secs = 300\n\
 \n\
@@ -576,5 +609,103 @@ mod tests {
         assert_eq!(resolved.model, "env-model");
         std::env::remove_var("MAE_AI_MODEL");
         std::env::remove_var("ANTHROPIC_API_KEY");
+    }
+
+    // --- Permission policy resolution tests ---
+
+    #[test]
+    fn resolve_permission_default_is_trusted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config::default();
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+    }
+
+    #[test]
+    fn resolve_permission_from_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Privileged);
+    }
+
+    #[test]
+    fn resolve_permission_env_overrides_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AI_PERMISSIONS", "readonly");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+    }
+
+    #[test]
+    fn resolve_permission_all_tiers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let tiers = [
+            ("readonly", PermissionTier::ReadOnly),
+            ("standard", PermissionTier::Write),
+            ("trusted", PermissionTier::Shell),
+            ("full", PermissionTier::Privileged),
+        ];
+        for (name, expected) in tiers {
+            let cfg = Config {
+                ai: AiSection {
+                    auto_approve_tier: Some(name.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let policy = resolve_permission_policy(&cfg);
+            assert_eq!(
+                policy.auto_approve_up_to, expected,
+                "tier '{}' mismatch",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_permission_unknown_tier_defaults_to_trusted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("bogus".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let policy = resolve_permission_policy(&cfg);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+    }
+
+    #[test]
+    fn config_with_permission_tier_round_trips() {
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("full".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.ai.auto_approve_tier.as_deref(), Some("full"));
     }
 }

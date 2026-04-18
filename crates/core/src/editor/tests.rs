@@ -3752,3 +3752,70 @@ fn switch_buffer_recomputes_search_matches() {
     editor.switch_to_buffer(1);
     assert_eq!(editor.search_state.matches.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Shell-insert keymap tests (Part 1: Lisp machine fix)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn default_keymaps_include_shell_insert() {
+    let editor = Editor::new();
+    assert!(
+        editor.keymaps.contains_key("shell-insert"),
+        "shell-insert keymap must exist in default keymaps"
+    );
+}
+
+#[test]
+fn shell_insert_keymap_has_default_exit_binding() {
+    use crate::keymap::{parse_key_seq_spaced, LookupResult};
+    let editor = Editor::new();
+    let km = editor.keymaps.get("shell-insert").unwrap();
+    let seq = parse_key_seq_spaced("C-\\ C-n");
+    assert_eq!(km.lookup(&seq), LookupResult::Exact("shell-normal-mode"));
+}
+
+#[test]
+fn shell_insert_keymap_ctrl_backslash_is_prefix() {
+    use crate::keymap::{parse_key_seq, LookupResult};
+    let editor = Editor::new();
+    let km = editor.keymaps.get("shell-insert").unwrap();
+    // A single Ctrl-\ should be a prefix (waiting for more keys).
+    let seq = parse_key_seq("C-\\");
+    assert_eq!(km.lookup(&seq), LookupResult::Prefix);
+}
+
+#[test]
+fn shell_insert_keymap_unbound_key_returns_none() {
+    use crate::keymap::{parse_key_seq, LookupResult};
+    let editor = Editor::new();
+    let km = editor.keymaps.get("shell-insert").unwrap();
+    // A regular 'a' key should not match anything.
+    assert_eq!(km.lookup(&parse_key_seq("a")), LookupResult::None);
+}
+
+#[test]
+fn shell_normal_mode_command_switches_to_normal() {
+    let mut editor = Editor::new();
+    editor.mode = Mode::ShellInsert;
+    editor.dispatch_builtin("shell-normal-mode");
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn shell_insert_keymap_user_rebind() {
+    use crate::keymap::{parse_key_seq_spaced, LookupResult};
+    let mut editor = Editor::new();
+    let km = editor.keymaps.get_mut("shell-insert").unwrap();
+    // Unbind default and bind a custom sequence.
+    km.unbind(&parse_key_seq_spaced("C-\\ C-n"));
+    km.bind(parse_key_seq_spaced("C-c C-c"), "shell-normal-mode");
+    assert_eq!(
+        km.lookup(&parse_key_seq_spaced("C-c C-c")),
+        LookupResult::Exact("shell-normal-mode")
+    );
+    assert_eq!(
+        km.lookup(&parse_key_seq_spaced("C-\\ C-n")),
+        LookupResult::None
+    );
+}

@@ -2,6 +2,7 @@
 members = [
     "crates/core",
     "crates/renderer",
+    "crates/gui",
     "crates/scheme",
     "crates/lsp",
     "crates/dap",

@@ -6,7 +6,7 @@ mod key_handling;
 use std::io;
 use std::panic;
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use mae_ai::{
     ai_specific_tools, execute_tool, tools_from_registry, AiCommand, AiEvent, DeferredKind,
@@ -20,7 +20,7 @@ use mae_dap::{DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint};
 use mae_lsp::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position,
 };
-use mae_renderer::TerminalRenderer;
+use mae_renderer::{Renderer, TerminalRenderer};
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
 
@@ -210,7 +210,7 @@ async fn main() -> io::Result<()> {
         tools.extend(ai_specific_tools());
         tools
     };
-    let permission_policy = mae_ai::PermissionPolicy::default();
+    let permission_policy = config::resolve_permission_policy(&app_config);
 
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
@@ -227,8 +227,8 @@ async fn main() -> io::Result<()> {
     // Active shell terminals, keyed by buffer index.
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
         std::collections::HashMap::new();
-    // Track Ctrl-\ for the shell exit sequence (Ctrl-\ Ctrl-n).
-    let mut shell_escape_pending = false;
+    // Accumulated key presses for shell-insert keymap lookup.
+    let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
 
     // MCP bridge: Unix socket for external agents (Claude Code, etc.)
     let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
@@ -258,7 +258,7 @@ async fn main() -> io::Result<()> {
 
         // Horizontal scroll: compute text width from focused window's actual area
         {
-            let (term_w, term_h) = renderer.terminal_size()?;
+            let (term_w, term_h) = renderer.size()?;
             let window_area = mae_core::WinRect {
                 x: 0,
                 y: 0,
@@ -336,7 +336,7 @@ async fn main() -> io::Result<()> {
         let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
         let had_shell_spawns = !shell_spawns.is_empty();
         for buf_idx in shell_spawns {
-            let (term_w, _term_h) = renderer.terminal_size().unwrap_or((80, 24));
+            let (term_w, _term_h) = renderer.size().unwrap_or((80, 24));
             let inner_cols = term_w.saturating_sub(4); // border + gutter
             let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
             let cwd = editor.project.as_ref().map(|p| p.root.clone());
@@ -472,9 +472,9 @@ async fn main() -> io::Result<()> {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         if editor.mode == Mode::ShellInsert {
-                            handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_escape_pending);
+                            handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
-                            shell_escape_pending = false;
+                            shell_pending_keys.clear();
                             handle_key(&mut editor, &mut scheme, key, &mut pending_keys, &ai_command_tx);
                         }
                     }
@@ -671,58 +671,82 @@ async fn main() -> io::Result<()> {
 
 /// Handle a key event while in ShellInsert mode.
 ///
-/// Keys are translated to terminal escape sequences and forwarded to the PTY.
-/// The escape sequence Ctrl-\ followed by Ctrl-n exits ShellInsert mode
-/// (Neovim convention for terminal-normal mode).
+/// Keys are checked against the "shell-insert" keymap first. If the key
+/// sequence matches a binding, the command is dispatched. If it's a prefix
+/// of a binding, the key is held until more keys arrive. Otherwise, all
+/// pending keys are translated to PTY byte sequences and forwarded.
+///
+/// This replaces the previous hardcoded Ctrl-\ Ctrl-n escape sequence with
+/// the standard keymap system — the Lisp machine principle that all
+/// user-facing behavior must be hot-reloadable.
 fn handle_shell_key(
     editor: &mut Editor,
     key: crossterm::event::KeyEvent,
     shell_terminals: &mut std::collections::HashMap<usize, mae_shell::ShellTerminal>,
-    escape_pending: &mut bool,
+    shell_pending_keys: &mut Vec<KeyPress>,
 ) {
-    // Ctrl-\ Ctrl-n escape sequence: exit terminal mode.
-    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('\\') {
-        *escape_pending = true;
-        return;
-    }
-    if *escape_pending {
-        *escape_pending = false;
-        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('n') {
-            editor.mode = Mode::Normal;
-            editor.set_status("Terminal: normal mode (Ctrl-\\ Ctrl-n)");
-            return;
-        }
-        // Not Ctrl-n — send the buffered Ctrl-\ then fall through to handle this key.
-        if let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) {
-            shell.write_input(&[0x1C]); // Ctrl-\ = 0x1C
-        }
-    }
+    use mae_core::LookupResult;
 
-    let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) else {
-        // No shell for this buffer (possibly exited). Switch back to Normal.
-        editor.mode = Mode::Normal;
-        editor.set_status("Terminal exited — returned to normal mode");
+    let Some(kp) = key_handling::crossterm_to_keypress(&key) else {
         return;
     };
 
-    // Don't send input to a dead shell.
-    if shell.has_exited() {
-        editor.mode = Mode::Normal;
-        editor.set_status("Terminal process has exited");
-        return;
-    }
+    shell_pending_keys.push(kp);
 
-    // Translate crossterm KeyEvent → PTY byte sequences.
-    let bytes: Vec<u8> = match key.code {
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                // Ctrl+letter → byte 1-26
+    // Look up accumulated keys in the shell-insert keymap.
+    let lookup = editor
+        .keymaps
+        .get("shell-insert")
+        .map(|km| km.lookup(shell_pending_keys))
+        .unwrap_or(LookupResult::None);
+
+    match lookup {
+        LookupResult::Exact(cmd) => {
+            let cmd = cmd.to_string();
+            shell_pending_keys.clear();
+            editor.execute_command(&cmd);
+        }
+        LookupResult::Prefix => {
+            // Wait for more keys — don't send anything to PTY yet.
+        }
+        LookupResult::None => {
+            // No binding matches. Flush all pending keys to the PTY.
+            let keys_to_send = std::mem::take(shell_pending_keys);
+
+            let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) else {
+                editor.mode = Mode::Normal;
+                editor.set_status("Terminal exited — returned to normal mode");
+                return;
+            };
+
+            if shell.has_exited() {
+                editor.mode = Mode::Normal;
+                editor.set_status("Terminal process has exited");
+                return;
+            }
+
+            for kp in &keys_to_send {
+                let bytes = keypress_to_pty_bytes(kp);
+                if !bytes.is_empty() {
+                    shell.write_input(&bytes);
+                }
+            }
+        }
+    }
+}
+
+/// Convert a mae_core KeyPress into PTY byte sequences for the shell.
+fn keypress_to_pty_bytes(kp: &KeyPress) -> Vec<u8> {
+    use mae_core::Key;
+
+    match &kp.key {
+        Key::Char(c) => {
+            if kp.ctrl {
                 let byte = (c.to_ascii_lowercase() as u8)
                     .wrapping_sub(b'a')
                     .wrapping_add(1);
                 vec![byte]
-            } else if key.modifiers.contains(KeyModifiers::ALT) {
-                // Alt+char → ESC + char
+            } else if kp.alt {
                 let mut v = vec![0x1b];
                 let mut buf = [0u8; 4];
                 v.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
@@ -732,37 +756,33 @@ fn handle_shell_key(
                 c.encode_utf8(&mut buf).as_bytes().to_vec()
             }
         }
-        KeyCode::Enter => vec![b'\r'],
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Tab => vec![b'\t'],
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Insert => b"\x1b[2~".to_vec(),
-        KeyCode::F(1) => b"\x1bOP".to_vec(),
-        KeyCode::F(2) => b"\x1bOQ".to_vec(),
-        KeyCode::F(3) => b"\x1bOR".to_vec(),
-        KeyCode::F(4) => b"\x1bOS".to_vec(),
-        KeyCode::F(5) => b"\x1b[15~".to_vec(),
-        KeyCode::F(6) => b"\x1b[17~".to_vec(),
-        KeyCode::F(7) => b"\x1b[18~".to_vec(),
-        KeyCode::F(8) => b"\x1b[19~".to_vec(),
-        KeyCode::F(9) => b"\x1b[20~".to_vec(),
-        KeyCode::F(10) => b"\x1b[21~".to_vec(),
-        KeyCode::F(11) => b"\x1b[23~".to_vec(),
-        KeyCode::F(12) => b"\x1b[24~".to_vec(),
-        _ => return,
-    };
-
-    shell.write_input(&bytes);
+        Key::Enter => vec![b'\r'],
+        Key::Backspace => vec![0x7f],
+        Key::Tab => vec![b'\t'],
+        Key::Escape => vec![0x1b],
+        Key::Up => b"\x1b[A".to_vec(),
+        Key::Down => b"\x1b[B".to_vec(),
+        Key::Right => b"\x1b[C".to_vec(),
+        Key::Left => b"\x1b[D".to_vec(),
+        Key::Home => b"\x1b[H".to_vec(),
+        Key::End => b"\x1b[F".to_vec(),
+        Key::PageUp => b"\x1b[5~".to_vec(),
+        Key::PageDown => b"\x1b[6~".to_vec(),
+        Key::Delete => b"\x1b[3~".to_vec(),
+        Key::F(1) => b"\x1bOP".to_vec(),
+        Key::F(2) => b"\x1bOQ".to_vec(),
+        Key::F(3) => b"\x1bOR".to_vec(),
+        Key::F(4) => b"\x1bOS".to_vec(),
+        Key::F(5) => b"\x1b[15~".to_vec(),
+        Key::F(6) => b"\x1b[17~".to_vec(),
+        Key::F(7) => b"\x1b[18~".to_vec(),
+        Key::F(8) => b"\x1b[19~".to_vec(),
+        Key::F(9) => b"\x1b[20~".to_vec(),
+        Key::F(10) => b"\x1b[21~".to_vec(),
+        Key::F(11) => b"\x1b[23~".to_vec(),
+        Key::F(12) => b"\x1b[24~".to_vec(),
+        _ => vec![],
+    }
 }
 
 /// Drain all pending LSP intents from the editor and forward them to the LSP task.

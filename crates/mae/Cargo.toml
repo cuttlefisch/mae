@@ -18,6 +18,7 @@ mae-lsp = { path = "../lsp" }
 mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
 mae-mcp = { path = "../mcp" }
+mae-gui = { path = "../gui", optional = true }
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt", "macros", "sync"] }
 futures = "0.3"
@@ -26,6 +27,9 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
+
+[features]
+gui = ["dep:mae-gui"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

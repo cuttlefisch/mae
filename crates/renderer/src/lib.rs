@@ -24,6 +24,35 @@ mod which_key_render;
 // Re-export gutter_width for external use (e.g. cursor module).
 pub use buffer_render::gutter_width;
 
+/// Backend-agnostic rendering interface.
+///
+/// Emacs lesson: `xdisp.c` is 38,605 lines because the display engine is
+/// tightly coupled to X11/GTK/NS backends. This trait ensures MAE's rendering
+/// backends (terminal, GUI) are interchangeable without touching the core.
+///
+/// The terminal backend (ratatui/crossterm) is the default. The GUI backend
+/// (winit/skia) is selected with `--gui` and provides direct OS-level key
+/// access, variable-height lines, inline images, and PDF preview.
+pub trait Renderer {
+    /// Render the current editor state to the display.
+    fn render(
+        &mut self,
+        editor: &mut Editor,
+        shells: &HashMap<usize, ShellTerminal>,
+    ) -> io::Result<()>;
+
+    /// Return the display size as (width, height).
+    /// Terminal: (columns, rows). GUI: (columns, rows) based on font metrics.
+    fn size(&self) -> io::Result<(u16, u16)>;
+
+    /// Return the number of visible text lines (excluding chrome like
+    /// status bar, command line, etc.).
+    fn viewport_height(&self) -> io::Result<usize>;
+
+    /// Tear down the rendering backend (restore terminal state, close window, etc.).
+    fn cleanup(&mut self) -> io::Result<()>;
+}
+
 /// Terminal renderer using ratatui/crossterm.
 ///
 /// Design: no global state, no static variables. The render function takes
@@ -45,8 +74,10 @@ impl TerminalRenderer {
         let terminal = Terminal::new(backend)?;
         Ok(TerminalRenderer { terminal })
     }
+}
 
-    pub fn render(
+impl Renderer for TerminalRenderer {
+    fn render(
         &mut self,
         editor: &mut Editor,
         shells: &HashMap<usize, ShellTerminal>,
@@ -57,18 +88,18 @@ impl TerminalRenderer {
         Ok(())
     }
 
-    pub fn terminal_size(&self) -> io::Result<(u16, u16)> {
+    fn size(&self) -> io::Result<(u16, u16)> {
         let size = self.terminal.size()?;
         Ok((size.width, size.height))
     }
 
-    pub fn viewport_height(&self) -> io::Result<usize> {
+    fn viewport_height(&self) -> io::Result<usize> {
         let size = self.terminal.size()?;
         // Subtract 2 for status bar and command/message line
         Ok((size.height as usize).saturating_sub(2))
     }
 
-    pub fn cleanup(&mut self) -> io::Result<()> {
+    fn cleanup(&mut self) -> io::Result<()> {
         disable_raw_mode()?;
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
         Ok(())

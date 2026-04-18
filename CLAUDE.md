@@ -17,7 +17,8 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 | Crate | Purpose | Key Dependencies (planned) |
 |---|---|---|
 | `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam` |
-| `mae-renderer` | Display/rendering — terminal (primary) + GPU (future) | `ratatui`, `crossterm`, eventually `wgpu` |
+| `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
+| `mae-gui` | GUI rendering backend — winit window + Skia 2D | `winit`, `skia-safe` |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
@@ -100,6 +101,14 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - File auto-reload: mtime tracking, clean buffer reload, dirty buffer warning, `file-changed-on-disk` hook ✅
 
 ### Phase 7: Embedded Documentation — PLANNED
+
+### Phase 8: GUI Rendering Backend — M1 COMPLETE (1,329 tests)
+- `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
+- `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
+- `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
+- Configurable shell exit sequence: shell-insert keymap (not hardcoded) ✅
+- Configurable AI permission tier: config.toml + `MAE_AI_PERMISSIONS` env var ✅
+- **Next: variable-height lines (M2), inline images (M3), PDF preview (M4), mouse (M5)**
 
 ## Key Design Decisions Already Made
 
