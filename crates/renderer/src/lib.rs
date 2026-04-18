@@ -12,6 +12,7 @@ use std::collections::HashMap;
 mod buffer_render;
 mod conversation_render;
 mod cursor;
+mod debug_render;
 mod help_render;
 mod messages_render;
 mod popup_render;
@@ -82,6 +83,7 @@ impl Renderer for TerminalRenderer {
         editor: &mut Editor,
         shells: &HashMap<usize, ShellTerminal>,
     ) -> io::Result<()> {
+        let _span = tracing::trace_span!("tui_render").entered();
         self.terminal.draw(|frame| {
             render_frame(frame, editor, shells);
         })?;
@@ -312,6 +314,16 @@ fn render_window_area(
                         is_focused,
                         editor,
                         Some(&help_spans),
+                    );
+                }
+                mae_core::BufferKind::Debug => {
+                    debug_render::render_debug_window(
+                        frame,
+                        ratatui_rect,
+                        buf,
+                        win,
+                        is_focused,
+                        editor,
                     );
                 }
                 mae_core::BufferKind::Shell => {

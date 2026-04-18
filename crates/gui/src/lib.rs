@@ -10,31 +10,47 @@
 //! - `GuiRenderer` implements `mae_renderer::Renderer` — drop-in replacement
 //!   for the terminal backend, selected with `--gui`.
 //! - `canvas` — Skia surface management and frame composition.
-//! - `text` — Text layout with mixed fonts and variable heights.
+//! - `text` — Styled cell types for per-character rendering.
 //! - `input` — winit KeyEvent/MouseEvent → mae_core::InputEvent translation.
-//! - `image` — Inline image rendering (PNG/JPG/SVG). (Phase 8 M3)
-//! - `pdf` — PDF page rendering via pdfium. (Phase 8 M4)
-//! - `theme` — ThemeStyle → Skia Paint/Font conversion.
-//!
-//! # Neovide precedent
-//!
-//! Neovide (Rust + Skia GUI for Neovim) proves this stack works for exactly
-//! our use case. Skia is battle-tested (Chrome, Android, Flutter) and provides
-//! the richest 2D rendering API available.
+//! - `theme` — ThemeStyle → Skia Color4f/Paint conversion.
+//! - `cursor` — Mode-aware cursor rendering.
+//! - `gutter` — Line numbers, breakpoint/diagnostic markers.
+//! - `buffer_render` — Text buffer rendering with syntax, selection, search.
+//! - `status_render` — Status bar and command line.
+//! - `popup_render` — File picker, browser, command palette, completion, which-key.
+//! - `splash_render` — Splash screen with ASCII art.
+//! - `conversation_render` — AI conversation buffer rendering.
+//! - `messages_render` — *Messages* log buffer rendering.
+//! - `shell_render` — Terminal emulator buffer rendering.
+//! - `debug_render` — DAP debug panel rendering.
 
+// GUI renderers pass editor state through multiple rendering layers —
+// many-argument functions are the natural pattern (same as terminal renderer).
+#![allow(clippy::too_many_arguments)]
+
+mod buffer_render;
 mod canvas;
+mod conversation_render;
+mod cursor;
+mod debug_render;
+mod gutter;
 mod input;
-mod text;
-mod theme;
+mod messages_render;
+mod popup_render;
+mod shell_render;
+mod splash_render;
+mod status_render;
+pub mod text;
+pub mod theme;
 
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
-use mae_core::Editor;
+use mae_core::{BufferKind, Editor, HighlightSpan};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
-use tracing::info;
+use tracing::{info, trace_span};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
@@ -52,6 +68,8 @@ pub struct GuiRenderer {
     rows: u16,
     cell_width: f32,
     cell_height: f32,
+    /// Timestamp of the last frame start, for FPS overlay.
+    last_frame_start: Option<std::time::Instant>,
 }
 
 impl GuiRenderer {
@@ -66,6 +84,7 @@ impl GuiRenderer {
             rows: 40,
             cell_width: 0.0,
             cell_height: 0.0,
+            last_frame_start: None,
         }
     }
 
@@ -138,35 +157,139 @@ impl Renderer for GuiRenderer {
     fn render(
         &mut self,
         editor: &mut Editor,
-        _shells: &HashMap<usize, ShellTerminal>,
+        shells: &HashMap<usize, ShellTerminal>,
     ) -> io::Result<()> {
+        let _span = trace_span!("gui_render").entered();
+        let frame_start = std::time::Instant::now();
+
         let Some(canvas) = &mut self.canvas else {
             return Ok(());
         };
 
-        let theme = &editor.theme;
-        canvas.begin_frame(theme);
+        let cols = self.cols as usize;
+        let rows = self.rows as usize;
 
-        // Render visible buffer content as monospace text.
-        let buf = &editor.buffers[editor.active_buffer_idx()];
-        let win = editor.window_mgr.focused_window();
-        let scroll_row = win.scroll_offset;
-        let visible_lines = self.rows.saturating_sub(2) as usize; // status + command line
+        // Compute frame ms from previous frame for FPS overlay.
+        let frame_ms = self
+            .last_frame_start
+            .map(|prev| prev.elapsed().as_millis() as u64);
 
-        for line_idx in 0..visible_lines {
-            let buf_line = scroll_row + line_idx;
-            if buf_line >= buf.line_count() {
-                break;
+        // Begin frame.
+        canvas.begin_frame(&editor.theme);
+
+        // Pre-compute syntax-highlight spans for every visible text buffer.
+        let syntax_spans = compute_visible_syntax_spans(editor);
+        let editor: &Editor = editor;
+
+        // Layout: window area = rows-2, status bar = 1, command line = 1.
+        let status_row = rows.saturating_sub(2);
+        let cmd_row = rows.saturating_sub(1);
+        let window_height = rows.saturating_sub(2);
+
+        // Check for fullscreen overlays first.
+        if editor.file_picker.is_some() {
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+            popup_render::render_file_picker(canvas, editor, cols, rows);
+        } else if editor.file_browser.is_some() {
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+            popup_render::render_file_browser(canvas, editor, cols, rows);
+        } else if editor.command_palette.is_some() {
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+            popup_render::render_command_palette(canvas, editor, cols, rows);
+        } else if !editor.which_key_prefix.is_empty() {
+            let entries = if let Some(km) = editor.keymaps.get("normal") {
+                km.which_key_entries(&editor.which_key_prefix, &editor.commands)
+            } else {
+                vec![]
+            };
+
+            let entry_cols = (cols / 25).max(1);
+            let entry_rows = entries.len().div_ceil(entry_cols);
+            let popup_height = (entry_rows + 2).min(rows / 2).max(3);
+
+            let win_height = rows.saturating_sub(popup_height);
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                win_height,
+            );
+            popup_render::render_which_key_popup(
+                canvas,
+                editor,
+                win_height,
+                popup_height,
+                cols,
+                &entries,
+            );
+        } else if splash_render::should_show_splash(editor) {
+            splash_render::render_splash(canvas, editor, 0, 0, cols, window_height);
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+        } else {
+            render_window_area(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
+
+            // Cursor (not for shell buffers — they render their own).
+            if editor.mode != mae_core::Mode::ShellInsert {
+                render_gui_cursor(canvas, editor, cols, window_height, status_row, cmd_row);
             }
-            let line_text = buf.line_text(buf_line);
-            canvas.draw_text_line(line_idx, &line_text, theme);
+
+            // Completion popup.
+            if !editor.completion_items.is_empty() {
+                popup_render::render_completion_popup(canvas, editor, 0, 0, cols, window_height);
+            }
         }
 
-        // Status bar.
-        let status = format!(" {} | {:?} ", buf.name, editor.mode,);
-        canvas.draw_status_line(visible_lines, &status, theme);
-
         canvas.end_frame();
+        self.last_frame_start = Some(frame_start);
         Ok(())
     }
 
@@ -184,6 +307,292 @@ impl Renderer for GuiRenderer {
         self.window = None;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Syntax span computation (same as terminal renderer)
+// ---------------------------------------------------------------------------
+
+fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
+    let mut targets: Vec<(usize, String)> = Vec::new();
+    for win in editor.window_mgr.iter_windows() {
+        let idx = win.buffer_idx;
+        if targets.iter().any(|(i, _)| *i == idx) {
+            continue;
+        }
+        let Some(buf) = editor.buffers.get(idx) else {
+            continue;
+        };
+        if !matches!(buf.kind, BufferKind::Text) {
+            continue;
+        }
+        if editor.syntax.language_of(idx).is_none() {
+            continue;
+        }
+        let source: String = buf.rope().chars().collect();
+        targets.push((idx, source));
+    }
+
+    let mut out = HashMap::new();
+    for (idx, src) in targets {
+        if let Some(spans) = editor.syntax.spans_for(idx, &src) {
+            out.insert(idx, spans.to_vec());
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Window area dispatch
+// ---------------------------------------------------------------------------
+
+fn render_window_area(
+    canvas: &mut canvas::SkiaCanvas,
+    editor: &Editor,
+    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    shells: &HashMap<usize, ShellTerminal>,
+    area_row: usize,
+    area_col: usize,
+    area_width: usize,
+    area_height: usize,
+) {
+    let window_area = mae_core::WinRect {
+        x: area_col as u16,
+        y: area_row as u16,
+        width: area_width as u16,
+        height: area_height as u16,
+    };
+    let rects = editor.window_mgr.layout_rects(window_area);
+    let focused_id = editor.window_mgr.focused_id();
+
+    for (win_id, win_rect) in &rects {
+        let r_row = win_rect.y as usize;
+        let r_col = win_rect.x as usize;
+        let r_width = win_rect.width as usize;
+        let r_height = win_rect.height as usize;
+
+        if let Some(win) = editor.window_mgr.window(*win_id) {
+            let buf = &editor.buffers[win.buffer_idx];
+            let is_focused = *win_id == focused_id;
+
+            match buf.kind {
+                BufferKind::Conversation => {
+                    conversation_render::render_conversation_window(
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    );
+                }
+                BufferKind::Messages => {
+                    messages_render::render_messages_window(
+                        canvas, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    );
+                }
+                BufferKind::Help => {
+                    // Help buffers: convert link spans to highlight spans.
+                    let help_spans: Vec<HighlightSpan> = buf
+                        .help_view
+                        .as_ref()
+                        .map(|view| {
+                            view.rendered_links
+                                .iter()
+                                .enumerate()
+                                .map(|(i, link)| {
+                                    let is_focused_link = view.focused_link == Some(i);
+                                    HighlightSpan {
+                                        byte_start: link.byte_start,
+                                        byte_end: link.byte_end,
+                                        theme_key: if is_focused_link {
+                                            "ui.selection"
+                                        } else {
+                                            "markup.link"
+                                        },
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    // Render with border.
+                    let border_fg = if is_focused {
+                        theme::ts_fg(editor, "ui.window.border.active")
+                    } else {
+                        theme::ts_fg(editor, "ui.window.border")
+                    };
+                    let modified = if buf.modified { " [+]" } else { "" };
+                    let title = format!(" {}{} ", buf.name, modified);
+                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
+
+                    let inner_row = r_row + 1;
+                    let inner_col = r_col + 1;
+                    let inner_width = r_width.saturating_sub(2);
+                    let inner_height = r_height.saturating_sub(2);
+                    buffer_render::render_buffer_content(
+                        canvas,
+                        editor,
+                        buf,
+                        win,
+                        is_focused,
+                        inner_row,
+                        inner_col,
+                        inner_width,
+                        inner_height,
+                        Some(&help_spans),
+                    );
+                }
+                BufferKind::Debug => {
+                    debug_render::render_debug_window(
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    );
+                }
+                BufferKind::Shell => {
+                    if let Some(shell) = shells.get(&win.buffer_idx) {
+                        shell_render::render_shell_window(
+                            canvas, buf, win, is_focused, editor, shell, r_row, r_col, r_width,
+                            r_height,
+                        );
+                    }
+                }
+                _ => {
+                    // Text (and Preview) buffers: border + syntax-highlighted content.
+                    let border_fg = if is_focused {
+                        theme::ts_fg(editor, "ui.window.border.active")
+                    } else {
+                        theme::ts_fg(editor, "ui.window.border")
+                    };
+                    let modified = if buf.modified { " [+]" } else { "" };
+                    let title = format!(" {}{} ", buf.name, modified);
+                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
+
+                    let inner_row = r_row + 1;
+                    let inner_col = r_col + 1;
+                    let inner_width = r_width.saturating_sub(2);
+                    let inner_height = r_height.saturating_sub(2);
+                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
+                    buffer_render::render_buffer_content(
+                        canvas,
+                        editor,
+                        buf,
+                        win,
+                        is_focused,
+                        inner_row,
+                        inner_col,
+                        inner_width,
+                        inner_height,
+                        spans,
+                    );
+                }
+            }
+        }
+    }
+
+    // Window split borders (vertical lines between windows).
+    if rects.len() > 1 {
+        let border_fg = theme::ts_fg(editor, "ui.window.border");
+        // Draw vertical separators where windows share an edge.
+        for (_, win_rect) in &rects {
+            let right_col = win_rect.x as usize + win_rect.width as usize;
+            if right_col < area_col + area_width {
+                canvas.draw_vline(
+                    right_col,
+                    win_rect.y as usize,
+                    win_rect.y as usize + win_rect.height as usize,
+                    border_fg,
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GUI cursor rendering
+// ---------------------------------------------------------------------------
+
+fn render_gui_cursor(
+    canvas: &mut canvas::SkiaCanvas,
+    editor: &Editor,
+    cols: usize,
+    window_height: usize,
+    _status_row: usize,
+    cmd_row: usize,
+) {
+    let focused_win = editor.window_mgr.focused_window();
+    let focused_buf = &editor.buffers[focused_win.buffer_idx];
+
+    // Find the focused window's rect for offset calculation.
+    let window_area = mae_core::WinRect {
+        x: 0,
+        y: 0,
+        width: cols as u16,
+        height: window_height as u16,
+    };
+    let rects = editor.window_mgr.layout_rects(window_area);
+    let focused_id = editor.window_mgr.focused_id();
+
+    if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+        let inner_row = win_rect.y as usize + 1;
+        let inner_col = win_rect.x as usize + 1;
+        let inner_width = (win_rect.width as usize).saturating_sub(2);
+        let inner_height = (win_rect.height as usize).saturating_sub(2);
+
+        let gutter_w = if editor.show_line_numbers {
+            gutter::gutter_width(focused_buf.display_line_count())
+        } else {
+            2
+        };
+
+        let inner = canvas::CellRect::new(inner_row, inner_col, inner_width, inner_height);
+
+        if editor.mode == mae_core::Mode::Command {
+            // Command line cursor.
+            let cursor_col = editor.command_line
+                [..editor.command_cursor.min(editor.command_line.len())]
+                .chars()
+                .count();
+            cursor::render_cursor(canvas, editor, cmd_row, 1 + cursor_col);
+        } else if editor.mode == mae_core::Mode::Search {
+            let col = 1 + editor.search_input.len();
+            cursor::render_cursor(canvas, editor, cmd_row, col);
+        } else if let Some(pos) = cursor::compute_cursor_position(editor, inner, gutter_w) {
+            match editor.mode {
+                mae_core::Mode::ConversationInput => {
+                    let (r, c) = pos;
+                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
+                }
+                _ => {
+                    let (r, c) = pos;
+                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared border helper
+// ---------------------------------------------------------------------------
+
+fn draw_window_border(
+    canvas: &mut canvas::SkiaCanvas,
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    color: skia_safe::Color4f,
+    title: &str,
+) {
+    if width < 2 || height < 2 {
+        return;
+    }
+    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
+    canvas.draw_text_at(row, col, &top, color);
+    if title.len() + 2 < width {
+        canvas.draw_text_at(row, col + 1, title, color);
+    }
+    for r in 1..height.saturating_sub(1) {
+        canvas.draw_text_at(row + r, col, "│", color);
+        canvas.draw_text_at(row + r, col + width - 1, "│", color);
+    }
+    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
+    canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 
 #[cfg(test)]

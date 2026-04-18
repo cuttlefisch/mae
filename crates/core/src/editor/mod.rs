@@ -1,6 +1,7 @@
 mod changes;
 mod command;
 mod dap_ops;
+mod debug_panel_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
@@ -305,6 +306,12 @@ pub struct Editor {
     /// which cancel the AI operation and release the lock). Set by
     /// `:self-test` and other AI operations to prevent race conditions.
     pub input_locked: bool,
+    /// Toggle: show frame timing in the status bar. Default false.
+    /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
+    pub show_fps: bool,
+    /// Name of the active rendering backend ("terminal" or "gui").
+    /// Set by the binary after renderer initialization.
+    pub renderer_name: String,
 }
 
 impl Default for Editor {
@@ -408,6 +415,8 @@ impl Editor {
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
             input_locked: false,
+            show_fps: false,
+            renderer_name: "terminal".to_string(),
         }
     }
 
@@ -517,6 +526,8 @@ impl Editor {
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
             input_locked: false,
+            show_fps: false,
+            renderer_name: "terminal".to_string(),
         }
     }
 

@@ -12,7 +12,10 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "message_log_entries": editor.message_log.len(),
         "debug_session_active": editor.debug_state.is_some(),
         "debug_target": editor.debug_state.as_ref().map(|s| format!("{:?}", s.target)),
+        "debug_panel_open": editor.buffers.iter().any(|b| b.kind == mae_core::buffer::BufferKind::Debug),
+        "breakpoint_count": editor.debug_state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
         "command_count": editor.commands.len(),
+        "renderer": editor.renderer_name,
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
@@ -88,8 +91,12 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
             editor.word_wrap = value == "true" || value == "on" || value == "1";
             Ok(format!("Word wrap: {}", editor.word_wrap))
         }
+        "show_fps" => {
+            editor.show_fps = value == "true" || value == "on" || value == "1";
+            Ok(format!("Show FPS: {}", editor.show_fps))
+        }
         _ => Err(format!(
-            "Unknown option: '{}'. Supported: 'theme', 'splash_art', 'line_numbers', 'relative_line_numbers', 'word_wrap'",
+            "Unknown option: '{}'. Supported: 'theme', 'splash_art', 'line_numbers', 'relative_line_numbers', 'word_wrap', 'show_fps'",
             option
         )),
     }
@@ -139,13 +146,45 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 })
                 .collect();
 
+            // Include variables grouped by scope.
+            let variables: serde_json::Value = state
+                .variables
+                .iter()
+                .map(|(scope_name, vars)| {
+                    let var_list: Vec<serde_json::Value> = vars
+                        .iter()
+                        .map(|v| {
+                            serde_json::json!({
+                                "name": v.name,
+                                "value": v.value,
+                                "type": v.var_type,
+                                "variables_reference": v.variables_reference,
+                            })
+                        })
+                        .collect();
+                    (scope_name.clone(), serde_json::Value::Array(var_list))
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+                .into();
+
+            // Include recent output (last 50 lines).
+            let output_len = state.output_log.len();
+            let output_start = output_len.saturating_sub(50);
+            let recent_output: Vec<&str> = state.output_log[output_start..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
+                "active_thread_id": state.active_thread_id,
                 "threads": threads,
                 "stack_frames": frames,
                 "scopes": state.scopes.iter().map(|s| &s.name).collect::<Vec<_>>(),
+                "variables": variables,
                 "breakpoints": breakpoints,
                 "stopped_location": state.stopped_location,
+                "output_log": recent_output,
             });
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }

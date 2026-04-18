@@ -43,12 +43,14 @@ pub fn handle_ai_event(
             if let Some(conv) = find_conversation_buffer_mut(editor) {
                 conv.push_tool_call(&call.name);
             }
+            let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
             match exec_result {
                 ExecuteResult::Immediate(result) => {
-                    info!(tool = %call.name, success = result.success, "AI tool call complete");
+                    let elapsed_ms = tool_start.elapsed().as_millis() as u64;
+                    info!(tool = %call.name, success = result.success, elapsed_ms, "AI tool call complete");
                     if let Some(conv) = find_conversation_buffer_mut(editor) {
-                        conv.push_tool_result(result.success, &result.output);
+                        conv.push_tool_result(result.success, &result.output, Some(elapsed_ms));
                     }
                     if reply.send(result).is_err() {
                         warn!(tool = %call.name, "tool result channel closed — AI session may have been cancelled");
@@ -164,7 +166,7 @@ pub fn timeout_deferred_reply(editor: &mut Editor, deferred_ai_reply: &mut Defer
             };
             let (_, _, reply, _) = deferred_ai_reply.take().unwrap();
             if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_tool_result(result.success, &result.output);
+                conv.push_tool_result(result.success, &result.output, None);
             }
             if reply.send(result).is_err() {
                 warn!("deferred tool result channel closed after timeout");
@@ -247,7 +249,7 @@ pub fn try_resolve_deferred(
             let (_, _, reply, _) = deferred_ai_reply.take().unwrap();
             debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed");
             if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_tool_result(result.success, &result.output);
+                conv.push_tool_result(result.success, &result.output, None);
             }
             if reply.send(result).is_err() {
                 warn!("deferred tool result channel closed");

@@ -159,6 +159,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_SELF_TEST,
         )
         .with_tags(["ai", "testing", "tools"]),
+        Node::new(
+            "concept:debugging",
+            "Concept: Debugging (DAP)",
+            NodeKind::Concept,
+            CONCEPT_DEBUGGING,
+        )
+        .with_tags(["dap", "debugging", "ai"]),
     ]
 }
 
@@ -177,6 +184,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:options|Editor Options]] — configuring MAE from Scheme
 - [[concept:agent-bootstrap|Agent Bootstrap]] — zero-config MCP tool discovery for AI agents
 - [[concept:self-test|AI Self-Test]] — validate editor tools and integrations via `:self-test`
+- [[concept:debugging|Debugging (DAP)]] — DAP client, debug panel, breakpoints, AI debug tools
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -406,7 +414,10 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `s` | [[cmd:debug-self]] | Self-debug |\n\
 | `b` | [[cmd:debug-toggle-breakpoint]] | Toggle breakpoint |\n\
 | `c` | [[cmd:debug-continue]] | Continue |\n\
-| `n/i/o` | step over/in/out | Step |\n\n\
+| `p` | [[cmd:debug-panel]] | Debug panel |\n\
+| `n` | [[cmd:debug-step-over]] | Step over |\n\
+| `i` | [[cmd:debug-step-into]] | Step into |\n\
+| `o` | [[cmd:debug-step-out]] | Step out |\n\n\
 ### SPC o — +open\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -623,6 +634,42 @@ AI↔editor integration: tool dispatch, permission checks, KB graph integrity, \
 and command registration. It catches wiring bugs that unit tests can't reach.\n\n\
 See also: [[concept:ai-as-peer]], [[concept:command]], [[concept:knowledge-base]], [[index]]\n";
 
+const CONCEPT_DEBUGGING: &str =
+    "MAE integrates with the **Debug Adapter Protocol (DAP)** to provide a full \
+debugging experience accessible to both the human user and the AI agent.\n\n\
+## DAP client\n\
+The DAP client connects to debug adapters via stdin/stdout. Built-in adapter \
+presets: `lldb` (LLVM), `debugpy` (Python), `codelldb` (CodeLLDB / Rust+C++).\n\n\
+## Debug panel\n\
+The `*Debug*` buffer (`SPC d p` or `:debug-panel`) shows threads, stack frames, \
+scopes, and variables in a navigable tree view.\n\n\
+| Key | Action |\n\
+|-----|--------|\n\
+| `j`/`k` | Navigate up/down |\n\
+| `Enter` | Expand/collapse node |\n\
+| `o` | Open source at selected frame |\n\
+| `q` | Close debug panel |\n\n\
+## AI debug tools (11 tools)\n\
+| Tool | Permission | Description |\n\
+|------|-----------|-------------|\n\
+| `dap_start` | Privileged | Launch adapter + debuggee |\n\
+| `dap_set_breakpoints` | Write | Set breakpoints in a source file |\n\
+| `dap_continue` | Write | Resume execution |\n\
+| `dap_step_over` | Write | Step over |\n\
+| `dap_step_into` | Write | Step into |\n\
+| `dap_step_out` | Write | Step out |\n\
+| `dap_threads` | ReadOnly | List threads |\n\
+| `dap_stack_trace` | ReadOnly | Stack frames for a thread |\n\
+| `dap_scopes` | ReadOnly | Scopes for a stack frame |\n\
+| `dap_variables` | ReadOnly | Variables in a scope |\n\
+| `dap_output` | ReadOnly | Debug adapter output |\n\n\
+Use `debug_state` to inspect the current session state (threads, frames, breakpoints).\n\n\
+## Permission tiers\n\
+- **Privileged** — `dap_start` (spawns processes).\n\
+- **Write** — execution control (`continue`, `step_*`, `set_breakpoints`).\n\
+- **ReadOnly** — inspection (`threads`, `stack_trace`, `scopes`, `variables`, `output`).\n\n\
+See also: [[concept:ai-as-peer]], [[cmd:debug-panel]], [[cmd:debug-start]], [[key:leader-keys]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,6 +702,7 @@ mod tests {
             "concept:options",
             "concept:agent-bootstrap",
             "concept:self-test",
+            "concept:debugging",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
