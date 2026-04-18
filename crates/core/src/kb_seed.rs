@@ -561,19 +561,30 @@ can discover the editor's MCP tools with zero manual setup.\n\n\
    ```json\n\
    { \"mcpServers\": { \"mae-editor\": { \"command\": \"/path/to/mae-mcp-shim\" } } }\n\
    ```\n\
-4. Claude Code reads `.mcp.json` automatically, spawns the shim.\n\
-5. The shim inherits `MAE_MCP_SOCKET` from the shell env and connects.\n\n\
+4. MAE also writes agent-specific settings to auto-approve tools \
+(e.g. `.claude/settings.local.json` for Claude Code).\n\
+5. The agent reads `.mcp.json`, spawns the shim, and gets full tool access.\n\
+6. The shim inherits `MAE_MCP_SOCKET` from the shell env and connects.\n\n\
 ## Commands\n\
-- `:agent-setup <name>` — manually write `.mcp.json` for a specific agent\n\
+- `:agent-setup <name>` — write `.mcp.json` and approval settings for an agent\n\
 - `:agent-list` — show all agents MAE can bootstrap\n\
-- `mae --setup-agents [DIR]` — CLI: write `.mcp.json` without starting the editor\n\n\
+- `mae --setup-agents [DIR]` — CLI: write configs without starting the editor\n\n\
 ## Configuration\n\
 In `~/.config/mae/config.toml`:\n\
 ```toml\n\
 [agents]\n\
-auto_mcp_json = false  # disable auto-write\n\
+auto_mcp_json = true       # write .mcp.json on terminal spawn\n\
+auto_approve_tools = true  # write agent settings for tool approval\n\
 ```\n\
-Or: `MAE_AGENTS_AUTO_MCP=0`\n\n\
+Env var overrides: `MAE_AGENTS_AUTO_MCP=0`, `MAE_AGENTS_AUTO_APPROVE=0`\n\n\
+## Adding a new agent\n\
+The bootstrap system is agent-agnostic. See the doc comments in `agents.rs` \
+for how to add support for new AI agents. Claude Code is the reference \
+implementation.\n\n\
+## AI permission tiers (internal)\n\
+MAE's own tool permissions are separate from agent approval. Use the \
+`ai_permissions` tool or `MAE_AI_PERMISSIONS` env var to control what \
+tier the AI auto-approves up to.\n\n\
 See also: [[concept:terminal]], [[concept:ai-as-peer]], [[index]]\n";
 
 #[cfg(test)]

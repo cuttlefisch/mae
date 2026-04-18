@@ -74,12 +74,19 @@ pub struct AgentsSection {
     /// Set to `false` or `MAE_AGENTS_AUTO_MCP=0` to disable.
     #[serde(default = "default_true")]
     pub auto_mcp_json: bool,
+    /// Automatically configure spawned agents to trust MAE's MCP tools.
+    /// Writes agent-specific settings (e.g. `.claude/settings.local.json`)
+    /// so tools run without per-call approval prompts.
+    /// Set to `false` or `MAE_AGENTS_AUTO_APPROVE=0` to disable.
+    #[serde(default = "default_true")]
+    pub auto_approve_tools: bool,
 }
 
 impl Default for AgentsSection {
     fn default() -> Self {
         Self {
             auto_mcp_json: true,
+            auto_approve_tools: true,
         }
     }
 }
@@ -91,6 +98,14 @@ impl AgentsSection {
             return val != "0";
         }
         self.auto_mcp_json
+    }
+
+    /// Resolve with env var override: `MAE_AGENTS_AUTO_APPROVE=0` disables.
+    pub fn auto_approve_tools_effective(&self) -> bool {
+        if let Ok(val) = std::env::var("MAE_AGENTS_AUTO_APPROVE") {
+            return val != "0";
+        }
+        self.auto_approve_tools
     }
 }
 
@@ -502,6 +517,12 @@ pub fn default_config_template() -> String {
 # Claude Code and other MCP clients will auto-discover MAE's tools.\n\
 # Set to false to disable. Env override: MAE_AGENTS_AUTO_MCP=0\n\
 # auto_mcp_json = true\n\
+\n\
+# Automatically configure spawned agents to trust MAE's MCP tools.\n\
+# Writes agent-specific settings (e.g. .claude/settings.local.json)\n\
+# so MCP tools run without per-call approval prompts.\n\
+# Set to false to disable. Env override: MAE_AGENTS_AUTO_APPROVE=0\n\
+# auto_approve_tools = true\n\
 ",
         config_path().display()
     )
@@ -707,5 +728,48 @@ mod tests {
         let s = toml::to_string(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.ai.auto_approve_tier.as_deref(), Some("full"));
+    }
+
+    // --- Agent auto-approve tests ---
+
+    #[test]
+    fn auto_approve_tools_defaults_to_true() {
+        let cfg = Config::default();
+        assert!(cfg.agents.auto_approve_tools);
+    }
+
+    #[test]
+    fn auto_approve_tools_env_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AGENTS_AUTO_APPROVE", "0");
+        let cfg = Config::default();
+        assert!(!cfg.agents.auto_approve_tools_effective());
+        std::env::remove_var("MAE_AGENTS_AUTO_APPROVE");
+    }
+
+    #[test]
+    fn auto_approve_tools_config_false() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AGENTS_AUTO_APPROVE");
+        let s = r#"
+            [agents]
+            auto_approve_tools = false
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert!(!cfg.agents.auto_approve_tools_effective());
+    }
+
+    #[test]
+    fn auto_approve_tools_round_trips() {
+        let cfg = Config {
+            agents: AgentsSection {
+                auto_mcp_json: true,
+                auto_approve_tools: false,
+            },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert!(!back.agents.auto_approve_tools);
     }
 }

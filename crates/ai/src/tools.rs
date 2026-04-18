@@ -861,6 +861,17 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Shell),
         },
+        // --- Permission introspection ---
+        ToolDefinition {
+            name: "ai_permissions".into(),
+            description: "Show the current AI permission tier and what each tier allows. Returns the auto-approved tier, available tiers with descriptions, and agent trust configuration status.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
 
@@ -958,7 +969,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 39);
+        assert_eq!(tools.len(), 40);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

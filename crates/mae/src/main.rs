@@ -277,6 +277,9 @@ async fn main() -> io::Result<()> {
     // Active shell terminals, keyed by buffer index.
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
         std::collections::HashMap::new();
+    // Last-known PTY dimensions per shell, for dynamic resize detection.
+    let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
+        std::collections::HashMap::new();
     // Accumulated key presses for shell-insert keymap lookup.
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
 
@@ -369,15 +372,19 @@ async fn main() -> io::Result<()> {
         let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
         let had_shell_spawns = !shell_spawns.is_empty();
         for buf_idx in shell_spawns {
-            let (term_w, _term_h) = renderer.size().unwrap_or((80, 24));
-            let inner_cols = term_w.saturating_sub(4); // border + gutter
-            let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
+            let (inner_cols, inner_rows) = shell_dims_for_buffer(&editor, &renderer, buf_idx);
             let cwd = editor.project.as_ref().map(|p| p.root.clone());
             let mut extra_env = std::collections::HashMap::new();
             extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
             match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
                 Ok(shell) => {
-                    debug!(buf_idx, "shell terminal spawned");
+                    debug!(
+                        buf_idx,
+                        cols = inner_cols,
+                        rows = inner_rows,
+                        "shell terminal spawned"
+                    );
+                    shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
                     shell_terminals.insert(buf_idx, shell);
                 }
                 Err(e) => {
@@ -387,18 +394,35 @@ async fn main() -> io::Result<()> {
             }
         }
 
-        // Auto-write .mcp.json on first shell spawn (idempotent).
-        if had_shell_spawns && app_config.agents.auto_mcp_json_effective() {
+        // Auto-write .mcp.json and agent settings on first shell spawn (idempotent).
+        if had_shell_spawns {
             let root = editor
                 .project
                 .as_ref()
                 .map(|p| p.root.clone())
                 .or_else(|| std::env::current_dir().ok());
             if let Some(root) = root {
-                let shim = agents::resolve_shim_path();
-                if let Err(e) = agents::write_mcp_json(&root, &shim) {
-                    debug!(error = %e, "failed to write .mcp.json");
+                if app_config.agents.auto_mcp_json_effective() {
+                    let shim = agents::resolve_shim_path();
+                    if let Err(e) = agents::write_mcp_json(&root, &shim) {
+                        debug!(error = %e, "failed to write .mcp.json");
+                    }
                 }
+                if app_config.agents.auto_approve_tools_effective() {
+                    if let Err(e) = agents::write_agent_settings(&root) {
+                        debug!(error = %e, "failed to write agent settings");
+                    }
+                }
+            }
+        }
+
+        // Dynamic resize: check each shell's owning window dims each tick.
+        // Handles focus changes, split creation/closing, and terminal resize.
+        for (buf_idx, shell) in &shell_terminals {
+            let dims = shell_dims_for_buffer(&editor, &renderer, *buf_idx);
+            if shell_last_dims.get(buf_idx) != Some(&dims) {
+                shell.resize(dims.0, dims.1);
+                shell_last_dims.insert(*buf_idx, dims);
             }
         }
 
@@ -511,13 +535,10 @@ async fn main() -> io::Result<()> {
                             handle_key(&mut editor, &mut scheme, key, &mut pending_keys, &ai_command_tx);
                         }
                     }
-                    Some(Ok(Event::Resize(w, h))) => {
-                        // Terminal resized — resize all active shell terminals.
-                        let inner_cols = w.saturating_sub(4); // border + gutter
-                        let inner_rows = h.saturating_sub(4); // status + command + borders
-                        for shell in shell_terminals.values() {
-                            shell.resize(inner_cols, inner_rows);
-                        }
+                    Some(Ok(Event::Resize(_w, _h))) => {
+                        // Terminal resized — per-shell resize happens in the
+                        // dynamic resize block at the top of the loop, which
+                        // uses layout_rects() to compute per-window dimensions.
                     }
                     Some(Err(e)) => {
                         editor.set_status(format!("Input error: {}", e));
@@ -707,6 +728,36 @@ async fn main() -> io::Result<()> {
 /// Keys are checked against the "shell-insert" keymap first. If the key
 /// sequence matches a binding, the command is dispatched. If it's a prefix
 /// of a binding, the key is held until more keys arrive. Otherwise, all
+/// Compute the PTY-appropriate cols/rows for a shell in a given buffer,
+/// accounting for split window dimensions via `layout_rects()`.
+///
+/// Falls back to full terminal dimensions if the buffer isn't visible
+/// in any window (shouldn't happen in practice).
+fn shell_dims_for_buffer(editor: &Editor, renderer: &dyn Renderer, buf_idx: usize) -> (u16, u16) {
+    let (term_w, term_h) = renderer.size().unwrap_or((80, 24));
+    let window_area = mae_core::WinRect {
+        x: 0,
+        y: 0,
+        width: term_w,
+        height: term_h.saturating_sub(2), // status bar + command line
+    };
+    let rects = editor.window_mgr.layout_rects(window_area);
+
+    // Find the window that owns this buffer.
+    for win in editor.window_mgr.iter_windows() {
+        if win.buffer_idx == buf_idx {
+            if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == win.id) {
+                let cols = rect.width.saturating_sub(2); // border
+                let rows = rect.height;
+                return (cols, rows);
+            }
+        }
+    }
+
+    // Fallback: full terminal minus chrome.
+    (term_w.saturating_sub(4), term_h.saturating_sub(4))
+}
+
 /// pending keys are translated to PTY byte sequences and forwarded.
 ///
 /// This replaces the previous hardcoded Ctrl-\ Ctrl-n escape sequence with
@@ -1366,6 +1417,8 @@ async fn run_gui_loop(
     let mut pending_keys: Vec<KeyPress> = Vec::new();
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
         std::collections::HashMap::new();
+    let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
+        std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
     let mut deferred_ai_reply: Option<(
         DeferredKind,
@@ -1453,15 +1506,19 @@ async fn run_gui_loop(
         let shell_spawns: Vec<usize> = editor.pending_shell_spawns.drain(..).collect();
         let had_shell_spawns = !shell_spawns.is_empty();
         for buf_idx in shell_spawns {
-            let (term_w, _) = renderer.size().unwrap_or((120, 40));
-            let inner_cols = term_w.saturating_sub(4);
-            let inner_rows = editor.viewport_height.saturating_sub(2) as u16;
+            let (inner_cols, inner_rows) = shell_dims_for_buffer(&editor, &renderer, buf_idx);
             let cwd = editor.project.as_ref().map(|p| p.root.clone());
             let mut extra_env = std::collections::HashMap::new();
             extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.clone());
             match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
                 Ok(shell) => {
-                    debug!(buf_idx, "shell terminal spawned (GUI)");
+                    debug!(
+                        buf_idx,
+                        cols = inner_cols,
+                        rows = inner_rows,
+                        "shell terminal spawned (GUI)"
+                    );
+                    shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
                     shell_terminals.insert(buf_idx, shell);
                 }
                 Err(e) => {
@@ -1471,17 +1528,33 @@ async fn run_gui_loop(
             }
         }
 
-        if had_shell_spawns && app_config.agents.auto_mcp_json_effective() {
+        if had_shell_spawns {
             let root = editor
                 .project
                 .as_ref()
                 .map(|p| p.root.clone())
                 .or_else(|| std::env::current_dir().ok());
             if let Some(root) = root {
-                let shim = agents::resolve_shim_path();
-                if let Err(e) = agents::write_mcp_json(&root, &shim) {
-                    debug!(error = %e, "failed to write .mcp.json");
+                if app_config.agents.auto_mcp_json_effective() {
+                    let shim = agents::resolve_shim_path();
+                    if let Err(e) = agents::write_mcp_json(&root, &shim) {
+                        debug!(error = %e, "failed to write .mcp.json");
+                    }
                 }
+                if app_config.agents.auto_approve_tools_effective() {
+                    if let Err(e) = agents::write_agent_settings(&root) {
+                        debug!(error = %e, "failed to write agent settings");
+                    }
+                }
+            }
+        }
+
+        // Dynamic resize: check each shell's owning window dims each tick.
+        for (buf_idx, shell) in &shell_terminals {
+            let dims = shell_dims_for_buffer(&editor, &renderer, *buf_idx);
+            if shell_last_dims.get(buf_idx) != Some(&dims) {
+                shell.resize(dims.0, dims.1);
+                shell_last_dims.insert(*buf_idx, dims);
             }
         }
 

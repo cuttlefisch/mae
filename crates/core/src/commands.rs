@@ -620,6 +620,16 @@ impl CommandRegistry {
             "Send visual selection to a terminal buffer (SPC e S)",
         );
 
+        // Agent bootstrap
+        reg.register_builtin(
+            "agent-list",
+            "List all AI agents MAE can bootstrap for MCP tool discovery",
+        );
+        reg.register_builtin(
+            "agent-setup",
+            "Bootstrap an AI agent: write .mcp.json and approval settings (:agent-setup <name>)",
+        );
+
         reg
     }
 }
@@ -698,5 +708,12 @@ mod tests {
         assert!(reg.contains("lsp-goto-definition"));
         assert!(reg.contains("lsp-find-references"));
         assert!(reg.contains("lsp-hover"));
+    }
+
+    #[test]
+    fn with_builtins_has_agent_commands() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("agent-list"));
+        assert!(reg.contains("agent-setup"));
     }
 }

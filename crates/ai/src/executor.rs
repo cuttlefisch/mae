@@ -95,7 +95,17 @@ pub fn execute_tool(
         };
     }
 
-    // 4. Dispatch synchronous tools
+    // 4. Handle ai_permissions specially (needs access to policy).
+    if call.name == "ai_permissions" {
+        let output = format_permissions_info(policy);
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            success: true,
+            output,
+        });
+    }
+
+    // 5. Dispatch synchronous tools
     let ai_tool_names = [
         "buffer_read",
         "buffer_write",
@@ -132,6 +142,7 @@ pub fn execute_tool(
         "shell_list",
         "shell_read_output",
         "shell_send_input",
+        "ai_permissions",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -197,6 +208,27 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         // shell_exec is handled async in the session, not here
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
+}
+
+fn format_permissions_info(policy: &PermissionPolicy) -> String {
+    let tier_name = match policy.auto_approve_up_to {
+        PermissionTier::ReadOnly => "readonly",
+        PermissionTier::Write => "standard",
+        PermissionTier::Shell => "trusted",
+        PermissionTier::Privileged => "full",
+    };
+
+    format!(
+        "Current auto-approve tier: {tier_name}\n\n\
+         Permission tiers (lowest to highest):\n\
+         - readonly: Read buffer contents, cursor state, file listings, project search\n\
+         - standard: Modify buffers, edit files, save, undo/redo\n\
+         - trusted: Execute shell commands (default)\n\
+         - full: Quit editor, modify config, privileged operations\n\n\
+         Tools at or below the '{tier_name}' tier run without prompting.\n\
+         Configure via MAE_AI_PERMISSIONS env var or [ai] auto_approve_tier in config.toml.\n\
+         Agent tool approval (MCP) is separate — see [agents] auto_approve_tools in config.toml."
+    )
 }
 
 #[cfg(test)]
@@ -1063,5 +1095,41 @@ mod tests {
         };
         assert!(!result.success);
         assert!(result.output.contains("no file path"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_returns_tier_info() {
+        let mut editor = Editor::new();
+        let call = make_call("ai_permissions", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        assert!(result.output.contains("trusted"));
+        assert!(result.output.contains("Permission tiers"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_reflects_policy() {
+        let mut editor = Editor::new();
+        let call = make_call("ai_permissions", serde_json::json!({}));
+        let policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::ReadOnly,
+        };
+        let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
+        assert!(result.success);
+        assert!(result.output.contains("readonly"));
+    }
+
+    #[test]
+    fn ai_permissions_tool_exists_in_definitions() {
+        let tools = ai_specific_tools();
+        assert!(
+            tools.iter().any(|t| t.name == "ai_permissions"),
+            "ai_permissions should be in ai_specific_tools()"
+        );
     }
 }
