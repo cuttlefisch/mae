@@ -324,6 +324,12 @@ async fn main() -> io::Result<()> {
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
 
     loop {
+        // Clamp all window cursors to buffer bounds. This is a safety net:
+        // MCP/AI tool calls and user key mashing can leave cursor_row past
+        // the end of a modified buffer. Without this, rope.line(cursor_row)
+        // panics on the next render or dispatch.
+        editor.clamp_all_cursors();
+
         // Update viewport dimensions and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
@@ -1433,6 +1439,7 @@ async fn run_gui_loop(
         ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
 
         // --- Pre-render bookkeeping (same as terminal loop) ---
+        editor.clamp_all_cursors();
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
         editor

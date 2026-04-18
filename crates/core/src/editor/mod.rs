@@ -537,6 +537,17 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// Clamp all window cursors to their buffer bounds. Safety net against
+    /// stale cursor positions after buffer mutations (MCP tools, AI edits).
+    pub fn clamp_all_cursors(&mut self) {
+        for win in self.window_mgr.iter_windows_mut() {
+            let buf_idx = win.buffer_idx;
+            if buf_idx < self.buffers.len() {
+                win.clamp_cursor(&self.buffers[buf_idx]);
+            }
+        }
+    }
+
     /// Convenience: index of the active (focused window's) buffer.
     pub fn active_buffer_idx(&self) -> usize {
         self.window_mgr.focused_window().buffer_idx
