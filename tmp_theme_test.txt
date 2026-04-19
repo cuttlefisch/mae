@@ -1,0 +1,8 @@
+This line stays the same.
+This line will be deleted.
+Another unchanged line.
+This line will also be removed.
+Keep this one.
+And this stays too.
+One more to delete.
+Final unchanged line.
