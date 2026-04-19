@@ -89,3 +89,4 @@ crust = "#11111b"
 "attribute" = { fg = "teal" }
 "namespace" = { fg = "blue" }
 "punctuation" = { fg = "overlay2" }
+"markup.link" = { fg = "sapphire", underline = true }

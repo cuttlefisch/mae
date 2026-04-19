@@ -60,3 +60,4 @@ gray = "#928374"
 "type" = { fg = "yellow" }
 "variable" = { fg = "blue" }
 "constant" = { fg = "purple" }
+"markup.link" = { fg = "aqua", underline = true }

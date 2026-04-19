@@ -58,17 +58,23 @@ const MAE_LOGO: &str = r#"
 "#;
 
 /// Quick-action hints shown below the ASCII art.
-const QUICK_ACTIONS: &[(&str, &str)] = &[
-    ("SPC f f", "Find file"),
-    ("SPC f d", "File browser"),
-    ("SPC f c", "Edit config"),
-    ("SPC SPC", "Commands"),
-    ("SPC :", "Command line"),
-    ("SPC a p", "AI prompt"),
-    ("SPC h h", "Help"),
-    ("SPC t s", "Set theme"),
-    ("SPC q q", "Quit"),
+/// Each entry maps to a command that can be dispatched when selected.
+pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
+    ("SPC f f", "Find file", "find-file"),
+    ("SPC f d", "File browser", "file-browser"),
+    ("SPC f c", "Edit config", "edit-config"),
+    ("SPC SPC", "Commands", "command-palette"),
+    ("SPC :", "Command line", "command-mode"),
+    ("SPC a p", "AI prompt", "ai-prompt"),
+    ("SPC h h", "Help", "help"),
+    ("SPC t s", "Set theme", "theme-picker"),
+    ("SPC q q", "Quit", "quit"),
 ];
+
+/// Number of selectable splash actions.
+pub fn splash_action_count() -> usize {
+    QUICK_ACTIONS.len()
+}
 
 /// Returns true if the splash should be displayed: the active buffer is the
 /// initial empty scratch buffer with no modifications.
@@ -147,17 +153,32 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     // Quick actions — format all to the same fixed width, then center the block.
     let qa_width = QUICK_ACTIONS
         .iter()
-        .map(|(k, d)| format!("{:<10}{}", k, d).len())
+        .map(|(k, d, _)| format!("{:<10}{}", k, d).len())
         .max()
         .unwrap_or(0);
     let qa_pad = center_block_pad(qa_width);
-    for &(key, desc) in QUICK_ACTIONS {
+    let sel_bg = ts(editor, "ui.selection")
+        .bg
+        .unwrap_or(ratatui::style::Color::DarkGray);
+    for (i, &(key, desc, _cmd)) in QUICK_ACTIONS.iter().enumerate() {
+        let is_selected = i == editor.splash_selection;
+        let mut key_s = key_style;
+        let mut desc_s = desc_style;
+        if is_selected {
+            key_s = key_s.bg(sel_bg).bold();
+            desc_s = desc_s.bg(sel_bg).bold();
+        }
         lines.push(Line::from(vec![
             Span::raw(" ".repeat(qa_pad)),
-            Span::styled(format!("{:<10}", key), key_style),
+            if is_selected {
+                Span::styled("▸ ", key_s)
+            } else {
+                Span::raw("  ")
+            },
+            Span::styled(format!("{:<10}", key), key_s),
             Span::styled(
                 format!("{:<width$}", desc, width = qa_width.saturating_sub(10)),
-                desc_style,
+                desc_s,
             ),
         ]));
     }
@@ -195,7 +216,7 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     }
 
     // Dismiss hint — single line, center within art_width.
-    let dismiss = "Press any key to dismiss";
+    let dismiss = "j/k to navigate, Enter to select, any other key to dismiss";
     let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
     lines.push(Line::styled(
         format!("{:>width$}{}", "", dismiss, width = dismiss_pad),

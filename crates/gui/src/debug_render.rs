@@ -135,10 +135,8 @@ pub fn render_debug_window(
         let is_bold = matches!(item, Some(DebugLineItem::SectionHeader(_)));
 
         // Cursor line background.
-        if is_cursor_line {
-            if let Some(bg) = cursor_bg {
-                canvas.draw_rect_fill(screen_row, inner_col, inner_width, 1, bg);
-            }
+        if let (true, Some(bg)) = (is_cursor_line, cursor_bg) {
+            canvas.draw_rect_fill(screen_row, inner_col, inner_width, 1, bg);
         }
 
         let display: String = line_text.chars().take(inner_width).collect();

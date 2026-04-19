@@ -165,6 +165,7 @@ impl Editor {
         let rope = self.buffers[idx].rope();
         let end = rope.len_chars();
         self.buffers[idx].insert_text_at(end, output);
+        self.clamp_all_cursors();
     }
 }
 

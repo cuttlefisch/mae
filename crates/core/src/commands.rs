@@ -552,7 +552,8 @@ impl CommandRegistry {
         );
         reg.register_builtin("rename-file", "Rename current file (SPC f R)");
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
-        reg.register_builtin("edit-config", "Open MAE config file for editing (SPC f c)");
+        reg.register_builtin("edit-config", "Open init.scm config for editing (SPC f c)");
+        reg.register_builtin("edit-settings", "Open config.toml settings (SPC f C)");
         reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
         reg.register_builtin(
             "debug-mode",

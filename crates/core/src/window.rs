@@ -228,7 +228,7 @@ impl Window {
     /// Scroll half a page down (Ctrl-D). Moves cursor down by half viewport.
     pub fn scroll_half_down(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         let half = viewport_height / 2;
-        let max_row = buf.line_count().saturating_sub(1);
+        let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + half).min(max_row);
         self.scroll_offset = (self.scroll_offset + half).min(max_row);
         self.clamp_cursor(buf);
@@ -244,7 +244,7 @@ impl Window {
     /// Scroll a full page down (Ctrl-F).
     pub fn scroll_page_down(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         let page = viewport_height.saturating_sub(2);
-        let max_row = buf.line_count().saturating_sub(1);
+        let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + page).min(max_row);
         self.scroll_offset = (self.scroll_offset + page).min(max_row);
         self.clamp_cursor(buf);
@@ -277,16 +277,19 @@ impl Window {
     }
 
     /// Move cursor to middle visible line (M).
-    pub fn move_to_screen_middle(&mut self, viewport_height: usize) {
-        self.cursor_row = self.scroll_offset + viewport_height / 2;
+    pub fn move_to_screen_middle(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
+        let max_row = buf.display_line_count().saturating_sub(1);
+        self.cursor_row = (self.scroll_offset + viewport_height / 2).min(max_row);
         self.cursor_col = 0;
+        self.clamp_cursor(buf);
     }
 
     /// Move cursor to bottom visible line (L).
     pub fn move_to_screen_bottom(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
-        let max_row = buf.line_count().saturating_sub(1);
+        let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.scroll_offset + viewport_height.saturating_sub(1)).min(max_row);
         self.cursor_col = 0;
+        self.clamp_cursor(buf);
     }
 
     // --- Scrolling ---
@@ -1018,10 +1021,11 @@ mod tests {
 
     #[test]
     fn move_screen_middle_goes_to_mid_visible() {
+        let buf = make_buffer(100);
         let mut win = Window::new(0, 0);
         win.cursor_row = 50;
         win.scroll_offset = 40;
-        win.move_to_screen_middle(20);
+        win.move_to_screen_middle(&buf, 20);
         // middle = 40 + 10 = 50
         assert_eq!(win.cursor_row, 50);
         assert_eq!(win.cursor_col, 0);

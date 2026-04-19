@@ -59,7 +59,12 @@ impl SkiaCanvas {
             .or_else(|| font_mgr.match_family_style("Fira Code", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("Cascadia Code", FontStyle::normal()))
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::normal()))
-            .expect("no monospace font found on the system");
+            .ok_or_else(|| {
+                io::Error::other(
+                    "no monospace font found on the system — install JetBrains Mono, \
+                     Fira Code, or Cascadia Code",
+                )
+            })?;
 
         let bold_typeface = font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::bold()))
@@ -108,6 +113,22 @@ impl SkiaCanvas {
             height,
             sb_surface,
         })
+    }
+
+    /// Recreate font objects and recalculate cell metrics for a new font size.
+    /// Called when font size is changed at runtime via `:set font_size` or Scheme.
+    pub fn update_font_size(&mut self, size: f32) {
+        let typeface = self.font.typeface();
+        let bold_typeface = self.bold_font.typeface();
+
+        self.font = Font::from_typeface(typeface, size);
+        self.bold_font = Font::from_typeface(bold_typeface, size);
+
+        let (_, bounds) = self.font.measure_str("M", None);
+        self.cell_width = bounds.width().max(size * 0.6);
+        self.cell_height = self.font.spacing();
+        let (_, metrics) = self.font.metrics();
+        self.ascent = (-metrics.ascent).max(size * 0.8);
     }
 
     /// Return (cell_width, cell_height) in pixels.

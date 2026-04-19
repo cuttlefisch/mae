@@ -849,12 +849,13 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Desktop launcher + icon | ✅ Done | M3 |
 | Font size config | ✅ Done | M3 |
 | FPS overlay | ✅ Done | M3 |
-| Variable-height lines | ❌ Not yet | M4 |
-| Mixed fonts (headings, prose) | ❌ Not yet | M4 |
-| Inline images (PNG/JPG/SVG) | ❌ Not yet | M5 |
-| Org-mode image preview | ❌ Not yet | M5 |
-| PDF preview | ❌ Not yet | M6 |
-| Mouse (click, drag, scroll) | ❌ Not yet | M7 |
+| Event loop refactor (run_app) | ❌ Not yet | M4 |
+| Variable-height lines | ❌ Not yet | M5 |
+| Mixed fonts (headings, prose) | ❌ Not yet | M5 |
+| Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
+| Org-mode image preview | ❌ Not yet | M6 |
+| PDF preview | ❌ Not yet | M7 |
+| Mouse (click, drag, scroll) | ❌ Not yet | M8 |
 
 ### M3: Visual Polish — COMPLETE
 - [x] Cursor rendering in GUI (block/line per mode)
@@ -874,24 +875,36 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [ ] Syntax highlighting colors in GUI
 - [ ] Visual mode selection highlighting in GUI
 
-### M4: Variable-Height Lines & Mixed Fonts
+### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy`
+
+Replace the `pump_app_events` polling loop with winit's `run_app` + typed `EventLoopProxy<MaeEvent>`, eliminating the 16ms polling latency and conforming to Wayland's event-driven model. This is the architecture used by Alacritty and other production GPU editors.
+
+- [ ] Define `MaeEvent` enum (DataReady, ShellOutput, AiResponse, LspResponse, DapEvent, McpMessage, Tick)
+- [ ] Switch from `pump_app_events` to `event_loop.run_app(handler)`
+- [ ] Spawn tokio runtime on background thread, pass `EventLoopProxy` to async tasks
+- [ ] Implement `ApplicationHandler::user_event()` to process `MaeEvent` variants
+- [ ] `about_to_wait()` → `request_redraw()` pattern (carried forward from M3 bandaid)
+- [ ] Remove 16ms poll timeout — event loop sleeps until OS event or proxy wakeup
+- [ ] Zero-latency async→render pipeline: async task completes → `proxy.send_event()` → winit wakes → render
+
+### M5: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
 - [ ] Headings rendered at larger font sizes
 - [ ] Code blocks rendered in monospace, prose in proportional
 - [ ] Bold/italic/underline/strikethrough font decorations
 - [ ] Line-height varies per line type (heading, code, prose)
 
-### M5: Inline Images
+### M6: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
 - [ ] Org-mode `[[file:image.png]]` auto-preview
 - [ ] Image scaling to fit viewport width
 
-### M6: PDF Preview
+### M7: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
 - [ ] `:pdf <file>` opens a PDF preview buffer
 - [ ] Scroll through pages, zoom in/out
 
-### M7: Mouse & Selection
+### M8: Mouse & Selection
 - [ ] Click to place cursor
 - [ ] Click-drag to select text
 - [ ] Scrollbar (vertical)
@@ -1018,14 +1031,15 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M4** (Variable-height lines & mixed fonts) — paragraph layout, headings, decorations
-2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-3. **Session persistence** — save/restore open buffers, window layout, cursor positions
-4. **Phase 8 M5-M7** (GUI) — inline images, PDF, mouse gestures
-5. **Phase 4c M3 remaining** — variable hover, watch expressions
-6. **LSP packaging review** — multi-language defaults, user-configurable server selection
-7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-8. **Phase 9** (Org-Mode Editing) — full org-mode environment
+1. **Phase 8 M4** (GUI event loop refactor) — `run_app` + `EventLoopProxy`, eliminate `pump_app_events` anti-pattern
+2. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings, decorations
+3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
+4. **Session persistence** — save/restore open buffers, window layout, cursor positions
+5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse gestures
+6. **Phase 4c M3 remaining** — variable hover, watch expressions
+7. **LSP packaging review** — multi-language defaults, user-configurable server selection
+8. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+9. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 

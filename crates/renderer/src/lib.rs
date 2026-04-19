@@ -17,7 +17,7 @@ mod help_render;
 mod messages_render;
 mod popup_render;
 mod shell_render;
-mod splash_render;
+pub mod splash_render;
 mod status_render;
 mod theme_convert;
 mod which_key_render;

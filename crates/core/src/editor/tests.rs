@@ -4033,6 +4033,13 @@ fn mouse_scroll_up_decreases_offset() {
 #[test]
 fn mouse_scroll_down_increases_offset() {
     let mut editor = Editor::new();
+    // Need enough lines for scroll to work (viewport_height defaults to 40).
+    let content = (0..100)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    editor.buffers[0].replace_contents(&content);
+    editor.viewport_height = 40;
     let win = editor.window_mgr.focused_window_mut();
     win.scroll_offset = 0;
 

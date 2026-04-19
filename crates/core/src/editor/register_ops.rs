@@ -40,6 +40,10 @@ impl Editor {
         if let Some(ch) = target {
             self.write_named_register(ch, &text);
         }
+        // Sync to system clipboard unless clipboard=internal.
+        if self.clipboard != "internal" {
+            let _ = crate::clipboard::copy(&text);
+        }
         // Unnamed register mirrors the yank.
         self.registers.insert('"', text);
     }
@@ -56,6 +60,10 @@ impl Editor {
         }
         if let Some(ch) = target {
             self.write_named_register(ch, &text);
+        }
+        // Sync to system clipboard unless clipboard=internal.
+        if self.clipboard != "internal" {
+            let _ = crate::clipboard::copy(&text);
         }
         self.registers.insert('"', text);
     }
@@ -97,7 +105,18 @@ impl Editor {
                 let lower = ch.to_ascii_lowercase();
                 self.registers.get(&lower).cloned()
             }
-            None => self.registers.get(&'"').cloned(),
+            None => {
+                // clipboard=unnamedplus: try system clipboard first, fall
+                // back to the unnamed register if the shell-out fails.
+                if self.clipboard == "unnamedplus" {
+                    if let Ok(text) = crate::clipboard::paste() {
+                        if !text.is_empty() {
+                            return Some(text);
+                        }
+                    }
+                }
+                self.registers.get(&'"').cloned()
+            }
         }
     }
 
@@ -292,5 +311,39 @@ mod tests {
         ed.show_registers_buffer();
         let buf = ed.buffers.iter().find(|b| b.name == "*Registers*").unwrap();
         assert!(buf.text().contains("all registers empty"));
+    }
+
+    #[test]
+    fn clipboard_internal_skips_system_clipboard() {
+        let mut ed = Editor::new();
+        ed.clipboard = "internal".to_string();
+        // Should not panic or error — clipboard::copy is never called.
+        ed.save_yank("internal-only".to_string());
+        assert_eq!(
+            ed.registers.get(&'"').map(String::as_str),
+            Some("internal-only")
+        );
+        assert_eq!(
+            ed.registers.get(&'0').map(String::as_str),
+            Some("internal-only")
+        );
+    }
+
+    #[test]
+    fn clipboard_option_default_is_unnamed() {
+        let ed = Editor::new();
+        assert_eq!(ed.clipboard, "unnamed");
+    }
+
+    #[test]
+    fn set_clipboard_option_validates() {
+        let mut ed = Editor::new();
+        assert!(ed.set_option("clipboard", "unnamedplus").is_ok());
+        assert_eq!(ed.clipboard, "unnamedplus");
+        assert!(ed.set_option("clipboard", "unnamed").is_ok());
+        assert_eq!(ed.clipboard, "unnamed");
+        assert!(ed.set_option("clipboard", "internal").is_ok());
+        assert_eq!(ed.clipboard, "internal");
+        assert!(ed.set_option("clipboard", "bogus").is_err());
     }
 }

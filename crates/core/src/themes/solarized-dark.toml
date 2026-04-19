@@ -63,3 +63,4 @@ green = "#859900"
 "attribute" = { fg = "orange" }
 "namespace" = { fg = "yellow" }
 "punctuation" = { fg = "base01" }
+"markup.link" = { fg = "blue", underline = true }

@@ -40,16 +40,16 @@ const MAE_LOGO: &str = r#"
     |_|  |_/_/   \_\|_____|
 "#;
 
-const QUICK_ACTIONS: &[(&str, &str)] = &[
-    ("SPC f f", "Find file"),
-    ("SPC f d", "File browser"),
-    ("SPC f c", "Edit config"),
-    ("SPC SPC", "Commands"),
-    ("SPC :", "Command line"),
-    ("SPC a p", "AI prompt"),
-    ("SPC h h", "Help"),
-    ("SPC t s", "Set theme"),
-    ("SPC q q", "Quit"),
+const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
+    ("SPC f f", "Find file", "find-file"),
+    ("SPC f d", "File browser", "file-browser"),
+    ("SPC f c", "Edit config", "edit-config"),
+    ("SPC SPC", "Commands", "command-palette"),
+    ("SPC :", "Command line", "command-mode"),
+    ("SPC a p", "AI prompt", "ai-prompt"),
+    ("SPC h h", "Help", "help"),
+    ("SPC t s", "Set theme", "theme-picker"),
+    ("SPC q q", "Quit", "quit"),
 ];
 
 /// Returns true if the splash should be displayed.
@@ -84,8 +84,8 @@ pub fn render_splash(
     let _desc_fg = theme::ts_fg(editor, "ui.text");
     let subtitle_fg = theme::ts_fg(editor, "comment");
 
-    // Collect all lines.
-    let mut lines: Vec<(String, skia_safe::Color4f)> = Vec::new();
+    // Collect all lines: (text, fg_color, is_selected).
+    let mut lines: Vec<(String, skia_safe::Color4f, bool)> = Vec::new();
 
     // Art.
     let art_lines: Vec<&str> = splash.art.lines().collect();
@@ -96,7 +96,7 @@ pub fn render_splash(
         } else {
             art_fg
         };
-        lines.push((line.to_string(), fg));
+        lines.push((line.to_string(), fg, false));
     }
 
     // Logo.
@@ -105,32 +105,41 @@ pub fn render_splash(
     let logo_pad = art_width.saturating_sub(logo_width) / 2;
     for line in &logo_lines {
         let padded = format!("{:>pad$}{}", "", line, pad = logo_pad);
-        lines.push((padded, logo_fg));
+        lines.push((padded, logo_fg, false));
     }
 
     // Subtitle.
     let subtitle = "Modern AI Editor -- ai-native lisp machine";
     let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
-    lines.push((format!("{:>w$}{}", "", subtitle, w = sub_pad), subtitle_fg));
+    lines.push((
+        format!("{:>w$}{}", "", subtitle, w = sub_pad),
+        subtitle_fg,
+        false,
+    ));
     let version = concat!("v", env!("CARGO_PKG_VERSION"));
     let ver_pad = art_width.saturating_sub(version.len()) / 2;
-    lines.push((format!("{:>w$}{}", "", version, w = ver_pad), subtitle_fg));
-    lines.push((String::new(), subtitle_fg));
+    lines.push((
+        format!("{:>w$}{}", "", version, w = ver_pad),
+        subtitle_fg,
+        false,
+    ));
+    lines.push((String::new(), subtitle_fg, false));
 
-    // Quick actions.
+    // Quick actions — with selection highlight.
     let qa_width = QUICK_ACTIONS
         .iter()
-        .map(|(k, d)| format!("{:<10}{}", k, d).len())
+        .map(|(k, d, _)| format!("{:<10}{}", k, d).len())
         .max()
         .unwrap_or(0);
-    let qa_pad = art_width.saturating_sub(qa_width) / 2;
-    for &(key, desc) in QUICK_ACTIONS {
-        let text = format!("{:>pad$}{:<10}{}", "", key, desc, pad = qa_pad);
-        // We'll render key and desc with different colors cell-by-cell.
-        // For simplicity, use key_fg for the whole line (good enough for M3).
-        lines.push((text, key_fg));
+    let qa_pad = art_width.saturating_sub(qa_width + 2) / 2;
+    let sel_bg = theme::ts_bg(editor, "ui.selection");
+    for (i, &(key, desc, _cmd)) in QUICK_ACTIONS.iter().enumerate() {
+        let is_selected = i == editor.splash_selection;
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let text = format!("{:>pad$}{}{:<10}{}", "", prefix, key, desc, pad = qa_pad);
+        lines.push((text, key_fg, is_selected));
     }
-    lines.push((String::new(), subtitle_fg));
+    lines.push((String::new(), subtitle_fg, false));
 
     // Recent files (up to 5).
     let recent: Vec<&str> = editor
@@ -143,35 +152,47 @@ pub fn render_splash(
     if !recent.is_empty() {
         let header = "Recent Files";
         let header_pad = art_width.saturating_sub(header.len()) / 2;
-        lines.push((format!("{:>w$}{}", "", header, w = header_pad), subtitle_fg));
+        lines.push((
+            format!("{:>w$}{}", "", header, w = header_pad),
+            subtitle_fg,
+            false,
+        ));
         for (i, path) in recent.iter().enumerate() {
             let label = format!("  {}  {}", i + 1, truncate_path(path, 50));
             let label_pad = art_width.saturating_sub(label.len()) / 2;
-            lines.push((format!("{:>w$}{}", "", label, w = label_pad), key_fg));
+            lines.push((format!("{:>w$}{}", "", label, w = label_pad), key_fg, false));
         }
-        lines.push((String::new(), subtitle_fg));
+        lines.push((String::new(), subtitle_fg, false));
     }
 
     // Dismiss hint.
-    let dismiss = "Press any key to dismiss";
+    let dismiss = "j/k to navigate, Enter to select, any other key to dismiss";
     let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
     lines.push((
         format!("{:>w$}{}", "", dismiss, w = dismiss_pad),
         subtitle_fg,
+        false,
     ));
 
     // Centering.
     let total_height = lines.len();
     let top_pad = area_height.saturating_sub(total_height) / 2;
-    let max_width = lines.iter().map(|(l, _)| l.len()).max().unwrap_or(0);
+    let max_width = lines.iter().map(|(l, _, _)| l.len()).max().unwrap_or(0);
     let left_pad = area_width.saturating_sub(max_width) / 2;
 
-    for (i, (text, fg)) in lines.iter().enumerate() {
+    for (i, (text, fg, selected)) in lines.iter().enumerate() {
         let row = area_row + top_pad + i;
         if row >= area_row + area_height {
             break;
         }
-        canvas.draw_text_at(row, left_pad, text, *fg);
+        if *selected {
+            if let Some(bg) = sel_bg {
+                canvas.draw_rect_fill(row, left_pad, text.len(), 1, bg);
+            }
+            canvas.draw_text_bold(row, left_pad, text, *fg);
+        } else {
+            canvas.draw_text_at(row, left_pad, text, *fg);
+        }
     }
 }
 

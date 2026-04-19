@@ -85,7 +85,7 @@ fn copy_candidates() -> &'static [(&'static str, &'static [&'static str])] {
 
 fn paste_candidates() -> &'static [(&'static str, &'static [&'static str])] {
     &[
-        ("wl-paste", &["--no-newline"]),
+        ("wl-paste", &["--no-newline", "--type", "text"]),
         ("xclip", &["-selection", "clipboard", "-o"]),
         ("pbpaste", &[]),
     ]

@@ -67,7 +67,7 @@
 
 # Markdown / org-mode markup styling.
 "markup.heading" = { fg = "yellow", bold = true }
-"markup.link" = { fg = "blue", underline = true }
+"markup.link" = { fg = "cyan", underline = true }
 "markup.literal" = { fg = "green" }
 "markup.bold" = { fg = "white", bold = true }
 "markup.italic" = { fg = "white", italic = true }

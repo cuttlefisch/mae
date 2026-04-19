@@ -334,11 +334,16 @@ pub struct Editor {
     /// Registry of all configurable editor options — single source of truth
     /// for metadata, aliases, types, defaults, and config.toml paths.
     pub option_registry: OptionRegistry,
+    /// Currently highlighted splash screen menu item index.
+    pub splash_selection: usize,
     /// Debug mode: show RSS/CPU/frame time in status bar. Toggled via
     /// `--debug` CLI flag, `:debug-mode`, or `SPC t D`.
     pub debug_mode: bool,
     /// Rolling performance statistics (frame time, RSS, CPU).
     pub perf_stats: perf::PerfStats,
+    /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
+    /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
+    pub clipboard: String,
 }
 
 impl Default for Editor {
@@ -447,8 +452,10 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             option_registry: OptionRegistry::new(),
+            splash_selection: 0,
             debug_mode: false,
             perf_stats: perf::PerfStats::default(),
+            clipboard: "unnamed".to_string(),
         }
     }
 
@@ -563,8 +570,10 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             option_registry: OptionRegistry::new(),
+            splash_selection: 0,
             debug_mode: false,
             perf_stats: perf::PerfStats::default(),
+            clipboard: "unnamed".to_string(),
         }
     }
 
@@ -599,6 +608,7 @@ impl Editor {
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "debug_mode" => self.debug_mode.to_string(),
+            "clipboard" => self.clipboard.clone(),
             _ => return None,
         };
         Some((value, def))
@@ -651,6 +661,17 @@ impl Editor {
                     self.show_fps = true;
                 }
             }
+            "clipboard" => match value {
+                "unnamedplus" | "unnamed" | "internal" => {
+                    self.clipboard = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid clipboard mode: '{}' (expected unnamedplus, unnamed, or internal)",
+                        value
+                    ))
+                }
+            },
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self.get_option(def_name).unwrap();
@@ -707,10 +728,20 @@ impl Editor {
             .and_then(|v| v.as_table_mut())
             .ok_or_else(|| format!("Config key '{}' is not a table", section_name))?;
 
-        // Set the value with the appropriate TOML type
+        // Set the value with the appropriate TOML type, validating the parse.
         let toml_val = match def.kind {
-            OptionKind::Bool => toml::Value::Boolean(value.parse().unwrap_or(false)),
-            OptionKind::Float => toml::Value::Float(value.parse().unwrap_or(14.0)),
+            OptionKind::Bool => {
+                let b: bool = value
+                    .parse()
+                    .map_err(|_| format!("Invalid bool: '{}'", value))?;
+                toml::Value::Boolean(b)
+            }
+            OptionKind::Float => {
+                let f: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                toml::Value::Float(f)
+            }
             OptionKind::String | OptionKind::Theme => toml::Value::String(value.clone()),
         };
         section.insert(key_name.to_string(), toml_val);
@@ -826,11 +857,24 @@ impl Editor {
     }
 
     pub fn active_buffer(&self) -> &Buffer {
-        &self.buffers[self.active_buffer_idx()]
+        let idx = self.active_buffer_idx();
+        assert!(
+            idx < self.buffers.len(),
+            "buffer_idx {} out of range ({})",
+            idx,
+            self.buffers.len()
+        );
+        &self.buffers[idx]
     }
 
     pub fn active_buffer_mut(&mut self) -> &mut Buffer {
         let idx = self.active_buffer_idx();
+        assert!(
+            idx < self.buffers.len(),
+            "buffer_idx {} out of range ({})",
+            idx,
+            self.buffers.len()
+        );
         &mut self.buffers[idx]
     }
 
@@ -1015,23 +1059,69 @@ impl Editor {
         }
     }
 
+    /// Handle mouse drag — update cursor position and enter/update Visual mode.
+    ///
+    /// On first drag event, the click position becomes the visual anchor.
+    /// Subsequent drag events update the cursor, extending the selection.
+    pub fn handle_mouse_drag(&mut self, row: usize, col: usize) {
+        let win = self.window_mgr.focused_window();
+        let gutter_width = if self.show_line_numbers { 5 } else { 0 };
+        let text_col = col.saturating_sub(gutter_width);
+        let buf_row = win.scroll_offset + row.saturating_sub(1);
+        let buf_idx = win.buffer_idx;
+        let buf = &self.buffers[buf_idx];
+        let max_row = buf.display_line_count().saturating_sub(1);
+        let target_row = buf_row.min(max_row);
+        let line_len = buf.line_len(target_row);
+        let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+
+        // Enter Visual mode on first drag if not already in it.
+        if !matches!(self.mode, crate::Mode::Visual(_)) {
+            // Anchor at current cursor position (the click position).
+            let win = self.window_mgr.focused_window();
+            self.visual_anchor_row = win.cursor_row;
+            self.visual_anchor_col = win.cursor_col;
+            self.mode = crate::Mode::Visual(crate::VisualType::Char);
+        }
+
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = target_row;
+        win.cursor_col = target_col;
+    }
+
     /// Handle mouse scroll (positive = up, negative = down).
     ///
-    /// Each scroll unit moves 3 lines (standard scroll speed). The scroll
-    /// offset is clamped to valid range by `ensure_scroll` on the next frame.
+    /// Vim-style: scroll moves the viewport and clamps the cursor into the
+    /// visible area, so `ensure_scroll` on the next frame is a no-op.
     pub fn handle_mouse_scroll(&mut self, delta: i16) {
         let lines = delta.unsigned_abs() as usize;
         if lines == 0 {
             return;
         }
         let scroll_speed = 3;
+        let buf_idx = self.active_buffer_idx();
+        let buf_line_count = self.buffers[buf_idx].display_line_count();
+        let viewport_height = self.viewport_height;
+
         let win = self.window_mgr.focused_window_mut();
         if delta > 0 {
             // Scroll up
             win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
         } else {
             // Scroll down
-            win.scroll_offset += lines * scroll_speed;
+            let max_scroll = buf_line_count.saturating_sub(viewport_height);
+            win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
         }
+
+        // Clamp cursor into visible viewport.
+        if win.cursor_row < win.scroll_offset {
+            win.cursor_row = win.scroll_offset;
+        }
+        let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
+        let max_row = buf_line_count.saturating_sub(1);
+        if win.cursor_row > bottom.min(max_row) {
+            win.cursor_row = bottom.min(max_row);
+        }
+        win.clamp_cursor(&self.buffers[buf_idx]);
     }
 }

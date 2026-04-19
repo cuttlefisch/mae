@@ -1493,6 +1493,9 @@ async fn run_gui_loop(
         app_config.editor.font_size,
     );
     editor.renderer_name = "gui".to_string();
+    // GUI default: paste reads system clipboard (Vim clipboard=unnamedplus).
+    // User can override via config.toml [editor] clipboard = "unnamed".
+    editor.clipboard = "unnamedplus".to_string();
     let mut event_loop = EventLoop::new().map_err(|e| io::Error::other(e.to_string()))?;
 
     // State shared between the winit callback and the outer loop.
@@ -1518,6 +1521,7 @@ async fn run_gui_loop(
     let mut last_health_check = tokio::time::Instant::now();
     // Accumulator for fractional pixel scroll (Wayland touchpad sends small deltas).
     let mut scroll_accumulator: f64 = 0.0;
+    let mut mouse_pressed = false;
 
     info!("entering GUI event loop");
 
@@ -1534,6 +1538,13 @@ async fn run_gui_loop(
                 last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
             );
             last_health_check = tokio::time::Instant::now();
+        }
+
+        // --- Font hot-reload: lisp-machine contract ---
+        if editor.gui_font_size != renderer.current_font_size() {
+            renderer.apply_font_size(editor.gui_font_size);
+            let viewport_height = renderer.viewport_height().unwrap_or(40);
+            editor.viewport_height = viewport_height;
         }
 
         // --- Pre-render bookkeeping (same as terminal loop) ---
@@ -1564,6 +1575,7 @@ async fn run_gui_loop(
                 cursor_x: &mut cursor_x,
                 cursor_y: &mut cursor_y,
                 scroll_accumulator: &mut scroll_accumulator,
+                mouse_pressed: &mut mouse_pressed,
             },
         );
 
@@ -1697,11 +1709,9 @@ async fn run_gui_loop(
             _ = tokio::time::sleep(Duration::from_millis(16)) => {}
         }
 
-        // Only request a redraw when something actually changed.
-        if dirty {
-            renderer.request_redraw();
-            dirty = false;
-        }
+        // Rendering happens inside WinitCallback::window_event(RedrawRequested),
+        // triggered by about_to_wait() calling request_redraw() when dirty.
+        // This ensures present() runs inside Wayland's event dispatch.
     }
 
     let _ = std::fs::remove_file(&mcp_socket_path);
@@ -1731,6 +1741,7 @@ struct WinitCallback<'a> {
     cursor_x: &'a mut f64,
     cursor_y: &'a mut f64,
     scroll_accumulator: &'a mut f64,
+    mouse_pressed: &'a mut bool,
 }
 
 #[cfg(feature = "gui")]
@@ -1818,7 +1829,16 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
             WindowEvent::CursorMoved { position, .. } => {
                 *self.cursor_x = position.x;
                 *self.cursor_y = position.y;
-                // Don't set dirty — cursor movement alone doesn't need a redraw.
+                // Drag-to-select: if left button is held, update visual selection.
+                if *self.mouse_pressed {
+                    let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                    if cell_w > 0.0 && cell_h > 0.0 {
+                        let col = (*self.cursor_x / cell_w as f64) as u16;
+                        let row = (*self.cursor_y / cell_h as f64) as u16;
+                        self.editor.handle_mouse_drag(row as usize, col as usize);
+                        *self.dirty = true;
+                    }
+                }
             }
             WindowEvent::MouseInput {
                 state: winit::event::ElementState::Pressed,
@@ -1826,6 +1846,9 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 ..
             } => {
                 if let Some(mae_button) = mae_gui::winit_mouse_button(&button) {
+                    if matches!(mae_button, mae_core::input::MouseButton::Left) {
+                        *self.mouse_pressed = true;
+                    }
                     // Convert pixel position to cell coordinates.
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
@@ -1836,6 +1859,13 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                         *self.dirty = true;
                     }
                 }
+            }
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Released,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                *self.mouse_pressed = false;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
@@ -1866,14 +1896,22 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
                 }
+                // Clear dirty flag after presenting — the frame is now
+                // committed inside Wayland's event dispatch where present()
+                // is valid.
+                *self.dirty = false;
             }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        // Intentionally empty — redraws are now driven by the dirty flag
-        // in the outer loop, not unconditionally every pump cycle.
+        // Wayland-correct render scheduling: request a redraw when dirty so
+        // the compositor dispatches RedrawRequested *inside* pump_app_events,
+        // where present() is valid.
+        if *self.dirty {
+            self.renderer.request_redraw();
+        }
     }
 }
 

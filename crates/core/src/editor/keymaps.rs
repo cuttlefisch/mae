@@ -274,6 +274,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
         normal.bind(parse_key_seq_spaced("SPC f R"), "rename-file");
         normal.bind(parse_key_seq_spaced("SPC f c"), "edit-config");
+        normal.bind(parse_key_seq_spaced("SPC f C"), "edit-settings");
         normal.bind(parse_key_seq_spaced("SPC f S"), "save-as");
         // +buffer expansions
         normal.bind(parse_key_seq_spaced("SPC b o"), "kill-other-buffers");

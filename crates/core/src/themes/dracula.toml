@@ -75,3 +75,4 @@ yellow = "#f1fa8c"
 "attribute" = { fg = "green" }
 "namespace" = { fg = "cyan" }
 "punctuation" = { fg = "fg" }
+"markup.link" = { fg = "cyan", underline = true }

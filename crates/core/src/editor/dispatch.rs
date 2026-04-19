@@ -363,10 +363,11 @@ impl Editor {
                 self.window_mgr.focused_window_mut().move_to_screen_top();
             }
             "move-screen-middle" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
                 let vh = self.viewport_height;
                 self.window_mgr
                     .focused_window_mut()
-                    .move_to_screen_middle(vh);
+                    .move_to_screen_middle(buf, vh);
             }
             "move-screen-bottom" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
@@ -1637,21 +1638,20 @@ impl Editor {
             // +buffer expansions (SPC b)
             "kill-other-buffers" => {
                 let active = self.active_buffer_idx();
-                let mut killed = 0;
-                let mut i = 0;
-                while i < self.buffers.len() {
-                    if i != active && !self.buffers[i].modified {
-                        self.buffers.remove(i);
-                        if active > i {
-                            // Adjust the focused window's buffer_idx
-                            let win = self.window_mgr.focused_window_mut();
-                            if win.buffer_idx > 0 {
-                                win.buffer_idx -= 1;
-                            }
-                        }
-                        killed += 1;
-                    } else {
-                        i += 1;
+                // Collect indices to remove (skip active + modified), then remove in reverse
+                // order so that later removals don't invalidate earlier indices.
+                let to_remove: Vec<usize> = (0..self.buffers.len())
+                    .filter(|&i| i != active && !self.buffers[i].modified)
+                    .collect();
+                let killed = to_remove.len();
+                for &i in to_remove.iter().rev() {
+                    self.buffers.remove(i);
+                }
+                // Revalidate ALL window buffer_idx values after bulk removal.
+                let buf_count = self.buffers.len();
+                for win in self.window_mgr.iter_windows_mut() {
+                    if win.buffer_idx >= buf_count {
+                        win.buffer_idx = buf_count.saturating_sub(1);
                     }
                 }
                 self.set_status(format!("Killed {} buffer(s)", killed));
@@ -1783,6 +1783,43 @@ impl Editor {
             }
 
             "edit-config" => {
+                // Scheme-first config: init.scm is the user-facing config surface.
+                // TOML config is bootstrap-only (see edit-settings).
+                let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                    std::path::PathBuf::from(xdg)
+                } else if let Ok(home) = std::env::var("HOME") {
+                    std::path::PathBuf::from(home).join(".config")
+                } else {
+                    std::path::PathBuf::from(".config")
+                }
+                .join("mae");
+                let init_path = config_dir.join("init.scm");
+                if !init_path.exists() {
+                    // Create template init.scm with helpful examples.
+                    let _ = std::fs::create_dir_all(&config_dir);
+                    let template = "\
+;; MAE init.scm — Scheme configuration (loaded after config.toml)
+;; This file is the primary config surface. TOML is bootstrap-only.
+;;
+;; Examples:
+;;   (set-option! \"theme\" \"catppuccin-mocha\")
+;;   (set-option! \"font_size\" \"16\")
+;;   (set-option! \"word_wrap\" \"true\")
+;;   (set-option! \"relative_line_numbers\" \"true\")
+;;
+;; Keybindings:
+;;   (define-key \"normal\" \"g c\" \"toggle-comment\")
+;;
+;; Hooks:
+;;   (add-hook! \"buffer-open\" (lambda () (display \"opened!\")))
+;;
+";
+                    let _ = std::fs::write(&init_path, template);
+                }
+                self.open_file(init_path.display().to_string());
+            }
+            "edit-settings" => {
+                // Bootstrap TOML config (GUI-only settings, font family, etc.)
                 let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
                     std::path::PathBuf::from(xdg)
                 } else if let Ok(home) = std::env::var("HOME") {

@@ -253,12 +253,7 @@ pub fn render_buffer_content(
 
 /// Draw a styled line at an absolute position.
 fn draw_styled_at(canvas: &mut SkiaCanvas, row: usize, col: usize, cells: &[StyledCell]) {
-    let offset_cells: StyledLine = cells.to_vec();
-
-    // We need to draw at the right position — use draw_styled_line with row offset.
-    // But draw_styled_line draws at row with col=0. We need col offset.
-    // Use cell-by-cell drawing instead.
-    for (i, cell) in offset_cells.iter().enumerate() {
+    for (i, cell) in cells.iter().enumerate() {
         if let Some(bg) = cell.bg {
             canvas.draw_rect_fill(row, col + i, 1, 1, bg);
         }

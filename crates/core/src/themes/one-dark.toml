@@ -76,3 +76,4 @@ gutter = "#4b5263"
 "attribute" = { fg = "yellow" }
 "namespace" = { fg = "yellow" }
 "punctuation" = { fg = "fg" }
+"markup.link" = { fg = "blue", underline = true }

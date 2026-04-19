@@ -53,14 +53,12 @@ impl PerfStats {
         self.frame_count += 1;
 
         let count = self.frame_count.min(self.frame_times.len() as u64);
-        if count > 0 {
-            let sum: u64 = if self.frame_count >= self.frame_times.len() as u64 {
-                self.frame_times.iter().sum()
-            } else {
-                self.frame_times[..self.frame_count as usize].iter().sum()
-            };
-            self.avg_frame_time_us = sum / count;
-        }
+        let sum: u64 = if self.frame_count >= self.frame_times.len() as u64 {
+            self.frame_times.iter().sum()
+        } else {
+            self.frame_times[..self.frame_count as usize].iter().sum()
+        };
+        self.avg_frame_time_us = sum.checked_div(count).unwrap_or(0);
     }
 
     /// Sample process-level stats (RSS, CPU). Rate-limited: only queries

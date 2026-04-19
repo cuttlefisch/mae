@@ -98,6 +98,16 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
     })
 }
 
+/// Check if the splash screen is currently visible.
+fn is_splash_visible(editor: &Editor) -> bool {
+    let buf = editor.active_buffer();
+    buf.kind == mae_core::BufferKind::Text
+        && buf.name == "[scratch]"
+        && buf.rope().len_chars() == 0
+        && !buf.modified
+        && editor.buffers.len() == 1
+}
+
 pub fn handle_key(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
@@ -112,6 +122,40 @@ pub fn handle_key(
 
     if editor.mode != Mode::Command {
         editor.status_msg.clear();
+    }
+
+    // --- Splash screen navigation intercept ---
+    // When the splash is visible, j/k/Up/Down navigate, Enter selects,
+    // and any other key dismisses the splash (by inserting into scratch).
+    if editor.mode == Mode::Normal && is_splash_visible(editor) {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let count = mae_renderer::splash_render::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + 1) % count;
+                }
+                return;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let count = mae_renderer::splash_render::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + count - 1) % count;
+                }
+                return;
+            }
+            KeyCode::Enter => {
+                let actions = mae_renderer::splash_render::QUICK_ACTIONS;
+                if let Some(&(_, _, cmd)) = actions.get(editor.splash_selection) {
+                    // Dismiss splash by inserting a space then clearing it,
+                    // so the splash condition no longer holds.
+                    editor.dispatch_builtin(cmd);
+                }
+                return;
+            }
+            _ => {
+                // Any other key dismisses splash and falls through to normal handling.
+            }
+        }
     }
 
     let mode_before = editor.mode;

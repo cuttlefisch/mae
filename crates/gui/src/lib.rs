@@ -169,6 +169,29 @@ impl GuiRenderer {
     pub fn cell_dimensions(&self) -> (f32, f32) {
         (self.cell_width, self.cell_height)
     }
+
+    /// Current font size. Returns the configured size or the default (14.0).
+    pub fn current_font_size(&self) -> f32 {
+        self.font_size.unwrap_or(14.0)
+    }
+
+    /// Apply a new font size at runtime — recreates font objects, recalculates
+    /// cell metrics and column/row counts. This is the lisp-machine contract:
+    /// `(set-option! "font-size" "20")` must take effect immediately.
+    pub fn apply_font_size(&mut self, size: f32) {
+        self.font_size = Some(size);
+        if let Some(canvas) = &mut self.canvas {
+            canvas.update_font_size(size);
+            let (cw, ch) = canvas.cell_size();
+            self.cell_width = cw;
+            self.cell_height = ch;
+            if let Some(window) = &self.window {
+                let ws = window.inner_size();
+                self.cols = (ws.width as f32 / cw) as u16;
+                self.rows = (ws.height as f32 / ch) as u16;
+            }
+        }
+    }
 }
 
 impl Default for GuiRenderer {
@@ -616,7 +639,7 @@ fn draw_window_border(
     }
     let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
     canvas.draw_text_at(row, col, &top, color);
-    if title.len() + 2 < width {
+    if title.chars().count() + 2 < width {
         canvas.draw_text_at(row, col + 1, title, color);
     }
     for r in 1..height.saturating_sub(1) {

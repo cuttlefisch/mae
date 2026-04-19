@@ -89,3 +89,4 @@ bright_orange = "#fe8019"
 "attribute" = { fg = "bright_aqua" }
 "namespace" = { fg = "bright_yellow" }
 "punctuation" = { fg = "fg3" }
+"markup.link" = { fg = "bright_aqua", underline = true }

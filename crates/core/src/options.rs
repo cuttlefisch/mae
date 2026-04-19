@@ -113,7 +113,7 @@ impl OptionRegistry {
                 OptionDef {
                     name: "font_size",
                     aliases: &["font-size"],
-                    doc: "GUI font size in points (6.0–72.0). Restart GUI to apply.",
+                    doc: "GUI font size in points (6.0–72.0). Takes effect immediately.",
                     kind: OptionKind::Float,
                     default_value: "14.0",
                     config_key: Some("editor.font_size"),
@@ -142,6 +142,14 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.debug_mode"),
+                },
+                OptionDef {
+                    name: "clipboard",
+                    aliases: &["clipboard-mode"],
+                    doc: "Clipboard integration: \"unnamedplus\" (paste from system clipboard), \"unnamed\" (yank syncs out, paste reads internal), \"internal\" (no clipboard sync)",
+                    kind: OptionKind::String,
+                    default_value: "unnamed",
+                    config_key: Some("editor.clipboard"),
                 },
             ],
         }
