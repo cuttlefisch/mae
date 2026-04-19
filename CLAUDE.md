@@ -95,7 +95,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - KB queries from Scheme and AI
 - Help buffer with navigation, link following, neighborhood display
 
-### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload, 1294 tests)
+### Phase 6: Embedded Shell — COMPLETE (M1-M4 + MCP bridge + file auto-reload)
 - Terminal emulator via `alacritty_terminal` (full VT100, colors, attributes) ✅
 - ShellInsert mode, Ctrl-\ Ctrl-n exit, process lifecycle handling ✅
 - Scheme hooks (7 hook points) + `set-option!` configuration ✅
@@ -133,7 +133,12 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Event loop refactor: `run_app` + `EventLoopProxy<MaeEvent>` replaces `pump_app_events` ✅
 - `GuiApp` owns all state, `bridge_task` on background tokio thread ✅
 - `main()` is plain `fn` — tokio runtime built manually ✅
-- v0.3.0 polish: BackTab, font zoom, `:read !cmd`, per-buffer projects, status line (git/LSP/tier), AI agent launcher, session persistence, vimtutor, sample config ✅
+- v0.3.0 polish: BackTab, font zoom, `:read !cmd`, per-buffer projects, status line (git/LSP/tier), AI agent launcher, session persistence, sample config ✅
+- Tutor→KB: 11 linked lesson nodes, `:tutor` opens help with Tab/Enter/C-o navigation ✅
+- Shell auto-close on exit (no blank frames), agent shells tagged for distinct cleanup ✅
+- Shell CPU idle: generation-based dirty tracking (30%→~0%) ✅
+- `find-file` uses project root with CWD fallback ✅
+- Debug stats show FPS instead of μs frame timing ✅
 - **Next: Doom-style init.scm (Phase 7 M4), line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
 
 ## Key Design Decisions Already Made

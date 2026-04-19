@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,508 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,509 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -13,7 +13,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 ## Comprehensive Feature Checklist
 
-### What We Have (521 tests)
+### What We Have (1,509 tests)
 
 | Category | Features |
 |----------|----------|
@@ -32,8 +32,13 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer, multi-file tools, project search |
 | **Scheme** | Steel runtime, init.scm, define-key, eval REPL |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
-| **Debug** | Self-debug state inspection, DAP protocol types |
-| **Renderer** | Line numbers, status bar, which-key popup, multi-window, search/selection highlights |
+| **Debug** | Self-debug state inspection, DAP protocol types, debug panel (threads/frames/scopes/variables) |
+| **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
+| **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
+| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints, step/continue, 11 AI debug tools |
+| **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
+| **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
+| **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
 | **CI** | GitHub Actions (check/test/clippy/fmt), tag-based release, dependabot, git-cliff changelog |
 
 ### Remaining Tier 1: Blocking Self-Hosting
@@ -67,8 +72,12 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 20 | Font zoom (Ctrl+=/-/0) | v0.3.0 ✅ |
 | 21 | BackTab / Shift-Tab support | v0.3.0 ✅ |
 | 22 | KB project nodes (`.project` → KB graph) | v0.3.0 ✅ |
-| 23 | Vimtutor-style onboarding (`:tutor`, `SPC h t`) | v0.3.0 ✅ |
+| 23 | KB-linked tutorial (`:tutor` → 11 help nodes with cross-links) | v0.3.0 ✅ |
 | 24 | Sample config template (`assets/sample-config.toml`) | v0.3.0 ✅ |
+| 25 | Shell auto-close on exit (no more blank `[exited]` frames) | v0.3.0 ✅ |
+| 26 | Shell CPU idle fix (generation-based dirty tracking, 30%→~0%) | v0.3.0 ✅ |
+| 27 | `find-file` uses project root instead of CWD | v0.3.0 ✅ |
+| 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
 
 ---
 
@@ -888,7 +897,8 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
 | Org-mode image preview | ❌ Not yet | M6 |
 | PDF preview | ❌ Not yet | M7 |
-| Mouse (click, drag, scroll) | ❌ Not yet | M8 |
+| Mouse click + scroll | ✅ Done | M3 |
+| Mouse click-drag select | ❌ Not yet | M8 |
 
 ### M3: Visual Polish — COMPLETE
 - [x] Cursor rendering in GUI (block/line per mode)
@@ -904,9 +914,9 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] `:set` ex-command + `:edit-config` (`SPC f c`)
 - [x] ZZ/ZQ keybindings
 - [x] 30-second health check for zombie shell detection
-- [ ] Font zoom keybindings: `Ctrl+=` increase, `Ctrl+-` decrease, `Ctrl+0` reset (register `increase-font-size` / `decrease-font-size` / `reset-font-size` commands)
+- [x] Font zoom keybindings: `Ctrl+=` increase, `Ctrl+-` decrease, `Ctrl+0` reset
+- [x] BackTab / Shift-Tab passthrough in shell-insert mode
 - [ ] Unicode/glyph fallback: load fallback font chain for characters missing from primary monospace font (Nerd Font glyphs, box-drawing, emoji, CJK) — currently renders replacement glyph (U+FFFD)
-- [ ] Shift-Tab passthrough in shell-insert mode: GUI terminal must forward Shift-Tab (CSI Z / ESC [Z) to the child process — blocks Claude Code accept-edits and plan-mode shortcuts
 - [ ] Line numbers and gutter in GUI
 - [ ] Syntax highlighting colors in GUI
 - [ ] Visual mode selection highlighting in GUI
@@ -947,10 +957,10 @@ Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `Even
 - [ ] Scroll through pages, zoom in/out
 
 ### M8: Mouse & Selection
-- [ ] Click to place cursor
+- [x] Click to place cursor (done in M3)
 - [ ] Click-drag to select text
 - [ ] Scrollbar (vertical)
-- [ ] Mouse wheel scroll
+- [x] Mouse wheel scroll (done in M3)
 - [ ] Selection highlighting
 
 ---
@@ -1059,13 +1069,13 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 4d + 5 (KB + help + SQLite) ✅
     │
-    ├─→ Phase 6 (embedded shell) ← next high-value target
+    ├─→ Phase 6 (embedded shell) ✅
     │       │
     │       └─→ Phase 6 M5 (magit parity) ← builds on M1 PTY shell + SPC g stubs
     │
-    ├─→ Phase 7 (embedded docs) ← parallel with Phase 6
+    ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm next
     │
-    ├─→ Phase 8 (GUI backend) ← direct key access, rich rendering
+    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M3 remaining items
     │
     ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
     │
@@ -1073,13 +1083,14 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations. Reference: Doom Emacs `custom-set-faces!` for org-level-* scaling values
-2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching; tutor as KB nodes with linked lessons instead of text blob
-3. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse gestures
-4. **Phase 4c M3 remaining** — variable hover, watch expressions
-5. **LSP packaging review** — multi-language defaults, user-configurable server selection
-6. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-7. **Phase 9** (Org-Mode Editing) — full org-mode environment
+1. **Phase 8 M3 remaining** (GUI polish) — line numbers/gutter, syntax highlighting colors, visual selection in GUI, Unicode/glyph fallback
+2. **Phase 7 M4** (Doom-style init.scm) — documented API reference, keybinding examples, hook usage, option config, module system
+3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
+4. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
+5. **Phase 4c M3 remaining** — variable hover, watch expressions
+6. **LSP packaging review** — multi-language defaults, user-configurable server selection
+7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+8. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 
@@ -1098,4 +1109,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 6     | 146 ✅ | shell terminal, hooks, options, MCP bridge, file auto-reload |
 | 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
-| **Total** | **~1,369** | All passing, 0 failures |
+| 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close |
+| **Total** | **1,509** | All passing, 0 failures |
