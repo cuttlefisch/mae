@@ -3712,11 +3712,17 @@ fn recent_projects_push_dedup_bounded() {
 }
 
 #[test]
-fn project_switch_palette_empty_shows_status() {
+fn project_switch_palette_empty_opens_palette() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("project-switch");
-    assert!(editor.status_msg.contains("No recent projects"));
-    assert!(editor.command_palette.is_none());
+    // Even with no recent projects, the palette opens so the user can type a path
+    assert!(editor.command_palette.is_some());
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert_eq!(
+        palette.purpose,
+        crate::command_palette::PalettePurpose::SwitchProject
+    );
+    assert!(palette.entries.is_empty());
 }
 
 #[test]

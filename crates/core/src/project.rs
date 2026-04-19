@@ -124,6 +124,11 @@ impl RecentProjects {
         }
     }
 
+    /// Remove a project root from the list.
+    pub fn remove(&mut self, root: &Path) {
+        self.roots.retain(|r| r != root);
+    }
+
     pub fn list(&self) -> &VecDeque<PathBuf> {
         &self.roots
     }

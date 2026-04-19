@@ -62,13 +62,13 @@ impl PerfStats {
     }
 
     /// Sample process-level stats (RSS, CPU). Rate-limited: only queries
-    /// sysinfo every 60 calls (roughly once per second at 60fps).
+    /// sysinfo every 120 calls (~6s at 20fps) to keep idle CPU low.
     pub fn sample_process_stats(&mut self) {
         if self.sample_countdown > 0 {
             self.sample_countdown -= 1;
             return;
         }
-        self.sample_countdown = 60;
+        self.sample_countdown = 120;
 
         let pid = Pid::from_u32(std::process::id());
         let sys = self.sys.get_or_insert_with(System::new);

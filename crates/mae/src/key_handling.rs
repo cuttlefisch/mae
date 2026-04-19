@@ -558,6 +558,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         KeyCode::Enter => {
             let name = palette.selected_name().map(|s| s.to_string());
             let purpose = palette.purpose;
+            let query = palette.query.clone();
             editor.command_palette = None;
             editor.mode = Mode::Normal;
             match (name, purpose) {
@@ -587,13 +588,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                     crate::config::persist_editor_preference("splash_art", &art);
                 }
                 (Some(root_str), PalettePurpose::SwitchProject) => {
-                    let root = std::path::PathBuf::from(&root_str);
-                    if root.is_dir() {
-                        editor.recent_projects.push(root.clone());
-                        editor.project = Some(mae_core::project::Project::from_root(root));
-                        editor.set_status(format!("Switched to project: {}", root_str));
+                    editor.add_project(&root_str);
+                }
+                (None, PalettePurpose::SwitchProject) => {
+                    // No match selected — treat query as a typed path
+                    if !query.is_empty() {
+                        editor.add_project(&query);
                     } else {
-                        editor.set_status(format!("Project root not found: {}", root_str));
+                        editor.set_status("No project selected");
                     }
                 }
                 (None, _) => editor.set_status("No command selected"),

@@ -404,6 +404,22 @@ impl Editor {
                 }
                 true
             }
+            "add-project" => {
+                if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    self.add_project(path);
+                } else {
+                    self.set_status("Usage: :add-project <path>");
+                }
+                true
+            }
+            "remove-project" => {
+                if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    self.remove_project(path);
+                } else {
+                    self.set_status("Usage: :remove-project <path>");
+                }
+                true
+            }
             "ai-save" => {
                 self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
                 true

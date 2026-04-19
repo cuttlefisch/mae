@@ -16,6 +16,8 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "breakpoint_count": editor.debug_state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
         "command_count": editor.commands.len(),
         "renderer": editor.renderer_name,
+        "git_branch": editor.git_branch,
+        "project_root": editor.project.as_ref().map(|p| p.root.display().to_string()),
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }

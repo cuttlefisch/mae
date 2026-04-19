@@ -185,6 +185,9 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Cache the current git branch for status line display.
+    editor.refresh_git_branch();
+
     // Apply editor preferences from config file.
     let app_config = config::load_config();
     if let Some(ref theme) = app_config.editor.theme {
@@ -192,6 +195,12 @@ fn main() -> io::Result<()> {
     }
     if let Some(ref art) = app_config.editor.splash_art {
         editor.splash_art = Some(art.clone());
+    }
+    if let Some(ref cmd) = app_config.ai.editor {
+        editor.ai_editor = cmd.clone();
+    }
+    if let Some(restore) = app_config.editor.restore_session {
+        editor.restore_session = restore;
     }
 
     // Initialize Scheme runtime
@@ -403,6 +412,7 @@ async fn run_terminal_loop(
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
     let mut last_health_check = tokio::time::Instant::now();
+    let mut tui_dirty = true; // start dirty for initial render
 
     loop {
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
@@ -454,12 +464,15 @@ async fn run_terminal_loop(
             }
         }
 
-        let frame_start = std::time::Instant::now();
-        renderer.render(editor, &shell_terminals)?;
-        let frame_elapsed = frame_start.elapsed().as_micros() as u64;
-        editor.perf_stats.record_frame(frame_elapsed);
-        if editor.debug_mode {
-            editor.perf_stats.sample_process_stats();
+        if tui_dirty {
+            let frame_start = std::time::Instant::now();
+            renderer.render(editor, &shell_terminals)?;
+            let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+            editor.perf_stats.record_frame(frame_elapsed);
+            if editor.debug_mode {
+                editor.perf_stats.sample_process_stats();
+            }
+            tui_dirty = false;
         }
 
         if !editor.running {
@@ -496,7 +509,9 @@ async fn run_terminal_loop(
         let has_shells = !shell_terminals.is_empty();
         let shell_tick = async {
             if has_shells {
-                tokio::time::sleep(std::time::Duration::from_millis(33)).await;
+                // 20fps for shell viewport refresh — smooth enough for terminal
+                // output while keeping idle CPU reasonable (~40% less than 30fps).
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             } else {
                 std::future::pending::<()>().await;
             }
@@ -515,6 +530,7 @@ async fn run_terminal_loop(
 
         tokio::select! {
             maybe_event = event_stream.next() => {
+                tui_dirty = true;
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         if editor.input_lock != mae_core::InputLock::None {
@@ -549,12 +565,14 @@ async fn run_terminal_loop(
                 }
             }
             Some(ai_event) = ai_event_rx.recv() => {
+                tui_dirty = true;
                 ai_event_handler::handle_ai_event(
                     editor, ai_event, all_tools, permission_policy,
                     &mut deferred_ai_reply, lsp_command_tx,
                 );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
+                tui_dirty = true;
                 ai_event_handler::try_resolve_deferred(editor, &lsp_event, &mut deferred_ai_reply);
                 if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
                     last_mcp_activity = Some(tokio::time::Instant::now());
@@ -562,9 +580,13 @@ async fn run_terminal_loop(
                 handle_lsp_event(editor, lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
+                tui_dirty = true;
                 handle_dap_event(editor, dap_event);
             }
-            _ = shell_tick => {}
+            _ = shell_tick => {
+                // Shell tick — only mark dirty when shells are active (new output possible)
+                tui_dirty = true;
+            }
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
@@ -575,10 +597,12 @@ async fn run_terminal_loop(
                         }
                         editor.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
+                        tui_dirty = true;
                     }
                 }
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
+                tui_dirty = true;
                 editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(

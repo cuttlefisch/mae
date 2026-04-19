@@ -712,6 +712,10 @@ impl CommandRegistry {
         );
         reg.register_builtin("session-load", "Restore session from .mae/session.json");
 
+        // Project management
+        reg.register_builtin("add-project", "Add a project directory and switch to it");
+        reg.register_builtin("remove-project", "Remove a project from the recent list");
+
         reg
     }
 }

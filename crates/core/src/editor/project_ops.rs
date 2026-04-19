@@ -69,6 +69,7 @@ impl Editor {
     }
 
     /// `project-switch` — palette with recently used project roots.
+    /// Opens even when empty so the user can type a new project path.
     pub(crate) fn project_switch_palette(&mut self) {
         let roots: Vec<String> = self
             .recent_projects
@@ -76,13 +77,34 @@ impl Editor {
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        if roots.is_empty() {
-            self.set_status("No recent projects");
-            return;
-        }
         let name_refs: Vec<&str> = roots.iter().map(|s| s.as_str()).collect();
         self.command_palette = Some(CommandPalette::for_project_switch(&name_refs));
         self.mode = Mode::CommandPalette;
+    }
+
+    /// `add-project` — add a directory to recent projects and switch to it.
+    pub fn add_project(&mut self, path_str: &str) {
+        let path = std::path::PathBuf::from(crate::file_picker::expand_tilde(path_str));
+        if path.is_dir() {
+            self.recent_projects.push(path.clone());
+            self.project = Some(crate::project::Project::from_root(path.clone()));
+            self.refresh_git_branch();
+            self.set_status(format!("Added & switched to project: {}", path.display()));
+        } else {
+            self.set_status(format!("Not a directory: {}", path_str));
+        }
+    }
+
+    /// `remove-project` — remove a directory from recent projects.
+    pub(crate) fn remove_project(&mut self, path_str: &str) {
+        let path = std::path::PathBuf::from(path_str);
+        let before = self.recent_projects.len();
+        self.recent_projects.remove(&path);
+        if self.recent_projects.len() < before {
+            self.set_status(format!("Removed project: {}", path_str));
+        } else {
+            self.set_status(format!("Project not found: {}", path_str));
+        }
     }
 
     /// `recent-files` — palette with all recent files.

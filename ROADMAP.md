@@ -1073,15 +1073,13 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M4** (GUI event loop refactor) — `run_app` + `EventLoopProxy`, eliminate `pump_app_events` anti-pattern
-2. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings, decorations
-3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-4. **Session persistence** — save/restore open buffers, window layout, cursor positions
-5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse gestures
-6. **Phase 4c M3 remaining** — variable hover, watch expressions
-7. **LSP packaging review** — multi-language defaults, user-configurable server selection
-8. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-9. **Phase 9** (Org-Mode Editing) — full org-mode environment
+1. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations. Reference: Doom Emacs `custom-set-faces!` for org-level-* scaling values
+2. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching; tutor as KB nodes with linked lessons instead of text blob
+3. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse gestures
+4. **Phase 4c M3 remaining** — variable hover, watch expressions
+5. **LSP packaging review** — multi-language defaults, user-configurable server selection
+6. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+7. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 

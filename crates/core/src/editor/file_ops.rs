@@ -601,14 +601,19 @@ impl Editor {
                 // Track recent files
                 if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
                     self.recent_files.push(canonical.clone());
-                    // Auto-detect project root if not yet set
-                    if self.project.is_none() {
-                        if let Some(root) = crate::project::detect_project_root(&canonical) {
-                            self.recent_projects.push(root.clone());
+                    // Auto-detect project root from the opened file's location
+                    if let Some(root) = crate::project::detect_project_root(&canonical) {
+                        self.recent_projects.push(root.clone());
+                        // Switch project context if it differs from current
+                        let should_switch = self
+                            .project
+                            .as_ref()
+                            .map(|p| p.root != root)
+                            .unwrap_or(true);
+                        if should_switch {
                             self.project = Some(crate::project::Project::from_root(root));
+                            self.refresh_git_branch();
                         }
-                    } else if let Some(ref proj) = self.project {
-                        self.recent_projects.push(proj.root.clone());
                     }
                     // Ingest project as KB node
                     if let Some(ref proj) = self.project {
