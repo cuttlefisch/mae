@@ -218,12 +218,23 @@ fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Optio
             &["fg", "fg1", "fg0", "text", "foreground"]
         }
         NamedColor::DimForeground => &["fg", "fg2", "fg3", "subtext0"],
-        NamedColor::Background => &["bg", "bg0", "base", "background"],
+        NamedColor::Background => &["bg", "bg0", "base", "base03", "background"],
         _ => return None,
     };
     for key in candidates {
         if let Some(c) = theme.palette.get(*key) {
             return Some(crate::theme_convert::to_ratatui_color(*c));
+        }
+    }
+    // For Background and Black, fall back to the theme's ui.background style.
+    // Terminal programs use ANSI "black" as the background color, so it should
+    // match the editor background rather than the terminal's default.
+    if matches!(
+        named,
+        NamedColor::Background | NamedColor::Black | NamedColor::DimBlack
+    ) {
+        if let Some(bg) = theme.style("ui.background").bg {
+            return Some(crate::theme_convert::to_ratatui_color(bg));
         }
     }
     None

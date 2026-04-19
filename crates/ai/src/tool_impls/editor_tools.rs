@@ -58,6 +58,40 @@ pub fn execute_command_list(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
 }
 
+pub fn execute_get_option(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("all");
+    if name == "all" || name.is_empty() {
+        let options: Vec<serde_json::Value> = editor
+            .option_registry
+            .list()
+            .iter()
+            .filter_map(|def| {
+                let (value, _) = editor.get_option(def.name)?;
+                Some(serde_json::json!({
+                    "name": def.name,
+                    "value": value,
+                    "type": def.kind.to_string(),
+                    "default": def.default_value,
+                    "doc": def.doc,
+                }))
+            })
+            .collect();
+        serde_json::to_string_pretty(&options).map_err(|e| e.to_string())
+    } else {
+        let (value, def) = editor
+            .get_option(name)
+            .ok_or_else(|| format!("Unknown option: '{}'", name))?;
+        let info = serde_json::json!({
+            "name": def.name,
+            "value": value,
+            "type": def.kind.to_string(),
+            "default": def.default_value,
+            "doc": def.doc,
+        });
+        serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+    }
+}
+
 pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let option = args
         .get("option")

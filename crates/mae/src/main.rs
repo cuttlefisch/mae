@@ -257,7 +257,7 @@ fn main() -> io::Result<()> {
 
         let all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
-            tools.extend(ai_specific_tools());
+            tools.extend(ai_specific_tools(&editor.option_registry));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);

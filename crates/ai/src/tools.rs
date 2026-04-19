@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mae_core::CommandRegistry;
+use mae_core::{CommandRegistry, OptionRegistry};
 
 use crate::types::*;
 
@@ -31,7 +31,19 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
 
 /// AI-specific tools that provide richer access than simple command dispatch.
 /// These give the AI structured read/write access to buffers, files, and shell.
-pub fn ai_specific_tools() -> Vec<ToolDefinition> {
+pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
+    let option_names: Vec<String> = registry.list().iter().map(|o| o.name.to_string()).collect();
+    let option_desc = {
+        let items: Vec<String> = registry
+            .list()
+            .iter()
+            .map(|o| format!("'{}' ({})", o.name, o.kind))
+            .collect();
+        format!(
+            "Set an editor option by name. Options: {}.",
+            items.join(", ")
+        )
+    };
     vec![
         ToolDefinition {
             name: "buffer_read".into(),
@@ -957,8 +969,25 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
         },
         // --- Editor settings ---
         ToolDefinition {
+            name: "get_option".into(),
+            description: "Get current value of an editor option, or list all options. Returns name, current value, type, default, and documentation. Call with no name (or name='all') to list everything. Use before set_option to read current values.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Option name to query, or 'all' to list everything. Omit for all options.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "set_option".into(),
-            description: "Set an editor option by name. Supported options: 'theme' (string), 'splash_art' (string), 'line_numbers' (true/false), 'relative_line_numbers' (true/false), 'word_wrap' (true/false), 'font_size' (number), 'show_fps' (true/false), 'break_indent' (true/false), 'show_break' (string), 'debug_mode' (true/false).".into(),
+            description: option_desc,
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -967,7 +996,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Option name".into(),
-                            enum_values: Some(vec!["theme".into(), "splash_art".into(), "line_numbers".into(), "relative_line_numbers".into(), "word_wrap".into(), "font_size".into(), "show_fps".into(), "break_indent".into(), "show_break".into(), "debug_mode".into()]),
+                            enum_values: Some(option_names),
                         },
                     ),
                     (
@@ -1282,11 +1311,12 @@ mod tests {
 
     #[test]
     fn ai_specific_tools_count() {
-        let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 55);
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert_eq!(tools.len(), 56);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
+        assert!(names.contains(&"get_option"));
         assert!(names.contains(&"set_option"));
         assert!(names.contains(&"cursor_info"));
         assert!(names.contains(&"shell_exec"));
@@ -1365,6 +1395,29 @@ mod tests {
             classify_command_permission("force-quit"),
             PermissionTier::Privileged
         );
+    }
+
+    #[test]
+    fn set_option_enum_covers_all_options() {
+        let registry = OptionRegistry::new();
+        let tools = ai_specific_tools(&registry);
+        let set_opt = tools.iter().find(|t| t.name == "set_option").unwrap();
+        let enum_values = set_opt.parameters.properties["option"]
+            .enum_values
+            .as_ref()
+            .expect("set_option should have enum_values");
+        assert_eq!(
+            enum_values.len(),
+            registry.list().len(),
+            "set_option enum_values must match OptionRegistry count"
+        );
+        for opt in registry.list() {
+            assert!(
+                enum_values.contains(&opt.name.to_string()),
+                "Missing option '{}' in set_option enum_values",
+                opt.name
+            );
+        }
     }
 
     #[test]

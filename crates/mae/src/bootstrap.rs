@@ -200,7 +200,7 @@ pub fn setup_ai(
 
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
-            t.extend(ai_specific_tools());
+            t.extend(ai_specific_tools(&editor.option_registry));
             t
         };
 

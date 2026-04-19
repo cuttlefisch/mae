@@ -14,11 +14,11 @@ use crate::tool_impls::{
     execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
     execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
     execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
-    execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_links_from,
-    execute_kb_links_to, execute_kb_list, execute_kb_search, execute_list_buffers,
-    execute_lsp_diagnostics, execute_open_file, execute_project_files, execute_project_info,
-    execute_project_search, execute_rename_file, execute_set_option, execute_shell_list,
-    execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
+    execute_file_read, execute_get_option, execute_help_open, execute_kb_get, execute_kb_graph,
+    execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
+    execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
+    execute_project_info, execute_project_search, execute_rename_file, execute_set_option,
+    execute_shell_list, execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
     execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 
@@ -206,6 +206,7 @@ pub fn execute_tool(
         "ai_permissions",
         "self_test_suite",
         "input_lock",
+        "get_option",
         "set_option",
         "ai_save",
         "ai_load",
@@ -276,6 +277,7 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
         "kb_graph" => execute_kb_graph(editor, &call.arguments),
         "help_open" => execute_help_open(editor, &call.arguments),
+        "get_option" => execute_get_option(editor, &call.arguments),
         "set_option" => execute_set_option(editor, &call.arguments),
         "shell_list" => execute_shell_list(editor),
         "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
@@ -819,7 +821,7 @@ mod tests {
 
     fn all_tools() -> Vec<ToolDefinition> {
         let mut tools = tools_from_registry(&mae_core::CommandRegistry::with_builtins());
-        tools.extend(ai_specific_tools());
+        tools.extend(ai_specific_tools(&mae_core::OptionRegistry::new()));
         tools
     }
 
@@ -1288,19 +1290,19 @@ mod tests {
 
     #[test]
     fn ai_save_load_rename_tools_exist() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
             names.contains(&"ai_save"),
-            "ai_save should be in ai_specific_tools()"
+            "ai_save should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
         assert!(
             names.contains(&"ai_load"),
-            "ai_load should be in ai_specific_tools()"
+            "ai_load should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
         assert!(
             names.contains(&"rename_file"),
-            "rename_file should be in ai_specific_tools()"
+            "rename_file should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
     }
 
@@ -1758,10 +1760,10 @@ mod tests {
 
     #[test]
     fn ai_permissions_tool_exists_in_definitions() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         assert!(
             tools.iter().any(|t| t.name == "ai_permissions"),
-            "ai_permissions should be in ai_specific_tools()"
+            "ai_permissions should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
     }
 
@@ -1812,10 +1814,10 @@ mod tests {
 
     #[test]
     fn self_test_suite_exists_in_definitions() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         assert!(
             tools.iter().any(|t| t.name == "self_test_suite"),
-            "self_test_suite should be in ai_specific_tools()"
+            "self_test_suite should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
     }
 

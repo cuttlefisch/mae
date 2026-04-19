@@ -232,12 +232,23 @@ fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Optio
             &["fg", "fg1", "fg0", "text", "foreground"]
         }
         NamedColor::DimForeground => &["fg", "fg2", "fg3", "subtext0"],
-        NamedColor::Background => &["bg", "bg0", "base", "background"],
+        NamedColor::Background => &["bg", "bg0", "base", "base03", "background"],
         _ => return None,
     };
     for key in candidates {
         if let Some(c) = theme.palette.get(*key) {
             return Some(theme::theme_color_to_skia(c));
+        }
+    }
+    // For Background and Black, fall back to the theme's ui.background style.
+    // Terminal programs use ANSI "black" as the background color, so it should
+    // match the editor background rather than xterm's hardcoded #000000.
+    if matches!(
+        named,
+        NamedColor::Background | NamedColor::Black | NamedColor::DimBlack
+    ) {
+        if let Some(bg) = theme.style("ui.background").bg {
+            return Some(theme::theme_color_to_skia(&bg));
         }
     }
     None
@@ -317,5 +328,46 @@ mod tests {
         let c = named_color_to_skia(NamedColor::Red);
         assert!(c.r > 0.7);
         assert!(c.g < 0.01);
+    }
+
+    fn make_test_theme(toml: &str) -> mae_core::Theme {
+        mae_core::Theme::from_toml("test", toml).unwrap()
+    }
+
+    #[test]
+    fn background_resolves_base03_for_solarized() {
+        // Solarized-dark uses "base03" as background — verify it's in our candidates.
+        let theme = make_test_theme(
+            r##"
+            [palette]
+            base03 = "#002b36"
+            [styles]
+            "ui.background" = { bg = "base03" }
+            "##,
+        );
+        let color = resolve_named_from_theme(NamedColor::Background, &theme);
+        assert!(color.is_some());
+        let c = color.unwrap();
+        assert!(c.r < 0.01, "expected near-zero red for solarized base03");
+        assert!(c.g > 0.1 && c.g < 0.2, "expected ~0.17 green for base03");
+    }
+
+    #[test]
+    fn black_falls_back_to_ui_background_style() {
+        // Theme with no "black"/"bg0"/"base"/"crust" palette key, but has
+        // ui.background style — Black should resolve to that bg color.
+        let theme = make_test_theme(
+            r##"
+            [palette]
+            mybg = "#282c34"
+            [styles]
+            "ui.background" = { bg = "mybg" }
+            "##,
+        );
+        let color = resolve_named_from_theme(NamedColor::Black, &theme);
+        assert!(color.is_some(), "Black should fall back to ui.background");
+        let c = color.unwrap();
+        // #282c34 → r=0.157, g=0.173, b=0.204
+        assert!(c.r > 0.1 && c.r < 0.2);
     }
 }

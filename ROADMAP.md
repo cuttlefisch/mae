@@ -58,6 +58,9 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 11 | Session persistence | 3f M3 |
 | 12 | README badges (CI status, Rust version, license, crate count) | future |
 | 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
+| 14 | Sample `init.scm` config: documented API reference, keybinding examples, hook usage, option config | Phase 7 |
+| 15 | Privileged scope escalation: TRAMP-style sudo for editing protected files, timed sudo sessions, AI privilege elevation UX | future |
+| 16 | Security & vulnerability audit: enterprise hardening, dependency audit, shell injection review, AI permission boundary testing, sandboxing | future |
 
 ---
 
@@ -871,6 +874,9 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] `:set` ex-command + `:edit-config` (`SPC f c`)
 - [x] ZZ/ZQ keybindings
 - [x] 30-second health check for zombie shell detection
+- [ ] Font zoom keybindings: `Ctrl+=` increase, `Ctrl+-` decrease, `Ctrl+0` reset (register `increase-font-size` / `decrease-font-size` / `reset-font-size` commands)
+- [ ] Unicode/glyph fallback: load fallback font chain for characters missing from primary monospace font (Nerd Font glyphs, box-drawing, emoji, CJK) — currently renders replacement glyph (U+FFFD)
+- [ ] Shift-Tab passthrough in shell-insert mode: GUI terminal must forward Shift-Tab (CSI Z / ESC [Z) to the child process — blocks Claude Code accept-edits and plan-mode shortcuts
 - [ ] Line numbers and gutter in GUI
 - [ ] Syntax highlighting colors in GUI
 - [ ] Visual mode selection highlighting in GUI
@@ -889,6 +895,9 @@ Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `Even
 - [x] Shared `AtomicBool` flags gate conditional ticks (shell 33ms, MCP 500ms, health 30s)
 - [x] `GuiApp` owns all state (no borrowed `WinitCallback<'a>`)
 - [x] `main()` is plain `fn` — tokio runtime built manually, terminal path uses `rt.block_on()`
+- [x] Shell background theme fix: `NamedColor::Background`/`Black` fall back to `ui.background` style instead of xterm #000000
+- [x] `get_option` AI tool: read current option values (name, value, type, default, doc) — symmetric with `set_option`
+- [x] `set_option` auto-generated from `OptionRegistry` — no more hardcoded enum drift (was missing `clipboard`)
 
 ### M5: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)

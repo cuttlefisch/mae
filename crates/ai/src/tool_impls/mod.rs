@@ -20,8 +20,8 @@ pub use dap::{
     execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_state, execute_set_option,
-    execute_window_layout,
+    execute_command_list, execute_debug_state, execute_editor_state, execute_get_option,
+    execute_set_option, execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
