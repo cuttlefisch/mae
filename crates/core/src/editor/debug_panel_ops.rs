@@ -414,27 +414,25 @@ impl Editor {
                 variables_reference,
                 scope,
                 ..
-            } => {
-                if variables_reference > 0 {
-                    let now_expanded = self.buffers[debug_idx]
-                        .debug_view
-                        .as_mut()
-                        .map(|v| v.toggle_expand(variables_reference))
-                        .unwrap_or(false);
+            } if variables_reference > 0 => {
+                let now_expanded = self.buffers[debug_idx]
+                    .debug_view
+                    .as_mut()
+                    .map(|v| v.toggle_expand(variables_reference))
+                    .unwrap_or(false);
 
-                    if now_expanded {
-                        // Check if children are already cached.
-                        let has_children = self.buffers[debug_idx]
-                            .debug_view
-                            .as_ref()
-                            .map(|v| v.child_variables.contains_key(&variables_reference))
-                            .unwrap_or(false);
-                        if !has_children {
-                            self.dap_request_variables(scope, variables_reference);
-                        }
+                if now_expanded {
+                    // Check if children are already cached.
+                    let has_children = self.buffers[debug_idx]
+                        .debug_view
+                        .as_ref()
+                        .map(|v| v.child_variables.contains_key(&variables_reference))
+                        .unwrap_or(false);
+                    if !has_children {
+                        self.dap_request_variables(scope, variables_reference);
                     }
-                    self.debug_populate_buffer(debug_idx);
                 }
+                self.debug_populate_buffer(debug_idx);
             }
             _ => {}
         }
