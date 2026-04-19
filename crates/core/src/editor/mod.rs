@@ -215,6 +215,18 @@ pub struct Editor {
     /// Queued text to send to shell terminals: (buffer_index, text).
     /// Drained by the binary which owns the `ShellTerminal` instances.
     pub pending_shell_inputs: Vec<(usize, String)>,
+    /// Pending shell scroll amount. Positive = scroll up, negative = scroll down,
+    /// zero = scroll to bottom. Consumed by the binary which owns `ShellTerminal`.
+    pub pending_shell_scroll: Option<i32>,
+    /// Pending shell mouse click: (row, col, button). Set by `handle_mouse_click`
+    /// for shell buffers, drained by the binary which owns `ShellTerminal`.
+    pub pending_shell_click: Option<(usize, usize, crate::input::MouseButton)>,
+    /// Pending shell mouse drag position: (row, col). Set during drag in shell
+    /// buffers, drained by the binary.
+    pub pending_shell_drag: Option<(usize, usize)>,
+    /// Pending shell mouse release position: (row, col). Set on button release
+    /// in shell buffers, drained by the binary to finalize selection.
+    pub pending_shell_release: Option<(usize, usize)>,
     /// Cached viewport snapshots for shell terminals, updated by the binary
     /// each render tick. Keyed by buffer index. Used by AI tools to read
     /// terminal output without direct access to `ShellTerminal`.
@@ -420,6 +432,10 @@ impl Editor {
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),
+            pending_shell_scroll: None,
+            pending_shell_click: None,
+            pending_shell_drag: None,
+            pending_shell_release: None,
             shell_viewports: HashMap::new(),
             shell_cwds: HashMap::new(),
             hooks: HookRegistry::new(),
@@ -531,6 +547,10 @@ impl Editor {
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),
+            pending_shell_scroll: None,
+            pending_shell_click: None,
+            pending_shell_drag: None,
+            pending_shell_release: None,
             shell_viewports: HashMap::new(),
             shell_cwds: HashMap::new(),
             hooks: HookRegistry::new(),
@@ -1032,13 +1052,40 @@ impl Editor {
         true
     }
 
+    /// Save current mode to the active buffer before switching away.
+    pub fn save_mode_to_buffer(&mut self) {
+        let idx = self.active_buffer_idx();
+        self.buffers[idx].saved_mode = Some(self.mode);
+    }
+
     /// Sync `self.mode` to the active buffer's kind after a focus/buffer change.
-    /// Shell buffers → ShellInsert. If leaving a buffer-specific mode (ShellInsert,
-    /// ConversationInput) for a non-matching buffer, reset to Normal.
-    /// Preserves Insert/Visual/etc. for text buffers.
+    /// Restores per-buffer `saved_mode` when available; otherwise falls back to
+    /// a sensible default based on buffer kind.
     pub fn sync_mode_to_buffer(&mut self) {
         let idx = self.active_buffer_idx();
         let kind = self.buffers[idx].kind;
+
+        if let Some(saved) = self.buffers[idx].saved_mode {
+            // Validate saved mode is appropriate for the buffer kind.
+            let valid = match kind {
+                crate::BufferKind::Shell => {
+                    matches!(saved, Mode::ShellInsert | Mode::Normal)
+                }
+                crate::BufferKind::Conversation => {
+                    matches!(
+                        saved,
+                        Mode::ConversationInput | Mode::Normal | Mode::Visual(_)
+                    )
+                }
+                _ => !matches!(saved, Mode::ShellInsert),
+            };
+            if valid {
+                self.mode = saved;
+                return;
+            }
+        }
+
+        // No saved mode or invalid — use default.
         match kind {
             crate::BufferKind::Shell => {
                 self.mode = Mode::ShellInsert;
@@ -1101,19 +1148,40 @@ impl Editor {
         button: crate::input::MouseButton,
     ) {
         use crate::input::MouseButton;
+
+        // Shell buffers: route to pending_shell_click for the binary to drain.
+        // Subtract window border offset (1 row top, 1 col left).
+        let active = self.active_buffer_idx();
+        if self.buffers[active].kind == crate::BufferKind::Shell {
+            let shell_row = row.saturating_sub(1);
+            let shell_col = col.saturating_sub(1);
+            self.pending_shell_click = Some((shell_row, shell_col, button));
+            return;
+        }
+
         match button {
             MouseButton::Left => {
                 // Place cursor at clicked position, adjusting for gutter and scroll.
                 let win = self.window_mgr.focused_window();
-                let gutter_width = if self.show_line_numbers { 5 } else { 0 };
+                let buf = &self.buffers[win.buffer_idx];
+                let line_count = buf.rope().len_lines();
+                let digits = if line_count == 0 {
+                    1
+                } else {
+                    (line_count as f64).log10().floor() as usize + 1
+                };
+                let gutter_width = if self.show_line_numbers {
+                    digits.max(2) + 1
+                } else {
+                    0
+                };
                 if col < gutter_width {
                     return; // Clicked in gutter, ignore
                 }
                 let text_col = col.saturating_sub(gutter_width);
                 // row 0 is the window border in GUI mode; buffer content starts at row 1.
                 let buf_row = win.scroll_offset + row.saturating_sub(1);
-                let buf = &self.buffers[win.buffer_idx];
-                let max_row = buf.rope().len_lines().saturating_sub(1);
+                let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
@@ -1136,12 +1204,30 @@ impl Editor {
     /// On first drag event, the click position becomes the visual anchor.
     /// Subsequent drag events update the cursor, extending the selection.
     pub fn handle_mouse_drag(&mut self, row: usize, col: usize) {
+        // Shell buffers: route to pending_shell_drag for selection update.
+        let active = self.active_buffer_idx();
+        if self.buffers[active].kind == crate::BufferKind::Shell {
+            let shell_row = row.saturating_sub(1);
+            let shell_col = col.saturating_sub(1);
+            self.pending_shell_drag = Some((shell_row, shell_col));
+            return;
+        }
+
         let win = self.window_mgr.focused_window();
-        let gutter_width = if self.show_line_numbers { 5 } else { 0 };
+        let buf = &self.buffers[win.buffer_idx];
+        let line_count = buf.rope().len_lines();
+        let digits = if line_count == 0 {
+            1
+        } else {
+            (line_count as f64).log10().floor() as usize + 1
+        };
+        let gutter_width = if self.show_line_numbers {
+            digits.max(2) + 1
+        } else {
+            0
+        };
         let text_col = col.saturating_sub(gutter_width);
         let buf_row = win.scroll_offset + row.saturating_sub(1);
-        let buf_idx = win.buffer_idx;
-        let buf = &self.buffers[buf_idx];
         let max_row = buf.display_line_count().saturating_sub(1);
         let target_row = buf_row.min(max_row);
         let line_len = buf.line_len(target_row);
@@ -1161,6 +1247,19 @@ impl Editor {
         win.cursor_col = target_col;
     }
 
+    /// Handle mouse button release at the given cell coordinates.
+    ///
+    /// For shell buffers, finalizes text selection and copies to registers.
+    /// For text buffers, this is a no-op (Visual mode persists until Esc).
+    pub fn handle_mouse_release(&mut self, row: usize, col: usize) {
+        let active = self.active_buffer_idx();
+        if self.buffers[active].kind == crate::BufferKind::Shell {
+            let shell_row = row.saturating_sub(1);
+            let shell_col = col.saturating_sub(1);
+            self.pending_shell_release = Some((shell_row, shell_col));
+        }
+    }
+
     /// Handle mouse scroll (positive = up, negative = down).
     ///
     /// Vim-style: scroll moves the viewport and clamps the cursor into the
@@ -1172,28 +1271,60 @@ impl Editor {
         }
         let scroll_speed = 3;
         let buf_idx = self.active_buffer_idx();
-        let buf_line_count = self.buffers[buf_idx].display_line_count();
-        let viewport_height = self.viewport_height;
+        let kind = self.buffers[buf_idx].kind;
 
-        let win = self.window_mgr.focused_window_mut();
-        if delta > 0 {
-            // Scroll up
-            win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
-        } else {
-            // Scroll down
-            let max_scroll = buf_line_count.saturating_sub(viewport_height);
-            win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
-        }
+        match kind {
+            crate::BufferKind::Conversation => {
+                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
+                    if delta > 0 {
+                        conv.scroll_up(lines * scroll_speed);
+                    } else {
+                        conv.scroll_down(lines * scroll_speed);
+                    }
+                }
+            }
+            crate::BufferKind::Shell => {
+                let amount = if delta > 0 {
+                    lines as i32 * scroll_speed as i32
+                } else {
+                    -(lines as i32 * scroll_speed as i32)
+                };
+                self.pending_shell_scroll = Some(amount);
+            }
+            crate::BufferKind::Messages => {
+                let total = self.message_log.len();
+                let vh = self.viewport_height;
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+                } else {
+                    let max = total.saturating_sub(vh);
+                    win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max);
+                }
+            }
+            _ => {
+                let buf_line_count = self.buffers[buf_idx].display_line_count();
+                let viewport_height = self.viewport_height;
 
-        // Clamp cursor into visible viewport.
-        if win.cursor_row < win.scroll_offset {
-            win.cursor_row = win.scroll_offset;
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+                } else {
+                    let max_scroll = buf_line_count.saturating_sub(viewport_height);
+                    win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
+                }
+
+                // Clamp cursor into visible viewport.
+                if win.cursor_row < win.scroll_offset {
+                    win.cursor_row = win.scroll_offset;
+                }
+                let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
+                let max_row = buf_line_count.saturating_sub(1);
+                if win.cursor_row > bottom.min(max_row) {
+                    win.cursor_row = bottom.min(max_row);
+                }
+                win.clamp_cursor(&self.buffers[buf_idx]);
+            }
         }
-        let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
-        let max_row = buf_line_count.saturating_sub(1);
-        if win.cursor_row > bottom.min(max_row) {
-            win.cursor_row = bottom.min(max_row);
-        }
-        win.clamp_cursor(&self.buffers[buf_idx]);
     }
 }

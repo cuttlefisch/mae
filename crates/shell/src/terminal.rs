@@ -48,6 +48,15 @@ impl Dimensions for TermSize {
     }
 }
 
+/// Custom text selection tracker for shell terminals.
+/// alacritty_terminal v0.26.0 doesn't expose a public Selection API,
+/// so we track selection state ourselves and read text from the grid.
+pub struct ShellSelection {
+    start: (usize, usize), // (row, col)
+    end: (usize, usize),
+    active: bool,
+}
+
 /// A running terminal emulator backed by a PTY + alacritty_terminal.
 pub struct ShellTerminal {
     /// The terminal state, shared with the I/O thread via FairMutex.
@@ -78,6 +87,9 @@ pub struct ShellTerminal {
     /// new data from the PTY. Renderers compare this to a cached value to
     /// avoid needless redraws when the shell is idle.
     generation: u64,
+
+    /// Custom text selection state for mouse-based text selection.
+    selection: Option<ShellSelection>,
 }
 
 /// Ensure common user binary directories are in PATH.
@@ -139,6 +151,8 @@ impl ShellTerminal {
         working_dir: Option<std::path::PathBuf>,
         extra_env: std::collections::HashMap<String, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cols = cols.max(2);
+        let rows = rows.max(1);
         let columns = cols as usize;
         let screen_lines = rows as usize;
 
@@ -197,6 +211,7 @@ impl ShellTerminal {
             exited: false,
             child_pid,
             generation: 0,
+            selection: None,
         })
     }
 
@@ -208,6 +223,8 @@ impl ShellTerminal {
         working_dir: Option<std::path::PathBuf>,
         extra_env: std::collections::HashMap<String, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cols = cols.max(2);
+        let rows = rows.max(1);
         let columns = cols as usize;
         let screen_lines = rows as usize;
 
@@ -272,6 +289,7 @@ impl ShellTerminal {
             exited: false,
             child_pid,
             generation: 0,
+            selection: None,
         })
     }
 
@@ -392,6 +410,104 @@ impl ShellTerminal {
     /// Get the current display offset (0 = at bottom/live, >0 = scrolled up).
     pub fn display_offset(&self) -> usize {
         self.term.lock().grid().display_offset()
+    }
+
+    /// Start a new text selection at the given grid position.
+    pub fn start_selection(&mut self, row: usize, col: usize) {
+        self.selection = Some(ShellSelection {
+            start: (row, col),
+            end: (row, col),
+            active: true,
+        });
+    }
+
+    /// Update the selection endpoint (called during mouse drag).
+    pub fn update_selection(&mut self, row: usize, col: usize) {
+        if let Some(ref mut sel) = self.selection {
+            if sel.active {
+                sel.end = (row, col);
+            }
+        }
+    }
+
+    /// Finish the selection and extract the selected text from the grid.
+    pub fn finish_selection(&mut self) -> Option<String> {
+        let sel = self.selection.as_mut()?;
+        sel.active = false;
+
+        let (start, end) = if sel.start <= sel.end {
+            (sel.start, sel.end)
+        } else {
+            (sel.end, sel.start)
+        };
+
+        let term = self.term.lock();
+        let content = term.renderable_content();
+
+        // Collect cells from renderable_content (same approach as read_viewport).
+        let mut text = String::new();
+        let mut last_line: Option<usize> = None;
+        let mut line_buf = String::new();
+
+        for cell in content.display_iter {
+            let row_idx = cell.point.line.0 as usize;
+            let col_idx = cell.point.column.0;
+
+            if row_idx < start.0 || row_idx > end.0 {
+                continue;
+            }
+
+            let col_start = if row_idx == start.0 { start.1 } else { 0 };
+            let col_end = if row_idx == end.0 { end.1 } else { usize::MAX };
+
+            if col_idx < col_start || col_idx > col_end {
+                continue;
+            }
+
+            if last_line.is_some() && last_line != Some(row_idx) {
+                // Flush previous line.
+                text.push_str(line_buf.trim_end());
+                text.push('\n');
+                line_buf.clear();
+            }
+            last_line = Some(row_idx);
+            line_buf.push(cell.c);
+        }
+        // Flush final line.
+        text.push_str(line_buf.trim_end());
+
+        Some(text.trim_end().to_string())
+    }
+
+    /// Clear any active selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Get the current selection range for rendering highlights.
+    /// Returns `((start_row, start_col), (end_row, end_col))` in normalized order.
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        let sel = self.selection.as_ref()?;
+        if sel.start <= sel.end {
+            Some((sel.start, sel.end))
+        } else {
+            Some((sel.end, sel.start))
+        }
+    }
+
+    /// Pre-populate the terminal's color palette from the editor theme.
+    ///
+    /// This makes OSC 10/11 color queries return the correct theme colors,
+    /// and ensures programs that inspect terminal colors see theme-aware
+    /// values. Call after spawn and on theme change.
+    ///
+    /// Indices: 0-15 = ANSI base colors, 256 = foreground, 257 = background.
+    pub fn set_theme_colors(&self, colors: &[(usize, (u8, u8, u8))]) {
+        use alacritty_terminal::vte::ansi::{Handler, Rgb};
+        let mut term = self.term.lock();
+        for &(idx, (r, g, b)) in colors {
+            term.set_color(idx, Rgb { r, g, b });
+        }
     }
 
     /// Read a line of text from the terminal grid (0-indexed from top of viewport).

@@ -102,12 +102,7 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
 
 /// Check if the splash screen is currently visible.
 fn is_splash_visible(editor: &Editor) -> bool {
-    let buf = editor.active_buffer();
-    buf.kind == mae_core::BufferKind::Text
-        && buf.name == "[scratch]"
-        && buf.rope().len_chars() == 0
-        && !buf.modified
-        && editor.buffers.len() == 1
+    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
 pub fn handle_key(

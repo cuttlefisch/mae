@@ -54,6 +54,8 @@ yellow = "#f1fa8c"
 "conversation.tool" = { fg = "orange" }
 "conversation.tool.result" = { fg = "comment" }
 "conversation.input" = { fg = "cyan" }
+"conversation.user.text" = { fg = "fg" }
+"conversation.assistant.text" = { fg = "fg" }
 
 "debug.current_line" = { bg = "yellow", fg = "bg" }
 "debug.breakpoint" = { fg = "red", bold = true }

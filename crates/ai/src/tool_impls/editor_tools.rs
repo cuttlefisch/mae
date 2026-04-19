@@ -1,3 +1,4 @@
+use mae_core::theme::{NamedColor, ThemeColor};
 use mae_core::Editor;
 
 pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
@@ -193,4 +194,161 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }
     }
+}
+
+fn theme_color_to_json(color: &Option<ThemeColor>) -> serde_json::Value {
+    match color {
+        None => serde_json::Value::Null,
+        Some(ThemeColor::Rgb(r, g, b)) => serde_json::json!({
+            "type": "rgb",
+            "r": r,
+            "g": g,
+            "b": b,
+        }),
+        Some(ThemeColor::Named(named)) => {
+            let name = match named {
+                NamedColor::Black => "Black",
+                NamedColor::Red => "Red",
+                NamedColor::Green => "Green",
+                NamedColor::Yellow => "Yellow",
+                NamedColor::Blue => "Blue",
+                NamedColor::Magenta => "Magenta",
+                NamedColor::Cyan => "Cyan",
+                NamedColor::White => "White",
+                NamedColor::DarkGray => "DarkGray",
+                NamedColor::LightRed => "LightRed",
+                NamedColor::LightGreen => "LightGreen",
+                NamedColor::LightYellow => "LightYellow",
+                NamedColor::LightBlue => "LightBlue",
+                NamedColor::LightMagenta => "LightMagenta",
+                NamedColor::LightCyan => "LightCyan",
+                NamedColor::Gray => "Gray",
+            };
+            // Also resolve to concrete RGB so callers get actionable values.
+            let (r, g, b) = mae_core::theme::Theme::resolve_to_rgb(&ThemeColor::Named(*named));
+            serde_json::json!({
+                "type": "named",
+                "name": name,
+                "r": r,
+                "g": g,
+                "b": b,
+            })
+        }
+    }
+}
+
+pub fn execute_theme_inspect(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'key' parameter")?;
+    let style = editor.theme.style(key);
+    let info = serde_json::json!({
+        "fg": theme_color_to_json(&style.fg),
+        "bg": theme_color_to_json(&style.bg),
+        "bold": style.bold,
+        "italic": style.italic,
+        "dim": style.dim,
+        "underline": style.underline,
+    });
+    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+}
+
+pub fn execute_shell_scrollback(
+    editor: &Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let buf_idx = args
+        .get("buffer_index")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or_else(|| editor.active_buffer_idx());
+    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+
+    let viewport = editor
+        .shell_viewports
+        .get(&buf_idx)
+        .ok_or_else(|| format!("No shell viewport data for buffer index {}", buf_idx))?;
+
+    if viewport.is_empty() {
+        return Ok(String::new());
+    }
+
+    let total = viewport.len();
+    let start = total.saturating_sub(offset + lines);
+    let end = total.saturating_sub(offset);
+    let slice = &viewport[start..end];
+    Ok(slice.join("\n"))
+}
+
+pub fn execute_mouse_event(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let event_type = args
+        .get("event_type")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'event_type' parameter")?;
+
+    match event_type {
+        "scroll" => {
+            let delta = args.get("delta").and_then(|v| v.as_i64()).unwrap_or(0) as i16;
+            editor.handle_mouse_scroll(delta);
+            Ok("ok".into())
+        }
+        "click" => {
+            let row = args.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let col = args.get("col").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let button = match args
+                .get("button")
+                .and_then(|v| v.as_str())
+                .unwrap_or("left")
+            {
+                "right" => mae_core::MouseButton::Right,
+                "middle" => mae_core::MouseButton::Middle,
+                _ => mae_core::MouseButton::Left,
+            };
+            editor.handle_mouse_click(row, col, button);
+            Ok("ok".into())
+        }
+        other => Err(format!(
+            "Unknown event_type '{}': expected 'scroll' or 'click'",
+            other
+        )),
+    }
+}
+
+pub fn execute_render_inspect(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let _row = args
+        .get("row")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'row' parameter")? as usize;
+    let _col = args
+        .get("col")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'col' parameter")? as usize;
+
+    // Window rects are computed at render time from a total area we don't store.
+    // For single-window layouts (the common case), the focused window covers
+    // the entire content area. For splits, we report the focused window since
+    // we cannot resolve exact coordinates without the render area.
+    let win = editor.window_mgr.focused_window();
+    let buf = editor.buffers.get(win.buffer_idx);
+    let (buffer_name, buffer_kind) = match buf {
+        Some(b) => (
+            serde_json::Value::String(b.name.clone()),
+            format!("{:?}", b.kind),
+        ),
+        None => (serde_json::Value::Null, "Unknown".into()),
+    };
+
+    let style = editor.theme.style("ui.text");
+    let info = serde_json::json!({
+        "buffer_name": buffer_name,
+        "buffer_kind": buffer_kind,
+        "theme_fg": theme_color_to_json(&style.fg),
+        "theme_bg": theme_color_to_json(&style.bg),
+    });
+    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }

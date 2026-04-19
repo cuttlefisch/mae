@@ -124,25 +124,23 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
     let border_fg = theme::ts_fg(editor, "ui.window.border.active");
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
-    // Clear and draw border.
+    // Clear and draw border with title.
     canvas.draw_rect_fill(popup.row, popup.col, popup.width, popup.height, bg);
-    draw_border(
-        canvas,
-        popup.row,
-        popup.col,
-        popup.width,
-        popup.height,
-        border_fg,
-    );
-
-    // Title.
     let match_count = picker.filtered.len();
     let total = picker.candidates.len();
     let title = format!(
         " Find File [{}] ({}/{}) ",
         picker.root_label, match_count, total
     );
-    canvas.draw_text_at(popup.row, popup.col + 2, &title, border_fg);
+    draw_border_titled(
+        canvas,
+        popup.row,
+        popup.col,
+        popup.width,
+        popup.height,
+        border_fg,
+        &title,
+    );
 
     let inner = popup.inner();
     if inner.height < 2 || inner.width < 4 {
@@ -220,20 +218,19 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(popup.row, popup.col, popup.width, popup.height, bg);
-    draw_border(
+    let cwd_display = browser.cwd.display().to_string();
+    let match_count = browser.filtered.len();
+    let total = browser.entries.len();
+    let title = format!(" {} ({}/{}) ", cwd_display, match_count, total);
+    draw_border_titled(
         canvas,
         popup.row,
         popup.col,
         popup.width,
         popup.height,
         border_fg,
+        &title,
     );
-
-    let cwd_display = browser.cwd.display().to_string();
-    let match_count = browser.filtered.len();
-    let total = browser.entries.len();
-    let title = format!(" {} ({}/{}) ", cwd_display, match_count, total);
-    canvas.draw_text_at(popup.row, popup.col + 2, &title, border_fg);
 
     let inner = popup.inner();
     if inner.height < 2 || inner.width < 4 {
@@ -300,15 +297,6 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(popup.row, popup.col, popup.width, popup.height, bg);
-    draw_border(
-        canvas,
-        popup.row,
-        popup.col,
-        popup.width,
-        popup.height,
-        border_fg,
-    );
-
     let match_count = palette.filtered.len();
     let total = palette.entries.len();
     let title = match palette.purpose {
@@ -321,7 +309,15 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
         PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
     };
-    canvas.draw_text_at(popup.row, popup.col + 2, &title, border_fg);
+    draw_border_titled(
+        canvas,
+        popup.row,
+        popup.col,
+        popup.width,
+        popup.height,
+        border_fg,
+        &title,
+    );
 
     let inner = popup.inner();
     if inner.height < 2 || inner.width < 4 {
@@ -409,16 +405,21 @@ pub fn render_which_key_popup(
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
-    draw_border(canvas, row_start, 0, cols, height, border_fg);
-
-    // Breadcrumb title.
     let breadcrumb: String = editor
         .which_key_prefix
         .iter()
         .map(format_keypress)
         .collect::<Vec<_>>()
         .join(" > ");
-    canvas.draw_text_at(row_start, 2, &format!(" {} ", breadcrumb), border_fg);
+    draw_border_titled(
+        canvas,
+        row_start,
+        0,
+        cols,
+        height,
+        border_fg,
+        &format!(" {} ", breadcrumb),
+    );
 
     let inner_row = row_start + 1;
     let inner_col = 1_usize;
@@ -501,11 +502,32 @@ fn draw_border(
     height: usize,
     color: Color4f,
 ) {
+    draw_border_titled(canvas, row, col, width, height, color, "");
+}
+
+/// Draw a box border with an optional title embedded in the top edge.
+/// Title is rendered as part of the border string to prevent
+/// strikethrough artifacts from dashes overlapping title glyphs in Skia.
+fn draw_border_titled(
+    canvas: &mut SkiaCanvas,
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    color: Color4f,
+    title: &str,
+) {
     if width < 2 || height < 2 {
         return;
     }
-    // Top border.
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
+    let inner_w = width.saturating_sub(2);
+    let title_len = title.chars().count();
+    let top = if !title.is_empty() && title_len < inner_w {
+        let pad = inner_w - title_len;
+        format!("┌{}{}┐", title, "─".repeat(pad))
+    } else {
+        format!("┌{}┐", "─".repeat(inner_w))
+    };
     canvas.draw_text_at(row, col, &top, color);
 
     // Side borders.
@@ -515,7 +537,7 @@ fn draw_border(
     }
 
     // Bottom border.
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
+    let bottom = format!("└{}┘", "─".repeat(inner_w));
     canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 

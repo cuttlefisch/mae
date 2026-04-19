@@ -416,6 +416,7 @@ async fn run_terminal_loop(
     let mut shell_generations: std::collections::HashMap<usize, u64> =
         std::collections::HashMap::new();
     let mut last_health_check = tokio::time::Instant::now();
+    let mut last_theme_name = editor.theme.name.clone();
     let mut tui_dirty = true; // start dirty for initial render
 
     // Frame rate limiting: render at most once per MIN_FRAME_INTERVAL.
@@ -525,6 +526,13 @@ async fn run_terminal_loop(
         );
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
+
+        // Detect theme changes and update shell terminal colors.
+        if editor.theme.name != last_theme_name {
+            last_theme_name = editor.theme.name.clone();
+            shell_lifecycle::update_shell_theme_colors(editor, &shell_terminals);
+        }
+
         shell_generations.retain(|idx, _| shell_terminals.contains_key(idx));
 
         let has_shells = !shell_terminals.is_empty();
@@ -868,15 +876,18 @@ pub(crate) fn shell_dims_for_buffer(
     for win in editor.window_mgr.iter_windows() {
         if win.buffer_idx == buf_idx {
             if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == win.id) {
-                let cols = rect.width.saturating_sub(2); // border
-                let rows = rect.height;
+                let cols = rect.width.saturating_sub(2).max(2); // border
+                let rows = rect.height.saturating_sub(2).max(1); // border
                 return (cols, rows);
             }
         }
     }
 
     // Fallback: full terminal minus chrome.
-    (term_w.saturating_sub(4), term_h.saturating_sub(4))
+    (
+        term_w.saturating_sub(4).max(2),
+        term_h.saturating_sub(4).max(1),
+    )
 }
 
 /// pending keys are translated to PTY byte sequences and forwarded.
@@ -1628,6 +1639,7 @@ fn run_gui(
 
     info!("entering GUI event loop (run_app + EventLoopProxy)");
 
+    let last_theme_name = editor.theme.name.clone();
     let mut app = GuiApp {
         renderer,
         editor,
@@ -1654,6 +1666,10 @@ fn run_gui(
         cursor_y: 0.0,
         scroll_accumulator: 0.0,
         mouse_pressed: false,
+        shell_generations: std::collections::HashMap::new(),
+        last_render: std::time::Instant::now(),
+        bell_sent: false,
+        last_theme_name,
         shell_active,
         mcp_active,
     };
@@ -1778,6 +1794,18 @@ struct GuiApp {
     scroll_accumulator: f64,
     mouse_pressed: bool,
 
+    // Shell generation tracking (dirty-check optimisation — TUI parity)
+    shell_generations: std::collections::HashMap<usize, u64>,
+
+    // Frame cap (60fps)
+    last_render: std::time::Instant,
+
+    // Bell urgency state
+    bell_sent: bool,
+
+    // Theme change tracking for shell color sync.
+    last_theme_name: String,
+
     // Shared atomics (read by bridge_task to gate conditional ticks)
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1806,6 +1834,16 @@ impl GuiApp {
             &mut self.shell_last_dims,
         );
         shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
+
+        // Detect theme changes and update shell terminal colors.
+        if self.editor.theme.name != self.last_theme_name {
+            self.last_theme_name = self.editor.theme.name.clone();
+            shell_lifecycle::update_shell_theme_colors(&self.editor, &self.shell_terminals);
+        }
+
+        // Clean up generation tracking for removed shells.
+        self.shell_generations
+            .retain(|idx, _| self.shell_terminals.contains_key(idx));
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
@@ -1886,7 +1924,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
-                self.dirty = true;
+                for (idx, term) in &self.shell_terminals {
+                    let gen = term.generation();
+                    if self.shell_generations.get(idx) != Some(&gen) {
+                        self.shell_generations.insert(*idx, gen);
+                        self.dirty = true;
+                    }
+                }
             }
             MaeEvent::McpIdleTick => {
                 if let Some(ts) = self.last_mcp_activity {
@@ -1911,10 +1955,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 );
             }
         }
-
-        // After handling any user event, drain intents so LSP/DAP commands
-        // are forwarded immediately.
-        self.drain_intents_and_lifecycle();
     }
 
     fn window_event(
@@ -1988,9 +2028,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         );
                     }
 
-                    // Drain intents after key handling (may have queued LSP/DAP).
-                    self.drain_intents_and_lifecycle();
-
                     // Check for editor shutdown after key handling.
                     if !self.editor.running {
                         self.shutdown();
@@ -2036,13 +2073,29 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 ..
             } => {
                 self.mouse_pressed = false;
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h as f64) as u16;
+                    self.editor.handle_mouse_release(row as usize, col as usize);
+                    self.dirty = true;
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as i16,
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                        debug!(y, "MouseWheel: LineDelta");
+                        y as i16
+                    }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
                         self.scroll_accumulator += pos.y;
                         let whole_lines = (self.scroll_accumulator / 20.0) as i16;
+                        debug!(
+                            pos_y = pos.y,
+                            accum = self.scroll_accumulator,
+                            whole_lines,
+                            "MouseWheel: PixelDelta"
+                        );
                         if whole_lines != 0 {
                             self.scroll_accumulator -= whole_lines as f64 * 20.0;
                         }
@@ -2055,14 +2108,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let frame_start = std::time::Instant::now();
+                self.last_render = std::time::Instant::now();
                 if let Err(e) = self
                     .renderer
                     .render(&mut self.editor, &self.shell_terminals)
                 {
                     warn!(error = %e, "GUI render error");
                 }
-                let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+                let frame_elapsed = self.last_render.elapsed().as_micros() as u64;
                 self.editor.perf_stats.record_frame(frame_elapsed);
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
@@ -2073,7 +2126,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use std::sync::atomic::Ordering::Relaxed;
 
         // Timeout deferred replies.
@@ -2112,9 +2165,33 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             Relaxed,
         );
 
-        // Request redraw if state changed.
+        // Bell → Wayland urgency hint (sway workspace highlight).
+        if self.editor.bell_active() {
+            if !self.bell_sent {
+                if let Some(window) = self.renderer.window() {
+                    window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                }
+                self.bell_sent = true;
+            }
+        } else {
+            self.bell_sent = false;
+        }
+
+        // Frame-capped redraw (60fps = 16.667ms).
         if self.dirty {
-            self.renderer.request_redraw();
+            let elapsed = self.last_render.elapsed();
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            if elapsed >= frame_budget {
+                self.renderer.request_redraw();
+            } else {
+                // Schedule wakeup for remaining budget.
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                    std::time::Instant::now() + (frame_budget - elapsed),
+                ));
+            }
+        } else {
+            // Not dirty — sleep until next event (no busy-loop).
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
     }
 }

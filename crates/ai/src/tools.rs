@@ -1215,6 +1215,137 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Introspection: theme, shell scrollback, mouse, render ---
+        ToolDefinition {
+            name: "theme_inspect".into(),
+            description: "Look up a resolved theme style by semantic key (e.g. 'conversation.user.text', 'ui.statusline'). Returns JSON with fg, bg, bold, italic, dim, underline.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "key".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Theme style key (dot-namespaced, e.g. 'ui.statusline')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["key".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "shell_scrollback".into(),
+            description: "Read text lines from a shell terminal's scrollback/viewport. Returns the cached viewport text for the given buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the shell terminal (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "offset".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Lines from the bottom to start reading (default: 0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "lines".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of lines to return (default: 50)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "mouse_event".into(),
+            description: "Simulate a mouse event (scroll or click) in the editor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "event_type".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Type of mouse event".into(),
+                            enum_values: Some(vec!["scroll".into(), "click".into()]),
+                        },
+                    ),
+                    (
+                        "row".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen row for click events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "col".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen column for click events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "delta".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Scroll delta (positive=up, negative=down) for scroll events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "button".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Mouse button for click events".into(),
+                            enum_values: Some(vec!["left".into(), "right".into(), "middle".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["event_type".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "render_inspect".into(),
+            description: "Inspect what is rendered at a given screen position. Returns the buffer name, buffer kind, and theme colors at that cell.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "row".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen row to inspect".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "col".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen column to inspect".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["row".into(), "col".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
 
@@ -1312,7 +1443,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 56);
+        assert_eq!(tools.len(), 60);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));

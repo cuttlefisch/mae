@@ -625,7 +625,11 @@ fn render_gui_cursor(
 // Shared border helper
 // ---------------------------------------------------------------------------
 
-fn draw_window_border(
+/// Draw a box border with an optional title embedded in the top edge.
+///
+/// The title is rendered as part of the border string so that dashes don't
+/// overlap the title glyphs (which causes a strikethrough effect in Skia).
+pub(crate) fn draw_window_border(
     canvas: &mut canvas::SkiaCanvas,
     row: usize,
     col: usize,
@@ -637,16 +641,20 @@ fn draw_window_border(
     if width < 2 || height < 2 {
         return;
     }
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
+    let inner_w = width.saturating_sub(2);
+    let title_len = title.chars().count();
+    let top = if !title.is_empty() && title_len < inner_w {
+        let pad = inner_w - title_len;
+        format!("┌{}{}┐", title, "─".repeat(pad))
+    } else {
+        format!("┌{}┐", "─".repeat(inner_w))
+    };
     canvas.draw_text_at(row, col, &top, color);
-    if title.chars().count() + 2 < width {
-        canvas.draw_text_at(row, col + 1, title, color);
-    }
     for r in 1..height.saturating_sub(1) {
         canvas.draw_text_at(row + r, col, "│", color);
         canvas.draw_text_at(row + r, col + width - 1, "│", color);
     }
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
+    let bottom = format!("└{}┘", "─".repeat(inner_w));
     canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 

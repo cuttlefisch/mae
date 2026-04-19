@@ -16,6 +16,7 @@
 ;;   (define-command NAME DOC FN)    — register a user command
 ;;   (set-theme NAME)                — switch color theme
 ;;   (set-status MSG)                — display in status bar
+;;   (set-option! KEY VALUE)         — set an editor option at runtime
 ;;
 ;; Live editing:
 ;;   (buffer-insert TEXT)            — insert at cursor
@@ -60,6 +61,11 @@
 (define-command "buffer-info"
   "Show buffer name, line count, and cursor position"
   "buffer-info")
+
+;; ── AI agent configuration ───────────────────────────────────
+;; Set the command for SPC a a (open-ai-agent).
+;; Default: "claude" (Claude Code). Other examples: "aider", "copilot".
+;; (set-option! "ai_editor" "claude")
 
 ;; ── Example: keybinding customization ───────────────────────────
 

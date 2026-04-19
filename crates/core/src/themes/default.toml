@@ -41,6 +41,8 @@
 "conversation.tool" = { fg = "yellow" }
 "conversation.tool.result" = { fg = "dark_gray" }
 "conversation.input" = { fg = "cyan" }
+"conversation.user.text" = { fg = "white" }
+"conversation.assistant.text" = { fg = "white" }
 
 "debug.current_line" = { bg = "yellow", fg = "black" }
 "debug.breakpoint" = { fg = "red", bold = true }

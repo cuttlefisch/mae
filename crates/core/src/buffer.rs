@@ -77,6 +77,10 @@ pub struct Buffer {
     /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
+    /// Per-buffer mode persistence (evil-mode pattern).  When switching away
+    /// from a buffer the editor saves its current mode here; switching back
+    /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
+    pub saved_mode: Option<crate::Mode>,
 }
 
 impl Default for Buffer {
@@ -102,6 +106,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -122,6 +127,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -142,6 +148,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -162,6 +169,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -183,6 +191,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -203,6 +212,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -223,6 +233,7 @@ impl Buffer {
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -249,6 +260,7 @@ impl Buffer {
             file_mtime: mtime,
             project_root,
             agent_shell: false,
+            saved_mode: None,
         })
     }
 

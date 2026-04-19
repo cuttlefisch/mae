@@ -7,7 +7,7 @@ use mae_shell::ShellTerminal;
 use skia_safe::Color4f;
 
 use crate::canvas::SkiaCanvas;
-use crate::text::StyledCell;
+use crate::draw_window_border;
 use crate::theme;
 
 /// Render a shell terminal buffer window.
@@ -87,8 +87,25 @@ fn render_shell_grid(
     let default_fg = theme::ts_fg(editor, "ui.text");
     let default_bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
+    // Collect cells into a grid for bg-coalescing and text rendering.
+    // This reduces ~1920 individual Skia draw_rect_fill calls per frame
+    // to ~24-100 coalesced rectangles (one per bg-color run per row).
+    #[derive(Clone)]
+    struct CellInfo {
+        fg: Color4f,
+        bg: Color4f,
+        ch: char,
+        bold: bool,
+    }
+
+    // Build a sparse grid of visible cells.
+    let mut grid: Vec<Vec<Option<CellInfo>>> = vec![vec![None; area_width]; area_height];
+
+    // Use the already-locked term to get display_offset — calling
+    // shell.display_offset() would deadlock (re-entrant FairMutex lock).
+    let display_offset = term.grid().display_offset() as i32;
     for indexed in content.display_iter {
-        let line_idx = indexed.point.line.0;
+        let line_idx = indexed.point.line.0 + display_offset;
         let col_idx = indexed.point.column.0;
 
         if line_idx < 0 || line_idx as usize >= area_height || col_idx >= area_width {
@@ -96,12 +113,6 @@ fn render_shell_grid(
         }
 
         let flags = indexed.cell.flags;
-
-        if flags.contains(CellFlags::WIDE_CHAR_SPACER)
-            || flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER)
-        {
-            continue;
-        }
 
         let mut fg_color =
             convert_color(indexed.cell.fg, content.colors, default_fg, &editor.theme);
@@ -112,40 +123,108 @@ fn render_shell_grid(
             std::mem::swap(&mut fg_color, &mut bg_color);
         }
 
-        let bold = flags.contains(CellFlags::BOLD);
-        let italic = flags.contains(CellFlags::ITALIC);
-        let underline = flags.intersects(CellFlags::ALL_UNDERLINES);
+        // Wide-char spacers: record bg for coalescing but render as space.
+        if flags.contains(CellFlags::WIDE_CHAR_SPACER)
+            || flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER)
+        {
+            grid[line_idx as usize][col_idx] = Some(CellInfo {
+                fg: fg_color,
+                bg: bg_color,
+                ch: ' ',
+                bold: false,
+            });
+            continue;
+        }
+
         let hidden = flags.contains(CellFlags::HIDDEN);
 
-        let cell = StyledCell {
-            ch: if hidden { ' ' } else { indexed.cell.c },
+        grid[line_idx as usize][col_idx] = Some(CellInfo {
             fg: fg_color,
-            bg: Some(bg_color),
-            bold,
-            italic,
-            underline,
-        };
+            bg: bg_color,
+            ch: if hidden { ' ' } else { indexed.cell.c },
+            bold: flags.contains(CellFlags::BOLD),
+        });
+    }
 
-        let row = area_row + line_idx as usize;
-        let col = area_col + col_idx;
-
-        // Draw bg.
-        if let Some(bg) = cell.bg {
-            canvas.draw_rect_fill(row, col, 1, 1, bg);
-        }
-        // Draw char.
-        if cell.ch != ' ' {
-            if cell.bold {
-                canvas.draw_text_bold(row, col, &cell.ch.to_string(), cell.fg);
+    // Overlay selection highlight if active.
+    if let Some(((sel_start_row, sel_start_col), (sel_end_row, sel_end_col))) =
+        shell.selection_range()
+    {
+        let sel_bg =
+            theme::ts_bg(editor, "ui.selection").unwrap_or(Color4f::new(0.2, 0.3, 0.6, 1.0));
+        for row_idx in sel_start_row..=sel_end_row.min(area_height.saturating_sub(1)) {
+            let col_start = if row_idx == sel_start_row {
+                sel_start_col
             } else {
-                canvas.draw_text_at(row, col, &cell.ch.to_string(), cell.fg);
+                0
+            };
+            let col_end = if row_idx == sel_end_row {
+                sel_end_col
+            } else {
+                area_width.saturating_sub(1)
+            };
+            for col_idx in col_start..=col_end.min(area_width.saturating_sub(1)) {
+                if let Some(ref mut cell_info) = grid
+                    .get_mut(row_idx)
+                    .and_then(|row| row.get_mut(col_idx))
+                    .and_then(|c| c.as_mut())
+                {
+                    cell_info.bg = sel_bg;
+                }
+            }
+        }
+    }
+
+    // Render: coalesce adjacent cells with same bg into wide rectangles.
+    for (line_idx, row_cells) in grid.iter().enumerate() {
+        let row = area_row + line_idx;
+        let mut run_start = 0usize;
+        let mut run_bg: Option<Color4f> = None;
+        let mut run_len = 0usize;
+
+        for (col_idx, cell_opt) in row_cells.iter().enumerate() {
+            let bg = cell_opt.as_ref().map(|c| c.bg).unwrap_or(default_bg);
+
+            if run_bg.map_or(false, |rb| color4f_eq(rb, bg)) {
+                run_len += 1;
+            } else {
+                // Flush previous run.
+                if run_len > 0 {
+                    if let Some(rb) = run_bg {
+                        canvas.draw_rect_fill(row, area_col + run_start, run_len, 1, rb);
+                    }
+                }
+                run_start = col_idx;
+                run_bg = Some(bg);
+                run_len = 1;
+            }
+        }
+        // Flush final run.
+        if run_len > 0 {
+            if let Some(rb) = run_bg {
+                canvas.draw_rect_fill(row, area_col + run_start, run_len, 1, rb);
+            }
+        }
+
+        // Draw text (non-space characters).
+        for (col_idx, cell_opt) in row_cells.iter().enumerate() {
+            if let Some(cell) = cell_opt {
+                if cell.ch != ' ' {
+                    let col = area_col + col_idx;
+                    if cell.bold {
+                        canvas.draw_text_bold(row, col, &cell.ch.to_string(), cell.fg);
+                    } else {
+                        canvas.draw_text_at(row, col, &cell.ch.to_string(), cell.fg);
+                    }
+                }
             }
         }
     }
 
     // Cursor.
-    if focused && cursor_point.line.0 >= 0 {
-        let crow = area_row + cursor_point.line.0 as usize;
+    let cursor_line = cursor_point.line.0 + display_offset;
+    if focused && cursor_line >= 0 {
+        let crow = area_row + cursor_line as usize;
         let ccol = area_col + cursor_point.column.0;
         if crow < area_row + area_height && ccol < area_col + area_width {
             let cursor_style = editor.theme.style("ui.cursor");
@@ -164,7 +243,7 @@ fn render_shell_grid(
 fn convert_color(
     color: AColor,
     colors: &Colors,
-    default: Color4f,
+    _default: Color4f,
     theme: &mae_core::Theme,
 ) -> Color4f {
     match color {
@@ -182,8 +261,29 @@ fn convert_color(
                     rgb.b as f32 / 255.0,
                     1.0,
                 )
+            } else if idx < 16 {
+                // ANSI base colors (0-15) → resolve through theme, same as Named.
+                let named = index_to_named(idx);
+                if let Some(color) = resolve_named_from_theme(named, theme) {
+                    color
+                } else {
+                    named_color_to_skia(named)
+                }
+            } else if idx < 232 {
+                // xterm 6×6×6 color cube (indices 16-231).
+                let ci = idx - 16;
+                let r = if ci / 36 > 0 { (ci / 36) * 40 + 55 } else { 0 };
+                let g = if (ci % 36) / 6 > 0 {
+                    ((ci % 36) / 6) * 40 + 55
+                } else {
+                    0
+                };
+                let b = if ci % 6 > 0 { (ci % 6) * 40 + 55 } else { 0 };
+                Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
             } else {
-                default
+                // Grayscale ramp (indices 232-255).
+                let v = (idx - 232) * 10 + 8;
+                Color4f::new(v as f32 / 255.0, v as f32 / 255.0, v as f32 / 255.0, 1.0)
             }
         }
         AColor::Named(named) => {
@@ -280,29 +380,32 @@ fn named_color_to_skia(named: NamedColor) -> Color4f {
     Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
 }
 
-fn draw_window_border(
-    canvas: &mut SkiaCanvas,
-    row: usize,
-    col: usize,
-    width: usize,
-    height: usize,
-    color: Color4f,
-    title: &str,
-) {
-    if width < 2 || height < 2 {
-        return;
+/// Map xterm indexed color 0-15 to a NamedColor for theme resolution.
+fn index_to_named(idx: u8) -> NamedColor {
+    match idx {
+        0 => NamedColor::Black,
+        1 => NamedColor::Red,
+        2 => NamedColor::Green,
+        3 => NamedColor::Yellow,
+        4 => NamedColor::Blue,
+        5 => NamedColor::Magenta,
+        6 => NamedColor::Cyan,
+        7 => NamedColor::White,
+        8 => NamedColor::BrightBlack,
+        9 => NamedColor::BrightRed,
+        10 => NamedColor::BrightGreen,
+        11 => NamedColor::BrightYellow,
+        12 => NamedColor::BrightBlue,
+        13 => NamedColor::BrightMagenta,
+        14 => NamedColor::BrightCyan,
+        15 => NamedColor::BrightWhite,
+        _ => NamedColor::Foreground,
     }
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row, col, &top, color);
-    if title.len() + 2 < width {
-        canvas.draw_text_at(row, col + 1, title, color);
-    }
-    for r in 1..height.saturating_sub(1) {
-        canvas.draw_text_at(row + r, col, "│", color);
-        canvas.draw_text_at(row + r, col + width - 1, "│", color);
-    }
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row + height - 1, col, &bottom, color);
+}
+
+/// Fast equality check for Color4f (skia_safe doesn't derive PartialEq).
+fn color4f_eq(a: Color4f, b: Color4f) -> bool {
+    a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
 }
 
 #[cfg(test)]

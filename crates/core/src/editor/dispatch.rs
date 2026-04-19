@@ -315,34 +315,77 @@ impl Editor {
             }
 
             // Scroll commands
-            "scroll-half-up" => {
+            "scroll-half-up" | "scroll-page-up" => {
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
                 let vh = self.viewport_height;
-                for _ in 0..n {
-                    self.window_mgr.focused_window_mut().scroll_half_up(vh);
+                let is_half = name == "scroll-half-up";
+                let amount = if is_half { vh / 2 } else { vh };
+                match kind {
+                    crate::BufferKind::Conversation => {
+                        if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            for _ in 0..n {
+                                conv.scroll_up(amount);
+                            }
+                        }
+                    }
+                    crate::BufferKind::Messages => {
+                        let win = self.window_mgr.focused_window_mut();
+                        for _ in 0..n {
+                            win.scroll_offset = win.scroll_offset.saturating_sub(amount);
+                        }
+                    }
+                    _ => {
+                        if is_half {
+                            for _ in 0..n {
+                                self.window_mgr.focused_window_mut().scroll_half_up(vh);
+                            }
+                        } else {
+                            for _ in 0..n {
+                                self.window_mgr.focused_window_mut().scroll_page_up(vh);
+                            }
+                        }
+                    }
                 }
             }
-            "scroll-half-down" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
+            "scroll-half-down" | "scroll-page-down" => {
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
                 let vh = self.viewport_height;
-                for _ in 0..n {
-                    self.window_mgr
-                        .focused_window_mut()
-                        .scroll_half_down(buf, vh);
-                }
-            }
-            "scroll-page-up" => {
-                let vh = self.viewport_height;
-                for _ in 0..n {
-                    self.window_mgr.focused_window_mut().scroll_page_up(vh);
-                }
-            }
-            "scroll-page-down" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
-                let vh = self.viewport_height;
-                for _ in 0..n {
-                    self.window_mgr
-                        .focused_window_mut()
-                        .scroll_page_down(buf, vh);
+                let is_half = name == "scroll-half-down";
+                let amount = if is_half { vh / 2 } else { vh };
+                match kind {
+                    crate::BufferKind::Conversation => {
+                        if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            for _ in 0..n {
+                                conv.scroll_down(amount);
+                            }
+                        }
+                    }
+                    crate::BufferKind::Messages => {
+                        let total = self.message_log.len();
+                        let win = self.window_mgr.focused_window_mut();
+                        let max = total.saturating_sub(vh);
+                        for _ in 0..n {
+                            win.scroll_offset = (win.scroll_offset + amount).min(max);
+                        }
+                    }
+                    _ => {
+                        let buf = &self.buffers[idx];
+                        if is_half {
+                            for _ in 0..n {
+                                self.window_mgr
+                                    .focused_window_mut()
+                                    .scroll_half_down(buf, vh);
+                            }
+                        } else {
+                            for _ in 0..n {
+                                self.window_mgr
+                                    .focused_window_mut()
+                                    .scroll_page_down(buf, vh);
+                            }
+                        }
+                    }
                 }
             }
             "scroll-center" => {
@@ -718,21 +761,25 @@ impl Editor {
                 }
             }
             "focus-left" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Left, area);
                 self.sync_mode_to_buffer();
             }
             "focus-right" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Right, area);
                 self.sync_mode_to_buffer();
             }
             "focus-up" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Up, area);
                 self.sync_mode_to_buffer();
             }
             "focus-down" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Down, area);
                 self.sync_mode_to_buffer();
@@ -855,6 +902,15 @@ impl Editor {
                     self.set_status("Not a terminal buffer");
                 }
             }
+            "shell-scroll-page-up" => {
+                self.pending_shell_scroll = Some(self.viewport_height as i32);
+            }
+            "shell-scroll-page-down" => {
+                self.pending_shell_scroll = Some(-(self.viewport_height as i32));
+            }
+            "shell-scroll-to-bottom" => {
+                self.pending_shell_scroll = Some(0); // sentinel: 0 means scroll_to_bottom
+            }
             "send-to-shell" => {
                 self.send_line_to_shell();
             }
@@ -870,6 +926,7 @@ impl Editor {
                 if self.buffers.len() <= 1 {
                     return true;
                 }
+                self.save_mode_to_buffer();
                 let prev_idx = self.active_buffer_idx();
                 let win = self.window_mgr.focused_window_mut();
                 win.buffer_idx = (win.buffer_idx + 1) % self.buffers.len();
@@ -878,11 +935,13 @@ impl Editor {
                 self.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[win.buffer_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
+                self.sync_mode_to_buffer();
             }
             "prev-buffer" => {
                 if self.buffers.len() <= 1 {
                     return true;
                 }
+                self.save_mode_to_buffer();
                 let prev_idx = self.active_buffer_idx();
                 let count = self.buffers.len();
                 let win = self.window_mgr.focused_window_mut();
@@ -892,6 +951,7 @@ impl Editor {
                 self.alternate_buffer_idx = Some(prev_idx);
                 let name = self.buffers[win.buffer_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
+                self.sync_mode_to_buffer();
             }
             "new-buffer" => {
                 let prev_idx = self.active_buffer_idx();
@@ -1481,6 +1541,7 @@ impl Editor {
             "alternate-file" => {
                 if let Some(alt_idx) = self.alternate_buffer_idx {
                     if alt_idx < self.buffers.len() {
+                        self.save_mode_to_buffer();
                         let current = self.active_buffer_idx();
                         self.alternate_buffer_idx = Some(current);
                         let win = self.window_mgr.focused_window_mut();

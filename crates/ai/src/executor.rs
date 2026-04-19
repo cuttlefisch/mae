@@ -16,10 +16,11 @@ use crate::tool_impls::{
     execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
     execute_file_read, execute_get_option, execute_help_open, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
-    execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
-    execute_project_info, execute_project_search, execute_rename_file, execute_set_option,
-    execute_shell_list, execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
-    execute_switch_project, execute_syntax_tree, execute_window_layout,
+    execute_list_buffers, execute_lsp_diagnostics, execute_mouse_event, execute_open_file,
+    execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
+    execute_render_inspect, execute_set_option, execute_shell_list, execute_shell_read_output,
+    execute_shell_scrollback, execute_shell_send_input, execute_switch_buffer,
+    execute_switch_project, execute_syntax_tree, execute_theme_inspect, execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -213,6 +214,10 @@ pub fn execute_tool(
         "rename_file",
         "perf_stats",
         "perf_benchmark",
+        "theme_inspect",
+        "shell_scrollback",
+        "mouse_event",
+        "render_inspect",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -288,6 +293,10 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "rename_file" => execute_rename_file(editor, &call.arguments),
         "perf_stats" => execute_perf_stats(editor),
         "perf_benchmark" => execute_perf_benchmark(editor, &call.arguments),
+        "theme_inspect" => execute_theme_inspect(editor, &call.arguments),
+        "shell_scrollback" => execute_shell_scrollback(editor, &call.arguments),
+        "mouse_event" => execute_mouse_event(editor, &call.arguments),
+        "render_inspect" => execute_render_inspect(editor, &call.arguments),
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }

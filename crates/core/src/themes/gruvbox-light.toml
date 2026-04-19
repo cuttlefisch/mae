@@ -52,6 +52,15 @@ gray = "#928374"
 "diagnostic.debug" = { fg = "gray" }
 "diagnostic.target" = { fg = "aqua" }
 
+"conversation.user" = { fg = "aqua", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "orange" }
+"conversation.tool.result" = { fg = "fg4" }
+"conversation.input" = { fg = "aqua" }
+"conversation.user.text" = { fg = "fg1" }
+"conversation.assistant.text" = { fg = "fg1" }
+
 "keyword" = { fg = "red" }
 "string" = { fg = "green" }
 "number" = { fg = "purple" }
