@@ -319,6 +319,46 @@ pub fn execute_mouse_event(
     }
 }
 
+pub fn execute_event_recording(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("status");
+
+    match action {
+        "start" => {
+            editor.event_recorder.start_recording();
+            Ok("Recording started".into())
+        }
+        "stop" => {
+            editor.event_recorder.stop_recording();
+            Ok(format!(
+                "Recording stopped ({} events)",
+                editor.event_recorder.event_count()
+            ))
+        }
+        "status" => {
+            let status = serde_json::json!({
+                "recording": editor.event_recorder.is_recording(),
+                "event_count": editor.event_recorder.event_count(),
+                "duration_us": editor.event_recorder.duration_us(),
+            });
+            serde_json::to_string_pretty(&status).map_err(|e| e.to_string())
+        }
+        "dump" => {
+            let last_n = args.get("last_n").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            Ok(editor.event_recorder.dump_json(last_n))
+        }
+        other => Err(format!(
+            "Unknown action: '{}'. Use: start, stop, status, dump",
+            other
+        )),
+    }
+}
+
 pub fn execute_render_inspect(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let _row = args
         .get("row")

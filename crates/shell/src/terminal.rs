@@ -15,7 +15,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use alacritty_terminal::tty;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 use crate::event::{ShellEvent, ShellEventListener};
 
@@ -352,7 +352,13 @@ impl ShellTerminal {
 
     /// Access the terminal state for rendering (locks the mutex).
     pub fn term(&self) -> impl std::ops::Deref<Target = Term<ShellEventListener>> + '_ {
-        self.term.lock()
+        let lock_start = std::time::Instant::now();
+        let guard = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired"
+        );
+        guard
     }
 
     /// Whether the child process has exited.
@@ -409,7 +415,13 @@ impl ShellTerminal {
 
     /// Get the current display offset (0 = at bottom/live, >0 = scrolled up).
     pub fn display_offset(&self) -> usize {
-        self.term.lock().grid().display_offset()
+        let lock_start = std::time::Instant::now();
+        let term = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired (display_offset)"
+        );
+        term.grid().display_offset()
     }
 
     /// Start a new text selection at the given grid position.
@@ -526,7 +538,12 @@ impl ShellTerminal {
 
     /// Read recent terminal output as a string (last N lines of the viewport).
     pub fn read_viewport(&self, max_lines: usize) -> Vec<String> {
+        let lock_start = std::time::Instant::now();
         let term = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired (read_viewport)"
+        );
         let content = term.renderable_content();
         let mut lines: Vec<String> = Vec::new();
         let mut current_line = String::new();

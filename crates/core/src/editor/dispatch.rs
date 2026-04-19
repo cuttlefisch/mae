@@ -1970,6 +1970,19 @@ impl Editor {
                 ));
             }
 
+            // Event recording for debugging
+            "record-start" => {
+                self.event_recorder.start_recording();
+                self.set_status("Recording started");
+            }
+            "record-stop" => {
+                self.event_recorder.stop_recording();
+                self.set_status(format!(
+                    "Recording stopped ({} events)",
+                    self.event_recorder.event_count()
+                ));
+            }
+
             // Font zoom (GUI)
             "increase-font-size" => {
                 let new_size = (self.gui_font_size + 1.0).min(72.0);

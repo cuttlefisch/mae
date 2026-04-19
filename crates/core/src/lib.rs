@@ -7,6 +7,7 @@ pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
 pub mod editor;
+pub mod event_record;
 pub mod file_browser;
 pub mod file_picker;
 pub mod grapheme;
@@ -15,6 +16,7 @@ pub mod hooks;
 pub mod input;
 pub mod kb_seed;
 pub mod keymap;
+pub mod lock_stats;
 pub mod lsp_intent;
 pub mod messages;
 pub mod options;
@@ -31,7 +33,7 @@ pub use buffer::{Buffer, BufferKind};
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
-pub use dap_intent::{DapIntent, DapSpawnConfig, StepKind};
+pub use dap_intent::{BreakpointSpec, DapIntent, DapSpawnConfig, StepKind};
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };

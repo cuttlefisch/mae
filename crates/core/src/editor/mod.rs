@@ -368,6 +368,14 @@ pub struct Editor {
     pub ai_editor: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
+    /// Shared heartbeat counter — incremented each event loop tick by the
+    /// binary. The watchdog thread monitors this to detect main-thread stalls.
+    pub heartbeat: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Consecutive stall count from the watchdog (0 = healthy). Read-only
+    /// for introspection / debug overlay.
+    pub watchdog_stall_count: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Input event recorder for reproducible debugging.
+    pub event_recorder: crate::event_record::EventRecorder,
 }
 
 impl Default for Editor {
@@ -489,6 +497,9 @@ impl Editor {
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
+            heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            event_recorder: crate::event_record::EventRecorder::new(),
         }
     }
 
@@ -616,6 +627,9 @@ impl Editor {
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
+            heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            event_recorder: crate::event_record::EventRecorder::new(),
         }
     }
 

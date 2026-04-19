@@ -5,6 +5,7 @@ use mae_core::{Editor, Window};
 use mae_shell::grid_types::{CellFlags, Color as AColor, Colors, NamedColor};
 use mae_shell::ShellTerminal;
 use skia_safe::Color4f;
+use tracing::trace;
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -80,6 +81,11 @@ fn render_shell_grid(
     area_width: usize,
     area_height: usize,
 ) {
+    trace!(
+        width = area_width,
+        height = area_height,
+        "render_shell_grid enter"
+    );
     let term = shell.term();
     let content = term.renderable_content();
     let cursor_point = content.cursor.point;
@@ -232,6 +238,7 @@ fn render_shell_grid(
             canvas.draw_rect_fill(crow, ccol, 1, 1, cursor_color);
         }
     }
+    trace!("render_shell_grid exit");
 }
 
 /// Convert an alacritty_terminal Color to a Skia Color4f.

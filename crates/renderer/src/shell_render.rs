@@ -6,6 +6,7 @@ use mae_shell::grid_types::{CellFlags, Color as AColor, Colors, NamedColor};
 use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
+use tracing::trace;
 
 use crate::theme_convert::ts;
 
@@ -57,6 +58,11 @@ fn render_shell_grid(
     shell: &ShellTerminal,
     focused: bool,
 ) {
+    trace!(
+        width = area.width,
+        height = area.height,
+        "render_shell_grid enter"
+    );
     let term = shell.term();
     let content = term.renderable_content();
 
@@ -167,6 +173,7 @@ fn render_shell_grid(
             frame.set_cursor_position((cursor_col, cursor_row));
         }
     }
+    trace!("render_shell_grid exit");
 }
 
 /// Convert an alacritty_terminal Color to a ratatui Color.

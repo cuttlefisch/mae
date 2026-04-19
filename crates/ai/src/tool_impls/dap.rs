@@ -37,6 +37,21 @@ pub fn execute_dap_start(editor: &mut Editor, args: &Value) -> Result<String, St
         .get("adapter")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'adapter' argument (one of: lldb, debugpy, codelldb)")?;
+
+    let mode = args
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("launch");
+
+    if mode == "attach" {
+        let pid = args
+            .get("pid")
+            .and_then(|v| v.as_u64())
+            .ok_or("Missing 'pid' argument for attach mode")?;
+        editor.dap_attach_with_adapter(adapter, pid as u32)?;
+        return Ok(format!("Attaching {} to pid {}", adapter, pid));
+    }
+
     let program = args
         .get("program")
         .and_then(|v| v.as_str())
@@ -76,14 +91,37 @@ pub fn execute_dap_set_breakpoint(editor: &mut Editor, args: &Value) -> Result<S
     if line < 1 {
         return Err("'line' must be >= 1".into());
     }
+    let condition = args
+        .get("condition")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let hit_condition = args
+        .get("hit_condition")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
-    let lines = editor.dap_set_breakpoint(source.to_string(), line);
-    Ok(json!({
+    let lines = if condition.is_some() || hit_condition.is_some() {
+        editor.dap_set_breakpoint_conditional(
+            source.to_string(),
+            line,
+            condition.clone(),
+            hit_condition.clone(),
+        )
+    } else {
+        editor.dap_set_breakpoint(source.to_string(), line)
+    };
+    let mut result = json!({
         "source": source,
         "line": line,
         "all_lines_for_source": lines,
-    })
-    .to_string())
+    });
+    if let Some(c) = &condition {
+        result["condition"] = json!(c);
+    }
+    if let Some(hc) = &hit_condition {
+        result["hit_condition"] = json!(hc);
+    }
+    Ok(result.to_string())
 }
 
 /// Resume execution on the active thread.
@@ -363,6 +401,51 @@ pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, Strin
     .to_string())
 }
 
+/// Evaluate an expression in the debuggee's context.
+///
+/// Args:
+/// - `expression` (string, required): expression to evaluate.
+/// - `frame_id` (integer, optional): stack frame for evaluation context.
+/// - `context` (string, optional): `"watch"`, `"repl"`, or `"hover"`.
+///
+/// This is a deferred tool — the result arrives asynchronously via
+/// `DapTaskEvent::EvaluateResult`. The AI should call `debug_state`
+/// or `dap_output` after a moment to see the result.
+pub fn execute_dap_evaluate(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    if editor.debug_state.is_none() {
+        return Err("No active debug session".into());
+    }
+    let expression = args
+        .get("expression")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'expression' argument")?;
+    if expression.is_empty() {
+        return Err("'expression' must not be empty".into());
+    }
+    let frame_id = args.get("frame_id").and_then(|v| v.as_i64());
+    let context = args.get("context").and_then(|v| v.as_str());
+
+    editor.dap_evaluate(expression, frame_id, context);
+    Ok(format!("Evaluating: {}", expression))
+}
+
+/// Disconnect from the debug adapter.
+///
+/// Args:
+/// - `terminate_debuggee` (boolean, optional): if true, also terminate
+///   the debugged process. Default: false (detach only).
+pub fn execute_dap_disconnect(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    if editor.debug_state.is_none() {
+        return Err("No active debug session".into());
+    }
+    let terminate = args
+        .get("terminate_debuggee")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    editor.dap_disconnect(terminate);
+    Ok(format!("Disconnecting (terminate_debuggee={})", terminate))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,5 +682,115 @@ mod tests {
         let ed = ed_with_dap_session();
         let err = execute_dap_inspect_variable(&ed, &json!({})).unwrap_err();
         assert!(err.contains("name"));
+    }
+
+    // ---- Tier 4: evaluate, disconnect, attach, conditional breakpoints ----
+
+    #[test]
+    fn dap_evaluate_requires_expression() {
+        let mut ed = ed_with_dap_session();
+        let err = execute_dap_evaluate(&mut ed, &json!({})).unwrap_err();
+        assert!(err.contains("expression"));
+    }
+
+    #[test]
+    fn dap_evaluate_rejects_empty_expression() {
+        let mut ed = ed_with_dap_session();
+        let err = execute_dap_evaluate(&mut ed, &json!({"expression": ""})).unwrap_err();
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn dap_evaluate_without_session_errors() {
+        let mut ed = Editor::new();
+        let err = execute_dap_evaluate(&mut ed, &json!({"expression": "x"})).unwrap_err();
+        assert!(err.contains("No active"));
+    }
+
+    #[test]
+    fn dap_evaluate_queues_intent() {
+        let mut ed = ed_with_dap_session();
+        let out = execute_dap_evaluate(
+            &mut ed,
+            &json!({"expression": "1+2", "frame_id": 100, "context": "repl"}),
+        )
+        .unwrap();
+        assert!(out.contains("Evaluating"));
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+    }
+
+    #[test]
+    fn dap_disconnect_without_session_errors() {
+        let mut ed = Editor::new();
+        let err = execute_dap_disconnect(&mut ed, &json!({})).unwrap_err();
+        assert!(err.contains("No active"));
+    }
+
+    #[test]
+    fn dap_disconnect_clears_session() {
+        let mut ed = ed_with_dap_session();
+        let out = execute_dap_disconnect(&mut ed, &json!({"terminate_debuggee": true})).unwrap();
+        assert!(out.contains("Disconnecting"));
+        assert!(ed.debug_state.is_none());
+    }
+
+    #[test]
+    fn dap_disconnect_defaults_no_terminate() {
+        let mut ed = ed_with_dap_session();
+        let out = execute_dap_disconnect(&mut ed, &json!({})).unwrap();
+        assert!(out.contains("terminate_debuggee=false"));
+    }
+
+    #[test]
+    fn dap_start_attach_mode() {
+        let mut ed = Editor::new();
+        let out = execute_dap_start(
+            &mut ed,
+            &json!({"adapter": "lldb", "mode": "attach", "pid": 12345}),
+        )
+        .unwrap();
+        assert!(out.contains("Attaching"));
+        assert!(out.contains("12345"));
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert!(matches!(
+            ed.pending_dap_intents[0],
+            mae_core::DapIntent::StartSession { attach: true, .. }
+        ));
+    }
+
+    #[test]
+    fn dap_start_attach_requires_pid() {
+        let mut ed = Editor::new();
+        let err =
+            execute_dap_start(&mut ed, &json!({"adapter": "lldb", "mode": "attach"})).unwrap_err();
+        assert!(err.contains("pid"));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_with_condition() {
+        let mut ed = Editor::new();
+        let out = execute_dap_set_breakpoint(
+            &mut ed,
+            &json!({"source": "/a.rs", "line": 10, "condition": "x > 5"}),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["condition"], "x > 5");
+        // Verify it's stored in state.
+        let state = ed.debug_state.as_ref().unwrap();
+        let bp = &state.breakpoints["/a.rs"][0];
+        assert_eq!(bp.condition.as_deref(), Some("x > 5"));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_with_hit_condition() {
+        let mut ed = Editor::new();
+        let out = execute_dap_set_breakpoint(
+            &mut ed,
+            &json!({"source": "/a.rs", "line": 10, "hit_condition": ">= 5"}),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hit_condition"], ">= 5");
     }
 }

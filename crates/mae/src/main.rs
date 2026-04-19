@@ -6,6 +6,7 @@ mod config;
 mod gui_event;
 mod key_handling;
 mod shell_lifecycle;
+mod watchdog;
 
 use std::io;
 use std::panic;
@@ -26,7 +27,7 @@ use mae_lsp::{
 };
 use mae_renderer::{Renderer, TerminalRenderer};
 use mae_scheme::SchemeRuntime;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use bootstrap::{
     find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_dap, setup_lsp,
@@ -176,6 +177,11 @@ fn main() -> io::Result<()> {
         ed
     };
     editor.message_log = message_log;
+
+    // Spawn the watchdog thread and wire heartbeat into the editor.
+    let watchdog_state = watchdog::spawn_watchdog();
+    editor.heartbeat = watchdog_state.heartbeat.clone();
+    editor.watchdog_stall_count = watchdog_state.stall_count.clone();
 
     // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
     if editor.project.is_none() {
@@ -427,6 +433,12 @@ async fn run_terminal_loop(
     let mut render_pending = false;
 
     loop {
+        // Heartbeat for watchdog — tick each loop iteration so the watchdog
+        // thread knows the main thread is alive.
+        editor
+            .heartbeat
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
                 editor,
@@ -512,6 +524,7 @@ async fn run_terminal_loop(
             break;
         }
 
+        trace!("drain_intents_and_lifecycle enter");
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
 
@@ -526,6 +539,7 @@ async fn run_terminal_loop(
         );
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
+        trace!("drain_intents_and_lifecycle exit");
 
         // Detect theme changes and update shell terminal colors.
         if editor.theme.name != last_theme_name {
@@ -1419,6 +1433,7 @@ fn dap_command_name(cmd: &DapCommand) -> &'static str {
         DapCommand::RefreshThreadsAndStack { .. } => "refresh-threads-and-stack",
         DapCommand::RequestScopes { .. } => "request-scopes",
         DapCommand::RequestVariables { .. } => "request-variables",
+        DapCommand::Evaluate { .. } => "evaluate",
         DapCommand::Terminate => "terminate",
         DapCommand::Disconnect { .. } => "disconnect",
         DapCommand::Shutdown => "shutdown",
@@ -1442,16 +1457,28 @@ fn intent_to_dap_command(intent: DapIntent) -> DapCommand {
             launch_args,
             attach,
         },
-        DapIntent::SetBreakpoints { source_path, lines } => DapCommand::SetBreakpoints {
+        DapIntent::SetBreakpoints {
             source_path,
-            breakpoints: lines
+            breakpoints,
+        } => DapCommand::SetBreakpoints {
+            source_path,
+            breakpoints: breakpoints
                 .into_iter()
-                .map(|line| SourceBreakpoint {
-                    line,
-                    condition: None,
-                    hit_condition: None,
+                .map(|bp| SourceBreakpoint {
+                    line: bp.line,
+                    condition: bp.condition,
+                    hit_condition: bp.hit_condition,
                 })
                 .collect(),
+        },
+        DapIntent::Evaluate {
+            expression,
+            frame_id,
+            context,
+        } => DapCommand::Evaluate {
+            expression,
+            frame_id,
+            context,
         },
         DapIntent::Continue { thread_id } => DapCommand::Continue { thread_id },
         DapIntent::Next { thread_id } => DapCommand::Next { thread_id },
@@ -1565,6 +1592,22 @@ fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
                 .filter_map(|b| b.line.map(|line| (b.id.unwrap_or(0), b.verified, line)))
                 .collect();
             editor.apply_dap_breakpoints_set(source_path, entries);
+        }
+        DapTaskEvent::EvaluateResult {
+            expression,
+            result,
+            type_field,
+            variables_reference: _,
+        } => {
+            if let Some(ref mut ds) = editor.debug_state {
+                ds.log(format!(
+                    "eval: {} = {} ({})",
+                    expression,
+                    result,
+                    type_field.as_deref().unwrap_or("?")
+                ));
+            }
+            editor.set_status(format!("= {}", result));
         }
     }
 }

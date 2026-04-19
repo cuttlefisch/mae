@@ -10,11 +10,12 @@ use crate::tool_impls::lsp::{
 use crate::tool_impls::{
     execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
     execute_close_buffer, execute_command_list, execute_create_file, execute_cursor_info,
-    execute_dap_continue, execute_dap_expand_variable, execute_dap_inspect_variable,
-    execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
-    execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
-    execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
-    execute_file_read, execute_get_option, execute_help_open, execute_kb_get, execute_kb_graph,
+    execute_dap_continue, execute_dap_disconnect, execute_dap_evaluate,
+    execute_dap_expand_variable, execute_dap_inspect_variable, execute_dap_list_variables,
+    execute_dap_output, execute_dap_remove_breakpoint, execute_dap_select_frame,
+    execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
+    execute_debug_state, execute_editor_state, execute_event_recording, execute_file_read,
+    execute_get_option, execute_help_open, execute_introspect, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_mouse_event, execute_open_file,
     execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
@@ -194,6 +195,8 @@ pub fn execute_tool(
         "dap_select_frame",
         "dap_select_thread",
         "dap_output",
+        "dap_evaluate",
+        "dap_disconnect",
         "kb_get",
         "kb_search",
         "kb_list",
@@ -218,6 +221,7 @@ pub fn execute_tool(
         "shell_scrollback",
         "mouse_event",
         "render_inspect",
+        "introspect",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -275,6 +279,8 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "dap_select_frame" => execute_dap_select_frame(editor, &call.arguments),
         "dap_select_thread" => execute_dap_select_thread(editor, &call.arguments),
         "dap_output" => execute_dap_output(editor, &call.arguments),
+        "dap_evaluate" => execute_dap_evaluate(editor, &call.arguments),
+        "dap_disconnect" => execute_dap_disconnect(editor, &call.arguments),
         "kb_get" => execute_kb_get(editor, &call.arguments),
         "kb_search" => execute_kb_search(editor, &call.arguments),
         "kb_list" => execute_kb_list(editor, &call.arguments),
@@ -297,6 +303,8 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "shell_scrollback" => execute_shell_scrollback(editor, &call.arguments),
         "mouse_event" => execute_mouse_event(editor, &call.arguments),
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
+        "introspect" => execute_introspect(editor, &call.arguments),
+        "event_recording" => execute_event_recording(editor, &call.arguments),
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }

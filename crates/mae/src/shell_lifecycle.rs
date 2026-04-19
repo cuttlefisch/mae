@@ -87,7 +87,7 @@ pub fn spawn_pending_shells(
         match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
             Ok(shell) => {
                 shell.set_theme_colors(&color_entries);
-                debug!(
+                info!(
                     buf_idx,
                     cols = inner_cols,
                     rows = inner_rows,
@@ -113,7 +113,7 @@ pub fn spawn_pending_shells(
         ) {
             Ok(shell) => {
                 shell.set_theme_colors(&color_entries);
-                debug!(buf_idx, %command, "agent terminal spawned");
+                info!(buf_idx, %command, "agent terminal spawned");
                 shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
                 shell_terminals.insert(buf_idx, shell);
             }
@@ -203,6 +203,9 @@ pub fn manage_shell_lifecycle(
     }
 
     // Handle exited shells.
+    for buf_idx in &exited_shells {
+        debug!(buf_idx, "shell exited — cleaning up buffer");
+    }
     for buf_idx in exited_shells {
         if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
             editor.mode = Mode::Normal;

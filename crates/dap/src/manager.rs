@@ -61,6 +61,12 @@ pub enum DapCommand {
         scope_name: String,
         variables_reference: i64,
     },
+    /// Evaluate an expression in the debuggee.
+    Evaluate {
+        expression: String,
+        frame_id: Option<i64>,
+        context: Option<String>,
+    },
     /// Soft terminate the debuggee.
     Terminate,
     /// Hard disconnect (terminates the adapter process).
@@ -118,6 +124,13 @@ pub enum DapTaskEvent {
     BreakpointsSet {
         source_path: String,
         breakpoints: Vec<crate::protocol::DapBreakpoint>,
+    },
+    /// Result of an Evaluate request.
+    EvaluateResult {
+        expression: String,
+        result: String,
+        type_field: Option<String>,
+        variables_reference: i64,
     },
 }
 
@@ -386,6 +399,39 @@ async fn handle_command(
                         .send(DapTaskEvent::VariablesResult {
                             scope_name,
                             variables,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
+                }
+            }
+        }
+        DapCommand::Evaluate {
+            expression,
+            frame_id,
+            context,
+        } => {
+            let Some(sess) = session.as_ref() else {
+                let _ = event_tx
+                    .send(DapTaskEvent::Error {
+                        message: "no DAP session active".into(),
+                    })
+                    .await;
+                return;
+            };
+            match sess
+                .client
+                .evaluate(&expression, frame_id, context.as_deref())
+                .await
+            {
+                Ok(body) => {
+                    let _ = event_tx
+                        .send(DapTaskEvent::EvaluateResult {
+                            expression,
+                            result: body.result,
+                            type_field: body.type_field,
+                            variables_reference: body.variables_reference,
                         })
                         .await;
                 }

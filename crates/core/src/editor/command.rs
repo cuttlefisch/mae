@@ -449,6 +449,42 @@ impl Editor {
                 }
                 true
             }
+            "debug-attach" => {
+                let arg_str = args.unwrap_or("");
+                let mut parts = arg_str.split_whitespace();
+                let adapter = parts.next();
+                let pid_str = parts.next();
+                match (adapter, pid_str) {
+                    (Some(adapter), Some(pid_str)) => match pid_str.parse::<u32>() {
+                        Ok(pid) => {
+                            if let Err(msg) = self.dap_attach_with_adapter(adapter, pid) {
+                                self.set_status(msg);
+                            }
+                        }
+                        Err(_) => {
+                            self.set_status("Usage: :debug-attach <adapter> <pid>");
+                        }
+                    },
+                    _ => {
+                        self.set_status(
+                            "Usage: :debug-attach <adapter> <pid>  — adapters: lldb, debugpy, codelldb",
+                        );
+                    }
+                }
+                true
+            }
+            "debug-eval" => {
+                let expression = args.unwrap_or("").trim();
+                if expression.is_empty() {
+                    self.set_status("Usage: :debug-eval <expression>");
+                } else if self.debug_state.is_none() {
+                    self.set_status("No active debug session");
+                } else {
+                    self.dap_evaluate(expression, None, Some("repl"));
+                    self.set_status(format!("Evaluating: {}", expression));
+                }
+                true
+            }
             "session-save" => {
                 let root = self
                     .active_project_root()
@@ -497,6 +533,24 @@ impl Editor {
             }
             "tutor" => {
                 self.dispatch_builtin("tutor");
+                true
+            }
+            "record-start" => {
+                self.dispatch_builtin("record-start");
+                true
+            }
+            "record-stop" => {
+                self.dispatch_builtin("record-stop");
+                true
+            }
+            "record-save" => {
+                self.dispatch_path_op(
+                    args,
+                    "record-save",
+                    |ed, p| ed.event_recorder.save(p),
+                    "Saved",
+                    "to",
+                );
                 true
             }
             _ => {
