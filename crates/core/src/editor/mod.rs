@@ -902,6 +902,22 @@ impl Editor {
         }
     }
 
+    /// Insert a dashboard buffer at position 0 and focus it.
+    /// Call this at application startup (before opening files) to get a
+    /// Doom-style splash screen. The existing scratch buffer shifts to index 1.
+    pub fn install_dashboard(&mut self) {
+        self.buffers.insert(0, Buffer::new_dashboard());
+        // Fix up window buffer indices — they all shift right by 1.
+        for win in self.window_mgr.iter_windows_mut() {
+            win.buffer_idx += 1;
+        }
+        if let Some(alt) = self.alternate_buffer_idx.as_mut() {
+            *alt += 1;
+        }
+        // Focus the dashboard.
+        self.window_mgr.focused_window_mut().buffer_idx = 0;
+    }
+
     /// Convenience: index of the active (focused window's) buffer.
     pub fn active_buffer_idx(&self) -> usize {
         self.window_mgr.focused_window().buffer_idx
@@ -1036,7 +1052,12 @@ impl Editor {
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
-        self.status_msg = msg.into();
+        let s = msg.into();
+        if !s.is_empty() {
+            self.message_log
+                .push(crate::messages::MessageLevel::Info, "status", &s);
+        }
+        self.status_msg = s;
     }
 
     /// Trigger a visual bell — the renderer will briefly flash the status

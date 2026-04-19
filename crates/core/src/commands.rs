@@ -325,6 +325,10 @@ impl CommandRegistry {
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
 
+        // Dashboard / scratch
+        reg.register_builtin("dashboard", "Show the startup dashboard");
+        reg.register_builtin("toggle-scratch-buffer", "Toggle the scratch buffer (SPC x)");
+
         // Leader key placeholder commands
         reg.register_builtin("command-palette", "Search and run any command");
         reg.register_builtin("kill-buffer", "Close current buffer");

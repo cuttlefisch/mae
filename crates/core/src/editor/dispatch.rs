@@ -743,6 +743,57 @@ impl Editor {
                 self.open_messages_buffer();
             }
 
+            // Dashboard / scratch
+            "dashboard" => {
+                // Find existing dashboard buffer or create one.
+                if let Some(idx) = self
+                    .buffers
+                    .iter()
+                    .position(|b| b.kind == crate::BufferKind::Dashboard)
+                {
+                    let prev = self.active_buffer_idx();
+                    self.alternate_buffer_idx = Some(prev);
+                    self.window_mgr.focused_window_mut().buffer_idx = idx;
+                } else {
+                    let prev = self.active_buffer_idx();
+                    self.buffers.push(Buffer::new_dashboard());
+                    let idx = self.buffers.len() - 1;
+                    self.alternate_buffer_idx = Some(prev);
+                    self.window_mgr.focused_window_mut().buffer_idx = idx;
+                }
+                self.mode = Mode::Normal;
+            }
+            "toggle-scratch-buffer" => {
+                let current = self.active_buffer_idx();
+                let is_scratch = self.buffers[current].kind == crate::BufferKind::Text
+                    && self.buffers[current].name == "[scratch]";
+                if is_scratch {
+                    // Switch to alternate buffer.
+                    let alt = self.alternate_buffer_idx.unwrap_or(0);
+                    if alt < self.buffers.len() && alt != current {
+                        self.alternate_buffer_idx = Some(current);
+                        self.window_mgr.focused_window_mut().buffer_idx = alt;
+                        self.sync_mode_to_buffer();
+                    }
+                } else {
+                    // Find or create scratch buffer.
+                    if let Some(idx) = self
+                        .buffers
+                        .iter()
+                        .position(|b| b.kind == crate::BufferKind::Text && b.name == "[scratch]")
+                    {
+                        self.alternate_buffer_idx = Some(current);
+                        self.window_mgr.focused_window_mut().buffer_idx = idx;
+                    } else {
+                        self.buffers.push(Buffer::new());
+                        let idx = self.buffers.len() - 1;
+                        self.alternate_buffer_idx = Some(current);
+                        self.window_mgr.focused_window_mut().buffer_idx = idx;
+                    }
+                    self.mode = Mode::Normal;
+                }
+            }
+
             // Help / KB
             "help" => self.open_help_at("index"),
             "help-follow-link" => self.help_follow_link(),

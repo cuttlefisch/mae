@@ -90,6 +90,27 @@ fn open_file_command() {
 }
 
 #[test]
+fn set_status_echoes_to_message_log() {
+    let mut editor = Editor::new();
+    editor.set_status("hello from test");
+    let entries = editor.message_log.entries();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.message.contains("hello from test")),
+        "message_log should contain status message"
+    );
+}
+
+#[test]
+fn set_status_empty_does_not_log() {
+    let mut editor = Editor::new();
+    let before = editor.message_log.entries().len();
+    editor.set_status("");
+    assert_eq!(editor.message_log.entries().len(), before);
+}
+
+#[test]
 fn unknown_command_sets_status() {
     let mut editor = Editor::new();
     let result = editor.execute_command("bogus");
@@ -742,6 +763,51 @@ fn next_buffer_single_is_noop() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("next-buffer");
     assert_eq!(editor.active_buffer_idx(), 0);
+}
+
+#[test]
+fn install_dashboard_inserts_at_front() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    assert_eq!(editor.buffers.len(), 2);
+    assert_eq!(editor.buffers[0].kind, crate::BufferKind::Dashboard);
+    assert_eq!(editor.buffers[0].name, "[dashboard]");
+    assert_eq!(editor.buffers[1].name, "[scratch]");
+    assert_eq!(editor.active_buffer_idx(), 0);
+}
+
+#[test]
+fn dashboard_command_finds_existing() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // Switch away from dashboard.
+    editor.window_mgr.focused_window_mut().buffer_idx = 1;
+    assert_eq!(editor.active_buffer().name, "[scratch]");
+    // :dashboard should return to it.
+    editor.execute_command("dashboard");
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Dashboard);
+}
+
+#[test]
+fn dashboard_command_creates_if_missing() {
+    let mut editor = Editor::new();
+    // No dashboard installed.
+    assert_eq!(editor.buffers.len(), 1);
+    editor.execute_command("dashboard");
+    assert_eq!(editor.buffers.len(), 2);
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Dashboard);
+}
+
+#[test]
+fn toggle_scratch_buffer_switches() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // From dashboard, toggle should go to scratch.
+    editor.execute_command("toggle-scratch-buffer");
+    assert_eq!(editor.active_buffer().name, "[scratch]");
+    // From scratch, toggle should go back.
+    editor.execute_command("toggle-scratch-buffer");
+    assert_ne!(editor.active_buffer().name, "[scratch]");
 }
 
 #[test]

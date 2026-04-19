@@ -171,7 +171,9 @@ fn main() -> io::Result<()> {
             }
         }
     } else {
-        Editor::new()
+        let mut ed = Editor::new();
+        ed.install_dashboard();
+        ed
     };
     editor.message_log = message_log;
 
@@ -566,9 +568,9 @@ async fn run_terminal_loop(
                 render_pending = false;
             }
             maybe_event = event_stream.next() => {
-                tui_dirty = true;
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                        tui_dirty = true;
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
@@ -592,8 +594,11 @@ async fn run_terminal_loop(
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx);
                         }
                     }
-                    Some(Ok(Event::Resize(_w, _h))) => {}
+                    Some(Ok(Event::Resize(_w, _h))) => {
+                        tui_dirty = true;
+                    }
                     Some(Err(e)) => {
+                        tui_dirty = true;
                         editor.set_status(format!("Input error: {}", e));
                     }
                     None => break,

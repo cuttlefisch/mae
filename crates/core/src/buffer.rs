@@ -27,6 +27,9 @@ pub enum BufferKind {
     /// DAP debug panel — read-only dashboard showing threads, stack frames,
     /// scopes, and variables from `DebugState`.
     Debug,
+    /// Startup dashboard — read-only buffer that shows the splash screen.
+    /// Unlike `Text` scratch, this buffer always renders the splash overlay.
+    Dashboard,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -91,6 +94,26 @@ impl Buffer {
             name: String::from("[scratch]"),
             kind: BufferKind::Text,
             read_only: false,
+            conversation: None,
+            help_view: None,
+            debug_view: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+        }
+    }
+
+    /// Create a dashboard buffer (startup splash screen).
+    pub fn new_dashboard() -> Self {
+        Buffer {
+            rope: Rope::new(),
+            file_path: None,
+            modified: false,
+            name: String::from("[dashboard]"),
+            kind: BufferKind::Dashboard,
+            read_only: true,
             conversation: None,
             help_view: None,
             debug_view: None,

@@ -80,6 +80,42 @@ pub struct ShellTerminal {
     generation: u64,
 }
 
+/// Ensure common user binary directories are in PATH.
+///
+/// When MAE is launched from a desktop file (GNOME, sway, etc.), the parent
+/// process has a minimal PATH that omits `~/.local/bin`, `~/.cargo/bin`, etc.
+/// Terminal emulators (Alacritty, kitty, wezterm) all solve this by sourcing
+/// the user's shell profile. We take a simpler approach: prepend the standard
+/// directories if they exist and aren't already in PATH.
+fn augment_path(env: &mut std::collections::HashMap<String, String>) {
+    let home = match env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+    {
+        Some(h) => h,
+        None => return,
+    };
+    let extra_dirs = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.cargo/bin"),
+        format!("{home}/bin"),
+        format!("{home}/.npm-global/bin"),
+    ];
+    let current_path = env.get("PATH").cloned().unwrap_or_default();
+    let path_entries: std::collections::HashSet<&str> = current_path.split(':').collect();
+    let mut prepend = Vec::new();
+    for dir in &extra_dirs {
+        if !path_entries.contains(dir.as_str()) && std::path::Path::new(dir).is_dir() {
+            prepend.push(dir.as_str());
+        }
+    }
+    if !prepend.is_empty() {
+        let new_path = format!("{}:{}", prepend.join(":"), current_path);
+        env.insert("PATH".to_string(), new_path);
+    }
+}
+
 impl ShellTerminal {
     /// Spawn a new terminal running the user's shell.
     ///
@@ -125,9 +161,10 @@ impl ShellTerminal {
             )
         };
 
-        let mut env = std::collections::HashMap::new();
+        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
         env.extend(extra_env);
+        augment_path(&mut env);
         let pty_opts = tty::Options {
             shell: Some(tty::Shell::new(program, args)),
             working_directory: working_dir,
@@ -187,9 +224,10 @@ impl ShellTerminal {
         let term = Arc::new(FairMutex::new(term));
 
         // PTY options.
-        let mut env = std::collections::HashMap::new();
+        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
         env.extend(extra_env);
+        augment_path(&mut env);
         let pty_opts = tty::Options {
             working_directory: working_dir,
             env,
