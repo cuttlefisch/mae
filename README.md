@@ -40,7 +40,7 @@ mode", no simulated keystrokes, no shadow API:
    Human (keys)      Scheme (eval)      AI / MCP (tool call)
         │                  │                     │
         ▼                  ▼                     ▼
-   ┌──────────┐    ┌─────────────┐    ┌────────────────────┐
+   ┌───────────┐    ┌─────────────┐    ┌────────────────────┐
    │ Keymap    │    │ (run-cmd)   │    │  Tool wrappers     │
    │ Lookup    │    │ (define-    │    │  → same functions  │
    │           │    │  command)   │    │  as keybindings    │
