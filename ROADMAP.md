@@ -849,7 +849,7 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Desktop launcher + icon | ✅ Done | M3 |
 | Font size config | ✅ Done | M3 |
 | FPS overlay | ✅ Done | M3 |
-| Event loop refactor (run_app) | ❌ Not yet | M4 |
+| Event loop refactor (run_app) | ✅ Done | M4 |
 | Variable-height lines | ❌ Not yet | M5 |
 | Mixed fonts (headings, prose) | ❌ Not yet | M5 |
 | Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
@@ -875,17 +875,20 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [ ] Syntax highlighting colors in GUI
 - [ ] Visual mode selection highlighting in GUI
 
-### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy`
+### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
 
-Replace the `pump_app_events` polling loop with winit's `run_app` + typed `EventLoopProxy<MaeEvent>`, eliminating the 16ms polling latency and conforming to Wayland's event-driven model. This is the architecture used by Alacritty and other production GPU editors.
+Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `EventLoopProxy<MaeEvent>`, eliminating the 16ms polling latency and conforming to Wayland's event-driven model. This is the architecture used by Alacritty and other production GPU editors.
 
-- [ ] Define `MaeEvent` enum (DataReady, ShellOutput, AiResponse, LspResponse, DapEvent, McpMessage, Tick)
-- [ ] Switch from `pump_app_events` to `event_loop.run_app(handler)`
-- [ ] Spawn tokio runtime on background thread, pass `EventLoopProxy` to async tasks
-- [ ] Implement `ApplicationHandler::user_event()` to process `MaeEvent` variants
-- [ ] `about_to_wait()` → `request_redraw()` pattern (carried forward from M3 bandaid)
-- [ ] Remove 16ms poll timeout — event loop sleeps until OS event or proxy wakeup
-- [ ] Zero-latency async→render pipeline: async task completes → `proxy.send_event()` → winit wakes → render
+- [x] Define `MaeEvent` enum (AiEvent, LspEvent, DapEvent, McpToolRequest, ShellTick, McpIdleTick, HealthCheck)
+- [x] Switch from `pump_app_events` to `event_loop.run_app(&mut GuiApp)`
+- [x] Tokio runtime on background thread with `bridge_task` reading all async channels
+- [x] `ApplicationHandler<MaeEvent>::user_event()` dispatches all async events
+- [x] `about_to_wait()` → deferred reply timeout + font hot-reload + shell lifecycle + `request_redraw()`
+- [x] Removed 16ms poll timeout — event loop sleeps until OS event or proxy wakeup
+- [x] Zero-latency async→render pipeline: async task → `proxy.send_event()` → winit wakes → render
+- [x] Shared `AtomicBool` flags gate conditional ticks (shell 33ms, MCP 500ms, health 30s)
+- [x] `GuiApp` owns all state (no borrowed `WinitCallback<'a>`)
+- [x] `main()` is plain `fn` — tokio runtime built manually, terminal path uses `rt.block_on()`
 
 ### M5: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)

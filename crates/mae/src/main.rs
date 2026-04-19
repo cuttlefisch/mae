@@ -2,6 +2,8 @@ mod agents;
 mod ai_event_handler;
 mod bootstrap;
 mod config;
+#[cfg(feature = "gui")]
+mod gui_event;
 mod key_handling;
 mod shell_lifecycle;
 
@@ -31,16 +33,16 @@ use bootstrap::{
 };
 use key_handling::handle_key;
 
-/// Async event loop for the MAE editor.
+/// Entry point for the MAE editor.
 ///
-/// Uses tokio::select! to multiplex keyboard input and AI agent events.
-/// The AI agent runs on a spawned tokio task, communicating via channels.
+/// Plain `fn main()` — the tokio runtime is constructed manually so that
+/// the GUI path can use winit's `EventLoop::run_app()` on the main thread
+/// (required by Wayland/macOS compositors) with tokio on a background thread.
 ///
 /// Emacs lesson: Emacs's event loop is synchronous and single-threaded.
 /// Retrofitting concurrency required 23,901 commits across 3 GC branches.
 /// We use async from day one so the AI agent can operate as a peer.
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
     // Create the in-editor message log first, then wire it into both
     // the tracing subscriber (for structured JSON logs to stderr + in-editor capture)
     // and the Editor (for the :messages command).
@@ -207,47 +209,90 @@ async fn main() -> io::Result<()> {
     // Load init.scm if it exists
     load_init_file(&mut scheme, &mut editor);
 
-    // Initialize AI agent (if configured)
-    let (mut ai_event_rx, ai_command_tx) = setup_ai(&editor);
-    info!(
-        ai_configured = ai_command_tx.is_some(),
-        "AI agent setup complete"
-    );
-
-    // Initialize LSP coordinator task.
-    let (mut lsp_event_rx, lsp_command_tx) = setup_lsp();
-    info!("LSP task spawned");
-
-    // Initialize DAP coordinator task.
-    let (mut dap_event_rx, dap_command_tx) = setup_dap();
-    info!("DAP task spawned");
-
-    // Build tool list for AI executor (used when handling tool call requests)
-    let all_tools = {
-        let mut tools = tools_from_registry(&editor.commands);
-        tools.extend(ai_specific_tools());
-        tools
-    };
-    let permission_policy = config::resolve_permission_policy(&app_config);
-
-    // MCP bridge: Unix socket for external agents (Claude Code, etc.)
-    // Clean stale sockets from crashed MAE sessions before binding our own.
-    cleanup_stale_mcp_sockets();
-    let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
-    let (mcp_tool_tx, mut mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
-    {
-        let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
-            .iter()
-            .map(|t| mae_mcp::protocol::ToolInfo {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
-            })
-            .collect();
-        let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
-        tokio::spawn(server.run(mcp_tools));
-        info!(socket = %mcp_socket_path, "MCP server started");
+    // --debug: enable debug mode (RSS/CPU/frame time in status bar)
+    if args.iter().any(|a| a == "--debug") {
+        editor.debug_mode = true;
+        editor.show_fps = true;
+        if std::env::var("MAE_LOG").is_err() && std::env::var("RUST_LOG").is_err() {
+            std::env::set_var("MAE_LOG", "debug");
+        }
+        info!("debug mode enabled via --debug flag");
     }
+
+    let use_gui = args.iter().any(|a| a == "--gui");
+
+    // Build the tokio runtime manually. The GUI path needs the event loop
+    // on the main thread (winit requirement) with tokio on a background
+    // thread. The terminal path runs tokio on the main thread as before.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    // Bootstrap async tasks (AI/LSP/DAP/MCP) inside the runtime context.
+    // `setup_ai`/`setup_lsp`/`setup_dap` call `tokio::spawn` internally.
+    let (
+        mut ai_event_rx,
+        ai_command_tx,
+        mut lsp_event_rx,
+        lsp_command_tx,
+        mut dap_event_rx,
+        dap_command_tx,
+        mut mcp_tool_rx,
+        mcp_socket_path,
+        all_tools,
+        permission_policy,
+    ) = rt.block_on(async {
+        let (ai_event_rx, ai_command_tx) = setup_ai(&editor);
+        info!(
+            ai_configured = ai_command_tx.is_some(),
+            "AI agent setup complete"
+        );
+
+        let (lsp_event_rx, lsp_command_tx) = setup_lsp();
+        info!("LSP task spawned");
+
+        let (dap_event_rx, dap_command_tx) = setup_dap();
+        info!("DAP task spawned");
+
+        let all_tools = {
+            let mut tools = tools_from_registry(&editor.commands);
+            tools.extend(ai_specific_tools());
+            tools
+        };
+        let permission_policy = config::resolve_permission_policy(&app_config);
+
+        // MCP bridge: Unix socket for external agents (Claude Code, etc.)
+        cleanup_stale_mcp_sockets();
+        let mcp_socket_path = format!("/tmp/mae-{}.sock", std::process::id());
+        let (mcp_tool_tx, mcp_tool_rx) = tokio::sync::mpsc::channel::<mae_mcp::McpToolRequest>(16);
+        {
+            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+                .iter()
+                .map(|t| mae_mcp::protocol::ToolInfo {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+                })
+                .collect();
+            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx);
+            tokio::spawn(server.run(mcp_tools));
+            info!(socket = %mcp_socket_path, "MCP server started");
+        }
+
+        (
+            ai_event_rx,
+            ai_command_tx,
+            lsp_event_rx,
+            lsp_command_tx,
+            dap_event_rx,
+            dap_command_tx,
+            mcp_tool_rx,
+            mcp_socket_path,
+            all_tools,
+            permission_policy,
+        )
+    });
 
     // --self-test [categories] — headless AI self-test.
     if args.iter().any(|a| a == "--self-test") {
@@ -264,7 +309,7 @@ async fn main() -> io::Result<()> {
             std::process::exit(1);
         }
 
-        let exit_code = run_headless_self_test(
+        let exit_code = rt.block_on(run_headless_self_test(
             &mut editor,
             &mut ai_event_rx,
             ai_command_tx.as_ref().unwrap(),
@@ -272,25 +317,11 @@ async fn main() -> io::Result<()> {
             &all_tools,
             &permission_policy,
             categories,
-        )
-        .await;
+        ));
 
-        // Clean up MCP socket.
         let _ = std::fs::remove_file(&mcp_socket_path);
         std::process::exit(exit_code);
     }
-
-    // --debug: enable debug mode (RSS/CPU/frame time in status bar)
-    if args.iter().any(|a| a == "--debug") {
-        editor.debug_mode = true;
-        editor.show_fps = true;
-        if std::env::var("MAE_LOG").is_err() && std::env::var("RUST_LOG").is_err() {
-            std::env::set_var("MAE_LOG", "debug");
-        }
-        info!("debug mode enabled via --debug flag");
-    }
-
-    let use_gui = args.iter().any(|a| a == "--gui");
 
     if use_gui {
         #[cfg(not(feature = "gui"))]
@@ -300,7 +331,8 @@ async fn main() -> io::Result<()> {
         }
         #[cfg(feature = "gui")]
         {
-            return run_gui_loop(
+            return run_gui(
+                rt,
                 editor,
                 scheme,
                 ai_event_rx,
@@ -314,11 +346,49 @@ async fn main() -> io::Result<()> {
                 all_tools,
                 permission_policy,
                 app_config,
-            )
-            .await;
+            );
         }
     }
 
+    // Terminal path: run the async event loop on the main thread.
+    rt.block_on(run_terminal_loop(
+        &mut editor,
+        &mut scheme,
+        &mut ai_event_rx,
+        &ai_command_tx,
+        &mut lsp_event_rx,
+        &lsp_command_tx,
+        &mut dap_event_rx,
+        &dap_command_tx,
+        &mut mcp_tool_rx,
+        &mcp_socket_path,
+        &all_tools,
+        &permission_policy,
+        &app_config,
+    ))?;
+
+    let _ = std::fs::remove_file(&mcp_socket_path);
+    info!("mae exited cleanly");
+    Ok(())
+}
+
+/// Terminal event loop — async, runs inside `rt.block_on()`.
+#[allow(clippy::too_many_arguments)]
+async fn run_terminal_loop(
+    editor: &mut Editor,
+    scheme: &mut SchemeRuntime,
+    ai_event_rx: &mut tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    lsp_event_rx: &mut tokio::sync::mpsc::Receiver<LspTaskEvent>,
+    lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
+    dap_event_rx: &mut tokio::sync::mpsc::Receiver<DapTaskEvent>,
+    dap_command_tx: &tokio::sync::mpsc::Sender<DapCommand>,
+    mcp_tool_rx: &mut tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mcp_socket_path: &str,
+    all_tools: &[mae_ai::ToolDefinition],
+    permission_policy: &mae_ai::PermissionPolicy,
+    app_config: &config::Config,
+) -> io::Result<()> {
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
     let mut pending_keys: Vec<KeyPress> = Vec::new();
@@ -327,21 +397,17 @@ async fn main() -> io::Result<()> {
     let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
-    // Active shell terminals, keyed by buffer index.
     let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
         std::collections::HashMap::new();
-    // Last-known PTY dimensions per shell, for dynamic resize detection.
     let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
         std::collections::HashMap::new();
-    // Accumulated key presses for shell-insert keymap lookup.
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
     let mut last_health_check = tokio::time::Instant::now();
 
     loop {
-        // Periodic health check (~30s): scan for zombie shells, stale locks.
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
-                &mut editor,
+                editor,
                 &mut shell_terminals,
                 deferred_ai_reply.is_some(),
                 last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
@@ -349,13 +415,8 @@ async fn main() -> io::Result<()> {
             last_health_check = tokio::time::Instant::now();
         }
 
-        // Clamp all window cursors to buffer bounds. This is a safety net:
-        // MCP/AI tool calls and user key mashing can leave cursor_row past
-        // the end of a modified buffer. Without this, rope.line(cursor_row)
-        // panics on the next render or dispatch.
         editor.clamp_all_cursors();
 
-        // Update viewport dimensions and scroll before rendering
         let viewport_height = renderer.viewport_height()?;
         editor.viewport_height = viewport_height;
         editor
@@ -363,19 +424,18 @@ async fn main() -> io::Result<()> {
             .focused_window_mut()
             .ensure_scroll(viewport_height);
 
-        // Horizontal scroll: compute text width from focused window's actual area
+        // Horizontal scroll
         {
             let (term_w, term_h) = renderer.size()?;
             let window_area = mae_core::WinRect {
                 x: 0,
                 y: 0,
                 width: term_w,
-                height: term_h.saturating_sub(2), // status bar + command line
+                height: term_h.saturating_sub(2),
             };
             let focused_id = editor.window_mgr.focused_id();
             let rects = editor.window_mgr.layout_rects(window_area);
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
-                // inner_rect subtracts 2 for border, gutter takes more
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
                 let gutter_w = if editor.show_line_numbers {
@@ -395,7 +455,7 @@ async fn main() -> io::Result<()> {
         }
 
         let frame_start = std::time::Instant::now();
-        renderer.render(&mut editor, &shell_terminals)?;
+        renderer.render(editor, &shell_terminals)?;
         let frame_elapsed = frame_start.elapsed().as_micros() as u64;
         editor.perf_stats.record_frame(frame_elapsed);
         if editor.debug_mode {
@@ -409,49 +469,42 @@ async fn main() -> io::Result<()> {
                     warn!("failed to send shutdown to AI session (channel closed)");
                 }
             }
-            // Best-effort LSP shutdown so language servers get a clean exit.
             if lsp_command_tx.try_send(LspCommand::Shutdown).is_err() {
                 warn!("failed to send shutdown to LSP task (channel closed)");
             }
-            // Best-effort DAP shutdown so the adapter process gets killed.
             if dap_command_tx.try_send(DapCommand::Shutdown).is_err() {
                 warn!("failed to send shutdown to DAP task (channel closed)");
             }
             break;
         }
 
-        // Drain any LSP / DAP intents queued by the last command dispatch.
-        drain_lsp_intents(&mut editor, &lsp_command_tx);
-        drain_dap_intents(&mut editor, &dap_command_tx);
+        drain_lsp_intents(editor, lsp_command_tx);
+        drain_dap_intents(editor, dap_command_tx);
 
-        shell_lifecycle::drain_agent_setup(&mut editor);
+        shell_lifecycle::drain_agent_setup(editor);
         shell_lifecycle::spawn_pending_shells(
-            &mut editor,
+            editor,
             &mut shell_terminals,
             &mut shell_last_dims,
             &renderer,
-            &mcp_socket_path,
-            &app_config,
+            mcp_socket_path,
+            app_config,
         );
-        shell_lifecycle::resize_shells(&editor, &renderer, &shell_terminals, &mut shell_last_dims);
-        shell_lifecycle::manage_shell_lifecycle(&mut editor, &mut shell_terminals);
+        shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
+        shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
 
-        // When shell terminals are active, poll for new output at ~30fps.
-        // Without this, shell output only renders on the next keypress.
         let has_shells = !shell_terminals.is_empty();
         let shell_tick = async {
             if has_shells {
                 tokio::time::sleep(std::time::Duration::from_millis(33)).await;
             } else {
-                // No shells — sleep forever (never wake from this branch).
                 std::future::pending::<()>().await;
             }
         };
 
-        ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
-        ai_event_handler::timeout_deferred_mcp_reply(&mut editor, &mut deferred_mcp_reply);
+        ai_event_handler::timeout_deferred_reply(editor, &mut deferred_ai_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(editor, &mut deferred_mcp_reply);
 
-        // MCP session-scoped input lock: auto-unlock after 500ms of inactivity.
         let mcp_idle_tick = async {
             if last_mcp_activity.is_some() {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -460,15 +513,10 @@ async fn main() -> io::Result<()> {
             }
         };
 
-        // Async event loop: select! over keyboard + AI + shell tick
         tokio::select! {
             maybe_event = event_stream.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
-                        // Input lock: during AI operations, discard all input
-                        // except Esc/Ctrl-C which cancel and release the lock.
-                        // Checked here (not in handle_key) so ShellInsert mode
-                        // is also covered.
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
@@ -483,22 +531,16 @@ async fn main() -> io::Result<()> {
                                 }
                                 editor.set_status("AI operation cancelled");
                             } else if editor.mode == Mode::ShellInsert {
-                                // Allow shell input even during AI/MCP lock.
-                                handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_pending_keys);
+                                handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                             }
-                            // All other keys discarded while locked.
                         } else if editor.mode == Mode::ShellInsert {
-                            handle_shell_key(&mut editor, key, &mut shell_terminals, &mut shell_pending_keys);
+                            handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
-                            handle_key(&mut editor, &mut scheme, key, &mut pending_keys, &ai_command_tx);
+                            handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx);
                         }
                     }
-                    Some(Ok(Event::Resize(_w, _h))) => {
-                        // Terminal resized — per-shell resize happens in the
-                        // dynamic resize block at the top of the loop, which
-                        // uses layout_rects() to compute per-window dimensions.
-                    }
+                    Some(Ok(Event::Resize(_w, _h))) => {}
                     Some(Err(e)) => {
                         editor.set_status(format!("Input error: {}", e));
                     }
@@ -508,23 +550,21 @@ async fn main() -> io::Result<()> {
             }
             Some(ai_event) = ai_event_rx.recv() => {
                 ai_event_handler::handle_ai_event(
-                    &mut editor, ai_event, &all_tools, &permission_policy,
-                    &mut deferred_ai_reply, &lsp_command_tx,
+                    editor, ai_event, all_tools, permission_policy,
+                    &mut deferred_ai_reply, lsp_command_tx,
                 );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
-                ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
+                ai_event_handler::try_resolve_deferred(editor, &lsp_event, &mut deferred_ai_reply);
                 if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
                     last_mcp_activity = Some(tokio::time::Instant::now());
                 }
-                handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
+                handle_lsp_event(editor, lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
-                handle_dap_event(&mut editor, dap_event);
+                handle_dap_event(editor, dap_event);
             }
-            _ = shell_tick => {
-                // Shell output tick — just re-render (top of loop handles it).
-            }
+            _ = shell_tick => {}
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
@@ -542,10 +582,9 @@ async fn main() -> io::Result<()> {
                 editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
-                    &mut editor, mcp_req, &all_tools, &permission_policy,
-                    &lsp_command_tx, &mut deferred_mcp_reply,
+                    editor, mcp_req, all_tools, permission_policy,
+                    lsp_command_tx, &mut deferred_mcp_reply,
                 );
-                // Immediate tools: clear lock right away if no deferred calls pending.
                 if immediate && deferred_mcp_reply.is_empty() {
                     editor.input_lock = mae_core::InputLock::None;
                     last_mcp_activity = None;
@@ -554,11 +593,7 @@ async fn main() -> io::Result<()> {
         }
     }
 
-    // Clean up MCP socket.
-    let _ = std::fs::remove_file(&mcp_socket_path);
-
     renderer.cleanup()?;
-    info!("mae exited cleanly");
     Ok(())
 }
 
@@ -1452,312 +1487,365 @@ fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
 }
 
 // ---------------------------------------------------------------------------
-// GUI event loop (Phase 8 M2)
+// GUI event loop (Phase 8 M4: run_app + EventLoopProxy)
 // ---------------------------------------------------------------------------
+//
+// Architecture: main thread runs EventLoop::run_app(&mut GuiApp) (blocking).
+// Background thread runs a tokio current_thread runtime with the bridge_task
+// that reads AI/LSP/DAP/MCP channels and forwards events via EventLoopProxy.
+// This replaces the pump_app_events anti-pattern that broke Wayland.
 
-/// Run the GUI event loop using winit's `pump_app_events()`.
-///
-/// This integrates winit into the existing tokio `current_thread` runtime:
-/// each iteration pumps winit events (window/keyboard/resize), then yields
-/// to tokio::select! to drain AI/LSP/DAP/MCP channels.
-///
-/// Platform notes:
-/// - Linux/Windows: pump_app_events works well.
-/// - macOS: documented as "best effort" — full macOS support is a future milestone.
+/// Launch the GUI event loop. Consumes the tokio runtime (moved to a
+/// background thread) and blocks the main thread on `run_app`.
 #[cfg(feature = "gui")]
 #[allow(clippy::too_many_arguments)]
-async fn run_gui_loop(
+fn run_gui(
+    rt: tokio::runtime::Runtime,
     mut editor: Editor,
-    mut scheme: SchemeRuntime,
-    mut ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    scheme: SchemeRuntime,
+    ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
-    mut lsp_event_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
+    lsp_event_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
-    mut dap_event_rx: tokio::sync::mpsc::Receiver<DapTaskEvent>,
+    dap_event_rx: tokio::sync::mpsc::Receiver<DapTaskEvent>,
     dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
-    mut mcp_tool_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mcp_tool_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
     mcp_socket_path: String,
     all_tools: Vec<mae_ai::ToolDefinition>,
     permission_policy: mae_ai::PermissionPolicy,
     app_config: config::Config,
 ) -> io::Result<()> {
-    use mae_gui::GuiRenderer;
-    use mae_renderer::Renderer;
-    use std::time::Duration;
+    use gui_event::MaeEvent;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
     use winit::event_loop::EventLoop;
-    use winit::platform::pump_events::EventLoopExtPumpEvents;
 
-    let mut renderer = GuiRenderer::new();
+    let mut renderer = mae_gui::GuiRenderer::new();
     renderer.set_font_config(
         app_config.editor.font_family.clone(),
         app_config.editor.font_size,
     );
     editor.renderer_name = "gui".to_string();
-    // GUI default: paste reads system clipboard (Vim clipboard=unnamedplus).
-    // User can override via config.toml [editor] clipboard = "unnamed".
     editor.clipboard = "unnamedplus".to_string();
-    let mut event_loop = EventLoop::new().map_err(|e| io::Error::other(e.to_string()))?;
 
-    // State shared between the winit callback and the outer loop.
-    let mut should_exit = false;
-    let mut pending_keys: Vec<KeyPress> = Vec::new();
-    let mut shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal> =
-        std::collections::HashMap::new();
-    let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
-        std::collections::HashMap::new();
-    let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
-    let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
-    let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
-    let mut last_mcp_activity: Option<tokio::time::Instant> = None;
+    // Create typed event loop with user events — must happen on main thread
+    // before the tokio runtime moves to the background.
+    let event_loop = EventLoop::<MaeEvent>::with_user_event()
+        .build()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let proxy = event_loop.create_proxy();
 
-    // Track modifier state across winit events (winit delivers modifiers
-    // separately from key events).
-    let mut ctrl_held = false;
-    let mut alt_held = false;
-    let mut mcp_cancelled = false;
-    let mut dirty = true;
-    let mut cursor_x: f64 = 0.0;
-    let mut cursor_y: f64 = 0.0;
-    let mut last_health_check = tokio::time::Instant::now();
-    // Accumulator for fractional pixel scroll (Wayland touchpad sends small deltas).
-    let mut scroll_accumulator: f64 = 0.0;
-    let mut mouse_pressed = false;
+    // Shared atomics so the bridge task only sends ticks when relevant.
+    let shell_active = Arc::new(AtomicBool::new(false));
+    let mcp_active = Arc::new(AtomicBool::new(false));
 
-    info!("entering GUI event loop");
+    // Move the tokio runtime + bridge task to a background thread.
+    let shell_active_bg = shell_active.clone();
+    let mcp_active_bg = mcp_active.clone();
+    std::thread::spawn(move || {
+        rt.block_on(bridge_task(
+            proxy,
+            ai_event_rx,
+            lsp_event_rx,
+            dap_event_rx,
+            mcp_tool_rx,
+            shell_active_bg,
+            mcp_active_bg,
+        ));
+    });
 
-    loop {
-        ai_event_handler::timeout_deferred_reply(&mut editor, &mut deferred_ai_reply);
-        ai_event_handler::timeout_deferred_mcp_reply(&mut editor, &mut deferred_mcp_reply);
+    info!("entering GUI event loop (run_app + EventLoopProxy)");
 
-        // Periodic health check (~30s): scan for zombie shells, stale locks.
-        if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
-            shell_lifecycle::health_check(
-                &mut editor,
-                &mut shell_terminals,
-                deferred_ai_reply.is_some(),
-                last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
-            );
-            last_health_check = tokio::time::Instant::now();
-        }
+    let mut app = GuiApp {
+        renderer,
+        editor,
+        scheme,
+        pending_keys: Vec::new(),
+        shell_pending_keys: Vec::new(),
+        shell_terminals: std::collections::HashMap::new(),
+        shell_last_dims: std::collections::HashMap::new(),
+        ai_command_tx,
+        deferred_ai_reply: None,
+        deferred_mcp_reply: Vec::new(),
+        last_mcp_activity: None,
+        all_tools,
+        permission_policy,
+        lsp_command_tx,
+        dap_command_tx,
+        mcp_socket_path,
+        app_config,
+        ctrl_held: false,
+        alt_held: false,
+        dirty: true,
+        cursor_x: 0.0,
+        cursor_y: 0.0,
+        scroll_accumulator: 0.0,
+        mouse_pressed: false,
+        shell_active,
+        mcp_active,
+    };
 
-        // --- Font hot-reload: lisp-machine contract ---
-        if editor.gui_font_size != renderer.current_font_size() {
-            renderer.apply_font_size(editor.gui_font_size);
-            let viewport_height = renderer.viewport_height().unwrap_or(40);
-            editor.viewport_height = viewport_height;
-        }
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
-        // --- Pre-render bookkeeping (same as terminal loop) ---
-        editor.clamp_all_cursors();
-        let viewport_height = renderer.viewport_height()?;
-        editor.viewport_height = viewport_height;
-        editor
-            .window_mgr
-            .focused_window_mut()
-            .ensure_scroll(viewport_height);
-
-        // --- Pump winit events (non-blocking, ~16ms timeout for 60fps) ---
-        let pump_status = event_loop.pump_app_events(
-            Some(Duration::from_millis(16)),
-            &mut WinitCallback {
-                renderer: &mut renderer,
-                editor: &mut editor,
-                scheme: &mut scheme,
-                pending_keys: &mut pending_keys,
-                shell_terminals: &mut shell_terminals,
-                shell_pending_keys: &mut shell_pending_keys,
-                ai_command_tx: &ai_command_tx,
-                should_exit: &mut should_exit,
-                ctrl_held: &mut ctrl_held,
-                alt_held: &mut alt_held,
-                mcp_cancelled: &mut mcp_cancelled,
-                dirty: &mut dirty,
-                cursor_x: &mut cursor_x,
-                cursor_y: &mut cursor_y,
-                scroll_accumulator: &mut scroll_accumulator,
-                mouse_pressed: &mut mouse_pressed,
-            },
-        );
-
-        if should_exit
-            || matches!(
-                pump_status,
-                winit::platform::pump_events::PumpStatus::Exit(..)
-            )
-        {
-            break;
-        }
-
-        if !editor.running {
-            info!("editor shutting down (GUI)");
-            if let Some(ref tx) = ai_command_tx {
-                let _ = tx.try_send(AiCommand::Shutdown);
-            }
-            let _ = lsp_command_tx.try_send(LspCommand::Shutdown);
-            let _ = dap_command_tx.try_send(DapCommand::Shutdown);
-            break;
-        }
-
-        // --- Drain editor intents (LSP / DAP / agents / shells) ---
-        drain_lsp_intents(&mut editor, &lsp_command_tx);
-        drain_dap_intents(&mut editor, &dap_command_tx);
-
-        shell_lifecycle::drain_agent_setup(&mut editor);
-        shell_lifecycle::spawn_pending_shells(
-            &mut editor,
-            &mut shell_terminals,
-            &mut shell_last_dims,
-            &renderer,
-            &mcp_socket_path,
-            &app_config,
-        );
-        shell_lifecycle::resize_shells(&editor, &renderer, &shell_terminals, &mut shell_last_dims);
-        shell_lifecycle::manage_shell_lifecycle(&mut editor, &mut shell_terminals);
-
-        // --- Poll async channels (AI/LSP/DAP/MCP) with short timeout ---
-        let has_shells = !shell_terminals.is_empty();
-        let shell_tick = async {
-            if has_shells {
-                tokio::time::sleep(Duration::from_millis(33)).await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        };
-        // Clear MCP cancel flag if set by WinitCallback during pump.
-        if mcp_cancelled {
-            last_mcp_activity = None;
-            mcp_cancelled = false;
-        }
-
-        let mcp_idle_tick = async {
-            if last_mcp_activity.is_some() {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        };
-
-        // Poll async channels; set dirty when state changes so we redraw.
-        tokio::select! {
-            biased;
-
-            Some(ai_event) = ai_event_rx.recv() => {
-                ai_event_handler::handle_ai_event(
-                    &mut editor, ai_event, &all_tools, &permission_policy,
-                    &mut deferred_ai_reply, &lsp_command_tx,
-                );
-                dirty = true;
-            }
-            Some(lsp_event) = lsp_event_rx.recv() => {
-                ai_event_handler::try_resolve_deferred(&mut editor, &lsp_event, &mut deferred_ai_reply);
-                if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
-                    last_mcp_activity = Some(tokio::time::Instant::now());
-                }
-                handle_lsp_event(&mut editor, &lsp_command_tx, lsp_event);
-                dirty = true;
-            }
-            Some(dap_event) = dap_event_rx.recv() => {
-                handle_dap_event(&mut editor, dap_event);
-                dirty = true;
-            }
-            _ = mcp_idle_tick => {
-                let was_locked = editor.input_lock;
-                if let Some(ts) = last_mcp_activity {
-                    if ts.elapsed() > Duration::from_millis(500)
-                        && deferred_mcp_reply.is_empty()
-                    {
-                        if editor.input_lock == mae_core::InputLock::McpBusy {
-                            editor.set_status("MCP: input unlocked");
-                        }
-                        editor.input_lock = mae_core::InputLock::None;
-                        last_mcp_activity = None;
-                    }
-                }
-                if was_locked != editor.input_lock {
-                    dirty = true;
-                }
-            }
-            Some(mcp_req) = mcp_tool_rx.recv() => {
-                editor.input_lock = mae_core::InputLock::McpBusy;
-                last_mcp_activity = Some(tokio::time::Instant::now());
-                let immediate = ai_event_handler::handle_mcp_request(
-                    &mut editor, mcp_req, &all_tools, &permission_policy,
-                    &lsp_command_tx, &mut deferred_mcp_reply,
-                );
-                // Immediate tools: clear lock right away if no deferred calls pending.
-                if immediate && deferred_mcp_reply.is_empty() {
-                    editor.input_lock = mae_core::InputLock::None;
-                    last_mcp_activity = None;
-                }
-                dirty = true;
-            }
-            _ = shell_tick => {
-                // Always redraw when shells are active. The PTY I/O thread
-                // writes directly to the Term grid via FairMutex — only
-                // metadata events (title/bell/exit) go through the mpsc
-                // channel that increments the generation counter.  Programs
-                // like htop produce continuous output without triggering
-                // ShellEvent, so we must redraw unconditionally at ~30fps.
-                if has_shells {
-                    dirty = true;
-                }
-            }
-            // Fallback: don't block forever — return to pump_app_events for winit events.
-            // Without this, when no async channels have data AND no shells are active,
-            // ALL select branches block forever and the GUI becomes unresponsive.
-            // 16ms matches the vsync cadence set by pump_app_events(16ms).
-            _ = tokio::time::sleep(Duration::from_millis(16)) => {}
-        }
-
-        // Rendering happens inside WinitCallback::window_event(RedrawRequested),
-        // triggered by about_to_wait() calling request_redraw() when dirty.
-        // This ensures present() runs inside Wayland's event dispatch.
-    }
-
-    let _ = std::fs::remove_file(&mcp_socket_path);
-    renderer.cleanup()?;
+    // Cleanup.
+    let _ = std::fs::remove_file(&app.mcp_socket_path);
+    let _ = app.renderer.cleanup();
     info!("mae (GUI) exited cleanly");
     Ok(())
 }
 
-/// Winit callback struct used with `pump_app_events()`.
+/// Async bridge task — runs on the background tokio thread, reads all async
+/// channels and forwards events to the main thread via `EventLoopProxy`.
 ///
-/// Borrows all state from the outer loop. Handles window creation on `Resumed`,
-/// keyboard input translation, resize, and close-requested.
+/// This is the Alacritty pattern: the event loop sleeps until an OS event
+/// *or* a proxy wakeup. No polling, no 16ms fallback sleep needed.
 #[cfg(feature = "gui")]
-struct WinitCallback<'a> {
-    renderer: &'a mut mae_gui::GuiRenderer,
-    editor: &'a mut Editor,
-    scheme: &'a mut SchemeRuntime,
-    pending_keys: &'a mut Vec<KeyPress>,
-    shell_terminals: &'a mut std::collections::HashMap<usize, mae_shell::ShellTerminal>,
-    shell_pending_keys: &'a mut Vec<KeyPress>,
-    ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
-    should_exit: &'a mut bool,
-    ctrl_held: &'a mut bool,
-    alt_held: &'a mut bool,
-    mcp_cancelled: &'a mut bool,
-    dirty: &'a mut bool,
-    cursor_x: &'a mut f64,
-    cursor_y: &'a mut f64,
-    scroll_accumulator: &'a mut f64,
-    mouse_pressed: &'a mut bool,
+async fn bridge_task(
+    proxy: winit::event_loop::EventLoopProxy<gui_event::MaeEvent>,
+    mut ai_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    mut lsp_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
+    mut dap_rx: tokio::sync::mpsc::Receiver<DapTaskEvent>,
+    mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use gui_event::MaeEvent;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::Duration;
+
+    let mut shell_interval = tokio::time::interval(Duration::from_millis(33));
+    let mut mcp_interval = tokio::time::interval(Duration::from_millis(500));
+    let mut health_interval = tokio::time::interval(Duration::from_secs(30));
+
+    // Skip the initial immediate tick from each interval.
+    shell_interval.tick().await;
+    mcp_interval.tick().await;
+    health_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            Some(ev) = ai_rx.recv() => {
+                if proxy.send_event(MaeEvent::AiEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = lsp_rx.recv() => {
+                if proxy.send_event(MaeEvent::LspEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = dap_rx.recv() => {
+                if proxy.send_event(MaeEvent::DapEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = mcp_rx.recv() => {
+                if proxy.send_event(MaeEvent::McpToolRequest(ev)).is_err() { break; }
+            }
+            _ = shell_interval.tick() => {
+                if shell_active.load(Relaxed) {
+                    let _ = proxy.send_event(MaeEvent::ShellTick);
+                }
+            }
+            _ = mcp_interval.tick() => {
+                if mcp_active.load(Relaxed) {
+                    let _ = proxy.send_event(MaeEvent::McpIdleTick);
+                }
+            }
+            _ = health_interval.tick() => {
+                let _ = proxy.send_event(MaeEvent::HealthCheck);
+            }
+        }
+    }
+}
+
+/// GUI application state — owns all editor state on the main thread.
+///
+/// Implements `ApplicationHandler<MaeEvent>` for winit's `run_app()`.
+/// This replaces the old `WinitCallback<'a>` which borrowed everything
+/// via mutable references (required by `pump_app_events`).
+#[cfg(feature = "gui")]
+struct GuiApp {
+    // Rendering
+    renderer: mae_gui::GuiRenderer,
+
+    // Core state (owned on main thread — not Send, which is fine)
+    editor: Editor,
+    scheme: SchemeRuntime,
+
+    // Key state
+    pending_keys: Vec<KeyPress>,
+    shell_pending_keys: Vec<KeyPress>,
+
+    // Shell terminals
+    shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal>,
+    shell_last_dims: std::collections::HashMap<usize, (u16, u16)>,
+
+    // AI/MCP state
+    ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    deferred_ai_reply: ai_event_handler::DeferredAiReply,
+    deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
+    last_mcp_activity: Option<tokio::time::Instant>,
+    all_tools: Vec<mae_ai::ToolDefinition>,
+    permission_policy: mae_ai::PermissionPolicy,
+
+    // Command senders (main thread → background tokio thread)
+    lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
+    dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+
+    // Config
+    mcp_socket_path: String,
+    app_config: config::Config,
+
+    // Input state
+    ctrl_held: bool,
+    alt_held: bool,
+    dirty: bool,
+    cursor_x: f64,
+    cursor_y: f64,
+    scroll_accumulator: f64,
+    mouse_pressed: bool,
+
+    // Shared atomics (read by bridge_task to gate conditional ticks)
+    shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "gui")]
-impl winit::application::ApplicationHandler for WinitCallback<'_> {
+impl GuiApp {
+    /// Drain editor intents to LSP/DAP, manage shells and agents.
+    fn drain_intents_and_lifecycle(&mut self) {
+        drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
+        drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+
+        shell_lifecycle::drain_agent_setup(&mut self.editor);
+        shell_lifecycle::spawn_pending_shells(
+            &mut self.editor,
+            &mut self.shell_terminals,
+            &mut self.shell_last_dims,
+            &self.renderer,
+            &self.mcp_socket_path,
+            &self.app_config,
+        );
+        shell_lifecycle::resize_shells(
+            &self.editor,
+            &self.renderer,
+            &self.shell_terminals,
+            &mut self.shell_last_dims,
+        );
+        shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
+    }
+
+    /// Send shutdown commands to AI/LSP/DAP tasks.
+    fn shutdown(&self) {
+        info!("editor shutting down (GUI)");
+        if let Some(ref tx) = self.ai_command_tx {
+            let _ = tx.try_send(AiCommand::Shutdown);
+        }
+        let _ = self.lsp_command_tx.try_send(LspCommand::Shutdown);
+        let _ = self.dap_command_tx.try_send(DapCommand::Shutdown);
+    }
+}
+
+#[cfg(feature = "gui")]
+impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.renderer.window().is_none() {
             if let Err(e) = self.renderer.init_window(event_loop) {
                 error!(error = %e, "failed to init GUI window");
-                *self.should_exit = true;
+                event_loop.exit();
             }
         }
     }
 
-    fn window_event(
+    fn user_event(
         &mut self,
         _event_loop: &winit::event_loop::ActiveEventLoop,
+        event: gui_event::MaeEvent,
+    ) {
+        use gui_event::MaeEvent;
+
+        match event {
+            MaeEvent::AiEvent(ai_event) => {
+                ai_event_handler::handle_ai_event(
+                    &mut self.editor,
+                    ai_event,
+                    &self.all_tools,
+                    &self.permission_policy,
+                    &mut self.deferred_ai_reply,
+                    &self.lsp_command_tx,
+                );
+                self.dirty = true;
+            }
+            MaeEvent::LspEvent(lsp_event) => {
+                ai_event_handler::try_resolve_deferred(
+                    &mut self.editor,
+                    &lsp_event,
+                    &mut self.deferred_ai_reply,
+                );
+                if ai_event_handler::try_resolve_deferred_mcp(
+                    &lsp_event,
+                    &mut self.deferred_mcp_reply,
+                ) {
+                    self.last_mcp_activity = Some(tokio::time::Instant::now());
+                }
+                handle_lsp_event(&mut self.editor, &self.lsp_command_tx, lsp_event);
+                self.dirty = true;
+            }
+            MaeEvent::DapEvent(dap_event) => {
+                handle_dap_event(&mut self.editor, dap_event);
+                self.dirty = true;
+            }
+            MaeEvent::McpToolRequest(mcp_req) => {
+                self.editor.input_lock = mae_core::InputLock::McpBusy;
+                self.last_mcp_activity = Some(tokio::time::Instant::now());
+                let immediate = ai_event_handler::handle_mcp_request(
+                    &mut self.editor,
+                    mcp_req,
+                    &self.all_tools,
+                    &self.permission_policy,
+                    &self.lsp_command_tx,
+                    &mut self.deferred_mcp_reply,
+                );
+                if immediate && self.deferred_mcp_reply.is_empty() {
+                    self.editor.input_lock = mae_core::InputLock::None;
+                    self.last_mcp_activity = None;
+                }
+                self.dirty = true;
+            }
+            MaeEvent::ShellTick => {
+                self.dirty = true;
+            }
+            MaeEvent::McpIdleTick => {
+                if let Some(ts) = self.last_mcp_activity {
+                    if ts.elapsed() > std::time::Duration::from_millis(500)
+                        && self.deferred_mcp_reply.is_empty()
+                    {
+                        if self.editor.input_lock == mae_core::InputLock::McpBusy {
+                            self.editor.set_status("MCP: input unlocked");
+                        }
+                        self.editor.input_lock = mae_core::InputLock::None;
+                        self.last_mcp_activity = None;
+                        self.dirty = true;
+                    }
+                }
+            }
+            MaeEvent::HealthCheck => {
+                shell_lifecycle::health_check(
+                    &mut self.editor,
+                    &mut self.shell_terminals,
+                    self.deferred_ai_reply.is_some(),
+                    self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
+                );
+            }
+        }
+
+        // After handling any user event, drain intents so LSP/DAP commands
+        // are forwarded immediately.
+        self.drain_intents_and_lifecycle();
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
@@ -1765,78 +1853,83 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
 
         match event {
             WindowEvent::CloseRequested => {
-                *self.should_exit = true;
-                *self.dirty = true;
+                self.shutdown();
+                event_loop.exit();
             }
             WindowEvent::Resized(size) => {
                 self.renderer.handle_resize(size.width, size.height);
-                *self.dirty = true;
+                self.dirty = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
                 let state = mods.state();
-                *self.ctrl_held = state.control_key();
-                *self.alt_held = state.alt_key();
+                self.ctrl_held = state.control_key();
+                self.alt_held = state.alt_key();
             }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == winit::event::ElementState::Pressed =>
             {
-                *self.dirty = true;
+                self.dirty = true;
                 if let Some(mae_core::InputEvent::Key(kp)) =
-                    mae_gui::winit_event_to_input(&event, *self.ctrl_held, *self.alt_held)
+                    mae_gui::winit_event_to_input(&event, self.ctrl_held, self.alt_held)
                 {
-                    // Input lock: allow Esc/Ctrl-C to cancel, shell input
-                    // to pass through, and discard everything else.
                     if self.editor.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
                         {
                             self.editor.input_lock = mae_core::InputLock::None;
                             self.editor.ai_streaming = false;
-                            *self.mcp_cancelled = true;
-                            if let Some(tx) = self.ai_command_tx {
+                            self.last_mcp_activity = None;
+                            if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
                             self.editor.set_status("AI operation cancelled");
                         } else if self.editor.mode == Mode::ShellInsert {
-                            // Allow shell input even during AI/MCP lock.
                             let ct_event = key_handling::keypress_to_crossterm(&kp);
                             handle_shell_key(
-                                self.editor,
+                                &mut self.editor,
                                 ct_event,
-                                self.shell_terminals,
-                                self.shell_pending_keys,
+                                &mut self.shell_terminals,
+                                &mut self.shell_pending_keys,
                             );
                         }
                     } else if self.editor.mode == Mode::ShellInsert {
                         let ct_event = key_handling::keypress_to_crossterm(&kp);
                         handle_shell_key(
-                            self.editor,
+                            &mut self.editor,
                             ct_event,
-                            self.shell_terminals,
-                            self.shell_pending_keys,
+                            &mut self.shell_terminals,
+                            &mut self.shell_pending_keys,
                         );
                     } else {
                         key_handling::handle_key_from_keypress(
-                            self.editor,
-                            self.scheme,
+                            &mut self.editor,
+                            &mut self.scheme,
                             kp,
-                            self.pending_keys,
-                            self.ai_command_tx,
+                            &mut self.pending_keys,
+                            &self.ai_command_tx,
                         );
+                    }
+
+                    // Drain intents after key handling (may have queued LSP/DAP).
+                    self.drain_intents_and_lifecycle();
+
+                    // Check for editor shutdown after key handling.
+                    if !self.editor.running {
+                        self.shutdown();
+                        event_loop.exit();
                     }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                *self.cursor_x = position.x;
-                *self.cursor_y = position.y;
-                // Drag-to-select: if left button is held, update visual selection.
-                if *self.mouse_pressed {
+                self.cursor_x = position.x;
+                self.cursor_y = position.y;
+                if self.mouse_pressed {
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        let col = (*self.cursor_x / cell_w as f64) as u16;
-                        let row = (*self.cursor_y / cell_h as f64) as u16;
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
                         self.editor.handle_mouse_drag(row as usize, col as usize);
-                        *self.dirty = true;
+                        self.dirty = true;
                     }
                 }
             }
@@ -1847,16 +1940,15 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
             } => {
                 if let Some(mae_button) = mae_gui::winit_mouse_button(&button) {
                     if matches!(mae_button, mae_core::input::MouseButton::Left) {
-                        *self.mouse_pressed = true;
+                        self.mouse_pressed = true;
                     }
-                    // Convert pixel position to cell coordinates.
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        let col = (*self.cursor_x / cell_w as f64) as u16;
-                        let row = (*self.cursor_y / cell_h as f64) as u16;
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
                         self.editor
                             .handle_mouse_click(row as usize, col as usize, mae_button);
-                        *self.dirty = true;
+                        self.dirty = true;
                     }
                 }
             }
@@ -1865,30 +1957,31 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 button: winit::event::MouseButton::Left,
                 ..
             } => {
-                *self.mouse_pressed = false;
+                self.mouse_pressed = false;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as i16,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        // Accumulate fractional pixel deltas (Wayland touchpads
-                        // send small values per event that would truncate to 0).
-                        *self.scroll_accumulator += pos.y;
-                        let whole_lines = (*self.scroll_accumulator / 20.0) as i16;
+                        self.scroll_accumulator += pos.y;
+                        let whole_lines = (self.scroll_accumulator / 20.0) as i16;
                         if whole_lines != 0 {
-                            *self.scroll_accumulator -= whole_lines as f64 * 20.0;
+                            self.scroll_accumulator -= whole_lines as f64 * 20.0;
                         }
                         whole_lines
                     }
                 };
                 if lines != 0 {
                     self.editor.handle_mouse_scroll(lines);
-                    *self.dirty = true;
+                    self.dirty = true;
                 }
             }
             WindowEvent::RedrawRequested => {
                 let frame_start = std::time::Instant::now();
-                if let Err(e) = self.renderer.render(self.editor, self.shell_terminals) {
+                if let Err(e) = self
+                    .renderer
+                    .render(&mut self.editor, &self.shell_terminals)
+                {
                     warn!(error = %e, "GUI render error");
                 }
                 let frame_elapsed = frame_start.elapsed().as_micros() as u64;
@@ -1896,20 +1989,53 @@ impl winit::application::ApplicationHandler for WinitCallback<'_> {
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
                 }
-                // Clear dirty flag after presenting — the frame is now
-                // committed inside Wayland's event dispatch where present()
-                // is valid.
-                *self.dirty = false;
+                self.dirty = false;
             }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
-        // Wayland-correct render scheduling: request a redraw when dirty so
-        // the compositor dispatches RedrawRequested *inside* pump_app_events,
-        // where present() is valid.
-        if *self.dirty {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        // Timeout deferred replies.
+        ai_event_handler::timeout_deferred_reply(&mut self.editor, &mut self.deferred_ai_reply);
+        ai_event_handler::timeout_deferred_mcp_reply(
+            &mut self.editor,
+            &mut self.deferred_mcp_reply,
+        );
+
+        // Font hot-reload: lisp-machine contract.
+        if self.editor.gui_font_size != self.renderer.current_font_size() {
+            self.renderer.apply_font_size(self.editor.gui_font_size);
+            let viewport_height = self.renderer.viewport_height().unwrap_or(40);
+            self.editor.viewport_height = viewport_height;
+            self.dirty = true;
+        }
+
+        // Pre-render bookkeeping.
+        self.editor.clamp_all_cursors();
+        if let Ok(vh) = self.renderer.viewport_height() {
+            self.editor.viewport_height = vh;
+            self.editor
+                .window_mgr
+                .focused_window_mut()
+                .ensure_scroll(vh);
+        }
+
+        // Shell lifecycle (runs after every event batch).
+        self.drain_intents_and_lifecycle();
+
+        // Update shared atomics so the bridge task knows when to send ticks.
+        self.shell_active
+            .store(!self.shell_terminals.is_empty(), Relaxed);
+        self.mcp_active.store(
+            self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
+            Relaxed,
+        );
+
+        // Request redraw if state changed.
+        if self.dirty {
             self.renderer.request_redraw();
         }
     }

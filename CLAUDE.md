@@ -107,13 +107,13 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M3 COMPLETE (1,470 tests)
+### Phase 8: GUI Rendering Backend — M1-M4 COMPLETE (1,470 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
 - Configurable shell exit sequence: shell-insert keymap (not hardcoded) ✅
 - Configurable AI permission tier: config.toml + `MAE_AI_PERMISSIONS` env var ✅
-- GUI event loop: winit `pump_app_events()` + tokio select!, softbuffer presentation ✅
+- GUI event loop: `run_app` + `EventLoopProxy<MaeEvent>` (Alacritty pattern) ✅
 - Full keyboard input in GUI: all modes, shell-insert, modifier tracking ✅
 - CI exclusion: `mae-gui` excluded from workspace CI (skia system deps) ✅
 - init.scm fix: inject editor state before Scheme evaluation ✅
@@ -130,7 +130,10 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - OptionRegistry: single source of truth for all editor options ✅
 - `describe-option` command + `SPC h o` binding ✅
 - `:set-save` — persist option changes to config.toml ✅
-- **Next: line numbers/gutter in GUI (M3 remaining), variable-height lines (M4), inline images (M5), PDF preview (M6), mouse gestures (M7)**
+- Event loop refactor: `run_app` + `EventLoopProxy<MaeEvent>` replaces `pump_app_events` ✅
+- `GuiApp` owns all state, `bridge_task` on background tokio thread ✅
+- `main()` is plain `fn` — tokio runtime built manually ✅
+- **Next: line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
 
 ## Key Design Decisions Already Made
 
