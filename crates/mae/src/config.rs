@@ -62,6 +62,8 @@ pub struct AiSection {
 pub struct EditorSection {
     pub theme: Option<String>,
     pub splash_art: Option<String>,
+    pub font_family: Option<String>,
+    pub font_size: Option<f32>,
 }
 
 fn default_true() -> bool {
@@ -511,6 +513,10 @@ pub fn default_config_template() -> String {
 \n\
 # Splash screen art: \"bat\" (more variants coming)\n\
 # splash_art = \"bat\"\n\
+\n\
+# Font family for GUI mode (--gui). Nerd Font variants recommended for icons.\n\
+# font_family = \"JetBrainsMono Nerd Font Mono\"\n\
+# font_size = 14.0\n\
 \n\
 [agents]\n\
 # Automatically write .mcp.json to the project root on :terminal spawn.\n\

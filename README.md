@@ -2,12 +2,12 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C303%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C482%20passing-brightgreen.svg)](#)
 [![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/claude-code)
 
-A terminal editor where the human and the AI are peer actors calling the same
+An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,303 tests. GPL-3.0-or-later.
+runtime. 1,482 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 
@@ -37,27 +37,51 @@ resolve to the same command via the same dispatcher. There is no separate "AI
 mode", no simulated keystrokes, no shadow API:
 
 ```
-Human (keyboard) ──→ ┌──────────────────┐
-Scheme (eval)    ──→ │   234 Commands   │ ──→ Editor State
-AI (tool call)   ──→ │   (dispatch)     │ ──→ Buffers, LSP, DAP, Shell, KB
-                     └──────────────────┘
-All three actors call the same command dispatch.
-The AI also has 39 specialized tools that map to the same primitives.
+   Human (keys)      Scheme (eval)      AI / MCP (tool call)
+        │                  │                     │
+        ▼                  ▼                     ▼
+   ┌──────────┐    ┌─────────────┐    ┌────────────────────┐
+   │ Keymap    │    │ (run-cmd)   │    │  Tool wrappers     │
+   │ Lookup    │    │ (define-    │    │  → same functions  │
+   │           │    │  command)   │    │  as keybindings    │
+   └─────┬─────┘    └──────┬──────┘    └─────────┬──────────┘
+         │                 │                     │
+         └────────────┬────┴─────────────────────┘
+                      ▼
+         ┌───────────────────────────┐
+         │     Editor Core API       │
+         │  dispatch_builtin()       │
+         │  buffer.insert/delete()   │
+         │  lsp/dap/kb/shell ops     │
+         │                           │
+         │  280+ commands · same     │
+         │  functions for all actors │
+         └─────────────┬─────────────┘
+                       ▼
+         ┌───────────────────────────┐
+         │      Editor State         │
+         │  Buffers · LSP · DAP      │
+         │  Shell · KB · Themes      │
+         └───────────────────────────┘
 ```
 
-When you type `dd` to delete a line, the AI agent can invoke `delete-line` with
-the same effect. When a package author writes `(define my/summarize ...)`, it's
-immediately available to both the user's keybinding and the AI's tool palette.
+All three actors converge on the same Editor Core API. The AI's tools are thin
+wrappers — `buffer_read` calls the same `buffer.line()` the renderer uses;
+`lsp_definition` queues the same intent as pressing `gd`. When you type `dd` to
+delete a line, the AI agent invokes `delete-line` with the same effect. When a
+package author writes `(define my/summarize ...)`, it's immediately available to
+both the user's keybinding and the AI's tool palette.
 
 ## What Makes MAE Different
 
 ### AI as Peer Actor
 
-Not a copilot sidebar. The AI calls the same 234 commands you do. It reads
+Not a copilot sidebar. The AI calls the same 280+ commands you do. It reads
 LSP types, DAP debug state, tree-sitter parse trees, and the knowledge base —
-structured data, not just syntax. 39 specialized AI tools plus every editor
-command as a tool. Permission tiers (ReadOnly, Write, Shell, Privileged) let
-you control how far the agent can act autonomously.
+structured data, not just syntax. Every editor command is an AI tool; the AI's
+specialized tools (buffer I/O, LSP queries, DAP inspection) are thin wrappers
+around the same core API. Permission tiers (ReadOnly, Write, Shell, Privileged)
+let you control how far the agent can act autonomously.
 
 ### Built-in Documentation & Knowledge Base
 
@@ -99,9 +123,16 @@ configuration. `init.scm` is a real program, not a settings file.
 Markdown, YAML, Scheme, Org) with structural parse trees. AI can query syntax
 trees for code reasoning.
 
+### GUI + Terminal
+
+Dual rendering backend — terminal (ratatui/crossterm) and GUI (winit + Skia 2D).
+`mae --gui` launches the hardware-accelerated window; plain `mae` uses the terminal.
+Both share the same editor core, commands, and AI integration. Desktop launcher
+included for GNOME, sway, and other freedesktop environments.
+
 ## Vim-Level Editing
 
-Full vi modal editing with 234 commands:
+Full vi modal editing with 280+ commands:
 
 | Category | Features |
 |----------|----------|
@@ -127,6 +158,7 @@ Full vi modal editing with 234 commands:
 | Core | Rust | Eliminates GC problem, ownership model for concurrency |
 | Extensions | Scheme R7RS-small (Steel) | Runtime redefinability, hygienic macros, tail calls |
 | Terminal UI | ratatui + crossterm | Platform-specific code lives in the library, not us |
+| GUI | winit + skia-safe | Hardware-accelerated 2D, mouse, font config |
 | Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
 | AI | Claude / OpenAI APIs | Tool-calling maps 1:1 to command API |
 | Protocols | LSP + DAP | First-class, not bolted on — exposed to Scheme and AI |
@@ -144,7 +176,9 @@ mae (binary)
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
- └── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search
+ ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search
+ ├── mae-gui       GUI rendering (winit + Skia), mouse input, font config
+ └── mae-mcp       MCP bridge — Unix socket server, JSON-RPC, stdio shim
 ```
 
 ### Event Loop
@@ -158,20 +192,30 @@ The binary's `select!` loop multiplexes:
 - **AI stream chunks** → conversation buffer updates + tool execution
 - **Scheme eval results** → command execution
 - **Render tick** → ratatui frame draw (~30fps when shells active)
+- **GUI events** (when `--gui`): winit window events, mouse clicks/scroll, dirty-flag render gating
 
 ## Getting Started
 
 ```sh
-# Build
-cargo build --release
+# Build with GUI (default)
+make build
 
-# Open a file
-./target/release/mae path/to/file.rs
+# Install with desktop launcher (GNOME, sway, etc.)
+make install
+
+# Run GUI
+mae --gui path/to/file.rs
+
+# Terminal mode
+mae path/to/file.rs
+
+# Terminal-only build (no skia dependency)
+make build-tui
 
 # Open with AI (requires API key)
-ANTHROPIC_API_KEY=sk-... ./target/release/mae file.rs
+ANTHROPIC_API_KEY=sk-... mae file.rs
 # or
-OPENAI_API_KEY=sk-... ./target/release/mae file.rs
+OPENAI_API_KEY=sk-... mae file.rs
 ```
 
 ### Configuration
@@ -251,7 +295,8 @@ crates/
 The near-term goal is to use MAE + Claude to develop MAE itself. All Tier 1
 blockers are complete: multi-file AI editing, LSP semantic understanding,
 tree-sitter syntax highlighting, DAP debugging, and the embedded terminal.
-MAE is now used for its own development alongside Emacs.
+MAE is now used as a terminal/GUI editor for its own development alongside Emacs.
+The GUI is the primary dev target going forward.
 
 ## Design Lineage
 
@@ -265,6 +310,19 @@ Key lessons applied:
 - Modular display layer (no monolithic `xdisp.c`)
 - Module boundaries that enable distributed ownership
 - Forge-native workflow (no mailing lists, no copyright assignment)
+
+## Contributing
+
+Feature branches + PR workflow. CI runs `cargo check/test/clippy` on stable and nightly.
+GUI builds require skia system deps and are excluded from CI.
+
+```bash
+make ci          # Run the CI pipeline locally (no GUI)
+make check       # Type-check with GUI (local dev)
+make test        # Full test suite with GUI
+```
+
+See CLAUDE.md for architecture principles and development priorities.
 
 ## License
 

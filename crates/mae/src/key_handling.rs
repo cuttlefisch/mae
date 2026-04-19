@@ -98,6 +98,16 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
     })
 }
 
+/// Check if the splash screen is currently visible.
+fn is_splash_visible(editor: &Editor) -> bool {
+    let buf = editor.active_buffer();
+    buf.kind == mae_core::BufferKind::Text
+        && buf.name == "[scratch]"
+        && buf.rope().len_chars() == 0
+        && !buf.modified
+        && editor.buffers.len() == 1
+}
+
 pub fn handle_key(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
@@ -107,10 +117,45 @@ pub fn handle_key(
 ) {
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
-    // input_locked is guaranteed false.
+    // input_lock is guaranteed None (or the mode is ShellInsert, which
+    // is allowed through the lock).
 
     if editor.mode != Mode::Command {
         editor.status_msg.clear();
+    }
+
+    // --- Splash screen navigation intercept ---
+    // When the splash is visible, j/k/Up/Down navigate, Enter selects,
+    // and any other key dismisses the splash (by inserting into scratch).
+    if editor.mode == Mode::Normal && is_splash_visible(editor) {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let count = mae_renderer::splash_render::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + 1) % count;
+                }
+                return;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let count = mae_renderer::splash_render::splash_action_count();
+                if count > 0 {
+                    editor.splash_selection = (editor.splash_selection + count - 1) % count;
+                }
+                return;
+            }
+            KeyCode::Enter => {
+                let actions = mae_renderer::splash_render::QUICK_ACTIONS;
+                if let Some(&(_, _, cmd)) = actions.get(editor.splash_selection) {
+                    // Dismiss splash by inserting a space then clearing it,
+                    // so the splash condition no longer holds.
+                    editor.dispatch_builtin(cmd);
+                }
+                return;
+            }
+            _ => {
+                // Any other key dismisses splash and falls through to normal handling.
+            }
+        }
     }
 
     let mode_before = editor.mode;
@@ -958,6 +1003,77 @@ fn handle_normal_mode(
         }
     }
 
+    // Debug panel: intercept navigation and action keys.
+    // j/k move between interactive items, Enter selects/expands,
+    // c/n/s/S drive execution, o toggles output, r refreshes, q closes.
+    let is_debug = {
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].kind == BufferKind::Debug
+    };
+    if is_debug && pending_keys.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('j') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                    view.move_down();
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('k') if !ctrl => {
+                let idx = editor.active_buffer_idx();
+                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                    view.move_up();
+                }
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Enter => {
+                editor.debug_panel_select();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('q') if !ctrl => {
+                editor.close_debug_panel();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('o') if !ctrl => {
+                editor.debug_toggle_output();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('r') if !ctrl => {
+                editor.dap_refresh();
+                editor.debug_panel_refresh_if_open();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('c') if !ctrl => {
+                editor.dap_continue();
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('n') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::Over);
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('s') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::In);
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('S') if !ctrl => {
+                editor.dap_step(mae_core::StepKind::Out);
+                editor.count_prefix = None;
+                return;
+            }
+            _ => {} // Fall through to normal keymap
+        }
+    }
+
     // In Normal mode, intercept j/k/G/gg for conversation buffer scrolling
     // and `i` to re-enter ConversationInput mode.
     let is_conv = {
@@ -1520,14 +1636,14 @@ pub fn handle_command_mode(
                 let categories = cmd.strip_prefix("self-test").unwrap().trim();
                 if let Some(tx) = ai_tx {
                     // Lock input so user keystrokes don't interfere with test state.
-                    editor.input_locked = true;
+                    editor.input_lock = mae_core::InputLock::AiBusy;
                     // Ensure *AI* buffer exists and is visible so the user
                     // can watch self-test progress (tool calls, results, report).
                     editor.open_conversation_buffer();
                     let prompt = build_self_test_prompt(categories);
                     if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
                         warn!("AI self-test prompt dropped");
-                        editor.input_locked = false;
+                        editor.input_lock = mae_core::InputLock::None;
                     }
                     info!(
                         "self-test started, categories={:?}",

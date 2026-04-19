@@ -38,6 +38,8 @@ bright_orange = "#fe8019"
 "ui.statusline.mode.insert" = { fg = "bg0", bg = "bright_green", bold = true }
 "ui.statusline.mode.command" = { fg = "bg0", bg = "bright_yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "bg0", bg = "bright_purple", bold = true }
+"ui.statusline.mode.locked" = { fg = "bg0", bg = "bright_red", bold = true }
+"ui.statusline.mode.mcp" = { fg = "bg0", bg = "bright_yellow", bold = true }
 "ui.gutter" = { fg = "bg3" }
 "ui.gutter.selected" = { fg = "bright_yellow" }
 "ui.popup" = { fg = "fg1", bg = "bg1" }
@@ -87,3 +89,4 @@ bright_orange = "#fe8019"
 "attribute" = { fg = "bright_aqua" }
 "namespace" = { fg = "bright_yellow" }
 "punctuation" = { fg = "fg3" }
+"markup.link" = { fg = "bright_aqua", underline = true }

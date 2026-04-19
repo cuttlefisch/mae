@@ -14,12 +14,14 @@ pub use buffer::{
     execute_list_buffers,
 };
 pub use dap::{
-    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_continue, execute_dap_expand_variable, execute_dap_inspect_variable,
+    execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
+    execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
     execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_state, execute_set_option,
-    execute_window_layout,
+    execute_command_list, execute_debug_state, execute_editor_state, execute_get_option,
+    execute_set_option, execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,

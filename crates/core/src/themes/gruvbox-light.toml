@@ -31,6 +31,8 @@ gray = "#928374"
 "ui.statusline.mode.insert" = { fg = "bg0", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "bg0", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "bg0", bg = "purple", bold = true }
+"ui.statusline.mode.locked" = { fg = "bg0", bg = "red", bold = true }
+"ui.statusline.mode.mcp" = { fg = "bg0", bg = "yellow", bold = true }
 "ui.gutter" = { fg = "bg3" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "fg1", bg = "bg1" }
@@ -58,3 +60,4 @@ gray = "#928374"
 "type" = { fg = "yellow" }
 "variable" = { fg = "blue" }
 "constant" = { fg = "purple" }
+"markup.link" = { fg = "aqua", underline = true }

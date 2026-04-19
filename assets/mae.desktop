@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=MAE
+GenericName=Text Editor
+Comment=Modern AI Editor — an AI-native lisp machine editor
+Exec=mae --gui %F
+Icon=mae
+Terminal=false
+Categories=Utility;Development;TextEditor;IDE;
+Keywords=editor;text;ai;lisp;scheme;code;
+MimeType=text/plain;text/x-csrc;text/x-c++src;text/x-rust;text/x-python;application/javascript;
+StartupWMClass=mae
+StartupNotify=true

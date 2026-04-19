@@ -28,6 +28,7 @@ tree-sitter-json = "0.24"
 tree-sitter-bash = "0.25"
 tree-sitter-scheme = "0.24"
 tree-sitter-yaml = "0.7"
+sysinfo = "0.33"
 
 [dev-dependencies]
 tempfile = "3"

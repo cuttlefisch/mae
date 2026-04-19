@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M2 COMPLETE (1,369 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M3 COMPLETE (1,470 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -58,6 +58,9 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 11 | Session persistence | 3f M3 |
 | 12 | README badges (CI status, Rust version, license, crate count) | future |
 | 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
+| 14 | Sample `init.scm` config: documented API reference, keybinding examples, hook usage, option config | Phase 7 |
+| 15 | Privileged scope escalation: TRAMP-style sudo for editing protected files, timed sudo sessions, AI privilege elevation UX | future |
+| 16 | Security & vulnerability audit: enterprise hardening, dependency audit, shell injection review, AI permission boundary testing, sandboxing | future |
 
 ---
 
@@ -569,21 +572,33 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [x] Marker priority: Stopped > Breakpoint > Diagnostic (`resolve_gutter_marker`)
 - [x] Stopped-line bg shows through syntax highlights (`Style::patch` merge)
 
-### M3: State Inspection
-- [ ] `threads` → populate thread list
-- [ ] `stackTrace` → populate stack frames
-- [ ] `scopes` + `variables` → populate variable tree
-- [ ] Variable hover (show value at cursor)
-- [ ] Watch expressions
+### M3: State Inspection (debug panel)
+- [x] `*Debug*` buffer with `DebugView` + `DebugLineItem` line map
+- [x] `threads` → thread list with active marker + status
+- [x] `stackTrace` → stack frames with source:line, selected marker
+- [x] `scopes` + `variables` → scope-grouped variable tree with expand/collapse
+- [x] Variable expansion: `▶`/`▼` markers, lazy-loaded children via DAP
+- [x] `debug-panel` command + `SPC d p` keybinding
+- [x] Panel key handling: j/k navigate, Enter select/expand, q close, o toggle output
+- [x] Output log view toggle (o key)
+- [x] Auto-refresh on DAP events (`debug_panel_refresh_if_open`)
+- [x] GUI + terminal debug panel renderers
+- [ ] Variable hover (show value at cursor in source) — deferred
+- [ ] Watch expressions — deferred
 
-### M4: AI Debug Tools ✅ (754 tests)
+### M4: AI Debug Tools ✅
 - [x] AI tools: `dap_start`, `dap_set_breakpoint`, `dap_continue`, `dap_step`, `dap_inspect_variable`
+- [x] AI tools (new): `dap_remove_breakpoint`, `dap_list_variables`, `dap_expand_variable`, `dap_select_frame`, `dap_select_thread`, `dap_output`
+- [x] `dap_list_variables` includes expanded children from debug panel
+- [x] `dap_select_frame` updates `DebugView.selected_frame_id`
 - [x] Action-oriented design — read-side view already covered by `debug_state`
 - [x] Permission tiers: `dap_start` Privileged, breakpoint/continue/step Write, inspect ReadOnly
 - [x] Idempotent breakpoint set; explicit errors (not no-ops) on stale-state calls
 - [x] Shared `dap_start_with_adapter` entry point — command & AI tool agree on preconditions
 - [x] `StepKind` enum replaces stringly-typed step dispatch
 - [x] `DebugState::find_variable` encapsulates scope iteration (no leak to tool layer)
+- [x] `editor_state` reports `debug_panel_open` + `breakpoint_count`
+- [x] Self-test suite: `dap` category with 6 tests (conditional, skippable)
 - [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)` — deferred
 
 ---
@@ -827,44 +842,81 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Status bar | ✅ Done | M2 |
 | AI/LSP/DAP/MCP channels | ✅ Done | M2 |
 | Shell terminals | ✅ Done | M2 |
-| Cursor rendering | ❌ Not yet | M3 |
+| Cursor rendering | ✅ Done | M3 |
 | Line numbers / gutter | ❌ Not yet | M3 |
-| Command line display | ❌ Not yet | M3 |
+| Command line display | ✅ Done | M3 |
 | Syntax highlighting colors | ❌ Not yet | M3 |
-| Splash screen | ❌ Not yet | M3 |
-| Variable-height lines | ❌ Not yet | M4 |
-| Mixed fonts (headings, prose) | ❌ Not yet | M4 |
-| Inline images (PNG/JPG/SVG) | ❌ Not yet | M5 |
-| Org-mode image preview | ❌ Not yet | M5 |
-| PDF preview | ❌ Not yet | M6 |
-| Mouse (click, drag, scroll) | ❌ Not yet | M7 |
+| Splash screen | ✅ Done | M3 |
+| Mouse (click, scroll) | ✅ Done | M3 |
+| Shell scrollback | ✅ Done | M3 |
+| Desktop launcher + icon | ✅ Done | M3 |
+| Font size config | ✅ Done | M3 |
+| FPS overlay | ✅ Done | M3 |
+| Event loop refactor (run_app) | ✅ Done | M4 |
+| Variable-height lines | ❌ Not yet | M5 |
+| Mixed fonts (headings, prose) | ❌ Not yet | M5 |
+| Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
+| Org-mode image preview | ❌ Not yet | M6 |
+| PDF preview | ❌ Not yet | M7 |
+| Mouse (click, drag, scroll) | ❌ Not yet | M8 |
 
-### M3: Visual Polish — Cursor, Gutter, Command Line
-- [ ] Cursor rendering (block/line per mode, blinking)
-- [ ] Line numbers and gutter (breakpoints, diagnostics)
-- [ ] Command line / status message display
-- [ ] Syntax highlighting via tree-sitter colors
-- [ ] Splash screen rendering
-- [ ] Visual mode selection highlighting
+### M3: Visual Polish — COMPLETE
+- [x] Cursor rendering in GUI (block/line per mode)
+- [x] Status bar + command line rendering
+- [x] Shell colors theme-aware
+- [x] Splash screen with recent files, config shortcut, version display
+- [x] Mouse basics (click to place cursor, wheel scroll)
+- [x] Shell scrollback (Shift-PageUp/PageDown)
+- [x] Input lock redesign (scoped, shell interaction allowed)
+- [x] Desktop launcher + SVG icon
+- [x] Font size configuration (config.toml + `:set font_size`)
+- [x] FPS overlay toggle (`SPC t F`)
+- [x] `:set` ex-command + `:edit-config` (`SPC f c`)
+- [x] ZZ/ZQ keybindings
+- [x] 30-second health check for zombie shell detection
+- [ ] Font zoom keybindings: `Ctrl+=` increase, `Ctrl+-` decrease, `Ctrl+0` reset (register `increase-font-size` / `decrease-font-size` / `reset-font-size` commands)
+- [ ] Unicode/glyph fallback: load fallback font chain for characters missing from primary monospace font (Nerd Font glyphs, box-drawing, emoji, CJK) — currently renders replacement glyph (U+FFFD)
+- [ ] Shift-Tab passthrough in shell-insert mode: GUI terminal must forward Shift-Tab (CSI Z / ESC [Z) to the child process — blocks Claude Code accept-edits and plan-mode shortcuts
+- [ ] Line numbers and gutter in GUI
+- [ ] Syntax highlighting colors in GUI
+- [ ] Visual mode selection highlighting in GUI
 
-### M4: Variable-Height Lines & Mixed Fonts
+### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
+
+Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `EventLoopProxy<MaeEvent>`, eliminating the 16ms polling latency and conforming to Wayland's event-driven model. This is the architecture used by Alacritty and other production GPU editors.
+
+- [x] Define `MaeEvent` enum (AiEvent, LspEvent, DapEvent, McpToolRequest, ShellTick, McpIdleTick, HealthCheck)
+- [x] Switch from `pump_app_events` to `event_loop.run_app(&mut GuiApp)`
+- [x] Tokio runtime on background thread with `bridge_task` reading all async channels
+- [x] `ApplicationHandler<MaeEvent>::user_event()` dispatches all async events
+- [x] `about_to_wait()` → deferred reply timeout + font hot-reload + shell lifecycle + `request_redraw()`
+- [x] Removed 16ms poll timeout — event loop sleeps until OS event or proxy wakeup
+- [x] Zero-latency async→render pipeline: async task → `proxy.send_event()` → winit wakes → render
+- [x] Shared `AtomicBool` flags gate conditional ticks (shell 33ms, MCP 500ms, health 30s)
+- [x] `GuiApp` owns all state (no borrowed `WinitCallback<'a>`)
+- [x] `main()` is plain `fn` — tokio runtime built manually, terminal path uses `rt.block_on()`
+- [x] Shell background theme fix: `NamedColor::Background`/`Black` fall back to `ui.background` style instead of xterm #000000
+- [x] `get_option` AI tool: read current option values (name, value, type, default, doc) — symmetric with `set_option`
+- [x] `set_option` auto-generated from `OptionRegistry` — no more hardcoded enum drift (was missing `clipboard`)
+
+### M5: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
 - [ ] Headings rendered at larger font sizes
 - [ ] Code blocks rendered in monospace, prose in proportional
 - [ ] Bold/italic/underline/strikethrough font decorations
 - [ ] Line-height varies per line type (heading, code, prose)
 
-### M5: Inline Images
+### M6: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
 - [ ] Org-mode `[[file:image.png]]` auto-preview
 - [ ] Image scaling to fit viewport width
 
-### M6: PDF Preview
+### M7: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
 - [ ] `:pdf <file>` opens a PDF preview buffer
 - [ ] Scroll through pages, zoom in/out
 
-### M7: Mouse & Selection
+### M8: Mouse & Selection
 - [ ] Click to place cursor
 - [ ] Click-drag to select text
 - [ ] Scrollbar (vertical)
@@ -973,7 +1025,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 4a (LSP) ✅ M1-M4 ← biggest unlock for self-hosting
     │       │
-    │       └─→ Phase 4c (DAP) M1/M2/M4 ✅
+    │       └─→ Phase 4c (DAP) M1/M2/M3/M4 ✅
     │
     ├─→ Phase 4d + 5 (KB + help + SQLite) ✅
     │
@@ -991,14 +1043,15 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 4c M3** (DAP state inspection UI) — debug panel for live debugging
-2. **Phase 6 M1-M2** (Embedded Shell) — highest self-hosting value; makes MAE the user's primary terminal
+1. **Phase 8 M4** (GUI event loop refactor) — `run_app` + `EventLoopProxy`, eliminate `pump_app_events` anti-pattern
+2. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings, decorations
 3. **Phase 7 M1-M2** (Embedded Docs) — AI-native docs make the editor self-teaching
-4. **Phase 8 M3-M7** (GUI) — cursor/gutter, variable fonts, images, PDF, mouse
-5. **Session & file management** — session save/restore, recent files, file watchers
-6. **LSP packaging review** — multi-language defaults, user-configurable server selection
-7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-8. **Phase 9** (Org-Mode Editing) — full org-mode environment
+4. **Session persistence** — save/restore open buffers, window layout, cursor positions
+5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse gestures
+6. **Phase 4c M3 remaining** — variable hover, watch expressions
+7. **LSP packaging review** — multi-language defaults, user-configurable server selection
+8. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+9. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 

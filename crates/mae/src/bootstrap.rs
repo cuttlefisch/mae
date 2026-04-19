@@ -160,6 +160,23 @@ impl tracing::field::Visit for MessageVisitor {
 
 /// Set up the AI agent session if an API key is configured.
 /// Returns (event_receiver, command_sender).
+///
+/// # Provider selection
+///
+/// Claude is the default provider — it's the primary development and testing
+/// target. Any unrecognized `provider_type` string falls through to the
+/// Claude constructor.
+///
+/// # Adding a new provider
+///
+/// 1. Implement [`AgentProvider`](mae_ai::AgentProvider) for your struct
+///    (see `crates/ai/src/provider.rs` for the trait definition).
+/// 2. Add a public constructor in your provider module under `crates/ai/src/`.
+/// 3. Add a match arm in the `provider_name.as_str()` block below.
+///
+/// Note: the `"ollama"` provider name is remapped to `"openai"` in
+/// `config.rs::resolve_ai_config()` because Ollama speaks the OpenAI-compatible
+/// API. By the time we reach this function, `provider_type` is already `"openai"`.
 pub fn setup_ai(
     editor: &Editor,
 ) -> (
@@ -183,7 +200,7 @@ pub fn setup_ai(
 
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
-            t.extend(ai_specific_tools());
+            t.extend(ai_specific_tools(&editor.option_registry));
             t
         };
 

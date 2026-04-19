@@ -15,8 +15,13 @@ use serde::{Deserialize, Serialize};
 pub enum ConversationRole {
     User,
     Assistant,
-    ToolCall { name: String },
-    ToolResult { success: bool },
+    ToolCall {
+        name: String,
+    },
+    ToolResult {
+        success: bool,
+        elapsed_ms: Option<u64>,
+    },
     System,
 }
 
@@ -132,9 +137,17 @@ impl Conversation {
         self.trim_entries();
     }
 
-    pub fn push_tool_result(&mut self, success: bool, output: impl Into<String>) {
+    pub fn push_tool_result(
+        &mut self,
+        success: bool,
+        output: impl Into<String>,
+        elapsed_ms: Option<u64>,
+    ) {
         self.entries.push(ConversationEntry {
-            role: ConversationRole::ToolResult { success },
+            role: ConversationRole::ToolResult {
+                success,
+                elapsed_ms,
+            },
             content: output.into(),
             collapsed: true,
         });
@@ -273,16 +286,23 @@ impl Conversation {
                         }
                     }
                 }
-                ConversationRole::ToolResult { success } => {
+                ConversationRole::ToolResult {
+                    success,
+                    elapsed_ms,
+                } => {
                     let marker = if *success { "✓" } else { "✗" };
+                    let header = match elapsed_ms {
+                        Some(ms) => format!("  [{} {}ms]", marker, ms),
+                        None => format!("  [{}]", marker),
+                    };
                     if entry.collapsed {
                         lines.push(RenderedLine {
-                            text: format!("  [{}]", marker),
+                            text: header,
                             style: LineStyle::ToolResultText,
                         });
                     } else {
                         lines.push(RenderedLine {
-                            text: format!("  [{}]", marker),
+                            text: header,
                             style: LineStyle::ToolResultText,
                         });
                         for line in entry.content.lines() {
@@ -583,7 +603,7 @@ mod tests {
         conv.push_user("hello");
         conv.push_assistant("hi there");
         conv.push_tool_call("buffer_read");
-        conv.push_tool_result(true, "content here");
+        conv.push_tool_result(true, "content here", None);
 
         assert_eq!(conv.entries.len(), 4);
         assert_eq!(conv.entries[0].role, ConversationRole::User);
@@ -637,7 +657,7 @@ mod tests {
     fn collapsed_tool_results() {
         let mut conv = Conversation::new();
         conv.push_tool_call("buffer_read");
-        conv.push_tool_result(true, "file contents\nline 2");
+        conv.push_tool_result(true, "file contents\nline 2", None);
 
         let lines = conv.rendered_lines();
         // Tool call should be collapsed (▸)
@@ -685,7 +705,7 @@ mod tests {
         conv.push_user("hello");
         conv.push_assistant("hi there");
         conv.push_tool_call("buffer_read");
-        conv.push_tool_result(true, "the file contents");
+        conv.push_tool_result(true, "the file contents", None);
         conv.push_system("system note");
 
         let json = conv.to_json().unwrap();
@@ -701,7 +721,7 @@ mod tests {
         ));
         assert!(matches!(
             restored.entries[3].role,
-            ConversationRole::ToolResult { success: true }
+            ConversationRole::ToolResult { success: true, .. }
         ));
         assert_eq!(restored.entries[4].role, ConversationRole::System);
     }

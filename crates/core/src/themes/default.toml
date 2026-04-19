@@ -13,6 +13,8 @@
 "ui.statusline.mode.insert" = { fg = "black", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "black", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "black", bg = "magenta", bold = true }
+"ui.statusline.mode.locked" = { fg = "black", bg = "red", bold = true }
+"ui.statusline.mode.mcp" = { fg = "black", bg = "yellow", bold = true }
 "ui.gutter" = { fg = "dark_gray" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "white" }
@@ -65,7 +67,7 @@
 
 # Markdown / org-mode markup styling.
 "markup.heading" = { fg = "yellow", bold = true }
-"markup.link" = { fg = "blue", underline = true }
+"markup.link" = { fg = "cyan", underline = true }
 "markup.literal" = { fg = "green" }
 "markup.bold" = { fg = "white", bold = true }
 "markup.italic" = { fg = "white", italic = true }

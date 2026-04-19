@@ -1,6 +1,7 @@
 mod changes;
 mod command;
 mod dap_ops;
+mod debug_panel_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
@@ -13,6 +14,7 @@ mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+pub mod perf;
 mod project_ops;
 mod register_ops;
 mod scheme_ops;
@@ -44,6 +46,7 @@ use crate::kb_seed::seed_kb;
 use crate::keymap::{KeyPress, Keymap};
 use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
+use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
 use crate::search::SearchState;
 use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowManager};
@@ -73,6 +76,17 @@ pub struct EditRecord {
     pub char_arg: Option<char>,
     /// Count prefix used with this edit (for dot-repeat).
     pub count: Option<usize>,
+}
+
+/// Input lock scope — controls what keyboard input is allowed during AI/MCP operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputLock {
+    /// No lock — all input accepted normally.
+    None,
+    /// AI session active — block editor commands but allow shell input and navigation.
+    AiBusy,
+    /// MCP tool executing — block editor commands but allow shell input and navigation.
+    McpBusy,
 }
 
 /// Top-level editor state.
@@ -301,10 +315,35 @@ pub struct Editor {
     /// The binary drains this and calls `agents::setup_agent()`.
     /// `Some("__list__")` is the sentinel for `:agent-list`.
     pub pending_agent_setup: Option<String>,
-    /// When true, user keyboard input is discarded (except Esc / Ctrl-C
-    /// which cancel the AI operation and release the lock). Set by
-    /// `:self-test` and other AI operations to prevent race conditions.
-    pub input_locked: bool,
+    /// Controls what keyboard input is allowed during AI/MCP operations.
+    /// When not `None`, editor commands are blocked but shell input and
+    /// navigation may still be allowed. Esc / Ctrl-C always cancel and
+    /// release the lock.
+    pub input_lock: InputLock,
+    /// True while the AI session is actively streaming (text chunks or tool
+    /// calls). Used to distinguish "AI thinking" from "idle but locked".
+    pub ai_streaming: bool,
+    /// Toggle: show frame timing in the status bar. Default false.
+    /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
+    pub show_fps: bool,
+    /// Name of the active rendering backend ("terminal" or "gui").
+    /// Set by the binary after renderer initialization.
+    pub renderer_name: String,
+    /// GUI font size in points. Default 14.0. Set via config.toml `[editor] font_size`.
+    pub gui_font_size: f32,
+    /// Registry of all configurable editor options — single source of truth
+    /// for metadata, aliases, types, defaults, and config.toml paths.
+    pub option_registry: OptionRegistry,
+    /// Currently highlighted splash screen menu item index.
+    pub splash_selection: usize,
+    /// Debug mode: show RSS/CPU/frame time in status bar. Toggled via
+    /// `--debug` CLI flag, `:debug-mode`, or `SPC t D`.
+    pub debug_mode: bool,
+    /// Rolling performance statistics (frame time, RSS, CPU).
+    pub perf_stats: perf::PerfStats,
+    /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
+    /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
+    pub clipboard: String,
 }
 
 impl Default for Editor {
@@ -407,7 +446,16 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
-            input_locked: false,
+            input_lock: InputLock::None,
+            ai_streaming: false,
+            show_fps: false,
+            renderer_name: "terminal".to_string(),
+            gui_font_size: 14.0,
+            option_registry: OptionRegistry::new(),
+            splash_selection: 0,
+            debug_mode: false,
+            perf_stats: perf::PerfStats::default(),
+            clipboard: "unnamed".to_string(),
         }
     }
 
@@ -516,7 +564,16 @@ impl Editor {
             break_indent: true,
             show_break: "↪ ".to_string(),
             pending_agent_setup: None,
-            input_locked: false,
+            input_lock: InputLock::None,
+            ai_streaming: false,
+            show_fps: false,
+            renderer_name: "terminal".to_string(),
+            gui_font_size: 14.0,
+            option_registry: OptionRegistry::new(),
+            splash_selection: 0,
+            debug_mode: false,
+            perf_stats: perf::PerfStats::default(),
+            clipboard: "unnamed".to_string(),
         }
     }
 
@@ -535,6 +592,214 @@ impl Editor {
             Mode::ShellInsert => return None, // Keys handled by binary shell layer
         };
         self.keymaps.get(name)
+    }
+
+    /// Get the current value and definition of an option by name or alias.
+    pub fn get_option(&self, name: &str) -> Option<(String, &crate::options::OptionDef)> {
+        let def = self.option_registry.find(name)?;
+        let value = match def.name {
+            "line_numbers" => self.show_line_numbers.to_string(),
+            "relative_line_numbers" => self.relative_line_numbers.to_string(),
+            "word_wrap" => self.word_wrap.to_string(),
+            "break_indent" => self.break_indent.to_string(),
+            "show_break" => self.show_break.clone(),
+            "show_fps" => self.show_fps.to_string(),
+            "font_size" => self.gui_font_size.to_string(),
+            "theme" => self.theme.name.clone(),
+            "splash_art" => self.splash_art.clone().unwrap_or_default(),
+            "debug_mode" => self.debug_mode.to_string(),
+            "clipboard" => self.clipboard.clone(),
+            _ => return None,
+        };
+        Some((value, def))
+    }
+
+    /// Set an option by name or alias, returning a confirmation message.
+    pub fn set_option(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let def_name = self
+            .option_registry
+            .find(name)
+            .map(|d| d.name)
+            .ok_or_else(|| format!("Unknown option: {}", name))?;
+        match def_name {
+            "line_numbers" => {
+                self.show_line_numbers = parse_option_bool(value)?;
+            }
+            "relative_line_numbers" => {
+                self.relative_line_numbers = parse_option_bool(value)?;
+            }
+            "word_wrap" => {
+                self.word_wrap = parse_option_bool(value)?;
+            }
+            "break_indent" => {
+                self.break_indent = parse_option_bool(value)?;
+            }
+            "show_break" => {
+                self.show_break = value.to_string();
+            }
+            "show_fps" => {
+                self.show_fps = parse_option_bool(value)?;
+            }
+            "font_size" => {
+                let size: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                if !(6.0..=72.0).contains(&size) {
+                    return Err("Font size must be between 6 and 72".into());
+                }
+                self.gui_font_size = size;
+            }
+            "theme" => {
+                self.set_theme_by_name(value);
+            }
+            "splash_art" => {
+                self.splash_art = Some(value.to_string());
+            }
+            "debug_mode" => {
+                self.debug_mode = parse_option_bool(value)?;
+                if self.debug_mode {
+                    self.show_fps = true;
+                }
+            }
+            "clipboard" => match value {
+                "unnamedplus" | "unnamed" | "internal" => {
+                    self.clipboard = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid clipboard mode: '{}' (expected unnamedplus, unnamed, or internal)",
+                        value
+                    ))
+                }
+            },
+            _ => return Err(format!("Unknown option: {}", name)),
+        }
+        let (current, _) = self.get_option(def_name).unwrap();
+        Ok(format!("{} = {}", def_name, current))
+    }
+
+    /// Persist an option's current value to `~/.config/mae/config.toml`.
+    pub fn save_option_to_config(&self, name: &str) -> Result<String, String> {
+        let (value, def) = self
+            .get_option(name)
+            .ok_or_else(|| format!("Unknown option: {}", name))?;
+        let config_key = def
+            .config_key
+            .ok_or_else(|| format!("Option '{}' cannot be saved to config", def.name))?;
+
+        let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            std::path::PathBuf::from(xdg).join("mae")
+        } else if let Ok(home) = std::env::var("HOME") {
+            std::path::PathBuf::from(home).join(".config").join("mae")
+        } else {
+            return Err("Cannot determine config directory".into());
+        };
+        let config_path = config_dir.join("config.toml");
+
+        // Read existing config as a TOML table, or start fresh
+        let mut table: toml::Table = if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)
+                .map_err(|e| format!("Failed to read config: {}", e))?;
+            content
+                .parse::<toml::Table>()
+                .map_err(|e| format!("Failed to parse config: {}", e))?
+        } else {
+            std::fs::create_dir_all(&config_dir)
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+            toml::Table::new()
+        };
+
+        // Parse config_key like "editor.line_numbers" into section + key
+        let parts: Vec<&str> = config_key.splitn(2, '.').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid config key: {}", config_key));
+        }
+        let (section_name, key_name) = (parts[0], parts[1]);
+
+        // Ensure the section table exists
+        if !table.contains_key(section_name) {
+            table.insert(
+                section_name.to_string(),
+                toml::Value::Table(toml::Table::new()),
+            );
+        }
+        let section = table
+            .get_mut(section_name)
+            .and_then(|v| v.as_table_mut())
+            .ok_or_else(|| format!("Config key '{}' is not a table", section_name))?;
+
+        // Set the value with the appropriate TOML type, validating the parse.
+        let toml_val = match def.kind {
+            OptionKind::Bool => {
+                let b: bool = value
+                    .parse()
+                    .map_err(|_| format!("Invalid bool: '{}'", value))?;
+                toml::Value::Boolean(b)
+            }
+            OptionKind::Float => {
+                let f: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                toml::Value::Float(f)
+            }
+            OptionKind::String | OptionKind::Theme => toml::Value::String(value.clone()),
+        };
+        section.insert(key_name.to_string(), toml_val);
+
+        let output = toml::to_string_pretty(&table)
+            .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        std::fs::write(&config_path, output)
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+
+        Ok(format!(
+            "Saved {} = {} to {}",
+            def.name,
+            value,
+            config_path.display()
+        ))
+    }
+
+    /// Open a scratch `*Options*` buffer listing all options with current values.
+    pub fn show_all_options(&mut self) {
+        let mut lines = Vec::new();
+        lines.push("Editor Options".to_string());
+        lines.push("==============".to_string());
+        lines.push(String::new());
+        lines.push(format!(
+            "{:<25} {:<10} {:<15} {}",
+            "Option", "Type", "Current", "Default"
+        ));
+        lines.push(format!(
+            "{:<25} {:<10} {:<15} {}",
+            "------", "----", "-------", "-------"
+        ));
+        for def in self.option_registry.list() {
+            let current = match self.get_option(def.name) {
+                Some((v, _)) => v,
+                None => "?".to_string(),
+            };
+            lines.push(format!(
+                "{:<25} {:<10} {:<15} {}",
+                def.name, def.kind, current, def.default_value
+            ));
+        }
+        lines.push(String::new());
+        lines.push(
+            "Use :set <option> <value> to change, :set <option> to toggle booleans.".to_string(),
+        );
+        lines.push("Use :set-save <option> [value] to persist to config.toml.".to_string());
+        lines.push("Use :describe-option <name> or SPC h o for documentation.".to_string());
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Options*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.window_mgr.focused_window_mut().buffer_idx = buf_idx;
     }
 
     /// Clamp all window cursors to their buffer bounds. Safety net against
@@ -592,11 +857,24 @@ impl Editor {
     }
 
     pub fn active_buffer(&self) -> &Buffer {
-        &self.buffers[self.active_buffer_idx()]
+        let idx = self.active_buffer_idx();
+        assert!(
+            idx < self.buffers.len(),
+            "buffer_idx {} out of range ({})",
+            idx,
+            self.buffers.len()
+        );
+        &self.buffers[idx]
     }
 
     pub fn active_buffer_mut(&mut self) -> &mut Buffer {
         let idx = self.active_buffer_idx();
+        assert!(
+            idx < self.buffers.len(),
+            "buffer_idx {} out of range ({})",
+            idx,
+            self.buffers.len()
+        );
         &mut self.buffers[idx]
     }
 
@@ -737,5 +1015,113 @@ impl Editor {
             width: 120,
             height: 40,
         }
+    }
+
+    /// Handle a mouse click at the given cell coordinates.
+    ///
+    /// Left-click places the cursor, adjusting for gutter width and scroll offset.
+    /// Middle-click pastes from the default register. Right-click is reserved for
+    /// future context menu support.
+    pub fn handle_mouse_click(
+        &mut self,
+        row: usize,
+        col: usize,
+        button: crate::input::MouseButton,
+    ) {
+        use crate::input::MouseButton;
+        match button {
+            MouseButton::Left => {
+                // Place cursor at clicked position, adjusting for gutter and scroll.
+                let win = self.window_mgr.focused_window();
+                let gutter_width = if self.show_line_numbers { 5 } else { 0 };
+                if col < gutter_width {
+                    return; // Clicked in gutter, ignore
+                }
+                let text_col = col.saturating_sub(gutter_width);
+                // row 0 is the window border in GUI mode; buffer content starts at row 1.
+                let buf_row = win.scroll_offset + row.saturating_sub(1);
+                let buf = &self.buffers[win.buffer_idx];
+                let max_row = buf.rope().len_lines().saturating_sub(1);
+                let target_row = buf_row.min(max_row);
+                let line_len = buf.line_len(target_row);
+                let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = target_row;
+                win.cursor_col = target_col;
+            }
+            MouseButton::Right => {
+                // Right-click could open context menu in the future.
+            }
+            MouseButton::Middle => {
+                // Middle-click paste from default register.
+                self.dispatch_builtin("paste-after");
+            }
+        }
+    }
+
+    /// Handle mouse drag — update cursor position and enter/update Visual mode.
+    ///
+    /// On first drag event, the click position becomes the visual anchor.
+    /// Subsequent drag events update the cursor, extending the selection.
+    pub fn handle_mouse_drag(&mut self, row: usize, col: usize) {
+        let win = self.window_mgr.focused_window();
+        let gutter_width = if self.show_line_numbers { 5 } else { 0 };
+        let text_col = col.saturating_sub(gutter_width);
+        let buf_row = win.scroll_offset + row.saturating_sub(1);
+        let buf_idx = win.buffer_idx;
+        let buf = &self.buffers[buf_idx];
+        let max_row = buf.display_line_count().saturating_sub(1);
+        let target_row = buf_row.min(max_row);
+        let line_len = buf.line_len(target_row);
+        let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+
+        // Enter Visual mode on first drag if not already in it.
+        if !matches!(self.mode, crate::Mode::Visual(_)) {
+            // Anchor at current cursor position (the click position).
+            let win = self.window_mgr.focused_window();
+            self.visual_anchor_row = win.cursor_row;
+            self.visual_anchor_col = win.cursor_col;
+            self.mode = crate::Mode::Visual(crate::VisualType::Char);
+        }
+
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = target_row;
+        win.cursor_col = target_col;
+    }
+
+    /// Handle mouse scroll (positive = up, negative = down).
+    ///
+    /// Vim-style: scroll moves the viewport and clamps the cursor into the
+    /// visible area, so `ensure_scroll` on the next frame is a no-op.
+    pub fn handle_mouse_scroll(&mut self, delta: i16) {
+        let lines = delta.unsigned_abs() as usize;
+        if lines == 0 {
+            return;
+        }
+        let scroll_speed = 3;
+        let buf_idx = self.active_buffer_idx();
+        let buf_line_count = self.buffers[buf_idx].display_line_count();
+        let viewport_height = self.viewport_height;
+
+        let win = self.window_mgr.focused_window_mut();
+        if delta > 0 {
+            // Scroll up
+            win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+        } else {
+            // Scroll down
+            let max_scroll = buf_line_count.saturating_sub(viewport_height);
+            win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
+        }
+
+        // Clamp cursor into visible viewport.
+        if win.cursor_row < win.scroll_offset {
+            win.cursor_row = win.scroll_offset;
+        }
+        let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
+        let max_row = buf_line_count.saturating_sub(1);
+        if win.cursor_row > bottom.min(max_row) {
+            win.cursor_row = bottom.min(max_row);
+        }
+        win.clamp_cursor(&self.buffers[buf_idx]);
     }
 }

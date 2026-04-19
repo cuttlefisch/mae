@@ -10,13 +10,15 @@ use crate::tool_impls::lsp::{
 use crate::tool_impls::{
     execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
     execute_close_buffer, execute_command_list, execute_create_file, execute_cursor_info,
-    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_continue, execute_dap_expand_variable, execute_dap_inspect_variable,
+    execute_dap_list_variables, execute_dap_output, execute_dap_remove_breakpoint,
+    execute_dap_select_frame, execute_dap_select_thread, execute_dap_set_breakpoint,
     execute_dap_start, execute_dap_step, execute_debug_state, execute_editor_state,
-    execute_file_read, execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_links_from,
-    execute_kb_links_to, execute_kb_list, execute_kb_search, execute_list_buffers,
-    execute_lsp_diagnostics, execute_open_file, execute_project_files, execute_project_info,
-    execute_project_search, execute_rename_file, execute_set_option, execute_shell_list,
-    execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
+    execute_file_read, execute_get_option, execute_help_open, execute_kb_get, execute_kb_graph,
+    execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
+    execute_list_buffers, execute_lsp_diagnostics, execute_open_file, execute_project_files,
+    execute_project_info, execute_project_search, execute_rename_file, execute_set_option,
+    execute_shell_list, execute_shell_read_output, execute_shell_send_input, execute_switch_buffer,
     execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 
@@ -134,14 +136,18 @@ pub fn execute_tool(
         });
     }
 
-    // 4c. Handle input_lock (sets editor.input_locked).
+    // 4c. Handle input_lock (sets editor.input_lock).
     if call.name == "input_lock" {
         let locked = call
             .arguments
             .get("locked")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        editor.input_locked = locked;
+        editor.input_lock = if locked {
+            mae_core::InputLock::AiBusy
+        } else {
+            mae_core::InputLock::None
+        };
         let msg = if locked {
             "Input locked — user keystrokes discarded (Esc/Ctrl-C to cancel)"
         } else {
@@ -181,6 +187,12 @@ pub fn execute_tool(
         "dap_continue",
         "dap_step",
         "dap_inspect_variable",
+        "dap_remove_breakpoint",
+        "dap_list_variables",
+        "dap_expand_variable",
+        "dap_select_frame",
+        "dap_select_thread",
+        "dap_output",
         "kb_get",
         "kb_search",
         "kb_list",
@@ -194,10 +206,13 @@ pub fn execute_tool(
         "ai_permissions",
         "self_test_suite",
         "input_lock",
+        "get_option",
         "set_option",
         "ai_save",
         "ai_load",
         "rename_file",
+        "perf_stats",
+        "perf_benchmark",
     ];
     let result = if ai_tool_names.contains(&call.name.as_str()) {
         execute_ai_tool(editor, call)
@@ -249,6 +264,12 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "dap_continue" => execute_dap_continue(editor),
         "dap_step" => execute_dap_step(editor, &call.arguments),
         "dap_inspect_variable" => execute_dap_inspect_variable(editor, &call.arguments),
+        "dap_remove_breakpoint" => execute_dap_remove_breakpoint(editor, &call.arguments),
+        "dap_list_variables" => execute_dap_list_variables(editor),
+        "dap_expand_variable" => execute_dap_expand_variable(editor, &call.arguments),
+        "dap_select_frame" => execute_dap_select_frame(editor, &call.arguments),
+        "dap_select_thread" => execute_dap_select_thread(editor, &call.arguments),
+        "dap_output" => execute_dap_output(editor, &call.arguments),
         "kb_get" => execute_kb_get(editor, &call.arguments),
         "kb_search" => execute_kb_search(editor, &call.arguments),
         "kb_list" => execute_kb_list(editor, &call.arguments),
@@ -256,6 +277,7 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
         "kb_graph" => execute_kb_graph(editor, &call.arguments),
         "help_open" => execute_help_open(editor, &call.arguments),
+        "get_option" => execute_get_option(editor, &call.arguments),
         "set_option" => execute_set_option(editor, &call.arguments),
         "shell_list" => execute_shell_list(editor),
         "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
@@ -264,6 +286,8 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "ai_save" => execute_ai_save(editor, &call.arguments),
         "ai_load" => execute_ai_load(editor, &call.arguments),
         "rename_file" => execute_rename_file(editor, &call.arguments),
+        "perf_stats" => execute_perf_stats(editor),
+        "perf_benchmark" => execute_perf_benchmark(editor, &call.arguments),
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }
@@ -376,6 +400,105 @@ fn format_permissions_info(policy: &PermissionPolicy) -> String {
     )
 }
 
+fn execute_perf_stats(editor: &mut Editor) -> Result<String, String> {
+    editor.perf_stats.sample_process_stats();
+    let buffer_count = editor.buffers.len();
+    let total_lines: usize = editor.buffers.iter().map(|b| b.line_count()).sum();
+    let stats = serde_json::json!({
+        "rss_bytes": editor.perf_stats.rss_bytes,
+        "cpu_percent": editor.perf_stats.cpu_percent,
+        "frame_time_us": editor.perf_stats.frame_time_us,
+        "avg_frame_time_us": editor.perf_stats.avg_frame_time_us,
+        "buffer_count": buffer_count,
+        "total_lines": total_lines,
+        "debug_mode": editor.debug_mode,
+    });
+    Ok(serde_json::to_string_pretty(&stats).unwrap())
+}
+
+fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let benchmark = args
+        .get("benchmark")
+        .and_then(|v| v.as_str())
+        .unwrap_or("buffer_insert");
+    let size = args.get("size").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+
+    let (duration_us, ops_per_sec) = match benchmark {
+        "buffer_insert" => {
+            let mut buf = mae_core::Buffer::new();
+            let start = std::time::Instant::now();
+            let mut win = mae_core::WindowManager::new(0);
+            for i in 0..size {
+                let line = format!("line {} — benchmark test content\n", i);
+                for ch in line.chars() {
+                    buf.insert_char(win.focused_window_mut(), ch);
+                }
+            }
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        "buffer_delete" => {
+            // Set up a buffer with `size` lines, then measure deletion.
+            let mut buf = mae_core::Buffer::new();
+            let mut win = mae_core::WindowManager::new(0);
+            for i in 0..size {
+                let line = format!("line {} — content to delete\n", i);
+                for ch in line.chars() {
+                    buf.insert_char(win.focused_window_mut(), ch);
+                }
+            }
+            let start = std::time::Instant::now();
+            for _ in 0..size {
+                if buf.line_count() > 1 {
+                    win.focused_window_mut().cursor_row = 0;
+                    win.focused_window_mut().cursor_col = 0;
+                    buf.delete_line(win.focused_window_mut());
+                }
+            }
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        "syntax_parse" => {
+            // Generate synthetic Rust source and parse it.
+            let mut source = String::new();
+            for i in 0..size {
+                source.push_str(&format!("fn func_{}(x: i32) -> i32 {{ x + {} }}\n", i, i));
+            }
+            let start = std::time::Instant::now();
+            let mut syntax_map = mae_core::syntax::SyntaxMap::new();
+            syntax_map.set_language(0, mae_core::syntax::Language::Rust);
+            let _ = syntax_map.spans_for(0, &source);
+            let elapsed = start.elapsed().as_micros() as u64;
+            let ops = if elapsed > 0 {
+                (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64
+            } else {
+                0
+            };
+            (elapsed, ops)
+        }
+        _ => return Err(format!("Unknown benchmark type: {}", benchmark)),
+    };
+
+    let _ = editor; // satisfy borrow checker
+    let result = serde_json::json!({
+        "benchmark": benchmark,
+        "size": size,
+        "duration_us": duration_us,
+        "ops_per_sec": ops_per_sec,
+    });
+    Ok(serde_json::to_string_pretty(&result).unwrap())
+}
+
 /// Build a structured JSON test plan for the self-test suite.
 ///
 /// Returns a JSON object that any MCP-connected agent can parse and execute
@@ -435,7 +558,8 @@ fn build_self_test_plan(filter: &str) -> String {
                     "terminal", "send-to-shell",
                     "agent-list", "agent-setup", "self-test",
                     "lsp-goto-definition", "lsp-find-references", "lsp-hover", "lsp-show-diagnostics",
-                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint"
+                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint",
+                    "debug-panel"
                 ]
             }
         }));
@@ -597,6 +721,74 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("performance") {
+        categories.push(serde_json::json!({
+            "name": "performance",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "perf_stats",
+                    "args": {},
+                    "assert": "Returns JSON with rss_bytes field"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "buffer_insert", "size": 10000},
+                    "assert": "duration_us < 50000"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "syntax_parse", "size": 1000},
+                    "assert": "duration_us < 100000"
+                }
+            ]
+        }));
+    }
+
+    if include("dap") {
+        categories.push(serde_json::json!({
+            "name": "dap",
+            "conditional": true,
+            "precondition": "Call debug_state first. If it returns 'No active debug session', run dap_start with adapter='lldb' and program='/bin/ls' (or skip if lldb unavailable). If dap_start fails, SKIP this entire category.",
+            "tests": [
+                {
+                    "tool": "debug_state",
+                    "args": {},
+                    "assert": "Returns JSON with 'target' and 'active_thread_id' fields (or 'No active debug session' before start)"
+                },
+                {
+                    "tool": "dap_set_breakpoint",
+                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
+                    "assert": "Returns JSON with 'all_lines_for_source' containing [1]"
+                },
+                {
+                    "tool": "dap_list_variables",
+                    "args": {},
+                    "assert": "Returns JSON object (may be empty scopes if not stopped at breakpoint)"
+                },
+                {
+                    "tool": "dap_output",
+                    "args": {"lines": 10},
+                    "assert": "Returns JSON with 'total_lines', 'returned_lines', 'output' fields"
+                },
+                {
+                    "tool": "dap_remove_breakpoint",
+                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
+                    "assert": "Returns JSON with 'remaining_lines' as empty array"
+                },
+                {
+                    "tool": "dap_continue",
+                    "args": {},
+                    "assert": "Returns 'continue' or error 'not stopped' (both acceptable)"
+                }
+            ],
+            "cleanup": [
+                "Call command_ debug-stop to tear down the session",
+                "Switch back to *AI* buffer"
+            ]
+        }));
+    }
+
     let plan = serde_json::json!({
         "version": 1,
         "description": "MAE self-test plan. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test.",
@@ -629,7 +821,7 @@ mod tests {
 
     fn all_tools() -> Vec<ToolDefinition> {
         let mut tools = tools_from_registry(&mae_core::CommandRegistry::with_builtins());
-        tools.extend(ai_specific_tools());
+        tools.extend(ai_specific_tools(&mae_core::OptionRegistry::new()));
         tools
     }
 
@@ -1098,19 +1290,19 @@ mod tests {
 
     #[test]
     fn ai_save_load_rename_tools_exist() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
             names.contains(&"ai_save"),
-            "ai_save should be in ai_specific_tools()"
+            "ai_save should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
         assert!(
             names.contains(&"ai_load"),
-            "ai_load should be in ai_specific_tools()"
+            "ai_load should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
         assert!(
             names.contains(&"rename_file"),
-            "rename_file should be in ai_specific_tools()"
+            "rename_file should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
     }
 
@@ -1568,10 +1760,10 @@ mod tests {
 
     #[test]
     fn ai_permissions_tool_exists_in_definitions() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         assert!(
             tools.iter().any(|t| t.name == "ai_permissions"),
-            "ai_permissions should be in ai_specific_tools()"
+            "ai_permissions should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
     }
 
@@ -1622,10 +1814,67 @@ mod tests {
 
     #[test]
     fn self_test_suite_exists_in_definitions() {
-        let tools = ai_specific_tools();
+        let tools = ai_specific_tools(&mae_core::OptionRegistry::new());
         assert!(
             tools.iter().any(|t| t.name == "self_test_suite"),
-            "self_test_suite should be in ai_specific_tools()"
+            "self_test_suite should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
         );
+    }
+
+    #[test]
+    fn self_test_plan_has_performance_category() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "self_test_suite",
+            serde_json::json!({"categories": "performance"}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+        assert!(categories.iter().any(|c| c["name"] == "performance"));
+    }
+
+    #[test]
+    fn perf_stats_returns_valid_json() {
+        let mut editor = Editor::new();
+        let call = make_call("perf_stats", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let stats: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(stats["rss_bytes"].is_number());
+        assert!(stats["buffer_count"].is_number());
+        assert!(stats["total_lines"].is_number());
+    }
+
+    #[test]
+    fn perf_benchmark_buffer_insert_measures_time() {
+        let mut editor = Editor::new();
+        let call = make_call(
+            "perf_benchmark",
+            serde_json::json!({"benchmark": "buffer_insert", "size": 100}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        let bench: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(bench["benchmark"], "buffer_insert");
+        assert_eq!(bench["size"], 100);
+        assert!(bench["duration_us"].as_u64().unwrap() > 0);
+        assert!(bench["ops_per_sec"].as_u64().unwrap() > 0);
     }
 }

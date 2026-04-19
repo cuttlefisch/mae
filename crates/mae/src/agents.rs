@@ -64,12 +64,26 @@ pub struct AgentDef {
 }
 
 /// How to make a given agent discover MAE's MCP tools.
+///
+/// Currently only `McpJson` exists, but this enum is the extension point
+/// for agents that use non-standard discovery (e.g. a CLI `add` command
+/// instead of a config file). `McpJson` covers any MCP-standard agent —
+/// if an agent reads `.mcp.json`, it works out of the box with no new
+/// variant needed.
 pub enum BootstrapStrategy {
     /// Write an entry into `.mcp.json` in the project root.
     McpJson { server_name: &'static str },
 }
 
 /// Return the list of agents MAE knows how to bootstrap.
+///
+/// Known-compatible agents (tested or expected to work):
+/// - **Claude Code** — fully tested, ships with settings writer
+/// - **Cline** — reads `.mcp.json` (McpJson strategy works as-is)
+/// - **Aider** — reads `.mcp.json` (McpJson strategy works as-is)
+///
+/// To add a new agent, push an `AgentDef` here and (if needed) add a
+/// settings writer in `write_agent_settings()`. See module-level docs.
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![AgentDef {
         name: "claude-code",
@@ -221,6 +235,11 @@ pub fn write_claude_settings(project_root: &Path) -> io::Result<()> {
 /// Called alongside `write_mcp_json()` on shell spawn when
 /// `auto_approve_tools` is enabled. Each agent gets its own
 /// settings writer — see module docs for how to add new agents.
+///
+/// The current if/else dispatch pattern scales fine for 3-4 agents.
+/// If we grow beyond that, extract a `trait AgentSettings` with a
+/// `write_settings(&self, project_root: &Path) -> io::Result<()>` method
+/// and store it on `AgentDef`.
 pub fn write_agent_settings(project_root: &Path) -> io::Result<()> {
     for agent in builtin_agents() {
         // Future agents: add their settings writer as new branches here.

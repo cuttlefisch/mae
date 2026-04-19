@@ -26,10 +26,16 @@ pub(crate) fn render_shell_window(
     };
 
     let title_text = shell.title();
-    let title = if title_text.is_empty() {
-        " *Terminal* ".to_string()
+    let offset = shell.display_offset();
+    let base_title = if title_text.is_empty() {
+        "*Terminal*".to_string()
     } else {
-        format!(" {} ", title_text)
+        title_text.to_string()
+    };
+    let title = if offset > 0 {
+        format!(" {} [\u{2191}{}] ", base_title, offset)
+    } else {
+        format!(" {} ", base_title)
     };
 
     let block = Block::default()
@@ -40,11 +46,17 @@ pub(crate) fn render_shell_window(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    render_shell_grid(frame, inner, shell, focused);
+    render_shell_grid(frame, inner, editor, shell, focused);
 }
 
 /// Render the alacritty terminal grid into the given area.
-fn render_shell_grid(frame: &mut Frame, area: Rect, shell: &ShellTerminal, focused: bool) {
+fn render_shell_grid(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &Editor,
+    shell: &ShellTerminal,
+    focused: bool,
+) {
     let term = shell.term();
     let content = term.renderable_content();
 
@@ -74,8 +86,8 @@ fn render_shell_grid(frame: &mut Frame, area: Rect, shell: &ShellTerminal, focus
             continue;
         }
 
-        let fg_color = convert_color(indexed.cell.fg, content.colors);
-        let bg_color = convert_color(indexed.cell.bg, content.colors);
+        let fg_color = convert_color(indexed.cell.fg, content.colors, &editor.theme);
+        let bg_color = convert_color(indexed.cell.bg, content.colors, &editor.theme);
 
         let mut style = Style::default().fg(fg_color).bg(bg_color);
 
@@ -129,7 +141,12 @@ fn render_shell_grid(frame: &mut Frame, area: Rect, shell: &ShellTerminal, focus
 }
 
 /// Convert an alacritty_terminal Color to a ratatui Color.
-fn convert_color(color: AColor, colors: &Colors) -> Color {
+///
+/// Resolution order for named colors:
+/// 1. alacritty_terminal's own color overrides (from `colors`)
+/// 2. Editor theme palette (e.g. gruvbox's `red = "#cc241d"`)
+/// 3. Standard ANSI terminal colors
+fn convert_color(color: AColor, colors: &Colors, theme: &mae_core::Theme) -> Color {
     match color {
         AColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
         AColor::Indexed(idx) => {
@@ -142,6 +159,8 @@ fn convert_color(color: AColor, colors: &Colors) -> Color {
         AColor::Named(named) => {
             if let Some(rgb) = colors[named] {
                 Color::Rgb(rgb.r, rgb.g, rgb.b)
+            } else if let Some(color) = resolve_named_from_theme(named, theme) {
+                color
             } else {
                 match named {
                     NamedColor::Black | NamedColor::DimBlack => Color::Black,
@@ -168,4 +187,55 @@ fn convert_color(color: AColor, colors: &Colors) -> Color {
             }
         }
     }
+}
+
+/// Try to resolve a NamedColor via the editor theme palette.
+///
+/// Themes use different naming conventions (gruvbox: "purple"/"aqua",
+/// dracula: "pink"/"cyan", catppuccin: "mauve"/"teal"). We try the
+/// canonical ANSI name first, then common aliases.
+fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Option<Color> {
+    let candidates: &[&str] = match named {
+        NamedColor::Black | NamedColor::DimBlack => &["black", "bg0", "base", "crust"],
+        NamedColor::Red | NamedColor::DimRed => &["red", "maroon"],
+        NamedColor::Green | NamedColor::DimGreen => &["green"],
+        NamedColor::Yellow | NamedColor::DimYellow => &["yellow", "peach", "orange"],
+        NamedColor::Blue | NamedColor::DimBlue => &["blue", "sapphire"],
+        NamedColor::Magenta | NamedColor::DimMagenta => &["magenta", "purple", "pink", "mauve"],
+        NamedColor::Cyan | NamedColor::DimCyan => &["cyan", "aqua", "teal", "sky"],
+        NamedColor::White | NamedColor::DimWhite => &["white", "fg0", "fg1", "text", "fg"],
+        NamedColor::BrightBlack => &["bright_black", "bg3", "overlay0", "comment"],
+        NamedColor::BrightRed => &["bright_red", "red"],
+        NamedColor::BrightGreen => &["bright_green", "green"],
+        NamedColor::BrightYellow => &["bright_yellow", "yellow"],
+        NamedColor::BrightBlue => &["bright_blue", "blue", "lavender"],
+        NamedColor::BrightMagenta => {
+            &["bright_magenta", "bright_purple", "purple", "pink", "mauve"]
+        }
+        NamedColor::BrightCyan => &["bright_cyan", "bright_aqua", "aqua", "teal", "sky"],
+        NamedColor::BrightWhite => &["bright_white", "fg0", "text", "fg"],
+        NamedColor::Foreground | NamedColor::BrightForeground => {
+            &["fg", "fg1", "fg0", "text", "foreground"]
+        }
+        NamedColor::DimForeground => &["fg", "fg2", "fg3", "subtext0"],
+        NamedColor::Background => &["bg", "bg0", "base", "base03", "background"],
+        _ => return None,
+    };
+    for key in candidates {
+        if let Some(c) = theme.palette.get(*key) {
+            return Some(crate::theme_convert::to_ratatui_color(*c));
+        }
+    }
+    // For Background and Black, fall back to the theme's ui.background style.
+    // Terminal programs use ANSI "black" as the background color, so it should
+    // match the editor background rather than the terminal's default.
+    if matches!(
+        named,
+        NamedColor::Background | NamedColor::Black | NamedColor::DimBlack
+    ) {
+        if let Some(bg) = theme.style("ui.background").bg {
+            return Some(crate::theme_convert::to_ratatui_color(bg));
+        }
+    }
+    None
 }

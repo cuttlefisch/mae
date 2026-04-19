@@ -341,6 +341,7 @@ impl Editor {
         };
         self.set_status(msg);
         self.dap_refresh();
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `Continued` event — clear the stopped marker.
@@ -354,6 +355,7 @@ impl Editor {
             }
         }
         self.set_status("[DAP] running");
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle an `Output` event — append to the debug output log.
@@ -372,12 +374,14 @@ impl Editor {
             }
         }
         self.set_status("[DAP] program terminated");
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle `AdapterExited` — drop the session entirely.
     pub fn apply_dap_adapter_exited(&mut self) {
         self.debug_state = None;
         self.set_status("[DAP] adapter exited");
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `ThreadsResult` — replace the thread list.
@@ -398,6 +402,7 @@ impl Editor {
             })
             .collect();
         state.set_threads(new_threads);
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `StackTraceResult` — replace the stack frames for the
@@ -436,6 +441,7 @@ impl Editor {
             }
             self.dap_request_scopes(frame_id);
         }
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `ScopesResult` — replace scope list and queue variables
@@ -463,6 +469,7 @@ impl Editor {
         for (name, vref) in scope_refs {
             self.dap_request_variables(name, vref);
         }
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `VariablesResult` — replace variables for a scope.
@@ -485,6 +492,7 @@ impl Editor {
             })
             .collect();
         state.set_variables_for_scope(scope_name, mapped);
+        self.debug_panel_refresh_if_open();
     }
 
     /// Handle a `BreakpointsSet` response — the adapter has verified

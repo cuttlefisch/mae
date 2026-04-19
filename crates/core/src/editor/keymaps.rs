@@ -154,6 +154,9 @@ impl Editor {
         normal.bind(vec![KeyPress::ctrl('6')], "alternate-file");
         // Dot repeat
         normal.bind(parse_key_seq("."), "dot-repeat");
+        // ZZ/ZQ (vim save-and-quit / force-quit)
+        normal.bind(parse_key_seq("ZZ"), "save-and-quit");
+        normal.bind(parse_key_seq("ZQ"), "force-quit");
         // Yank/Paste
         normal.bind(parse_key_seq("yy"), "yank-line");
         normal.bind(parse_key_seq("p"), "paste-after");
@@ -222,6 +225,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
         normal.bind(parse_key_seq_spaced("SPC h c"), "describe-command");
+        normal.bind(parse_key_seq_spaced("SPC h o"), "describe-option");
         normal.bind(parse_key_seq_spaced("SPC h s"), "help-search");
         normal.bind(parse_key_seq_spaced("SPC h b"), "help-back");
         normal.bind(parse_key_seq_spaced("SPC h f"), "help-forward");
@@ -240,6 +244,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC d o"), "debug-step-out");
         normal.bind(parse_key_seq_spaced("SPC d b"), "debug-toggle-breakpoint");
         normal.bind(parse_key_seq_spaced("SPC d v"), "debug-inspect");
+        normal.bind(parse_key_seq_spaced("SPC d p"), "debug-panel");
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
@@ -268,6 +273,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
         normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
         normal.bind(parse_key_seq_spaced("SPC f R"), "rename-file");
+        normal.bind(parse_key_seq_spaced("SPC f c"), "edit-config");
+        normal.bind(parse_key_seq_spaced("SPC f C"), "edit-settings");
         normal.bind(parse_key_seq_spaced("SPC f S"), "save-as");
         // +buffer expansions
         normal.bind(parse_key_seq_spaced("SPC b o"), "kill-other-buffers");
@@ -280,6 +287,8 @@ impl Editor {
             "toggle-relative-line-numbers",
         );
         normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
+        normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
+        normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
         // +git
         normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
         normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mae_core::CommandRegistry;
+use mae_core::{CommandRegistry, OptionRegistry};
 
 use crate::types::*;
 
@@ -31,7 +31,19 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
 
 /// AI-specific tools that provide richer access than simple command dispatch.
 /// These give the AI structured read/write access to buffers, files, and shell.
-pub fn ai_specific_tools() -> Vec<ToolDefinition> {
+pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
+    let option_names: Vec<String> = registry.list().iter().map(|o| o.name.to_string()).collect();
+    let option_desc = {
+        let items: Vec<String> = registry
+            .list()
+            .iter()
+            .map(|o| format!("'{}' ({})", o.name, o.kind))
+            .collect();
+        format!(
+            "Set an editor option by name. Options: {}.",
+            items.join(", ")
+        )
+    };
     vec![
         ToolDefinition {
             name: "buffer_read".into(),
@@ -688,6 +700,121 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "dap_remove_breakpoint".into(),
+            description: "Remove a breakpoint at source:line. Returns remaining lines for that source.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "source".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Source file path".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number of breakpoint to remove".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["source".into(), "line".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_list_variables".into(),
+            description: "List all variables in the current frame's scopes. Returns JSON mapping scope names to variable arrays with name/value/type/variables_reference.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "dap_expand_variable".into(),
+            description: "Request children of a nested variable. Queues a DAP request; call debug_state or dap_list_variables after to see results.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "variables_reference".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "The parent variable's variables_reference (must be > 0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "scope".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Scope name for the request (e.g. 'Locals')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["variables_reference".into(), "scope".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_select_frame".into(),
+            description: "Switch to a different stack frame by id. Queues a scopes request for the new frame.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "frame_id".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Stack frame id to select".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["frame_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_select_thread".into(),
+            description: "Switch the active thread. Triggers a stack trace refresh for the new thread.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "thread_id".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Thread id to switch to".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["thread_id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_output".into(),
+            description: "Read recent debug output log lines. Returns JSON with output array and total line count.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "lines".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "Number of recent lines to return (default 50)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // ---- Knowledge base (shared with :help) ----
         //
         // The KB is the source of truth for command/concept/key
@@ -842,8 +969,25 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
         },
         // --- Editor settings ---
         ToolDefinition {
+            name: "get_option".into(),
+            description: "Get current value of an editor option, or list all options. Returns name, current value, type, default, and documentation. Call with no name (or name='all') to list everything. Use before set_option to read current values.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Option name to query, or 'all' to list everything. Omit for all options.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "set_option".into(),
-            description: "Set an editor option by name. Supported options: 'theme', 'splash_art', 'line_numbers' (true/false), 'relative_line_numbers' (true/false), 'word_wrap' (true/false).".into(),
+            description: option_desc,
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -852,7 +996,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Option name".into(),
-                            enum_values: Some(vec!["theme".into(), "splash_art".into(), "line_numbers".into(), "relative_line_numbers".into(), "word_wrap".into()]),
+                            enum_values: Some(option_names),
                         },
                     ),
                     (
@@ -954,7 +1098,7 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                     "categories".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, performance".into(),
                         enum_values: None,
                     },
                 )]),
@@ -1032,6 +1176,44 @@ pub fn ai_specific_tools() -> Vec<ToolDefinition> {
                 required: vec!["new_path".into()],
             },
             permission: Some(PermissionTier::Write),
+        },
+        // --- Performance tools ---
+        ToolDefinition {
+            name: "perf_stats".into(),
+            description: "Get current editor performance statistics: RSS memory, CPU usage, frame timing, buffer count, total lines.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "perf_benchmark".into(),
+            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "benchmark".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Benchmark type".into(),
+                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into()]),
+                        },
+                    ),
+                    (
+                        "size".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of lines/items for the benchmark (default: 1000)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["benchmark".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
         },
     ]
 }
@@ -1129,11 +1311,12 @@ mod tests {
 
     #[test]
     fn ai_specific_tools_count() {
-        let tools = ai_specific_tools();
-        assert_eq!(tools.len(), 47);
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert_eq!(tools.len(), 56);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
+        assert!(names.contains(&"get_option"));
         assert!(names.contains(&"set_option"));
         assert!(names.contains(&"cursor_info"));
         assert!(names.contains(&"shell_exec"));
@@ -1160,6 +1343,12 @@ mod tests {
         assert!(names.contains(&"dap_continue"));
         assert!(names.contains(&"dap_step"));
         assert!(names.contains(&"dap_inspect_variable"));
+        assert!(names.contains(&"dap_remove_breakpoint"));
+        assert!(names.contains(&"dap_list_variables"));
+        assert!(names.contains(&"dap_expand_variable"));
+        assert!(names.contains(&"dap_select_frame"));
+        assert!(names.contains(&"dap_select_thread"));
+        assert!(names.contains(&"dap_output"));
         assert!(names.contains(&"kb_get"));
         assert!(names.contains(&"kb_search"));
         assert!(names.contains(&"kb_list"));
@@ -1206,6 +1395,29 @@ mod tests {
             classify_command_permission("force-quit"),
             PermissionTier::Privileged
         );
+    }
+
+    #[test]
+    fn set_option_enum_covers_all_options() {
+        let registry = OptionRegistry::new();
+        let tools = ai_specific_tools(&registry);
+        let set_opt = tools.iter().find(|t| t.name == "set_option").unwrap();
+        let enum_values = set_opt.parameters.properties["option"]
+            .enum_values
+            .as_ref()
+            .expect("set_option should have enum_values");
+        assert_eq!(
+            enum_values.len(),
+            registry.list().len(),
+            "set_option enum_values must match OptionRegistry count"
+        );
+        for opt in registry.list() {
+            assert!(
+                enum_values.contains(&opt.name.to_string()),
+                "Missing option '{}' in set_option enum_values",
+                opt.name
+            );
+        }
     }
 
     #[test]

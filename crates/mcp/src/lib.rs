@@ -24,6 +24,14 @@ pub struct McpToolRequest {
     pub reply: oneshot::Sender<McpToolResult>,
 }
 
+impl std::fmt::Debug for McpToolRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpToolRequest")
+            .field("tool_name", &self.tool_name)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Result of a tool call, sent back from the editor thread.
 pub struct McpToolResult {
     pub success: bool,

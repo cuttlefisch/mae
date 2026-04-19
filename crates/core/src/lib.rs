@@ -5,6 +5,7 @@ pub mod commands;
 pub mod conversation;
 pub mod dap_intent;
 pub mod debug;
+pub mod debug_view;
 pub mod editor;
 pub mod file_browser;
 pub mod file_picker;
@@ -16,6 +17,7 @@ pub mod kb_seed;
 pub mod keymap;
 pub mod lsp_intent;
 pub mod messages;
+pub mod options;
 pub mod project;
 pub mod search;
 pub mod syntax;
@@ -32,21 +34,23 @@ pub use dap_intent::{DapIntent, DapSpawnConfig, StepKind};
 pub use debug::{
     Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
 };
+pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor,
+    CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor, InputLock,
     LspLocation, LspRange,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
 pub use help_view::{HelpLinkSpan, HelpView};
 pub use hooks::HookRegistry;
-pub use input::InputEvent;
+pub use input::{InputEvent, MouseButton};
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };
 pub use lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 pub use mae_kb::{parse_links, KnowledgeBase, Node as KbNode, NodeKind as KbNodeKind};
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
+pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub use syntax::{language_for_path, HighlightSpan, Language, SyntaxMap};

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::conversation::Conversation;
+use crate::debug_view::DebugView;
 use crate::help_view::HelpView;
 use crate::window::Window;
 
@@ -23,6 +24,9 @@ pub enum BufferKind {
     /// Terminal emulator buffer. Rendering is driven by an external
     /// `ShellTerminal` (lives in `mae` binary, not in core).
     Shell,
+    /// DAP debug panel — read-only dashboard showing threads, stack frames,
+    /// scopes, and variables from `DebugState`.
+    Debug,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -56,6 +60,8 @@ pub struct Buffer {
     pub conversation: Option<Conversation>,
     /// Help-buffer navigation state. Present iff `kind == BufferKind::Help`.
     pub help_view: Option<HelpView>,
+    /// Debug panel view state. Present iff `kind == BufferKind::Debug`.
+    pub debug_view: Option<DebugView>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// Last known modification time of the backing file on disk.
@@ -80,6 +86,7 @@ impl Buffer {
             read_only: false,
             conversation: None,
             help_view: None,
+            debug_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -97,6 +104,7 @@ impl Buffer {
             read_only: false,
             conversation: Some(Conversation::new()),
             help_view: None,
+            debug_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -114,6 +122,7 @@ impl Buffer {
             read_only: true,
             conversation: None,
             help_view: None,
+            debug_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -132,6 +141,7 @@ impl Buffer {
             read_only: true,
             conversation: None,
             help_view: Some(HelpView::new(start)),
+            debug_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -149,6 +159,25 @@ impl Buffer {
             read_only: true,
             conversation: None,
             help_view: None,
+            debug_view: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            file_mtime: None,
+        }
+    }
+
+    /// Create a debug panel buffer.
+    pub fn new_debug() -> Self {
+        Buffer {
+            rope: Rope::new(),
+            file_path: None,
+            modified: false,
+            name: String::from("*Debug*"),
+            kind: BufferKind::Debug,
+            read_only: true,
+            conversation: None,
+            help_view: None,
+            debug_view: Some(DebugView::new()),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -171,6 +200,7 @@ impl Buffer {
             read_only: false,
             conversation: None,
             help_view: None,
+            debug_view: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: mtime,

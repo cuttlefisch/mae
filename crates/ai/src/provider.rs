@@ -1,3 +1,23 @@
+//! Agent provider abstraction — the trait that makes MAE backend-agnostic.
+//!
+//! This module defines [`AgentProvider`], the async trait that every AI
+//! backend must implement, plus the shared types ([`ProviderConfig`],
+//! [`ProviderResponse`], [`Usage`], [`BudgetConfig`]) that flow between
+//! the provider and the session loop.
+//!
+//! # Adding a new provider
+//!
+//! 1. **Implement [`AgentProvider`]** for your struct. The trait has two
+//!    methods: `send()` (conversation turn) and `name()` (logging label).
+//!    See `claude.rs` and `openai.rs` for reference implementations.
+//! 2. **Add a constructor** in a new module under `crates/ai/src/` and
+//!    re-export it from `crates/ai/src/lib.rs`.
+//! 3. **Add a match arm** in `crates/mae/src/bootstrap.rs::setup_ai()` so
+//!    the provider string from config resolves to your constructor.
+//! 4. **Add pricing entries** in `pricing.rs` for any models your provider
+//!    serves, so the session budget tracker can estimate cost. Unknown
+//!    models are treated as free (unmetered).
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 

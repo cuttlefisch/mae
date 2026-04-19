@@ -262,6 +262,85 @@ impl Editor {
                 self.search_state.highlight_active = false;
                 true
             }
+            "set" => {
+                if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let parts: Vec<&str> = kv.splitn(2, ' ').collect();
+                    if parts.len() == 2 {
+                        match self.set_option(parts[0], parts[1]) {
+                            Ok(msg) => self.set_status(msg),
+                            Err(e) => self.set_status(e),
+                        }
+                    } else {
+                        // Single arg: toggle boolean or show current value
+                        match self.get_option(parts[0]) {
+                            Some((val, def)) if def.kind == crate::options::OptionKind::Bool => {
+                                let toggled = if val == "true" { "false" } else { "true" };
+                                match self.set_option(parts[0], toggled) {
+                                    Ok(msg) => self.set_status(msg),
+                                    Err(e) => self.set_status(e),
+                                }
+                            }
+                            Some((val, def)) => {
+                                self.set_status(format!("{} = {}", def.name, val));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", parts[0])),
+                        }
+                    }
+                } else {
+                    // No args: list all options
+                    self.show_all_options();
+                }
+                true
+            }
+            "set-save" => {
+                if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let parts: Vec<&str> = kv.splitn(2, ' ').collect();
+                    let key = parts[0];
+                    // If value given, apply it first
+                    if parts.len() == 2 {
+                        if let Err(e) = self.set_option(key, parts[1]) {
+                            self.set_status(e);
+                            return true;
+                        }
+                    }
+                    // Save current value to config.toml
+                    match self.save_option_to_config(key) {
+                        Ok(msg) => self.set_status(msg),
+                        Err(e) => self.set_status(e),
+                    }
+                } else {
+                    self.set_status("Usage: :set-save <option> [value]");
+                }
+                true
+            }
+            "describe-option" => {
+                let name = args.map(str::trim).filter(|s| !s.is_empty());
+                match name {
+                    Some(n) => {
+                        // Try to find the option and open its KB node
+                        if let Some((_, def)) = self.get_option(n) {
+                            let id = format!("option:{}", def.name);
+                            if self.kb.contains(&id) {
+                                self.open_help_at(&id);
+                            } else {
+                                // Fallback: show inline
+                                let (val, _) = self.get_option(n).unwrap();
+                                self.set_status(format!(
+                                    "{}: {} (current: {}, default: {})",
+                                    def.name, def.doc, val, def.default_value
+                                ));
+                            }
+                        } else {
+                            self.set_status(format!("Unknown option: {}", n));
+                        }
+                    }
+                    None => {
+                        // Open palette filtered to options
+                        self.show_all_options();
+                    }
+                }
+                true
+            }
             "ai-save" => {
                 self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
                 true

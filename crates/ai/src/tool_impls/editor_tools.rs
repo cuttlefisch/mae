@@ -12,7 +12,10 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "message_log_entries": editor.message_log.len(),
         "debug_session_active": editor.debug_state.is_some(),
         "debug_target": editor.debug_state.as_ref().map(|s| format!("{:?}", s.target)),
+        "debug_panel_open": editor.buffers.iter().any(|b| b.kind == mae_core::buffer::BufferKind::Debug),
+        "breakpoint_count": editor.debug_state.as_ref().map(|s| s.breakpoint_count()).unwrap_or(0),
         "command_count": editor.commands.len(),
+        "renderer": editor.renderer_name,
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
@@ -55,6 +58,40 @@ pub fn execute_command_list(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
 }
 
+pub fn execute_get_option(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("all");
+    if name == "all" || name.is_empty() {
+        let options: Vec<serde_json::Value> = editor
+            .option_registry
+            .list()
+            .iter()
+            .filter_map(|def| {
+                let (value, _) = editor.get_option(def.name)?;
+                Some(serde_json::json!({
+                    "name": def.name,
+                    "value": value,
+                    "type": def.kind.to_string(),
+                    "default": def.default_value,
+                    "doc": def.doc,
+                }))
+            })
+            .collect();
+        serde_json::to_string_pretty(&options).map_err(|e| e.to_string())
+    } else {
+        let (value, def) = editor
+            .get_option(name)
+            .ok_or_else(|| format!("Unknown option: '{}'", name))?;
+        let info = serde_json::json!({
+            "name": def.name,
+            "value": value,
+            "type": def.kind.to_string(),
+            "default": def.default_value,
+            "doc": def.doc,
+        });
+        serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+    }
+}
+
 pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let option = args
         .get("option")
@@ -64,35 +101,7 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
         .get("value")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'value' parameter")?;
-    match option {
-        "theme" => {
-            editor.set_theme_by_name(value);
-            Ok(format!("Theme set to: {}", editor.theme.name))
-        }
-        "splash_art" => {
-            editor.splash_art = Some(value.to_string());
-            Ok(format!("Splash art set to: {}", value))
-        }
-        "line_numbers" => {
-            editor.show_line_numbers = value == "true" || value == "on" || value == "1";
-            Ok(format!("Line numbers: {}", editor.show_line_numbers))
-        }
-        "relative_line_numbers" => {
-            editor.relative_line_numbers = value == "true" || value == "on" || value == "1";
-            Ok(format!(
-                "Relative line numbers: {}",
-                editor.relative_line_numbers
-            ))
-        }
-        "word_wrap" => {
-            editor.word_wrap = value == "true" || value == "on" || value == "1";
-            Ok(format!("Word wrap: {}", editor.word_wrap))
-        }
-        _ => Err(format!(
-            "Unknown option: '{}'. Supported: 'theme', 'splash_art', 'line_numbers', 'relative_line_numbers', 'word_wrap'",
-            option
-        )),
-    }
+    editor.set_option(option, value)
 }
 
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
@@ -139,13 +148,45 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 })
                 .collect();
 
+            // Include variables grouped by scope.
+            let variables: serde_json::Value = state
+                .variables
+                .iter()
+                .map(|(scope_name, vars)| {
+                    let var_list: Vec<serde_json::Value> = vars
+                        .iter()
+                        .map(|v| {
+                            serde_json::json!({
+                                "name": v.name,
+                                "value": v.value,
+                                "type": v.var_type,
+                                "variables_reference": v.variables_reference,
+                            })
+                        })
+                        .collect();
+                    (scope_name.clone(), serde_json::Value::Array(var_list))
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+                .into();
+
+            // Include recent output (last 50 lines).
+            let output_len = state.output_log.len();
+            let output_start = output_len.saturating_sub(50);
+            let recent_output: Vec<&str> = state.output_log[output_start..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
+                "active_thread_id": state.active_thread_id,
                 "threads": threads,
                 "stack_frames": frames,
                 "scopes": state.scopes.iter().map(|s| &s.name).collect::<Vec<_>>(),
+                "variables": variables,
                 "breakpoints": breakpoints,
                 "stopped_location": state.stopped_location,
+                "output_log": recent_output,
             });
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }

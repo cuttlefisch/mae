@@ -363,10 +363,11 @@ impl Editor {
                 self.window_mgr.focused_window_mut().move_to_screen_top();
             }
             "move-screen-middle" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
                 let vh = self.viewport_height;
                 self.window_mgr
                     .focused_window_mut()
-                    .move_to_screen_middle(vh);
+                    .move_to_screen_middle(buf, vh);
             }
             "move-screen-bottom" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
@@ -979,6 +980,11 @@ impl Editor {
                 self.command_palette = Some(CommandPalette::for_describe(&self.commands));
                 self.mode = Mode::CommandPalette;
             }
+            "describe-option" => {
+                // Open the *Options* buffer listing all options.
+                // (ex-command handler supports :describe-option <name> for specific options)
+                self.show_all_options();
+            }
             "set-theme" => {
                 let names = bundled_theme_names();
                 let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
@@ -1074,6 +1080,11 @@ impl Editor {
                 } else {
                     self.set_status("No active debug session");
                 }
+            }
+
+            // Debug panel
+            "debug-panel" => {
+                self.toggle_debug_panel();
             }
 
             // Visual mode
@@ -1429,7 +1440,39 @@ impl Editor {
                 self.lsp_request_definition();
             }
             "lsp-find-references" => self.lsp_request_references(),
-            "lsp-hover" => self.lsp_request_hover(),
+            "lsp-hover" => {
+                self.lsp_request_hover();
+                // Also show debug variable value if stopped.
+                if let Some(state) = &self.debug_state {
+                    if state.is_stopped() {
+                        let buf = &self.buffers[self.active_buffer_idx()];
+                        let win = self.window_mgr.focused_window();
+                        let offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+                        if let Some(pattern) = crate::search::word_at_offset(buf.rope(), offset) {
+                            // word_at_offset returns `\bword\b`; extract the raw word.
+                            let word = pattern
+                                .strip_prefix("\\b")
+                                .and_then(|s| s.strip_suffix("\\b"))
+                                .unwrap_or(&pattern);
+                            if let Some((_scope, var)) = state.find_variable(word, None) {
+                                let type_str = var
+                                    .var_type
+                                    .as_deref()
+                                    .map(|t| format!(": {}", t))
+                                    .unwrap_or_default();
+                                let debug_info =
+                                    format!("[Debug] {}{} = {}", var.name, type_str, var.value);
+                                let existing = std::mem::take(&mut self.status_msg);
+                                if existing.is_empty() {
+                                    self.status_msg = debug_info;
+                                } else {
+                                    self.status_msg = format!("{} | {}", existing, debug_info);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // LSP completion (Phase 4a M4)
             "lsp-complete" => self.lsp_request_completion(),
@@ -1595,21 +1638,20 @@ impl Editor {
             // +buffer expansions (SPC b)
             "kill-other-buffers" => {
                 let active = self.active_buffer_idx();
-                let mut killed = 0;
-                let mut i = 0;
-                while i < self.buffers.len() {
-                    if i != active && !self.buffers[i].modified {
-                        self.buffers.remove(i);
-                        if active > i {
-                            // Adjust the focused window's buffer_idx
-                            let win = self.window_mgr.focused_window_mut();
-                            if win.buffer_idx > 0 {
-                                win.buffer_idx -= 1;
-                            }
-                        }
-                        killed += 1;
-                    } else {
-                        i += 1;
+                // Collect indices to remove (skip active + modified), then remove in reverse
+                // order so that later removals don't invalidate earlier indices.
+                let to_remove: Vec<usize> = (0..self.buffers.len())
+                    .filter(|&i| i != active && !self.buffers[i].modified)
+                    .collect();
+                let killed = to_remove.len();
+                for &i in to_remove.iter().rev() {
+                    self.buffers.remove(i);
+                }
+                // Revalidate ALL window buffer_idx values after bulk removal.
+                let buf_count = self.buffers.len();
+                for win in self.window_mgr.iter_windows_mut() {
+                    if win.buffer_idx >= buf_count {
+                        win.buffer_idx = buf_count.saturating_sub(1);
                     }
                 }
                 self.set_status(format!("Killed {} buffer(s)", killed));
@@ -1738,6 +1780,73 @@ impl Editor {
             }
             "ai-load" => {
                 self.set_status("Usage: :ai-load <path>");
+            }
+
+            "edit-config" => {
+                // Scheme-first config: init.scm is the user-facing config surface.
+                // TOML config is bootstrap-only (see edit-settings).
+                let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                    std::path::PathBuf::from(xdg)
+                } else if let Ok(home) = std::env::var("HOME") {
+                    std::path::PathBuf::from(home).join(".config")
+                } else {
+                    std::path::PathBuf::from(".config")
+                }
+                .join("mae");
+                let init_path = config_dir.join("init.scm");
+                if !init_path.exists() {
+                    // Create template init.scm with helpful examples.
+                    let _ = std::fs::create_dir_all(&config_dir);
+                    let template = "\
+;; MAE init.scm — Scheme configuration (loaded after config.toml)
+;; This file is the primary config surface. TOML is bootstrap-only.
+;;
+;; Examples:
+;;   (set-option! \"theme\" \"catppuccin-mocha\")
+;;   (set-option! \"font_size\" \"16\")
+;;   (set-option! \"word_wrap\" \"true\")
+;;   (set-option! \"relative_line_numbers\" \"true\")
+;;
+;; Keybindings:
+;;   (define-key \"normal\" \"g c\" \"toggle-comment\")
+;;
+;; Hooks:
+;;   (add-hook! \"buffer-open\" (lambda () (display \"opened!\")))
+;;
+";
+                    let _ = std::fs::write(&init_path, template);
+                }
+                self.open_file(init_path.display().to_string());
+            }
+            "edit-settings" => {
+                // Bootstrap TOML config (GUI-only settings, font family, etc.)
+                let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+                    std::path::PathBuf::from(xdg)
+                } else if let Ok(home) = std::env::var("HOME") {
+                    std::path::PathBuf::from(home).join(".config")
+                } else {
+                    std::path::PathBuf::from(".config")
+                }
+                .join("mae")
+                .join("config.toml");
+                self.open_file(config_path.display().to_string());
+            }
+            "toggle-fps" => {
+                self.show_fps = !self.show_fps;
+                self.set_status(format!(
+                    "FPS overlay: {}",
+                    if self.show_fps { "on" } else { "off" }
+                ));
+            }
+            "debug-mode" => {
+                self.debug_mode = !self.debug_mode;
+                if self.debug_mode {
+                    self.show_fps = true;
+                }
+                self.set_status(format!(
+                    "Debug mode: {}",
+                    if self.debug_mode { "on" } else { "off" }
+                ));
             }
 
             _ => return false,

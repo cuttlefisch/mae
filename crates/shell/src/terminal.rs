@@ -73,6 +73,11 @@ pub struct ShellTerminal {
 
     /// PID of the child shell process.
     child_pid: u32,
+
+    /// Generation counter — incremented each time `poll_events()` receives
+    /// new data from the PTY. Renderers compare this to a cached value to
+    /// avoid needless redraws when the shell is idle.
+    generation: u64,
 }
 
 impl ShellTerminal {
@@ -158,6 +163,7 @@ impl ShellTerminal {
             title: String::new(),
             exited: false,
             child_pid,
+            generation: 0,
         })
     }
 
@@ -206,7 +212,16 @@ impl ShellTerminal {
             }
             events.push(event);
         }
+        if !events.is_empty() {
+            self.generation += 1;
+        }
         events
+    }
+
+    /// Generation counter — incremented each time new events arrive from the PTY.
+    /// Compare across frames to detect whether the shell produced new output.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Access the terminal state for rendering (locks the mutex).
@@ -251,6 +266,24 @@ impl ShellTerminal {
     /// Shutdown the terminal. Sends shutdown message to the I/O thread.
     pub fn shutdown(&self) {
         let _ = self.pty_tx.send(Msg::Shutdown);
+    }
+
+    /// Scroll the terminal display by a given amount.
+    /// Used for scrollback navigation (Shift-PageUp/Down, Ctrl-Shift-j/k).
+    pub fn scroll_display(&self, scroll: alacritty_terminal::grid::Scroll) {
+        self.term.lock().scroll_display(scroll);
+    }
+
+    /// Scroll to the bottom of the terminal (live output).
+    pub fn scroll_to_bottom(&self) {
+        self.term
+            .lock()
+            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+    }
+
+    /// Get the current display offset (0 = at bottom/live, >0 = scrolled up).
+    pub fn display_offset(&self) -> usize {
+        self.term.lock().grid().display_offset()
     }
 
     /// Read a line of text from the terminal grid (0-indexed from top of viewport).

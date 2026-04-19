@@ -402,30 +402,13 @@ impl SchemeRuntime {
             }
         }
 
-        // Apply editor options
+        // Apply editor options via the OptionRegistry (single source of truth)
         for (key, value) in state.pending_options.drain(..) {
-            match key.as_str() {
-                "line-numbers" | "show-line-numbers" => {
-                    editor.show_line_numbers = parse_bool(&value);
-                }
-                "relative-line-numbers" => {
-                    editor.relative_line_numbers = parse_bool(&value);
-                }
-                "word-wrap" => {
-                    editor.word_wrap = parse_bool(&value);
-                }
-                "break-indent" => {
-                    editor.break_indent = parse_bool(&value);
-                }
-                "show-break" => {
-                    editor.show_break = value;
-                }
-                "theme" => {
-                    editor.set_theme_by_name(&value);
-                }
-                other => {
-                    warn!(key = other, "unknown set-option! key");
-                    editor.set_status(format!("Unknown option: {}", other));
+            match editor.set_option(&key, &value) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(key = key.as_str(), "set-option! error: {}", e);
+                    editor.set_status(e);
                 }
             }
         }
@@ -562,11 +545,6 @@ impl SchemeRuntime {
     }
 }
 
-/// Parse a string value as a boolean (for `set-option!`).
-fn parse_bool(s: &str) -> bool {
-    matches!(s, "true" | "#t" | "1" | "yes" | "on")
-}
-
 fn steel_val_to_string(val: &SteelVal) -> String {
     match val {
         SteelVal::Void => String::new(),
@@ -677,7 +655,7 @@ mod tests {
         let dir = std::env::temp_dir().join("mae_test_scheme_load");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("test.scm");
-        std::fs::write(&path, r#"(define-key "normal" "Z" "save-and-quit")"#).unwrap();
+        std::fs::write(&path, r#"(define-key "normal" "Q" "my-custom-save")"#).unwrap();
 
         let mut rt = SchemeRuntime::new().unwrap();
         let mut editor = Editor::new();
@@ -687,8 +665,8 @@ mod tests {
 
         let keymap = editor.keymaps.get("normal").unwrap();
         assert_eq!(
-            keymap.lookup(&parse_key_seq("Z")),
-            mae_core::LookupResult::Exact("save-and-quit")
+            keymap.lookup(&parse_key_seq("Q")),
+            mae_core::LookupResult::Exact("my-custom-save")
         );
 
         let _ = std::fs::remove_dir_all(&dir);

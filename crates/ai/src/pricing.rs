@@ -12,6 +12,21 @@
 //! provider impls means the table stays self-contained and the editor
 //! crate never has to care about model identifiers.
 //!
+//! # Unknown models
+//!
+//! Models not in the table (e.g. Ollama-hosted local models like `llama3`
+//! or `qwen2.5-coder:7b`) return `None` from [`lookup()`]. The session
+//! budget tracker treats these as free/unmetered — budget enforcement is
+//! skipped entirely rather than blocking the request. This is intentional:
+//! a local FOSS contributor should never hit a budget rejection.
+//!
+//! # Adding new model families
+//!
+//! Add a `(prefix, ModelPrice)` entry to [`TABLE`]. Order matters: longer
+//! prefixes must come before shorter ones so the first match wins (e.g.
+//! `"gpt-4o-mini"` before `"gpt-4o"`). Group entries by provider and
+//! sort within each group by specificity (most specific first).
+//!
 //! # Keeping rates fresh
 //! Rates reflect published public pricing as of 2026-04. The source of
 //! truth is each provider's pricing page. When rates change, update
