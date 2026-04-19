@@ -203,6 +203,9 @@ pub struct Editor {
     /// Buffer indices of newly created shell buffers that need PTY spawning.
     /// The binary drains this and creates `ShellTerminal` instances.
     pub pending_shell_spawns: Vec<usize>,
+    /// Agent shell spawns: (buf_idx, command). The binary spawns these with
+    /// `spawn_command` so the PTY exits when the agent command exits.
+    pub pending_agent_spawns: Vec<(usize, String)>,
     /// Buffer indices of shell terminals that should be reset (clear screen).
     /// Drained by the binary which owns the `ShellTerminal` instances.
     pub pending_shell_resets: Vec<usize>,
@@ -413,6 +416,7 @@ impl Editor {
             pending_lsp_requests: Vec::new(),
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
+            pending_agent_spawns: Vec::new(),
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),
@@ -523,6 +527,7 @@ impl Editor {
             pending_lsp_requests: Vec::new(),
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
+            pending_agent_spawns: Vec::new(),
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
             pending_shell_inputs: Vec::new(),

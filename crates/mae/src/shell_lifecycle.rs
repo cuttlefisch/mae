@@ -46,7 +46,8 @@ pub fn spawn_pending_shells(
     app_config: &config::Config,
 ) {
     let shell_spawns = std::mem::take(&mut editor.pending_shell_spawns);
-    let had_shell_spawns = !shell_spawns.is_empty();
+    let agent_spawns = std::mem::take(&mut editor.pending_agent_spawns);
+    let had_shell_spawns = !shell_spawns.is_empty() || !agent_spawns.is_empty();
 
     for buf_idx in shell_spawns {
         let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
@@ -67,6 +68,27 @@ pub fn spawn_pending_shells(
             Err(e) => {
                 error!(buf_idx, error = %e, "failed to spawn shell terminal");
                 editor.set_status(format!("Terminal spawn failed: {}", e));
+            }
+        }
+    }
+
+    // Spawn agent shells: command runs directly as PTY program.
+    for (buf_idx, command) in agent_spawns {
+        let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
+        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
+        let mut extra_env = HashMap::new();
+        extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.to_string());
+        match mae_shell::ShellTerminal::spawn_command(
+            inner_cols, inner_rows, &command, cwd, extra_env,
+        ) {
+            Ok(shell) => {
+                debug!(buf_idx, %command, "agent terminal spawned");
+                shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
+                shell_terminals.insert(buf_idx, shell);
+            }
+            Err(e) => {
+                error!(buf_idx, error = %e, "failed to spawn agent terminal");
+                editor.set_status(format!("Agent spawn failed: {}", e));
             }
         }
     }

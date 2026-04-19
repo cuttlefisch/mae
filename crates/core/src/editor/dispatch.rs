@@ -1884,10 +1884,11 @@ impl Editor {
                 let new_idx = self.buffers.len() - 1;
                 self.alternate_buffer_idx = Some(prev_idx);
                 self.window_mgr.focused_window_mut().buffer_idx = new_idx;
-                self.pending_shell_spawns.push(new_idx);
-                // Queue the AI editor command to be sent after shell spawns
-                let cmd = format!("{}\n", self.ai_editor);
-                self.pending_shell_inputs.push((new_idx, cmd));
+                // Spawn the agent command directly as the PTY program,
+                // not inside a shell. When the agent exits, the PTY exits
+                // and the buffer auto-closes.
+                let cmd = self.ai_editor.clone();
+                self.pending_agent_spawns.push((new_idx, cmd));
                 self.mode = Mode::ShellInsert;
             }
 

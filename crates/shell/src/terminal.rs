@@ -93,6 +93,76 @@ impl ShellTerminal {
         Self::spawn_with_env(cols, rows, working_dir, std::collections::HashMap::new())
     }
 
+    /// Spawn a terminal running a specific command (not the user's shell).
+    /// When the command exits, the PTY exits — ideal for agent processes
+    /// where the lifecycle should be tied to the command, not a shell.
+    pub fn spawn_command(
+        cols: u16,
+        rows: u16,
+        command: &str,
+        working_dir: Option<std::path::PathBuf>,
+        extra_env: std::collections::HashMap<String, String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let columns = cols as usize;
+        let screen_lines = rows as usize;
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let listener = ShellEventListener::new(event_tx);
+
+        let config = TermConfig::default();
+        let size = TermSize::new(columns, screen_lines);
+        let term = Term::new(config, &size, listener.clone());
+        let term = Arc::new(FairMutex::new(term));
+
+        // Parse command into program + args (simple space-split).
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        let (program, args) = if parts.is_empty() {
+            return Err("empty command".into());
+        } else {
+            (
+                parts[0].to_string(),
+                parts[1..].iter().map(|s| s.to_string()).collect(),
+            )
+        };
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("MAE_TERMINAL".to_string(), "1".to_string());
+        env.extend(extra_env);
+        let pty_opts = tty::Options {
+            shell: Some(tty::Shell::new(program, args)),
+            working_directory: working_dir,
+            env,
+            ..Default::default()
+        };
+
+        let window_size = WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width: 1,
+            cell_height: 1,
+        };
+
+        tty::setup_env();
+        let pty = tty::new(&pty_opts, window_size, 0)?;
+        let child_pid = pty.child().id();
+        let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, true, false)?;
+        let pty_tx = event_loop.channel();
+        let io_thread = event_loop.spawn();
+
+        debug!(cols, rows, command, "agent terminal spawned");
+
+        Ok(ShellTerminal {
+            term,
+            pty_tx,
+            event_rx,
+            _io_thread: io_thread,
+            title: String::new(),
+            exited: false,
+            child_pid,
+            generation: 0,
+        })
+    }
+
     /// Spawn a new terminal with extra environment variables injected
     /// into the child process (e.g. `MAE_MCP_SOCKET`).
     pub fn spawn_with_env(
@@ -153,7 +223,7 @@ impl ShellTerminal {
         let pty_tx = event_loop.channel();
         let io_thread = event_loop.spawn();
 
-        debug!(cols, rows, "shell terminal spawned");
+        debug!(cols, rows, program = ?pty_opts.shell, "shell terminal spawned");
 
         Ok(ShellTerminal {
             term,
