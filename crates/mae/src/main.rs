@@ -416,6 +416,13 @@ async fn run_terminal_loop(
     let mut last_health_check = tokio::time::Instant::now();
     let mut tui_dirty = true; // start dirty for initial render
 
+    // Frame rate limiting: render at most once per MIN_FRAME_INTERVAL.
+    // First event after idle renders immediately (no input latency).
+    // Rapid events coalesce into the next frame slot (Alacritty/Helix pattern).
+    const MIN_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_micros(16_667); // ~60fps
+    let mut last_render = std::time::Instant::now() - MIN_FRAME_INTERVAL; // allow first render immediately
+    let mut render_pending = false;
+
     loop {
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
@@ -467,14 +474,23 @@ async fn run_terminal_loop(
         }
 
         if tui_dirty {
-            let frame_start = std::time::Instant::now();
-            renderer.render(editor, &shell_terminals)?;
-            let frame_elapsed = frame_start.elapsed().as_micros() as u64;
-            editor.perf_stats.record_frame(frame_elapsed);
-            if editor.debug_mode {
-                editor.perf_stats.sample_process_stats();
+            let since_last = last_render.elapsed();
+            if since_last >= MIN_FRAME_INTERVAL {
+                // Enough time has passed — render now (instant response).
+                let frame_start = std::time::Instant::now();
+                renderer.render(editor, &shell_terminals)?;
+                let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+                editor.perf_stats.record_frame(frame_elapsed);
+                if editor.debug_mode {
+                    editor.perf_stats.sample_process_stats();
+                }
+                last_render = std::time::Instant::now();
+                tui_dirty = false;
+                render_pending = false;
+            } else {
+                // Too soon — defer render to next frame slot.
+                render_pending = true;
             }
-            tui_dirty = false;
         }
 
         if !editor.running {
@@ -531,7 +547,24 @@ async fn run_terminal_loop(
             }
         };
 
+        // Frame timer: fires at the next render slot when a deferred render is pending.
+        let frame_timer = async {
+            if render_pending {
+                let elapsed = last_render.elapsed();
+                if elapsed < MIN_FRAME_INTERVAL {
+                    tokio::time::sleep(MIN_FRAME_INTERVAL - elapsed).await;
+                }
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
         tokio::select! {
+            _ = frame_timer => {
+                // Frame slot arrived — mark dirty so the render section fires.
+                tui_dirty = true;
+                render_pending = false;
+            }
             maybe_event = event_stream.next() => {
                 tui_dirty = true;
                 match maybe_event {
