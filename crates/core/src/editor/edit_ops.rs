@@ -3,6 +3,44 @@ use crate::Mode;
 use super::{EditRecord, Editor};
 
 impl Editor {
+    /// Insert text after the current cursor line. Used by `:read` and `:r`.
+    /// Sets a status message with the number of lines inserted.
+    pub fn insert_lines_after_cursor(&mut self, text: &str) {
+        let idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let row = win.cursor_row;
+        let buf = &self.buffers[idx];
+
+        let line_count = buf.rope().len_lines();
+        let insert_pos = if row + 1 >= line_count {
+            // At or past the last line — append at end
+            buf.rope().len_chars()
+        } else {
+            buf.rope().line_to_char(row + 1)
+        };
+
+        // Ensure we start on a new line if needed
+        let needs_newline = if insert_pos > 0 {
+            buf.rope().char(insert_pos - 1) != '\n'
+        } else {
+            false
+        };
+
+        let trimmed = text.trim_end_matches('\n');
+        let to_insert = if needs_newline {
+            format!("\n{}\n", trimmed)
+        } else {
+            format!("{}\n", trimmed)
+        };
+
+        self.buffers[idx].insert_text_at(insert_pos, &to_insert);
+
+        let inserted_lines = text.lines().count();
+        self.set_status(format!("{} lines inserted", inserted_lines));
+    }
+}
+
+impl Editor {
     /// Join current line with the next: remove newline, collapse leading whitespace to one space.
     pub(crate) fn join_line(&mut self) {
         let idx = self.active_buffer_idx();

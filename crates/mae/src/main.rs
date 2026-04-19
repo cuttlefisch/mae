@@ -893,6 +893,7 @@ fn keypress_to_pty_bytes(kp: &KeyPress) -> Vec<u8> {
         Key::Enter => vec![b'\r'],
         Key::Backspace => vec![0x7f],
         Key::Tab => vec![b'\t'],
+        Key::BackTab => b"\x1b[Z".to_vec(),
         Key::Escape => vec![0x1b],
         Key::Up => b"\x1b[A".to_vec(),
         Key::Down => b"\x1b[B".to_vec(),
@@ -1576,6 +1577,7 @@ fn run_gui(
         app_config,
         ctrl_held: false,
         alt_held: false,
+        shift_held: false,
         dirty: true,
         cursor_x: 0.0,
         cursor_y: 0.0,
@@ -1698,6 +1700,7 @@ struct GuiApp {
     // Input state
     ctrl_held: bool,
     alt_held: bool,
+    shift_held: bool,
     dirty: bool,
     cursor_x: f64,
     cursor_y: f64,
@@ -1864,14 +1867,18 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let state = mods.state();
                 self.ctrl_held = state.control_key();
                 self.alt_held = state.alt_key();
+                self.shift_held = state.shift_key();
             }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == winit::event::ElementState::Pressed =>
             {
                 self.dirty = true;
-                if let Some(mae_core::InputEvent::Key(kp)) =
-                    mae_gui::winit_event_to_input(&event, self.ctrl_held, self.alt_held)
-                {
+                if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
+                    &event,
+                    self.ctrl_held,
+                    self.alt_held,
+                    self.shift_held,
+                ) {
                     if self.editor.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)

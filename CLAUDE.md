@@ -133,7 +133,8 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Event loop refactor: `run_app` + `EventLoopProxy<MaeEvent>` replaces `pump_app_events` ✅
 - `GuiApp` owns all state, `bridge_task` on background tokio thread ✅
 - `main()` is plain `fn` — tokio runtime built manually ✅
-- **Next: line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
+- v0.3.0 polish: BackTab, font zoom, `:read !cmd`, per-buffer projects, status line (git/LSP/tier), AI agent launcher, session persistence, vimtutor, sample config ✅
+- **Next: Doom-style init.scm (Phase 7 M4), line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
 
 ## Key Design Decisions Already Made
 

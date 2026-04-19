@@ -59,6 +59,29 @@ impl Editor {
         }
     }
 
+    /// Refresh the cached git branch by running `git rev-parse --abbrev-ref HEAD`.
+    pub fn refresh_git_branch(&mut self) {
+        let dir = self
+            .project
+            .as_ref()
+            .map(|p| p.root.clone())
+            .or_else(|| std::env::current_dir().ok());
+        self.git_branch = dir.and_then(|d| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&d)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+    }
+
     pub(crate) fn git_status(&mut self) {
         self.git_command_to_buffer(&["status"], "*git-status*");
     }

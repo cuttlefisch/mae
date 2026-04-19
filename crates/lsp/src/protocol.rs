@@ -1021,7 +1021,7 @@ mod tests {
             capabilities: ClientCapabilities::default(),
             client_info: Some(ClientInfo {
                 name: "MAE".into(),
-                version: Some("0.1.0".into()),
+                version: Some("0.3.0".into()),
             }),
         };
         let json = serde_json::to_string(&params).unwrap();

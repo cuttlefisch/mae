@@ -50,7 +50,7 @@ pub fn spawn_pending_shells(
 
     for buf_idx in shell_spawns {
         let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
-        let cwd = editor.project.as_ref().map(|p| p.root.clone());
+        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
         let mut extra_env = HashMap::new();
         extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.to_string());
         match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {

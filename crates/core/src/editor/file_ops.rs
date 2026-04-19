@@ -610,6 +610,20 @@ impl Editor {
                     } else if let Some(ref proj) = self.project {
                         self.recent_projects.push(proj.root.clone());
                     }
+                    // Ingest project as KB node
+                    if let Some(ref proj) = self.project {
+                        let config_body = proj
+                            .config
+                            .as_ref()
+                            .map(|c| {
+                                format!(
+                                    "Workspaces: {:?}\nResources: {:?}",
+                                    c.workspaces, c.required_resources
+                                )
+                            })
+                            .unwrap_or_default();
+                        self.kb.ingest_project(&proj.name, &proj.root, &config_body);
+                    }
                 }
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;

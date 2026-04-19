@@ -258,6 +258,54 @@ impl Editor {
                 self.pending_agent_setup = Some("__list__".to_string());
                 true
             }
+            "read" | "r" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => {
+                        self.set_status("Usage: :read <file> or :read !<command>");
+                    }
+                    Some(arg) => {
+                        if let Some(cmd_str) = arg.strip_prefix('!') {
+                            let cmd_str = cmd_str.trim();
+                            if cmd_str.is_empty() {
+                                self.set_status("Usage: :read !<command>");
+                            } else {
+                                match std::process::Command::new("sh")
+                                    .arg("-c")
+                                    .arg(cmd_str)
+                                    .output()
+                                {
+                                    Ok(output) => {
+                                        if output.status.success() {
+                                            let text = String::from_utf8_lossy(&output.stdout);
+                                            self.insert_lines_after_cursor(&text);
+                                        } else {
+                                            let stderr = String::from_utf8_lossy(&output.stderr);
+                                            self.set_status(format!(
+                                                "Command failed: {}",
+                                                stderr.trim()
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.set_status(format!("Shell error: {}", e));
+                                    }
+                                }
+                            }
+                        } else {
+                            // Read file
+                            match std::fs::read_to_string(arg) {
+                                Ok(content) => {
+                                    self.insert_lines_after_cursor(&content);
+                                }
+                                Err(e) => {
+                                    self.set_status(format!("Cannot read {}: {}", arg, e));
+                                }
+                            }
+                        }
+                    }
+                }
+                true
+            }
             "noh" | "nohlsearch" => {
                 self.search_state.highlight_active = false;
                 true
@@ -341,6 +389,21 @@ impl Editor {
                 }
                 true
             }
+            "set-project-root" => {
+                if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let path = std::path::PathBuf::from(path);
+                    if path.is_dir() {
+                        let idx = self.active_buffer_idx();
+                        self.buffers[idx].project_root = Some(path.clone());
+                        self.set_status(format!("Project root set: {}", path.display()));
+                    } else {
+                        self.set_status(format!("Not a directory: {}", path.display()));
+                    }
+                } else {
+                    self.set_status("Usage: :set-project-root <path>");
+                }
+                true
+            }
             "ai-save" => {
                 self.dispatch_path_op(args, "ai-save", |ed, p| ed.ai_save(p), "Saved", "to");
                 true
@@ -368,6 +431,56 @@ impl Editor {
                         );
                     }
                 }
+                true
+            }
+            "session-save" => {
+                let root = self
+                    .active_project_root()
+                    .map(|p| p.to_path_buf())
+                    .or_else(|| self.project.as_ref().map(|p| p.root.clone()));
+                match root {
+                    Some(root) => {
+                        let session = crate::session::Session::from_editor(self);
+                        match session.save(&root) {
+                            Ok(()) => self.set_status(format!(
+                                "Session saved ({} buffers)",
+                                session.buffers.len()
+                            )),
+                            Err(e) => self.set_status(e),
+                        }
+                    }
+                    None => self.set_status("No project root — cannot save session"),
+                }
+                true
+            }
+            "session-load" => {
+                let root = self
+                    .active_project_root()
+                    .map(|p| p.to_path_buf())
+                    .or_else(|| self.project.as_ref().map(|p| p.root.clone()));
+                match root {
+                    Some(root) => match crate::session::Session::load(&root) {
+                        Ok(session) => {
+                            let count = session.buffers.len();
+                            for sb in &session.buffers {
+                                if !self
+                                    .buffers
+                                    .iter()
+                                    .any(|b| b.file_path() == Some(&sb.file_path))
+                                {
+                                    self.open_file(&sb.file_path);
+                                }
+                            }
+                            self.set_status(format!("Session loaded ({} buffers)", count));
+                        }
+                        Err(e) => self.set_status(e),
+                    },
+                    None => self.set_status("No project root — cannot load session"),
+                }
+                true
+            }
+            "tutor" => {
+                self.dispatch_builtin("tutor");
                 true
             }
             _ => {
@@ -521,5 +634,46 @@ mod tests {
         ed.execute_command(&format!("ai-load {}", path.display()));
         assert!(ed.status_msg.contains("Loaded 1 entries"));
         assert_eq!(ed.conversation().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn read_command_shell_inserts_output() {
+        let mut ed = Editor::new();
+        // Put some content in the buffer so cursor is on a real line
+        ed.active_buffer_mut().insert_text_at(0, "first line\n");
+        ed.execute_command("read !echo hello");
+        let content = ed.active_buffer().rope().to_string();
+        assert!(content.contains("hello"), "content was: {}", content);
+        assert!(ed.status_msg.contains("1 lines inserted"));
+    }
+
+    #[test]
+    fn read_command_file_inserts_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.txt");
+        std::fs::write(&path, "file content\n").unwrap();
+        let mut ed = Editor::new();
+        ed.execute_command(&format!("read {}", path.display()));
+        let content = ed.active_buffer().rope().to_string();
+        assert!(content.contains("file content"), "content was: {}", content);
+    }
+
+    #[test]
+    fn read_command_no_args_shows_usage() {
+        let mut ed = Editor::new();
+        ed.execute_command("read");
+        assert!(
+            ed.status_msg.to_lowercase().contains("usage"),
+            "status was: {}",
+            ed.status_msg
+        );
+    }
+
+    #[test]
+    fn r_alias_works() {
+        let mut ed = Editor::new();
+        ed.execute_command("r !echo test");
+        let content = ed.active_buffer().rope().to_string();
+        assert!(content.contains("test"), "content was: {}", content);
     }
 }

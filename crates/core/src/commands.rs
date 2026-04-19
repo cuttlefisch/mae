@@ -694,6 +694,24 @@ impl CommandRegistry {
             "Run AI-driven self-test to validate editor tools and integrations (:self-test [categories])",
         );
 
+        // Font zoom (GUI)
+        reg.register_builtin("increase-font-size", "Increase GUI font size by 1pt");
+        reg.register_builtin("decrease-font-size", "Decrease GUI font size by 1pt");
+        reg.register_builtin("reset-font-size", "Reset GUI font size to default (14pt)");
+
+        // AI agent launcher
+        reg.register_builtin("open-ai-agent", "Open AI agent in a shell terminal");
+
+        // Tutorial
+        reg.register_builtin("tutor", "Open interactive MAE tutorial");
+
+        // Session persistence
+        reg.register_builtin(
+            "session-save",
+            "Save current session (open buffers + cursors) to .mae/session.json",
+        );
+        reg.register_builtin("session-load", "Restore session from .mae/session.json");
+
         reg
     }
 }

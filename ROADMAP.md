@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M3 COMPLETE (1,470 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,508 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -53,14 +53,22 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 6 | Auto-reload on external change | Phase 6 ✅ |
 | 7 | `:set` options (`set-option!`) | Phase 6 M1b ✅ |
 | 8 | Mouse support | future |
-| 9 | `:read !cmd` | future |
+| 9 | `:read !cmd` | v0.3.0 ✅ |
 | 10 | Multiple cursors | future |
-| 11 | Session persistence | 3f M3 |
-| 12 | README badges (CI status, Rust version, license, crate count) | future |
+| 11 | Session persistence | v0.3.0 ✅ |
+| 12 | README badges (CI status, Rust version, license, crate count) | v0.3.0 ✅ |
 | 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
-| 14 | Sample `init.scm` config: documented API reference, keybinding examples, hook usage, option config | Phase 7 |
+| 14 | Doom-style `init.scm`: documented API reference, keybinding examples, hook usage, option config, module system | Phase 7 |
 | 15 | Privileged scope escalation: TRAMP-style sudo for editing protected files, timed sudo sessions, AI privilege elevation UX | future |
 | 16 | Security & vulnerability audit: enterprise hardening, dependency audit, shell injection review, AI permission boundary testing, sandboxing | future |
+| 17 | Per-buffer project roots, `active_project()`, multi-project support | v0.3.0 ✅ |
+| 18 | Status line enhancements (git branch, LSP, file type, AI tier) | v0.3.0 ✅ |
+| 19 | AI agent launcher (`SPC a a`, ai_editor option) | v0.3.0 ✅ |
+| 20 | Font zoom (Ctrl+=/-/0) | v0.3.0 ✅ |
+| 21 | BackTab / Shift-Tab support | v0.3.0 ✅ |
+| 22 | KB project nodes (`.project` → KB graph) | v0.3.0 ✅ |
+| 23 | Vimtutor-style onboarding (`:tutor`, `SPC h t`) | v0.3.0 ✅ |
+| 24 | Sample config template (`assets/sample-config.toml`) | v0.3.0 ✅ |
 
 ---
 
@@ -795,6 +803,28 @@ docs to help users effectively. Builds on the existing KB + help buffer.
 - [ ] `:help-edit <topic>` — edit a help node inline (user-authored overrides)
 - [ ] User help nodes persisted to `~/.config/mae/help/` directory
 - [ ] Org-mode format for user-authored help (parsed by existing org parser)
+
+### M4: Doom-style init.scm — Configuration Framework
+Inspired by Doom Emacs's module system: declarative, layered, well-documented.
+
+- [ ] Ship `assets/init.scm` — comprehensive documented default config
+  - All keybinding examples with comments
+  - Hook usage patterns (before-save, after-save, buffer-open, etc.)
+  - Option configuration via `(set-option! ...)` with all options listed
+  - Theme selection, font size, clipboard mode
+  - AI provider configuration examples
+- [ ] Module system: `(mae/module! :editor :ai :lsp :dap :shell :kb)`
+  - Each module self-contained, can be enabled/disabled
+  - Modules declare dependencies (`:lsp` requires `:editor`)
+  - `~/.config/mae/modules/` for user modules
+- [ ] Layer system: base → user → project
+  - `assets/init.scm` = base layer (always loaded)
+  - `~/.config/mae/init.scm` = user layer (overrides base)
+  - `.mae/init.scm` = project layer (overrides user)
+- [ ] `(after! module body...)` — run code after a module loads (Doom pattern)
+- [ ] `(map! mode keys command)` — ergonomic keybinding macro
+- [ ] Package-like autoloads: deferred Scheme evaluation until first use
+- [ ] `:reload-config` command — hot-reload all layers without restart
 
 ---
 

@@ -297,6 +297,10 @@ pub struct Editor {
     pub bell_until: Option<std::time::Instant>,
     /// Detected project for the current working context.
     pub project: Option<crate::project::Project>,
+    /// Cached git branch name for the active project. Updated on project detect and file save.
+    pub git_branch: Option<String>,
+    /// Current AI permission tier label for status display.
+    pub ai_permission_tier: String,
     /// Recently opened files (bounded, deduplicated).
     pub recent_files: crate::project::RecentFiles,
     /// Recently used project roots (bounded, deduplicated).
@@ -344,6 +348,11 @@ pub struct Editor {
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
     /// "unnamed" (yank syncs out, paste reads internal), "internal" (no sync).
     pub clipboard: String,
+    /// AI editor/agent command to launch in a shell (e.g. "claude", "aider").
+    /// Used by `open-ai-agent` to spawn an agent shell.
+    pub ai_editor: String,
+    /// Whether to restore sessions on startup. Default false.
+    pub restore_session: bool,
 }
 
 impl Default for Editor {
@@ -438,6 +447,8 @@ impl Editor {
             ai_session_tokens_out: 0,
             bell_until: None,
             project: None,
+            git_branch: None,
+            ai_permission_tier: "ReadOnly".to_string(),
             recent_files: crate::project::RecentFiles::default(),
             recent_projects: crate::project::RecentProjects::default(),
             show_line_numbers: true,
@@ -451,11 +462,13 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            ai_editor: "claude".to_string(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
+            restore_session: false,
         }
     }
 
@@ -556,6 +569,8 @@ impl Editor {
             ai_session_tokens_out: 0,
             bell_until: None,
             project: None,
+            git_branch: None,
+            ai_permission_tier: "ReadOnly".to_string(),
             recent_files: crate::project::RecentFiles::default(),
             recent_projects: crate::project::RecentProjects::default(),
             show_line_numbers: true,
@@ -569,11 +584,13 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            ai_editor: "claude".to_string(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
+            restore_session: false,
         }
     }
 
@@ -594,6 +611,15 @@ impl Editor {
         self.keymaps.get(name)
     }
 
+    /// Returns the active buffer's project root, falling back to the editor-wide project root.
+    pub fn active_project_root(&self) -> Option<&std::path::Path> {
+        let buf = self.active_buffer();
+        if let Some(ref root) = buf.project_root {
+            return Some(root);
+        }
+        self.project.as_ref().map(|p| p.root.as_path())
+    }
+
     /// Get the current value and definition of an option by name or alias.
     pub fn get_option(&self, name: &str) -> Option<(String, &crate::options::OptionDef)> {
         let def = self.option_registry.find(name)?;
@@ -609,6 +635,9 @@ impl Editor {
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
+            "ai_tier" => self.ai_permission_tier.clone(),
+            "ai_editor" => self.ai_editor.clone(),
+            "restore_session" => self.restore_session.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -672,6 +701,23 @@ impl Editor {
                     ))
                 }
             },
+            "ai_tier" => match value {
+                "ReadOnly" | "Write" | "Shell" | "Privileged" => {
+                    self.ai_permission_tier = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid AI tier: '{}' (expected ReadOnly, Write, Shell, or Privileged)",
+                        value
+                    ))
+                }
+            },
+            "ai_editor" => {
+                self.ai_editor = value.to_string();
+            }
+            "restore_session" => {
+                self.restore_session = parse_option_bool(value)?;
+            }
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self.get_option(def_name).unwrap();

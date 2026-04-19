@@ -67,6 +67,7 @@ pub fn kind_to_str(k: NodeKind) -> &'static str {
         NodeKind::Concept => "concept",
         NodeKind::Key => "key",
         NodeKind::Note => "note",
+        NodeKind::Project => "project",
     }
 }
 
@@ -76,6 +77,7 @@ fn kind_from_str(s: &str) -> NodeKind {
         "command" => NodeKind::Command,
         "concept" => NodeKind::Concept,
         "key" => NodeKind::Key,
+        "project" => NodeKind::Project,
         _ => NodeKind::Note,
     }
 }

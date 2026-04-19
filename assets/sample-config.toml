@@ -1,0 +1,72 @@
+# MAE Configuration
+# Place this file at ~/.config/mae/config.toml
+# or use :edit-config to open it from within MAE.
+
+[editor]
+# Color theme (use :theme or SPC t s to preview)
+# Available: default, gruvbox, solarized-dark, solarized-light, dracula, nord, monokai
+theme = "default"
+
+# Show line numbers in the gutter
+line_numbers = true
+
+# Use relative line numbers (distance from cursor)
+relative_line_numbers = false
+
+# Soft-wrap long lines at the window edge
+word_wrap = false
+
+# Indent wrapped continuation lines to match original indentation
+break_indent = true
+
+# Character prefix for wrapped continuation lines
+show_break = "↪ "
+
+# Show FPS/frame-timing overlay in the status bar
+show_fps = false
+
+# GUI font size in points (6.0–72.0)
+font_size = 14.0
+
+# Show RSS/CPU/frame-time in status bar (debug mode)
+debug_mode = false
+
+# Clipboard integration:
+#   "unnamedplus" - paste from system clipboard
+#   "unnamed"     - yank syncs out, paste reads internal
+#   "internal"    - no clipboard sync
+clipboard = "unnamed"
+
+# Automatically restore the previous session on startup (per-project)
+restore_session = false
+
+[ai]
+# AI provider: "claude", "openai", or "ollama"
+provider = "claude"
+
+# AI permission tier: ReadOnly, Write, Shell, Privileged
+# Controls what AI tools can do without explicit approval.
+auto_approve_tier = "ReadOnly"
+
+# Command to launch for AI agent shell sessions (SPC a a)
+editor = "claude"
+
+# Claude API configuration
+# api_key is read from ANTHROPIC_API_KEY env var (preferred)
+# model = "claude-sonnet-4-20250514"
+
+# OpenAI API configuration
+# api_key is read from OPENAI_API_KEY env var
+# model = "gpt-4o"
+# base_url = "https://api.openai.com/v1"
+
+# Ollama configuration (local models)
+# model = "llama3"
+# base_url = "http://localhost:11434"
+
+[agents]
+# Auto-write .mcp.json to project root on first shell spawn
+auto_mcp_json = true
+
+# Auto-configure agent tool approval settings
+auto_approve_tools = true

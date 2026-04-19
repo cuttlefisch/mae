@@ -17,6 +17,7 @@ pub enum Key {
     Enter,
     Backspace,
     Tab,
+    BackTab,
     Up,
     Down,
     Left,
@@ -305,6 +306,7 @@ pub fn serialize_keypress(kp: &KeyPress) -> String {
         (Key::Enter, false, false) => "<CR>".to_string(),
         (Key::Backspace, false, false) => "<BS>".to_string(),
         (Key::Tab, false, false) => "<Tab>".to_string(),
+        (Key::BackTab, false, false) => "<S-Tab>".to_string(),
         (Key::Up, false, false) => "<Up>".to_string(),
         (Key::Down, false, false) => "<Down>".to_string(),
         (Key::Left, false, false) => "<Left>".to_string(),
@@ -386,6 +388,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
         "cr" | "enter" | "return" => Some(KeyPress::special(Key::Enter)),
         "bs" | "backspace" => Some(KeyPress::special(Key::Backspace)),
         "tab" => Some(KeyPress::special(Key::Tab)),
+        "s-tab" | "backtab" => Some(KeyPress::special(Key::BackTab)),
         "up" => Some(KeyPress::special(Key::Up)),
         "down" => Some(KeyPress::special(Key::Down)),
         "left" => Some(KeyPress::special(Key::Left)),
@@ -421,6 +424,7 @@ fn match_named_key(s: &str) -> Option<(Key, usize)> {
         ("enter", Key::Enter),
         ("backspace", Key::Backspace),
         ("tab", Key::Tab),
+        ("backtab", Key::BackTab),
         ("up", Key::Up),
         ("down", Key::Down),
         ("left", Key::Left),
@@ -863,6 +867,37 @@ mod tests {
         assert_eq!(keys.len(), 1);
         assert!(keys[0].ctrl);
         assert_eq!(keys[0].key, Key::Char('x'));
+    }
+
+    #[test]
+    fn serialize_backtab() {
+        assert_eq!(
+            serialize_keypress(&KeyPress::special(Key::BackTab)),
+            "<S-Tab>"
+        );
+    }
+
+    #[test]
+    fn deserialize_backtab() {
+        let keys = deserialize_macro("<S-Tab>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::BackTab);
+    }
+
+    #[test]
+    fn backtab_roundtrip() {
+        let keys = vec![KeyPress::special(Key::BackTab)];
+        let s = serialize_macro(&keys);
+        assert_eq!(s, "<S-Tab>");
+        let back = deserialize_macro(&s);
+        assert_eq!(back, keys);
+    }
+
+    #[test]
+    fn parse_backtab_named_key() {
+        let seq = parse_key_seq("backtab");
+        assert_eq!(seq.len(), 1);
+        assert_eq!(seq[0].key, Key::BackTab);
     }
 
     #[test]

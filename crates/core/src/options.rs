@@ -151,6 +151,30 @@ impl OptionRegistry {
                     default_value: "unnamed",
                     config_key: Some("editor.clipboard"),
                 },
+                OptionDef {
+                    name: "ai_tier",
+                    aliases: &["ai-tier"],
+                    doc: "Current AI permission tier (ReadOnly, Write, Shell, Privileged)",
+                    kind: OptionKind::String,
+                    default_value: "ReadOnly",
+                    config_key: Some("ai.auto_approve_tier"),
+                },
+                OptionDef {
+                    name: "ai_editor",
+                    aliases: &["ai-editor"],
+                    doc: "Command to launch for AI agent shell sessions (e.g. claude, aider)",
+                    kind: OptionKind::String,
+                    default_value: "claude",
+                    config_key: Some("ai.editor"),
+                },
+                OptionDef {
+                    name: "restore_session",
+                    aliases: &["restore-session"],
+                    doc: "Automatically restore the previous session on startup (per-project)",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.restore_session"),
+                },
             ],
         }
     }

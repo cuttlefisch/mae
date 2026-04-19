@@ -46,8 +46,10 @@ const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC f c", "Edit config", "edit-config"),
     ("SPC SPC", "Commands", "command-palette"),
     ("SPC :", "Command line", "command-mode"),
+    ("SPC a a", "AI agent", "open-ai-agent"),
     ("SPC a p", "AI prompt", "ai-prompt"),
     ("SPC h h", "Help", "help"),
+    ("SPC h t", "Tutorial", "tutor"),
     ("SPC t s", "Set theme", "theme-picker"),
     ("SPC q q", "Quit", "quit"),
 ];

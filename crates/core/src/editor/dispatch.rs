@@ -767,6 +767,23 @@ impl Editor {
                 self.help_reopen();
             }
 
+            // Tutorial
+            "tutor" => {
+                let content = crate::tutor::TUTORIAL_CONTENT;
+                let mut buf = crate::Buffer::new();
+                buf.name = "*Tutor*".to_string();
+                buf.insert_text_at(0, content);
+                buf.modified = false;
+                let prev_idx = self.active_buffer_idx();
+                self.buffers.push(buf);
+                let new_idx = self.buffers.len() - 1;
+                self.alternate_buffer_idx = Some(prev_idx);
+                self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+                self.set_status(
+                    "Welcome to the MAE tutorial! Navigate with j/k, try the commands.",
+                );
+            }
+
             // Shell / terminal emulator
             "terminal" => {
                 let shell_name = format!("*Terminal {}*", self.buffers.len());
@@ -1847,6 +1864,38 @@ impl Editor {
                     "Debug mode: {}",
                     if self.debug_mode { "on" } else { "off" }
                 ));
+            }
+
+            // Font zoom (GUI)
+            "increase-font-size" => {
+                let new_size = (self.gui_font_size + 1.0).min(72.0);
+                self.gui_font_size = new_size;
+                self.set_status(format!("Font size: {}", new_size));
+            }
+            "decrease-font-size" => {
+                let new_size = (self.gui_font_size - 1.0).max(6.0);
+                self.gui_font_size = new_size;
+                self.set_status(format!("Font size: {}", new_size));
+            }
+            "reset-font-size" => {
+                self.gui_font_size = 14.0;
+                self.set_status("Font size: 14 (default)");
+            }
+
+            // AI agent launcher
+            "open-ai-agent" => {
+                let shell_name = format!("*AI:{}*", self.ai_editor);
+                let buf = Buffer::new_shell(shell_name);
+                let prev_idx = self.active_buffer_idx();
+                self.buffers.push(buf);
+                let new_idx = self.buffers.len() - 1;
+                self.alternate_buffer_idx = Some(prev_idx);
+                self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+                self.pending_shell_spawns.push(new_idx);
+                // Queue the AI editor command to be sent after shell spawns
+                let cmd = format!("{}\n", self.ai_editor);
+                self.pending_shell_inputs.push((new_idx, cmd));
+                self.mode = Mode::ShellInsert;
             }
 
             _ => return false,

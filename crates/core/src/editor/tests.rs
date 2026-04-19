@@ -187,9 +187,14 @@ fn leader_bindings_exist() {
         normal.lookup(&parse_key_seq_spaced("SPC w v")),
         LookupResult::Exact("split-vertical")
     );
-    // SPC a a should be ai-prompt
+    // SPC a a should be open-ai-agent
     assert_eq!(
         normal.lookup(&parse_key_seq_spaced("SPC a a")),
+        LookupResult::Exact("open-ai-agent")
+    );
+    // SPC a p should be ai-prompt
+    assert_eq!(
+        normal.lookup(&parse_key_seq_spaced("SPC a p")),
         LookupResult::Exact("ai-prompt")
     );
 }
@@ -4139,4 +4144,53 @@ fn option_registry_has_debug_mode() {
     assert_eq!(opt.kind, crate::options::OptionKind::Bool);
     // Also works via alias
     assert!(reg.find("debug-mode").is_some());
+}
+
+#[test]
+fn active_project_root_falls_back_to_editor_project() {
+    let mut ed = Editor::new();
+    // No project set anywhere
+    assert!(ed.active_project_root().is_none());
+
+    // Set editor-wide project
+    ed.project = Some(crate::project::Project::from_root(
+        std::path::PathBuf::from("/tmp"),
+    ));
+    assert_eq!(
+        ed.active_project_root().unwrap(),
+        std::path::Path::new("/tmp")
+    );
+}
+
+#[test]
+fn active_project_root_prefers_buffer_project() {
+    let mut ed = Editor::new();
+    ed.project = Some(crate::project::Project::from_root(
+        std::path::PathBuf::from("/editor-wide"),
+    ));
+    ed.buffers[0].project_root = Some(std::path::PathBuf::from("/buffer-specific"));
+    assert_eq!(
+        ed.active_project_root().unwrap(),
+        std::path::Path::new("/buffer-specific")
+    );
+}
+
+#[test]
+fn set_project_root_command() {
+    let mut ed = Editor::new();
+    // Valid directory
+    ed.execute_command("set-project-root /tmp");
+    assert_eq!(
+        ed.buffers[0].project_root,
+        Some(std::path::PathBuf::from("/tmp"))
+    );
+    assert!(ed.status_msg.contains("Project root set"));
+
+    // Invalid directory
+    ed.execute_command("set-project-root /nonexistent_mae_test_xyz");
+    assert!(ed.status_msg.contains("Not a directory"));
+
+    // No args
+    ed.execute_command("set-project-root");
+    assert!(ed.status_msg.contains("Usage"));
 }

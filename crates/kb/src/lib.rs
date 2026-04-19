@@ -43,6 +43,8 @@ pub enum NodeKind {
     Key,
     /// Free-form user note (org-roam-style).
     Note,
+    /// Project node — represents a detected project from a `.project` file.
+    Project,
 }
 
 /// A single node in the knowledge base.
@@ -292,6 +294,24 @@ impl KnowledgeBase {
     /// collect and sort by id.
     pub(crate) fn nodes_values(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
+    }
+
+    /// Ingest a project config as a KB node.
+    pub fn ingest_project(&mut self, name: &str, root: &std::path::Path, config_body: &str) {
+        let id = format!("project:{}", name.to_lowercase().replace(' ', "-"));
+        let node = Node {
+            id: id.clone(),
+            title: name.to_string(),
+            kind: NodeKind::Project,
+            body: format!(
+                "# Project: {}\n\nRoot: `{}`\n\n{}",
+                name,
+                root.display(),
+                config_body
+            ),
+            tags: vec!["project".to_string()],
+        };
+        self.insert(node);
     }
 
     /// Incoming links — node ids whose body references `target`.
