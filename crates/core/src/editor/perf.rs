@@ -61,6 +61,15 @@ impl PerfStats {
         self.avg_frame_time_us = sum.checked_div(count).unwrap_or(0);
     }
 
+    /// Compute FPS from average frame time.
+    pub fn fps(&self) -> f64 {
+        if self.avg_frame_time_us == 0 {
+            0.0
+        } else {
+            1_000_000.0 / self.avg_frame_time_us as f64
+        }
+    }
+
     /// Sample process-level stats (RSS, CPU). Rate-limited: only queries
     /// sysinfo every 120 calls (~6s at 20fps) to keep idle CPU low.
     pub fn sample_process_stats(&mut self) {

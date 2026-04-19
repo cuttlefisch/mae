@@ -158,12 +158,38 @@ pub fn manage_shell_lifecycle(
             shell.shutdown();
         }
         if buf_idx < editor.buffers.len() {
-            let name = editor.buffers[buf_idx].name.clone();
-            if !name.contains("[exited]") {
-                editor.buffers[buf_idx].name = format!("{} [exited]", name);
+            // Auto-close the exited shell buffer (empty rope = useless frame).
+            let label = if editor.buffers[buf_idx].agent_shell {
+                "AI agent exited — buffer closed"
+            } else {
+                "Terminal exited — buffer closed"
+            };
+            if editor.active_buffer_idx() == buf_idx {
+                // Switch away before removing
+                let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                let target = if alt < editor.buffers.len() && alt != buf_idx {
+                    alt
+                } else {
+                    0
+                };
+                editor.window_mgr.focused_window_mut().buffer_idx = target;
             }
+            editor.buffers.remove(buf_idx);
+            // Fix up buffer indices in all windows after removal
+            for win in editor.window_mgr.iter_windows_mut() {
+                if win.buffer_idx > buf_idx {
+                    win.buffer_idx -= 1;
+                }
+            }
+            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
+                if *alt > buf_idx {
+                    *alt -= 1;
+                } else if *alt == buf_idx {
+                    *alt = 0;
+                }
+            }
+            editor.set_status(label);
         }
-        editor.set_status("Terminal process exited");
     }
 
     // Drain pending shell inputs.
@@ -214,9 +240,28 @@ pub fn health_check(
             shell.shutdown();
         }
         if buf_idx < editor.buffers.len() {
-            let name = editor.buffers[buf_idx].name.clone();
-            if !name.contains("[exited]") {
-                editor.buffers[buf_idx].name = format!("{} [exited]", name);
+            // Auto-close zombie shell buffer (same as normal exit)
+            if editor.active_buffer_idx() == buf_idx {
+                let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                let target = if alt < editor.buffers.len() && alt != buf_idx {
+                    alt
+                } else {
+                    0
+                };
+                editor.window_mgr.focused_window_mut().buffer_idx = target;
+            }
+            editor.buffers.remove(buf_idx);
+            for win in editor.window_mgr.iter_windows_mut() {
+                if win.buffer_idx > buf_idx {
+                    win.buffer_idx -= 1;
+                }
+            }
+            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
+                if *alt > buf_idx {
+                    *alt -= 1;
+                } else if *alt == buf_idx {
+                    *alt = 0;
+                }
             }
         }
     }

@@ -167,8 +167,10 @@ pub fn render_status_bar(
     let debug_info = if editor.debug_mode {
         let rss_mb = editor.perf_stats.rss_bytes as f64 / (1024.0 * 1024.0);
         format!(
-            " [DBG] {:.0}MB {:.1}% {}μs ",
-            rss_mb, editor.perf_stats.cpu_percent, editor.perf_stats.avg_frame_time_us,
+            " [DBG] {:.0}MB {:.1}% {:.0}fps ",
+            rss_mb,
+            editor.perf_stats.cpu_percent,
+            editor.perf_stats.fps(),
         )
     } else {
         String::new()

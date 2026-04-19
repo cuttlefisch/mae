@@ -767,21 +767,9 @@ impl Editor {
                 self.help_reopen();
             }
 
-            // Tutorial
+            // Tutorial — opens in help system with KB-linked lessons
             "tutor" => {
-                let content = crate::tutor::TUTORIAL_CONTENT;
-                let mut buf = crate::Buffer::new();
-                buf.name = "*Tutor*".to_string();
-                buf.insert_text_at(0, content);
-                buf.modified = false;
-                let prev_idx = self.active_buffer_idx();
-                self.buffers.push(buf);
-                let new_idx = self.buffers.len() - 1;
-                self.alternate_buffer_idx = Some(prev_idx);
-                self.window_mgr.focused_window_mut().buffer_idx = new_idx;
-                self.set_status(
-                    "Welcome to the MAE tutorial! Navigate with j/k, try the commands.",
-                );
+                self.open_help_at("tutor:index");
             }
 
             // Shell / terminal emulator
@@ -947,7 +935,11 @@ impl Editor {
                 self.mode = crate::Mode::CommandPalette;
             }
             "find-file" => {
-                let root = std::env::current_dir().unwrap_or_default();
+                let root = self
+                    .active_project_root()
+                    .map(|p| p.to_path_buf())
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_default();
                 self.file_picker = Some(FilePicker::scan(&root));
                 self.mode = Mode::FilePicker;
             }
@@ -1885,7 +1877,8 @@ impl Editor {
             // AI agent launcher
             "open-ai-agent" => {
                 let shell_name = format!("*AI:{}*", self.ai_editor);
-                let buf = Buffer::new_shell(shell_name);
+                let mut buf = Buffer::new_shell(shell_name);
+                buf.agent_shell = true;
                 let prev_idx = self.active_buffer_idx();
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;

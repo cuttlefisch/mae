@@ -25,6 +25,7 @@ use crate::options::OptionRegistry;
 pub fn seed_kb(registry: &CommandRegistry) -> KnowledgeBase {
     let mut kb = KnowledgeBase::new();
     install_static_nodes(&mut kb);
+    install_tutor_nodes(&mut kb);
     install_command_nodes(&mut kb, registry);
     install_option_nodes(&mut kb);
     kb
@@ -36,6 +37,288 @@ fn install_static_nodes(kb: &mut KnowledgeBase) {
         kb.insert(node);
     }
 }
+
+/// Install tutorial lesson nodes into the KB.
+fn install_tutor_nodes(kb: &mut KnowledgeBase) {
+    for node in tutor_nodes() {
+        kb.insert(node);
+    }
+}
+
+/// Tutorial nodes: an index + 10 lessons.
+fn tutor_nodes() -> Vec<Node> {
+    vec![
+        Node::new(
+            "tutor:index",
+            "MAE Tutorial",
+            NodeKind::Concept,
+            TUTOR_INDEX,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:navigation",
+            "Lesson 1: Navigation",
+            NodeKind::Concept,
+            LESSON_NAVIGATION,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:modes",
+            "Lesson 2: Modes",
+            NodeKind::Concept,
+            LESSON_MODES,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:editing",
+            "Lesson 3: Editing",
+            NodeKind::Concept,
+            LESSON_EDITING,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:files",
+            "Lesson 4: Files & Buffers",
+            NodeKind::Concept,
+            LESSON_FILES,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:ai",
+            "Lesson 5: AI Features",
+            NodeKind::Concept,
+            LESSON_AI,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:scheme",
+            "Lesson 6: Scheme REPL",
+            NodeKind::Concept,
+            LESSON_SCHEME,
+        )
+        .with_tags(["tutorial"]),
+        Node::new("lesson:lsp", "Lesson 7: LSP", NodeKind::Concept, LESSON_LSP)
+            .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:terminal",
+            "Lesson 8: Terminal",
+            NodeKind::Concept,
+            LESSON_TERMINAL,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:help",
+            "Lesson 9: Help System",
+            NodeKind::Concept,
+            LESSON_HELP,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:leader",
+            "Lesson 10: Leader Keys",
+            NodeKind::Concept,
+            LESSON_LEADER,
+        )
+        .with_tags(["tutorial"]),
+    ]
+}
+
+const TUTOR_INDEX: &str = "\
+Welcome to the MAE Tutorial!\n\n\
+MAE (Modern AI Editor) is an AI-native Lisp machine editor. \
+Work through these lessons to learn the essentials.\n\n\
+## Lessons\n\
+1. [[lesson:navigation|Navigation]] — h/j/k/l, words, pages\n\
+2. [[lesson:modes|Modes]] — Normal, Insert, Visual, Command\n\
+3. [[lesson:editing|Editing]] — insert, delete, undo, repeat\n\
+4. [[lesson:files|Files & Buffers]] — open, save, switch\n\
+5. [[lesson:ai|AI Features]] — the AI as peer actor\n\
+6. [[lesson:scheme|Scheme REPL]] — extend MAE with R7RS Scheme\n\
+7. [[lesson:lsp|LSP]] — go-to-definition, references, hover\n\
+8. [[lesson:terminal|Terminal]] — embedded terminal emulator\n\
+9. [[lesson:help|Help System]] — navigating the knowledge base\n\
+10. [[lesson:leader|Leader Keys]] — SPC-based command groups\n\n\
+Navigate with **Tab** to move between links, **Enter** to follow.\n\
+**C-o** goes back, **C-i** goes forward.\n\n\
+See also: [[index|Help Index]]\n";
+
+const LESSON_NAVIGATION: &str = "\
+## Lesson 1: Navigation\n\n\
+MAE uses vi-style movement keys in [[concept:mode|Normal mode]].\n\n\
+### Basic movement\n\
+  `h` — move left    `j` — move down    `k` — move up    `l` — move right\n\n\
+### Word movement\n\
+  `w` — next word start    `b` — previous word start\n\
+  `e` — next word end      `0` — line start\n\
+  `$` — line end\n\n\
+### File movement\n\
+  `gg` — first line         `G` — last line\n\
+  `Ctrl-d` — half page down  `Ctrl-u` — half page up\n\
+  `Ctrl-f` — page down       `Ctrl-b` — page up\n\n\
+Try opening a file and moving around with these keys!\n\n\
+**Next:** [[lesson:modes|Lesson 2: Modes]]  |  **Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_MODES: &str = "\
+## Lesson 2: Modes\n\n\
+MAE uses [[concept:mode|modal editing]] like Vim:\n\n\
+- **Normal mode** (default) — navigation and commands\n\
+- **Insert mode** — type text freely\n\
+- **Visual mode** — select text\n\
+- **Command mode** — ex commands (`:` prefix)\n\n\
+### Switching modes\n\
+  `i` — enter Insert mode (before cursor)\n\
+  `a` — enter Insert mode (after cursor)\n\
+  `v` — enter Visual mode (character)\n\
+  `V` — enter Visual mode (line)\n\
+  `:` — enter Command mode\n\
+  `Escape` — return to Normal mode\n\n\
+**Prev:** [[lesson:navigation|Lesson 1]]  |  \
+**Next:** [[lesson:editing|Lesson 3: Editing]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_EDITING: &str = "\
+## Lesson 3: Editing\n\n\
+### Inserting text\n\
+  `i` — insert before cursor    `a` — insert after cursor\n\
+  `o` — open line below         `O` — open line above\n\n\
+### Deleting text\n\
+  `x` — delete character         [[cmd:delete-line|dd]] — delete line\n\
+  `dw` — delete word             `d$` — delete to end of line\n\n\
+### Undo / Redo\n\
+  [[cmd:undo|u]] — undo          `Ctrl-r` — redo\n\n\
+### Clipboard\n\
+  `yy` — yank (copy) line       `p` — paste after\n\
+  `P` — paste before\n\n\
+### Repeat\n\
+  `.` — repeat last edit\n\n\
+**Prev:** [[lesson:modes|Lesson 2]]  |  \
+**Next:** [[lesson:files|Lesson 4: Files]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_FILES: &str = "\
+## Lesson 4: Files & Buffers\n\n\
+A [[concept:buffer|buffer]] is the unit of editable content in MAE.\n\n\
+### File commands\n\
+  `:w` — [[cmd:save|save]] file\n\
+  `:e <file>` — open file\n\
+  `:q` — quit (fails if unsaved)\n\
+  `:wq` or `:x` — save and quit\n\n\
+### Leader shortcuts\n\
+  `SPC f f` — find file (fuzzy picker)\n\
+  `SPC f d` — file browser\n\
+  `SPC b b` — switch buffer (palette)\n\
+  `SPC b d` — close buffer\n\n\
+**Prev:** [[lesson:editing|Lesson 3]]  |  \
+**Next:** [[lesson:ai|Lesson 5: AI]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_AI: &str = "\
+## Lesson 5: AI Features\n\n\
+MAE treats the AI agent as a [[concept:ai-as-peer|peer actor]] — \
+it calls the same primitives as you.\n\n\
+### AI commands\n\
+  `SPC a p` — AI prompt (send a message)\n\
+  `SPC a a` — [[cmd:open-ai-agent|launch AI agent]] in a shell\n\
+  `SPC a c` — cancel AI operation\n\n\
+The AI can read/edit buffers, navigate, search, and use LSP/DAP tools. \
+It sees the same [[concept:knowledge-base|knowledge base]] you're reading now.\n\n\
+**Prev:** [[lesson:files|Lesson 4]]  |  \
+**Next:** [[lesson:scheme|Lesson 6: Scheme]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_SCHEME: &str = "\
+## Lesson 6: Scheme REPL\n\n\
+MAE is extensible via R7RS Scheme (Steel). [[concept:hooks|Hooks]] let \
+Scheme code react to editor events.\n\n\
+### Evaluate expressions\n\
+  `SPC e e` — evaluate current line\n\
+  `SPC e b` — evaluate entire buffer\n\
+  `:eval <expr>` — evaluate a Scheme expression\n\n\
+### Try it\n\
+  `:eval (+ 1 2)` — should show `3`\n\
+  `:eval (set-option! \"theme\" \"dracula\")` — change theme\n\n\
+### Configuration\n\
+Your `init.scm` is loaded at startup. Use `SPC f c` to edit it.\n\n\
+**Prev:** [[lesson:ai|Lesson 5]]  |  \
+**Next:** [[lesson:lsp|Lesson 7: LSP]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_LSP: &str = "\
+## Lesson 7: LSP\n\n\
+MAE has first-class LSP (Language Server Protocol) support.\n\n\
+### Navigation\n\
+  `gd` — [[cmd:lsp-goto-definition|go to definition]]\n\
+  `gr` — find references\n\
+  `K` — hover documentation\n\n\
+### Diagnostics\n\
+  `SPC l d` — show diagnostics\n\
+  Errors and warnings appear in the gutter.\n\n\
+### Code actions\n\
+  `SPC c a` — code action\n\
+  `SPC c R` — rename symbol\n\
+  `SPC c f` — format\n\n\
+LSP starts automatically when you open a supported file type.\n\n\
+**Prev:** [[lesson:scheme|Lesson 6]]  |  \
+**Next:** [[lesson:terminal|Lesson 8: Terminal]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_TERMINAL: &str = "\
+## Lesson 8: Terminal\n\n\
+MAE embeds a full [[concept:terminal|terminal emulator]].\n\n\
+### Commands\n\
+  `SPC o t` — open terminal\n\
+  `Ctrl-\\ Ctrl-n` — exit terminal to Normal mode\n\
+  `SPC e s` — send current line to terminal\n\
+  `SPC e S` — send selection to terminal\n\n\
+### Features\n\
+- Full VT100 support (vim, less, top, fzf all work)\n\
+- MCP bridge: AI agents in the terminal can call back into MAE\n\
+- Shell CWD tracking via `/proc`\n\n\
+**Prev:** [[lesson:lsp|Lesson 7]]  |  \
+**Next:** [[lesson:help|Lesson 9: Help]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_HELP: &str = "\
+## Lesson 9: Help System\n\n\
+MAE's help is a [[concept:knowledge-base|knowledge base]] — the same data \
+the AI queries via `kb_*` tools.\n\n\
+### Help commands\n\
+  `SPC h h` — [[cmd:help|open help index]]\n\
+  `SPC h k` — describe key\n\
+  `SPC h c` — describe command\n\
+  `SPC h o` — describe option\n\
+  `:help <topic>` — open help for a topic\n\n\
+### Navigation\n\
+- **Tab** — next link    **Shift-Tab** — previous link\n\
+- **Enter** — follow link\n\
+- **C-o** — go back    **C-i** — go forward\n\
+- **q** — close help\n\n\
+**Prev:** [[lesson:terminal|Lesson 8]]  |  \
+**Next:** [[lesson:leader|Lesson 10: Leader Keys]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+const LESSON_LEADER: &str = "\
+## Lesson 10: Leader Keys\n\n\
+`SPC` is the leader key (Doom Emacs style). Press `SPC` and wait to see \
+available sub-keys in the which-key popup.\n\n\
+### Key groups\n\
+| Prefix | Group | Examples |\n\
+|--------|-------|----------|\n\
+| `SPC f` | +file | `SPC f f` find, `SPC f s` save |\n\
+| `SPC b` | +buffer | `SPC b b` switch, `SPC b d` kill |\n\
+| `SPC w` | +window | `SPC w v` vsplit, `SPC w s` hsplit |\n\
+| `SPC a` | +ai | `SPC a p` prompt, `SPC a a` agent |\n\
+| `SPC h` | +help | `SPC h h` index, `SPC h k` describe key |\n\
+| `SPC t` | +toggle | `SPC t t` theme, `SPC t l` line nums |\n\
+| `SPC l` | +lsp | `SPC l d` diagnostics |\n\
+| `SPC d` | +debug | `SPC d b` breakpoint, `SPC d c` continue |\n\
+| `SPC p` | +project | `SPC p f` find file, `SPC p s` search |\n\
+| `SPC e` | +eval | `SPC e e` eval line, `SPC e b` eval buffer |\n\
+| `SPC q` | +quit | `SPC q q` quit |\n\n\
+See [[key:leader-keys|full leader key reference]] for the complete list.\n\n\
+See also: [[concept:command|Commands]], [[index|Help Index]]\n\n\
+**Prev:** [[lesson:help|Lesson 9]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
 
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
@@ -251,6 +534,9 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[key:leader-keys|SPC leader bindings]] (14 groups, Doom Emacs style)
 - [[concept:project|Project management]]
 - Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
+
+## Tutorial
+- [[tutor:index|MAE Tutorial]] — interactive lessons covering all essentials
 
 ## Getting around
 - **Enter** on a link follows it.
@@ -805,6 +1091,31 @@ mod tests {
         assert!(links.contains(&"concept:buffer".to_string()));
         assert!(links.contains(&"concept:ai-as-peer".to_string()));
         assert!(links.contains(&"concept:gui".to_string()));
+        assert!(links.contains(&"tutor:index".to_string()));
+    }
+
+    #[test]
+    fn seed_includes_tutor_lessons() {
+        let kb = seed_kb(&CommandRegistry::with_builtins());
+        assert!(kb.contains("tutor:index"), "missing tutor:index");
+        for i in [
+            "lesson:navigation",
+            "lesson:modes",
+            "lesson:editing",
+            "lesson:files",
+            "lesson:ai",
+            "lesson:scheme",
+            "lesson:lsp",
+            "lesson:terminal",
+            "lesson:help",
+            "lesson:leader",
+        ] {
+            assert!(kb.contains(i), "missing lesson: {}", i);
+        }
+        // Tutor index links to all lessons
+        let links = kb.links_from("tutor:index");
+        assert!(links.contains(&"lesson:navigation".to_string()));
+        assert!(links.contains(&"lesson:leader".to_string()));
     }
 
     #[test]

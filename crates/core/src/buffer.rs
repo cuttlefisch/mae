@@ -71,6 +71,9 @@ pub struct Buffer {
     /// When set, `Editor::active_project_root()` prefers this over the
     /// editor-wide `project` field, enabling per-buffer project context.
     pub project_root: Option<PathBuf>,
+    /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
+    /// Agent shells are auto-closed when the process exits.
+    pub agent_shell: bool,
 }
 
 impl Default for Buffer {
@@ -95,6 +98,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -114,6 +118,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -133,6 +138,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -153,6 +159,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -172,6 +179,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -191,6 +199,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
+            agent_shell: false,
         }
     }
 
@@ -216,6 +225,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             file_mtime: mtime,
             project_root,
+            agent_shell: false,
         })
     }
 

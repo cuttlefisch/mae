@@ -23,7 +23,6 @@ pub mod search;
 pub mod session;
 pub mod syntax;
 pub mod theme;
-pub mod tutor;
 pub mod window;
 pub mod word;
 pub mod wrap;

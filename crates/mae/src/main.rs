@@ -411,6 +411,8 @@ async fn run_terminal_loop(
     let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
+    let mut shell_generations: std::collections::HashMap<usize, u64> =
+        std::collections::HashMap::new();
     let mut last_health_check = tokio::time::Instant::now();
     let mut tui_dirty = true; // start dirty for initial render
 
@@ -505,6 +507,7 @@ async fn run_terminal_loop(
         );
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
+        shell_generations.retain(|idx, _| shell_terminals.contains_key(idx));
 
         let has_shells = !shell_terminals.is_empty();
         let shell_tick = async {
@@ -584,8 +587,14 @@ async fn run_terminal_loop(
                 handle_dap_event(editor, dap_event);
             }
             _ = shell_tick => {
-                // Shell tick — only mark dirty when shells are active (new output possible)
-                tui_dirty = true;
+                // Shell tick — only mark dirty when a shell has new output
+                for (idx, term) in &shell_terminals {
+                    let gen = term.generation();
+                    if shell_generations.get(idx) != Some(&gen) {
+                        shell_generations.insert(*idx, gen);
+                        tui_dirty = true;
+                    }
+                }
             }
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {
