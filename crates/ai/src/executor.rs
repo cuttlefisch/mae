@@ -15,7 +15,9 @@ use crate::tool_impls::{
     execute_dap_output, execute_dap_remove_breakpoint, execute_dap_select_frame,
     execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
     execute_debug_state, execute_editor_state, execute_event_recording, execute_file_read,
-    execute_get_option, execute_help_open, execute_introspect, execute_kb_get, execute_kb_graph,
+    execute_get_option, execute_git_checkout, execute_git_commit, execute_git_diff,
+    execute_git_log, execute_git_pull, execute_git_push, execute_git_stage, execute_git_status,
+    execute_git_unstage, execute_help_open, execute_introspect, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_mouse_event, execute_open_file,
     execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
@@ -305,6 +307,18 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
         "introspect" => execute_introspect(editor, &call.arguments),
         "event_recording" => execute_event_recording(editor, &call.arguments),
+
+        // --- Git operations ---
+        "git_status" => execute_git_status(editor),
+        "git_diff" => execute_git_diff(editor, &call.arguments),
+        "git_log" => execute_git_log(editor, &call.arguments),
+        "git_stage" => execute_git_stage(editor, &call.arguments),
+        "git_unstage" => execute_git_unstage(editor, &call.arguments),
+        "git_commit" => execute_git_commit(editor, &call.arguments),
+        "git_push" => execute_git_push(editor, &call.arguments),
+        "git_pull" => execute_git_pull(editor, &call.arguments),
+        "git_checkout" => execute_git_checkout(editor, &call.arguments),
+
         _ => Err(format!("Unknown tool: {}", call.name)),
     }
 }
@@ -1183,7 +1197,8 @@ mod tests {
         ));
         assert!(result.success, "open_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        assert!(editor.active_buffer().text().contains("line1"));
+        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        assert!(editor.buffers[target_idx].text().contains("line1"));
 
         std::fs::remove_file(&path).ok();
     }
@@ -1234,7 +1249,8 @@ mod tests {
             &PermissionPolicy::default(),
         ));
         assert!(result.success);
-        assert_eq!(editor.active_buffer().name, "second");
+        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        assert_eq!(editor.buffers[target_idx].name, "second");
     }
 
     #[test]
@@ -1410,7 +1426,8 @@ mod tests {
         ));
         assert!(result.success, "create_file failed: {}", result.output);
         assert_eq!(editor.buffers.len(), 2);
-        assert!(editor.active_buffer().text().contains("new file"));
+        let target_idx = editor.ai_target_buffer_idx.expect("should have AI target");
+        assert!(editor.buffers[target_idx].text().contains("new file"));
         // File should exist on disk
         assert!(path.exists());
 

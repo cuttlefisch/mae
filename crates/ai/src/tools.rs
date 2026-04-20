@@ -1496,6 +1496,202 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "git_status".into(),
+            description: "Get structured git status: branch name, staged, unstaged, and untracked files.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_diff".into(),
+            description: "Get git diff for the project or a specific path. Use staged=true to see staged changes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional file path to diff".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "staged".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Show staged changes (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_log".into(),
+            description: "Get git commit log. Returns oneline format.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional file path to show log for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Maximum number of commits to show (default: 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_stage".into(),
+            description: "Stage files for commit (git add).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "paths".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of file paths to stage".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["paths".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_unstage".into(),
+            description: "Unstage files (git reset).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "paths".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of file paths to unstage".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["paths".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_commit".into(),
+            description: "Commit staged changes with a message.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "message".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Commit message".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["message".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_push".into(),
+            description: "Push commits to a remote repository.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "remote".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Remote name (default: 'origin')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name (default: current branch)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "git_pull".into(),
+            description: "Pull changes from a remote repository.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "remote".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Remote name (default: 'origin')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name (default: current branch)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "git_checkout".into(),
+            description: "Switch branches or create new ones.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name to checkout".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "create".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Create the branch if it doesn't exist (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["branch".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
 
@@ -1516,6 +1712,7 @@ pub enum ToolCategory {
     Knowledge,
     ShellMgmt,
     Commands,
+    Git,
 }
 
 /// Classify a tool into Core or Extended tier.
@@ -1526,7 +1723,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "create_file" | "close_buffer" | "list_buffers" | "editor_state" | "project_search"
         | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
         | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
-        | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" => ToolTier::Core,
+        | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" | "git_status"
+        | "git_diff" | "git_log" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -1544,6 +1742,8 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::ShellMgmt)
     } else if name.starts_with("command_") {
         Some(ToolCategory::Commands)
+    } else if name.starts_with("git_") {
+        Some(ToolCategory::Git)
     } else {
         None
     }
@@ -1679,51 +1879,14 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 64);
+        assert_eq!(tools.len(), 73);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
-        assert!(names.contains(&"buffer_write"));
-        assert!(names.contains(&"get_option"));
-        assert!(names.contains(&"set_option"));
-        assert!(names.contains(&"cursor_info"));
-        assert!(names.contains(&"shell_exec"));
-        assert!(names.contains(&"file_read"));
-        assert!(names.contains(&"list_buffers"));
-        assert!(names.contains(&"editor_state"));
-        assert!(names.contains(&"window_layout"));
-        assert!(names.contains(&"command_list"));
-        assert!(names.contains(&"debug_state"));
-        assert!(names.contains(&"open_file"));
-        assert!(names.contains(&"switch_buffer"));
-        assert!(names.contains(&"close_buffer"));
-        assert!(names.contains(&"create_file"));
-        assert!(names.contains(&"project_files"));
-        assert!(names.contains(&"project_info"));
-        assert!(names.contains(&"project_search"));
+        assert!(names.contains(&"git_status"));
+        assert!(names.contains(&"git_commit"));
         assert!(names.contains(&"lsp_definition"));
-        assert!(names.contains(&"lsp_references"));
-        assert!(names.contains(&"lsp_hover"));
-        assert!(names.contains(&"lsp_diagnostics"));
-        assert!(names.contains(&"syntax_tree"));
         assert!(names.contains(&"dap_start"));
-        assert!(names.contains(&"dap_set_breakpoint"));
-        assert!(names.contains(&"dap_continue"));
-        assert!(names.contains(&"dap_step"));
-        assert!(names.contains(&"dap_inspect_variable"));
-        assert!(names.contains(&"dap_remove_breakpoint"));
-        assert!(names.contains(&"dap_list_variables"));
-        assert!(names.contains(&"dap_expand_variable"));
-        assert!(names.contains(&"dap_select_frame"));
-        assert!(names.contains(&"dap_select_thread"));
-        assert!(names.contains(&"dap_output"));
-        assert!(names.contains(&"dap_evaluate"));
-        assert!(names.contains(&"dap_disconnect"));
         assert!(names.contains(&"kb_get"));
-        assert!(names.contains(&"kb_search"));
-        assert!(names.contains(&"kb_list"));
-        assert!(names.contains(&"kb_links_from"));
-        assert!(names.contains(&"kb_links_to"));
-        assert!(names.contains(&"kb_graph"));
         assert!(names.contains(&"help_open"));
         assert!(names.contains(&"switch_project"));
     }

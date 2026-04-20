@@ -67,9 +67,7 @@ fn main() -> io::Result<()> {
         default_hook(info);
     }));
 
-    let args: Vec<String> = std::env::args().collect();
-
-    // Handle --version / --help / --init-config before the terminal UI starts.
+    let args: Vec<String> = std::env::args().collect(); // Handle --version / --help / --init-config before the terminal UI starts.
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("mae {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

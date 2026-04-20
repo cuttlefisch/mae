@@ -682,12 +682,32 @@ impl Editor {
     }
 
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
+        if let Some(new_idx) = self.open_file_hidden(path) {
+            let prev_idx = self.active_buffer_idx();
+            self.alternate_buffer_idx = Some(prev_idx);
+            self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+        }
+    }
+
+    /// Opens a file and returns its buffer index without modifying the window manager focus.
+    /// If the file is already open, it just returns that buffer's index.
+    pub fn open_file_hidden(&mut self, path: impl AsRef<Path>) -> Option<usize> {
         let path = path.as_ref();
+
+        // Check if file is already open
+        if let Ok(canonical) = path.canonicalize() {
+            if let Some((idx, _)) = self.buffers.iter().enumerate().find(|(_, b)| {
+                b.file_path().and_then(|p| p.canonicalize().ok()).as_ref() == Some(&canonical)
+            }) {
+                return Some(idx);
+            }
+        }
+
         match Buffer::from_file(path) {
             Ok(buf) => {
                 let name = buf.name.clone();
                 let detected_lang = buf.file_path().and_then(crate::syntax::language_for_path);
-                let prev_idx = self.active_buffer_idx();
+
                 // Track recent files
                 if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
                     self.recent_files.push(canonical.clone());
@@ -720,10 +740,10 @@ impl Editor {
                         self.kb.ingest_project(&proj.name, &proj.root, &config_body);
                     }
                 }
+
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
-                self.alternate_buffer_idx = Some(prev_idx);
-                self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+
                 if let Some(lang) = detected_lang {
                     self.syntax.set_language(new_idx, lang);
                 }
@@ -731,9 +751,11 @@ impl Editor {
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
                 self.fire_hook("buffer-open");
+                Some(new_idx)
             }
             Err(e) => {
                 self.set_status(format!("Error opening: {}", e));
+                None
             }
         }
     }

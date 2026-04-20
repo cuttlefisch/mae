@@ -1127,36 +1127,47 @@ impl Editor {
         if idx >= self.buffers.len() {
             return false;
         }
-        let focused_buf = self.active_buffer_idx();
-        if !self.is_conversation_buffer(focused_buf) {
-            return self.switch_to_buffer(idx);
+
+        self.ai_target_buffer_idx = Some(idx);
+
+        // 1. Is this buffer already visible?
+        if self.window_mgr.iter_windows().any(|w| w.buffer_idx == idx) {
+            return true;
         }
-        // Focused window is conversation — route to another window.
+
+        // 2. Can we put it in a non-focused window that isn't a conversation?
         let focused_id = self.window_mgr.focused_id();
-        // Find a non-conversation window.
         let other = self
             .window_mgr
             .iter_windows()
-            .find(|w| w.id != focused_id)
+            .find(|w| w.id != focused_id && !self.is_conversation_buffer(w.buffer_idx))
             .map(|w| w.id);
+
         if let Some(other_id) = other {
             if let Some(win) = self.window_mgr.window_mut(other_id) {
                 win.buffer_idx = idx;
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
-            true
-        } else {
-            // Single window — auto-split vertically.
-            let area = self.default_area();
-            match self
-                .window_mgr
-                .split(crate::window::SplitDirection::Vertical, idx, area)
-            {
-                Ok(_new_id) => true,
-                Err(_) => {
-                    // Too small to split — fall back to normal switch.
+            return true;
+        }
+
+        // 3. Fallback: split the focused window if it's conversation,
+        // or just some window if we can't find a better spot.
+        let area = self.default_area();
+        match self
+            .window_mgr
+            .split(crate::window::SplitDirection::Vertical, idx, area)
+        {
+            Ok(_new_id) => true,
+            Err(_) => {
+                // Too small to split — if we are in conversation, we HAVE to steal focus
+                // but we try to avoid it.
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
                     self.switch_to_buffer(idx)
+                } else {
+                    // Not in conversation, so just keep focus where it is.
+                    true
                 }
             }
         }
@@ -1164,28 +1175,12 @@ impl Editor {
 
     /// Open a file without stealing focus from a conversation window.
     ///
-    /// If the focused window is `*AI*`, the file is opened normally (which
-    /// pushes a new buffer and switches focus), then focus is restored to the
-    /// conversation and the new buffer is routed via
-    /// `switch_to_buffer_non_conversation`.
+    /// The file is opened "hidden" (not assigned to focused window), then
+    /// routed via `switch_to_buffer_non_conversation`.
     pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
-        let focused_buf = self.active_buffer_idx();
-        if !self.is_conversation_buffer(focused_buf) {
-            self.open_file(path);
-            return;
+        if let Some(new_idx) = self.open_file_hidden(path) {
+            self.switch_to_buffer_non_conversation(new_idx);
         }
-        let conv_idx = focused_buf;
-        self.open_file(path);
-        let new_buf_idx = self.active_buffer_idx();
-        if new_buf_idx == conv_idx {
-            return; // open_file failed or was a no-op
-        }
-        // Restore conversation in focused window.
-        self.window_mgr.focused_window_mut().buffer_idx = conv_idx;
-        self.window_mgr.focused_window_mut().cursor_row = 0;
-        self.window_mgr.focused_window_mut().cursor_col = 0;
-        // Route the new buffer to a non-conversation window.
-        self.switch_to_buffer_non_conversation(new_buf_idx);
     }
 
     /// Save current mode to the active buffer before switching away.

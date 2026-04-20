@@ -2,6 +2,7 @@ mod buffer;
 mod dap;
 mod editor_tools;
 mod file;
+mod git;
 mod help;
 mod introspect;
 mod kb;
@@ -28,6 +29,10 @@ pub use editor_tools::{
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
     execute_rename_file, execute_switch_buffer,
+};
+pub use git::{
+    execute_git_checkout, execute_git_commit, execute_git_diff, execute_git_log, execute_git_pull,
+    execute_git_push, execute_git_stage, execute_git_status, execute_git_unstage,
 };
 pub use help::execute_help_open;
 pub use introspect::execute_introspect;
