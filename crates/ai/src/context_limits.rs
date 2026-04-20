@@ -42,8 +42,8 @@ const TABLE: &[(&str, u64)] = &[
     ("gemini-2.5-pro", 1_000_000),
     ("gemini-2.5-flash", 1_000_000),
     // ---- DeepSeek ----
-    ("deepseek-reasoner", 131_072),
-    ("deepseek-chat", 131_072),
+    ("deepseek-reasoner", 64_000),
+    ("deepseek-chat", 64_000),
 ];
 
 #[cfg(test)]
@@ -61,13 +61,13 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_chat_131k() {
-        assert_eq!(lookup("deepseek-chat"), 131_072);
+    fn deepseek_chat_64k() {
+        assert_eq!(lookup("deepseek-chat"), 64_000);
     }
 
     #[test]
-    fn deepseek_reasoner_131k() {
-        assert_eq!(lookup("deepseek-reasoner"), 131_072);
+    fn deepseek_reasoner_64k() {
+        assert_eq!(lookup("deepseek-reasoner"), 64_000);
     }
 
     #[test]

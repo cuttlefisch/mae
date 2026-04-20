@@ -5,7 +5,7 @@
 //! stdin/stdout to the MAE editor's Unix socket.
 
 use std::env;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 #[tokio::main(flavor = "current_thread")]
@@ -31,38 +31,20 @@ async fn main() {
     let mut stdin_reader = BufReader::new(stdin);
 
     // Bidirectional pipe: stdin -> socket, socket -> stdout.
-    tokio::select! {
-        _ = async {
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match stdin_reader.read_line(&mut line).await {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
-                        if socket_writer.write_all(line.as_bytes()).await.is_err() {
-                            break;
-                        }
-                        let _ = socket_writer.flush().await;
-                    }
-                    Err(_) => break,
-                }
+    // Use tokio::io::copy for raw, robust, unbuffered proxying.
+    // We use join! so both directions run concurrently until EOF/error.
+    let _ = tokio::join!(
+        async {
+            if let Err(e) = tokio::io::copy(&mut stdin_reader, &mut socket_writer).await {
+                eprintln!("mae-mcp-shim: stdin -> socket error: {}", e);
             }
-        } => {}
-        _ = async {
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match socket_reader.read_line(&mut line).await {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if stdout.write_all(line.as_bytes()).await.is_err() {
-                            break;
-                        }
-                        let _ = stdout.flush().await;
-                    }
-                    Err(_) => break,
-                }
+            let _ = socket_writer.shutdown().await;
+        },
+        async {
+            if let Err(e) = tokio::io::copy(&mut socket_reader, &mut stdout).await {
+                eprintln!("mae-mcp-shim: socket -> stdout error: {}", e);
             }
-        } => {}
-    }
+            let _ = stdout.flush().await;
+        }
+    );
 }

@@ -289,9 +289,9 @@ impl AgentProvider for OpenAiProvider {
             } else {
                 ""
             };
-            let body_lower = body_preview.to_lowercase();
-            let kind = if body_lower.contains("context_length_exceeded")
-                || body_lower.contains("maximum context length")
+            let full_body_lower = String::from_utf8_lossy(&raw_body).to_lowercase();
+            let kind = if full_body_lower.contains("context_length_exceeded")
+                || full_body_lower.contains("maximum context length")
             {
                 ErrorKind::ContextOverflow
             } else if status.as_u16() == 401 {

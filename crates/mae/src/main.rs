@@ -296,8 +296,26 @@ fn main() -> io::Result<()> {
             "AI agent setup complete"
         );
 
-        let (lsp_event_rx, lsp_command_tx) = setup_lsp();
+        let (lsp_event_rx, lsp_command_tx) = {
+            let root_uri = editor
+                .active_project_root()
+                .map(|p| format!("file://{}", p.display()));
+            setup_lsp(root_uri)
+        };
         info!("LSP task spawned");
+
+        // AI session restoration
+        if editor.restore_session {
+            if let Some(root) = editor.active_project_root() {
+                let session_path = root.join(".mae/conversation.json");
+                if session_path.exists() {
+                    match editor.ai_load(&session_path) {
+                        Ok(n) => info!(path = %session_path.display(), entries = n, "AI session restored"),
+                        Err(e) => warn!(path = %session_path.display(), error = %e, "failed to restore AI session"),
+                    }
+                }
+            }
+        }
 
         let (dap_event_rx, dap_command_tx) = setup_dap();
         info!("DAP task spawned");
@@ -540,6 +558,28 @@ async fn run_terminal_loop(
 
         if !editor.running {
             info!("editor shutting down");
+
+            // AI session persistence
+            if editor.restore_session {
+                if let Some(root) = editor.active_project_root() {
+                    let session_path = root.join(".mae/conversation.json");
+                    // Ensure directory exists
+                    if let Some(parent) = session_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match editor.ai_save(&session_path) {
+                        Ok(n) => {
+                            info!(path = %session_path.display(), entries = n, "AI session persisted")
+                        }
+                        Err(e) => {
+                            if !e.contains("No conversation buffer") {
+                                warn!(path = %session_path.display(), error = %e, "failed to persist AI session");
+                            }
+                        }
+                    }
+                }
+            }
+
             if let Some(ref tx) = ai_command_tx {
                 if tx.try_send(AiCommand::Shutdown).is_err() {
                     warn!("failed to send shutdown to AI session (channel closed)");

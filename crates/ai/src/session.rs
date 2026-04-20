@@ -94,8 +94,8 @@ impl AgentSession {
             system_prompt,
             event_tx,
             command_rx,
-            max_rounds: 20,
-            max_messages: 200,
+            max_rounds: 250,
+            max_messages: 2000,
             consecutive_errors: 0,
             price: None,
             budget: crate::BudgetConfig::default(),
@@ -489,6 +489,9 @@ impl AgentSession {
                     // Context overflow recovery: aggressively prune and retry once
                     if e.kind == ErrorKind::ContextOverflow {
                         warn!("context overflow detected — pruning old messages and retrying");
+                        // Halve the context window for self-healing (discovery of actual tighter limits)
+                        self.context_window = (self.context_window / 2).max(4000);
+
                         let _ = self
                             .event_tx
                             .send(AiEvent::Error(
@@ -908,7 +911,8 @@ mod tests {
         }
 
         let provider = Box::new(MockProvider::new(responses));
-        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_rounds = 20; // Low limit so test doesn't need 250 mock responses
 
         tokio::spawn(session.run());
 

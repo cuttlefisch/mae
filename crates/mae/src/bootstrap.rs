@@ -329,20 +329,37 @@ pub fn find_conversation_buffer_mut(editor: &mut Editor) -> Option<&mut mae_core
 ///   MAE_LSP_RUST=rust-analyzer
 ///   MAE_LSP_PYTHON=pylsp
 ///   MAE_LSP_TYPESCRIPT="typescript-language-server --stdio"
-pub fn setup_lsp() -> (
+pub fn setup_lsp(
+    root_uri: Option<String>,
+) -> (
     tokio::sync::mpsc::Receiver<LspTaskEvent>,
     tokio::sync::mpsc::Sender<LspCommand>,
 ) {
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
 
-    insert_if_set(&mut configs, "rust", "MAE_LSP_RUST", "rust-analyzer", &[]);
-    insert_if_set(&mut configs, "python", "MAE_LSP_PYTHON", "pylsp", &[]);
+    insert_if_set(
+        &mut configs,
+        "rust",
+        "MAE_LSP_RUST",
+        "rust-analyzer",
+        &[],
+        root_uri.clone(),
+    );
+    insert_if_set(
+        &mut configs,
+        "python",
+        "MAE_LSP_PYTHON",
+        "pylsp",
+        &[],
+        root_uri.clone(),
+    );
     insert_if_set(
         &mut configs,
         "typescript",
         "MAE_LSP_TYPESCRIPT",
         "typescript-language-server",
         &["--stdio"],
+        root_uri.clone(),
     );
     insert_if_set(
         &mut configs,
@@ -350,8 +367,16 @@ pub fn setup_lsp() -> (
         "MAE_LSP_TYPESCRIPT",
         "typescript-language-server",
         &["--stdio"],
+        root_uri.clone(),
     );
-    insert_if_set(&mut configs, "go", "MAE_LSP_GO", "gopls", &[]);
+    insert_if_set(
+        &mut configs,
+        "go",
+        "MAE_LSP_GO",
+        "gopls",
+        &[],
+        root_uri.clone(),
+    );
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<LspCommand>(64);
     let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<LspTaskEvent>(64);
@@ -371,6 +396,7 @@ fn insert_if_set(
     env_var: &str,
     default_cmd: &str,
     default_args: &[&str],
+    root_uri: Option<String>,
 ) {
     let (command, args) = match std::env::var(env_var) {
         Ok(v) => {
@@ -393,7 +419,7 @@ fn insert_if_set(
         LspServerConfig {
             command,
             args,
-            root_uri: None,
+            root_uri,
         },
     );
 }
