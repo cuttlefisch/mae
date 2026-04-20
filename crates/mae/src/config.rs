@@ -216,6 +216,9 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         "openai" => std::env::var("OPENAI_API_KEY")
             .ok()
             .or_else(|| file.api_key.clone()),
+        "gemini" => std::env::var("GEMINI_API_KEY")
+            .ok()
+            .or_else(|| file.api_key.clone()),
         _ => std::env::var("ANTHROPIC_API_KEY")
             .ok()
             .or_else(|| file.api_key.clone()),
@@ -246,6 +249,7 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         .or_else(|| file.model.clone())
         .unwrap_or_else(|| match provider_type.as_str() {
             "openai" => "gpt-4o".to_string(),
+            "gemini" => "gemini-2.5-flash".to_string(),
             _ => "claude-sonnet-4-5".to_string(),
         });
 
@@ -368,17 +372,22 @@ pub fn run_wizard() -> io::Result<()> {
     writeln!(out, "    2. openai  — OpenAI API (requires OPENAI_API_KEY)")?;
     writeln!(
         out,
-        "    3. ollama  — Local Ollama (no key, uses http://localhost:11434)"
+        "    3. gemini  — Google Gemini (requires GEMINI_API_KEY)"
     )?;
-    writeln!(out, "    4. skip    — Don't configure AI now")?;
-    let choice = prompt(&mut out, "Choice [1-4, default=4]", "4")?;
+    writeln!(
+        out,
+        "    4. ollama  — Local Ollama (no key, uses http://localhost:11434)"
+    )?;
+    writeln!(out, "    5. skip    — Don't configure AI now")?;
+    let choice = prompt(&mut out, "Choice [1-5, default=5]", "5")?;
 
     let mut cfg = Config::default();
 
     let (provider, ask_key, default_model, default_base) = match choice.as_str() {
         "1" | "claude" => ("claude", true, "claude-sonnet-4-5", None),
         "2" | "openai" => ("openai", true, "gpt-4o", None),
-        "3" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
+        "3" | "gemini" => ("gemini", true, "gemini-2.5-flash", None),
+        "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
         _ => {
             writeln!(
                 out,
@@ -414,10 +423,10 @@ pub fn run_wizard() -> io::Result<()> {
         writeln!(
             out,
             "  API key: leave blank to keep reading ${}_API_KEY from the environment.",
-            if provider == "openai" {
-                "OPENAI"
-            } else {
-                "ANTHROPIC"
+            match provider {
+                "openai" => "OPENAI",
+                "gemini" => "GEMINI",
+                _ => "ANTHROPIC",
             }
         )?;
         let key = prompt(&mut out, "API key (blank = env var)", "")?;
@@ -476,20 +485,21 @@ pub fn default_config_template() -> String {
 # Env vars always take precedence over values set here.\n\
 \n\
 [ai]\n\
-# Provider: \"claude\" | \"openai\" | \"ollama\"\n\
+# Provider: \"claude\" | \"openai\" | \"gemini\" | \"ollama\"\n\
 # (\"ollama\" is a shortcut for openai-compatible + http://localhost:11434/v1)\n\
 # provider = \"claude\"\n\
 \n\
 # Model identifier. Leave unset for the provider default.\n\
 # Claude defaults:  claude-sonnet-4-5  (also: claude-opus-4-6, claude-haiku-4-5-20251001)\n\
 # OpenAI defaults:  gpt-4o\n\
+# Gemini defaults:  gemini-2.5-flash (also: gemini-3.1-pro, gemini-3.1-flash-lite)\n\
 # Ollama examples:  llama3, codellama, qwen2.5-coder\n\
 # model = \"claude-sonnet-4-5\"\n\
 \n\
 # Base URL for the API. Leave unset for provider defaults.\n\
 # base_url = \"http://localhost:11434/v1\"\n\
 \n\
-# API key. If unset, ANTHROPIC_API_KEY / OPENAI_API_KEY env vars are read.\n\
+# API key. If unset, ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY env vars are read.\n\
 # Ollama doesn't need a key.\n\
 # api_key = \"...\"\n\
 \n\
@@ -611,6 +621,25 @@ mod tests {
         assert_eq!(resolved.provider_type, "openai");
         assert_eq!(resolved.model, "llama3");
         assert!(resolved.base_url.as_deref().unwrap().contains("localhost"));
+    }
+
+    #[test]
+    fn resolve_gemini_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("GEMINI_API_KEY", "gemini-key");
+        std::env::remove_var("MAE_AI_PROVIDER");
+        let cfg = Config {
+            ai: AiSection {
+                provider: Some("gemini".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolve_ai_config(&cfg).unwrap();
+        assert_eq!(resolved.provider_type, "gemini");
+        assert_eq!(resolved.api_key.as_deref(), Some("gemini-key"));
+        assert_eq!(resolved.model, "gemini-2.5-flash"); // default
+        std::env::remove_var("GEMINI_API_KEY");
     }
 
     #[test]

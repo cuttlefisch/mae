@@ -70,7 +70,7 @@
 ;; 5. AI configuration
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; AI agent command for SPC a a. Default: "claude" (Claude Code).
-;; Other examples: "aider", "copilot", any CLI that speaks stdio.
+;; Other examples: "gemini" (Gemini CLI), "aider", "copilot".
 ;; (set-option! "ai-editor" "claude")
 
 ;; Permission tier: ReadOnly, Write, Shell, Privileged

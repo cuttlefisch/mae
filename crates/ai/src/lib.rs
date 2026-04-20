@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod executor;
+pub mod gemini;
 pub mod openai;
 pub mod pricing;
 pub mod provider;
@@ -10,6 +11,7 @@ pub mod types;
 
 pub use claude::ClaudeProvider;
 pub use executor::{execute_tool, DeferredKind, ExecuteResult};
+pub use gemini::GeminiProvider;
 pub use openai::OpenAiProvider;
 pub use pricing::{lookup as lookup_price, ModelPrice};
 pub use provider::{

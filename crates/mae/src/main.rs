@@ -83,7 +83,7 @@ fn main() -> io::Result<()> {
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
-        println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
+        println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
@@ -91,12 +91,13 @@ fn main() -> io::Result<()> {
         println!("  {}", config::config_path().display());
         println!();
         println!("ENVIRONMENT:");
-        println!("  MAE_AI_PROVIDER     claude | openai | ollama");
+        println!("  MAE_AI_PROVIDER     claude | openai | gemini | ollama");
         println!("  MAE_AI_MODEL        model identifier");
         println!("  MAE_AI_BASE_URL     custom API base URL (for Ollama/vLLM/proxies)");
         println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
         println!("  ANTHROPIC_API_KEY   Claude API key");
         println!("  OPENAI_API_KEY      OpenAI API key");
+        println!("  GEMINI_API_KEY      Gemini API key");
         println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
@@ -119,17 +120,14 @@ fn main() -> io::Result<()> {
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let shim = agents::resolve_shim_path();
-        match agents::write_mcp_json(&dir, &shim) {
-            Ok(()) => {
-                println!("Wrote {}", dir.join(".mcp.json").display());
-                return Ok(());
-            }
-            Err(e) => {
-                eprintln!("Failed: {}", e);
-                std::process::exit(1);
+
+        for agent in agents::builtin_agents() {
+            match agents::setup_agent(&agent.name, &dir) {
+                Ok(msg) => println!("  {}: {}", agent.name, msg),
+                Err(e) => eprintln!("  {}: Failed: {}", agent.name, e),
             }
         }
+        return Ok(());
     }
     if args.iter().any(|a| a == "--init-config") {
         let force = args.iter().any(|a| a == "--force");

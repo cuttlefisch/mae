@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use mae_ai::{
     ai_specific_tools, tools_from_registry, AgentSession, AiCommand, AiEvent, ClaudeProvider,
-    OpenAiProvider, ProviderConfig,
+    GeminiProvider, OpenAiProvider, ProviderConfig,
 };
 use mae_core::Editor;
 use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
@@ -195,6 +195,7 @@ pub fn setup_ai(
         info!(provider = %provider_name, model = %model, "initializing AI provider");
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
+            "gemini" => Box::new(GeminiProvider::new(config)),
             _ => Box::new(ClaudeProvider::new(config)), // default to Claude
         };
 

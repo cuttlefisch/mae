@@ -171,6 +171,47 @@ const TABLE: &[(&str, ModelPrice)] = &[
             output_per_mtok: 60.0,
         },
     ),
+    // ---- Gemini ----
+    // Gemini 3.1 Pro (Preview)
+    (
+        "gemini-3.1-pro",
+        ModelPrice {
+            input_per_mtok: 2.0,
+            output_per_mtok: 12.0,
+        },
+    ),
+    // Gemini 3.1 Flash-Lite
+    (
+        "gemini-3.1-flash-lite",
+        ModelPrice {
+            input_per_mtok: 0.25,
+            output_per_mtok: 1.50,
+        },
+    ),
+    // Gemini 3.0 Flash (Preview)
+    (
+        "gemini-3.0-flash",
+        ModelPrice {
+            input_per_mtok: 0.50,
+            output_per_mtok: 3.0,
+        },
+    ),
+    // Gemini 2.5 Pro (Stable)
+    (
+        "gemini-2.5-pro",
+        ModelPrice {
+            input_per_mtok: 1.25,
+            output_per_mtok: 10.0,
+        },
+    ),
+    // Gemini 2.5 Flash
+    (
+        "gemini-2.5-flash",
+        ModelPrice {
+            input_per_mtok: 0.30,
+            output_per_mtok: 2.50,
+        },
+    ),
 ];
 
 #[cfg(test)]
