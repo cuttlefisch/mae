@@ -65,6 +65,11 @@ pub struct AgentSession {
     all_tools: Vec<ToolDefinition>,
     /// Categories that have been enabled via `request_tools`.
     enabled_categories: std::collections::HashSet<crate::tools::ToolCategory>,
+    /// Index in `self.messages` where the current transaction (User prompt) started.
+    /// Used for tool stack compression.
+    transaction_start_idx: Option<usize>,
+    /// Current round in the tool loop. Exposed for introspection.
+    current_round: usize,
 }
 
 impl AgentSession {
@@ -110,6 +115,8 @@ impl AgentSession {
             initialized: false,
             model_name: String::new(),
             enabled_categories: std::collections::HashSet::new(),
+            transaction_start_idx: None,
+            current_round: 0,
         }
     }
 
@@ -124,7 +131,9 @@ impl AgentSession {
     pub fn with_budget(mut self, model: impl AsRef<str>, budget: crate::BudgetConfig) -> Self {
         let model_str = model.as_ref();
         self.price = crate::pricing::lookup(model_str);
-        self.context_window = crate::context_limits::lookup(model_str);
+        let limits = crate::context_limits::lookup(model_str);
+        self.context_window = limits.context_window;
+        self.max_rounds = limits.max_rounds;
         self.model_name = model_str.to_string();
         self.budget = budget;
         self
@@ -414,6 +423,7 @@ impl AgentSession {
                 .await;
         }
 
+        self.transaction_start_idx = Some(self.messages.len());
         self.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(prompt),
@@ -421,7 +431,33 @@ impl AgentSession {
         self.trim_messages();
 
         for round in 0..self.max_rounds {
+            self.current_round = round;
+            let _ = self
+                .event_tx
+                .send(AiEvent::RoundUpdate {
+                    round: self.current_round,
+                    transaction_start_idx: self.transaction_start_idx,
+                })
+                .await;
             debug!(round, max_rounds = self.max_rounds, "AI provider send");
+
+            // Dynamic context-aware loop break: stop if we are running out of context
+            // before the provider even errors out.
+            let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+            if current_tokens > self.context_window.saturating_sub(self.reserved_output) {
+                warn!(
+                    current_tokens,
+                    context_window = self.context_window,
+                    "breaking tool loop: context nearly full"
+                );
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::Error(
+                        "Context window nearly full — stopping tool calls".into(),
+                    ))
+                    .await;
+                break;
+            }
 
             // Cost circuit breaker: refuse the send if the session is
             // already over budget. Checked *before* every round so a
@@ -442,6 +478,10 @@ impl AgentSession {
                             cap_usd: cap,
                         })
                         .await;
+                    if let Some(start_idx) = self.transaction_start_idx {
+                        self.collapse_transaction(start_idx);
+                    }
+                    self.transaction_start_idx = None;
                     return;
                 }
             }
@@ -519,6 +559,10 @@ impl AgentSession {
                                         retry_err.message
                                     )))
                                     .await;
+                                if let Some(start_idx) = self.transaction_start_idx {
+                                    self.collapse_transaction(start_idx);
+                                }
+                                self.transaction_start_idx = None;
                                 return;
                             }
                         }
@@ -537,6 +581,10 @@ impl AgentSession {
                         continue;
                     } else {
                         let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
                         return;
                     }
                 }
@@ -561,6 +609,10 @@ impl AgentSession {
                     .event_tx
                     .send(AiEvent::SessionComplete(final_text))
                     .await;
+                if let Some(start_idx) = self.transaction_start_idx {
+                    self.collapse_transaction(start_idx);
+                }
+                self.transaction_start_idx = None;
                 return;
             }
 
@@ -667,6 +719,10 @@ impl AgentSession {
                         .event_tx
                         .send(AiEvent::Error("Event channel closed".into()))
                         .await;
+                    if let Some(start_idx) = self.transaction_start_idx {
+                        self.collapse_transaction(start_idx);
+                    }
+                    self.transaction_start_idx = None;
                     return;
                 }
 
@@ -685,6 +741,10 @@ impl AgentSession {
                             .event_tx
                             .send(AiEvent::Error("Tool result channel closed".into()))
                             .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
                         return;
                     }
                 }
@@ -703,6 +763,91 @@ impl AgentSession {
                 self.max_rounds
             )))
             .await;
+
+        if let Some(start_idx) = self.transaction_start_idx {
+            self.collapse_transaction(start_idx);
+        }
+        self.transaction_start_idx = None;
+    }
+
+    /// Collapse intermediate tool calls and results in the current transaction
+    /// into a single reasoning/summary message.
+    ///
+    /// Preserves: System prompt, User prompt, Final response text.
+    /// Condenses: Tool calls, tool results, intermediate reasoning text.
+    fn collapse_transaction(&mut self, start_idx: usize) {
+        if self.messages.len() <= start_idx + 2 {
+            // Not enough messages to collapse (e.g. just user prompt + 1 response)
+            return;
+        }
+
+        let mut reasoning = Vec::new();
+        let final_response = self.messages.pop(); // The very last message is usually the final text
+
+        // Drain everything between start_idx+1 (after User prompt) and the final response
+        let to_drain = self.messages.len() - (start_idx + 1);
+        let drained: Vec<Message> = self.messages.drain(start_idx + 1..).collect();
+
+        let mut tool_count = 0;
+        for msg in drained {
+            match &msg.content {
+                MessageContent::Text(t) => {
+                    if msg.role == Role::Assistant {
+                        reasoning.push(t.clone());
+                    }
+                }
+                MessageContent::TextWithToolCalls { text, tool_calls } => {
+                    reasoning.push(text.clone());
+                    tool_count += tool_calls.len();
+                }
+                MessageContent::ToolCalls(calls) => {
+                    tool_count += calls.len();
+                }
+                MessageContent::ToolResult(_) => {
+                    // results are discarded but implicitly summarized by the fact
+                    // the model reached its final response.
+                }
+            }
+        }
+
+        // If we have reasoning text, insert a single compressed reasoning message
+        if !reasoning.is_empty() || tool_count > 0 {
+            let mut summary = String::new();
+            if !reasoning.is_empty() {
+                summary.push_str("Thought process:\n");
+                for r in &reasoning {
+                    summary.push_str("- ");
+                    summary.push_str(r);
+                    summary.push('\n');
+                }
+            }
+            if tool_count > 0 {
+                summary.push_str(&format!(
+                    "\n(Assistant performed {} tool operations)",
+                    tool_count
+                ));
+            }
+
+            self.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(summary),
+            });
+        }
+
+        let has_final = final_response.is_some();
+        if let Some(resp) = final_response {
+            self.messages.push(resp);
+        }
+
+        debug!(
+            original_len = to_drain + (if has_final { 1 } else { 0 }),
+            new_len = if reasoning.is_empty() && tool_count == 0 {
+                0
+            } else {
+                1
+            } + (if has_final { 1 } else { 0 }),
+            "collapsed tool callstack"
+        );
     }
 }
 
@@ -748,13 +893,15 @@ mod tests {
         }
     }
 
-    /// Drain the one-time session initialization TextResponse.
-    async fn drain_init_message(rx: &mut mpsc::Receiver<AiEvent>) {
-        match rx.recv().await.unwrap() {
-            AiEvent::TextResponse(t) => {
-                assert!(t.starts_with("[AI:"), "expected init message, got: {}", t);
+    /// Receive the next event, skipping RoundUpdate and the initialization TextResponse.
+    async fn recv_filtered(rx: &mut mpsc::Receiver<AiEvent>) -> AiEvent {
+        loop {
+            let evt = rx.recv().await.unwrap();
+            match &evt {
+                AiEvent::RoundUpdate { .. } => continue,
+                AiEvent::TextResponse(t) if t.starts_with("[AI:") => continue,
+                _ => return evt,
             }
-            other => panic!("expected init TextResponse, got {:?}", other),
         }
     }
 
@@ -776,15 +923,12 @@ mod tests {
 
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
-        // Drain init message
-        drain_init_message(&mut event_rx).await;
-
         // Should get TextResponse then SessionComplete
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::TextResponse(t) => assert_eq!(t, "Hello!"),
             other => panic!("expected TextResponse, got {:?}", other),
         }
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::SessionComplete(t) => assert_eq!(t, "Hello!"),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
@@ -827,17 +971,14 @@ mod tests {
             .await
             .unwrap();
 
-        // Drain init message
-        drain_init_message(&mut event_rx).await;
-
         // TextResponse from first response
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::TextResponse(t) => assert_eq!(t, "Let me check."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
         // ToolCallRequest
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::ToolCallRequest { call, reply } => {
                 assert_eq!(call.name, "cursor_info");
                 reply
@@ -852,13 +993,13 @@ mod tests {
         }
 
         // TextResponse from second response
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::TextResponse(t) => assert_eq!(t, "You're on line 1."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
         // SessionComplete
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::SessionComplete(t) => assert_eq!(t, "You're on line 1."),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
@@ -879,10 +1020,7 @@ mod tests {
 
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
-        // Drain init message
-        drain_init_message(&mut event_rx).await;
-
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
             other => panic!("expected Error, got {:?}", other),
         }
@@ -1024,15 +1162,15 @@ mod tests {
             .await
             .unwrap();
 
-        // Drain init message
-        drain_init_message(&mut event_rx).await;
-
         // Should NOT get a ToolCallRequest — shell_exec is handled locally.
         // We should get TextResponse then SessionComplete.
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::TextResponse(t) => assert_eq!(t, "Done."),
+            other => panic!("expected TextResponse, got {:?}", other),
+        }
+        match recv_filtered(&mut event_rx).await {
             AiEvent::SessionComplete(t) => assert_eq!(t, "Done."),
-            other => panic!("expected TextResponse or SessionComplete, got {:?}", other),
+            other => panic!("expected SessionComplete, got {:?}", other),
         }
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();

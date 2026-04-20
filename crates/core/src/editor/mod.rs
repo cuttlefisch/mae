@@ -342,6 +342,10 @@ pub struct Editor {
     /// True while the AI session is actively streaming (text chunks or tool
     /// calls). Used to distinguish "AI thinking" from "idle but locked".
     pub ai_streaming: bool,
+    /// Current round in the AI tool loop.
+    pub ai_current_round: usize,
+    /// Current transaction start index in history.
+    pub ai_transaction_start_idx: Option<usize>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -496,6 +500,8 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_current_round: 0,
+            ai_transaction_start_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
@@ -630,6 +636,8 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_current_round: 0,
+            ai_transaction_start_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,

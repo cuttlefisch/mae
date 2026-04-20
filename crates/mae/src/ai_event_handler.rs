@@ -152,6 +152,13 @@ pub fn handle_ai_event(
             editor.input_lock = InputLock::None;
             editor.set_status(msg);
         }
+        AiEvent::RoundUpdate {
+            round,
+            transaction_start_idx,
+        } => {
+            editor.ai_current_round = round;
+            editor.ai_transaction_start_idx = transaction_start_idx;
+        }
     }
 }
 

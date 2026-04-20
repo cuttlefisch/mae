@@ -762,6 +762,29 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("tool_callstack") {
+        categories.push(serde_json::json!({
+            "name": "tool_callstack",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "introspect",
+                    "args": {"section": "ai"},
+                    "assert": "Returns JSON with current_round and transaction_start_idx"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "Verify round increments after this tool call (AI should check introspect again)"
+                }
+            ],
+            "e2e_compression_check": {
+                "description": "After this turn ends, the next turn should see a smaller message history due to compression",
+                "procedure": "1. Run self-test. 2. Finish turn. 3. Start new turn. 4. Check introspect conversation_entries."
+            }
+        }));
+    }
+
     if include("dap") {
         categories.push(serde_json::json!({
             "name": "dap",

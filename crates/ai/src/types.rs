@@ -138,6 +138,11 @@ pub enum AiEvent {
     /// distinctly from transport/API errors (e.g. for telemetry or
     /// retry policies).
     BudgetExceeded { session_usd: f64, cap_usd: f64 },
+    /// Update on the current round and transaction status.
+    RoundUpdate {
+        round: usize,
+        transaction_start_idx: Option<usize>,
+    },
 }
 
 /// Commands sent from the main thread to the AI task.

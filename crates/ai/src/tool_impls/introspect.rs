@@ -124,6 +124,8 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
         "streaming": editor.ai_streaming,
         "input_lock": format!("{:?}", editor.input_lock),
         "conversation_entries": conv_entries,
+        "current_round": editor.ai_current_round,
+        "transaction_start_idx": editor.ai_transaction_start_idx,
         "session_cost_usd": editor.ai_session_cost_usd,
         "session_tokens_in": editor.ai_session_tokens_in,
         "session_tokens_out": editor.ai_session_tokens_out,
