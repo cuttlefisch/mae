@@ -190,7 +190,7 @@ pub fn setup_ai(
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<AiCommand>(8);
 
-    let config = load_ai_config();
+    let config = load_ai_config(editor);
 
     if let Some(config) = config {
         let provider_name = config.provider_type.clone();
@@ -221,12 +221,13 @@ pub fn setup_ai(
     }
 }
 
-/// Load the AI provider configuration by layering env vars over the TOML
-/// config file (if any) over built-in defaults. See `config.rs` for the
-/// precedence details.
-pub fn load_ai_config() -> Option<ProviderConfig> {
+/// Load the AI provider configuration by layering:
+///   env vars > Scheme (init.scm) > TOML (config.toml) > defaults.
+/// See `config.rs` for the full precedence details.
+pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     let file = crate::config::load_config();
-    crate::config::resolve_ai_config(&file)
+    let scheme = crate::config::SchemeAiOverrides::from_editor(editor);
+    crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
 fn build_system_prompt() -> String {
@@ -236,6 +237,27 @@ fn build_system_prompt() -> String {
     // Add working directory context
     if let Ok(cwd) = std::env::current_dir() {
         prompt.push_str(&format!("\n\n## Working Directory\n`{}`\n", cwd.display()));
+
+        // Add project context from CLAUDE.md or README.md (truncated to ~2K tokens)
+        let project_files = ["CLAUDE.md", "README.md", "README.org", ".project"];
+        for filename in &project_files {
+            let path = cwd.join(filename);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let max_chars = 8000; // ~2K tokens at 4 chars/token
+                    let truncated = if content.len() > max_chars {
+                        format!("{}...\n[truncated]", &content[..max_chars])
+                    } else {
+                        content
+                    };
+                    prompt.push_str(&format!(
+                        "\n## Project Context ({})\n```\n{}\n```\n",
+                        filename, truncated
+                    ));
+                    break; // Only include the first found project file
+                }
+            }
+        }
     }
 
     // Add git status context if in a git repo

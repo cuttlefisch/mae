@@ -1939,6 +1939,11 @@ impl Editor {
                 }
                 self.open_file(init_path.display().to_string());
             }
+            "setup-wizard" => {
+                self.set_status(
+                    "Run `mae --init-config --force` from a terminal to re-run the setup wizard. Or use :edit-settings to edit config.toml directly."
+                );
+            }
             "edit-settings" => {
                 // Bootstrap TOML config (GUI-only settings, font family, etc.)
                 let config_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {

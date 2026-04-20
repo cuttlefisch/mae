@@ -2,6 +2,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::provider::*;
+use crate::token_estimate;
 use crate::types::*;
 
 /// AgentSession runs the agentic loop on a spawned tokio task:
@@ -48,6 +49,22 @@ pub struct AgentSession {
     /// session. Users don't want a warn per round after crossing the
     /// threshold.
     warned: bool,
+    /// Model's context window size in tokens (from context_limits table).
+    context_window: u64,
+    /// Cached token estimate for the system prompt (computed once).
+    system_prompt_tokens: u64,
+    /// Cached token estimate for the tool definitions (computed once).
+    tools_tokens: u64,
+    /// Output tokens reserved for the model's response.
+    reserved_output: u64,
+    /// Whether the session initialization message has been emitted.
+    initialized: bool,
+    /// Model name for display purposes.
+    model_name: String,
+    /// All tools (core + extended). Partitioned at construction.
+    all_tools: Vec<ToolDefinition>,
+    /// Categories that have been enabled via `request_tools`.
+    enabled_categories: std::collections::HashSet<crate::tools::ToolCategory>,
 }
 
 impl AgentSession {
@@ -58,9 +75,21 @@ impl AgentSession {
         event_tx: mpsc::Sender<AiEvent>,
         command_rx: mpsc::Receiver<AiCommand>,
     ) -> Self {
+        // Partition tools into core (always sent) + extended (on request).
+        // Core tools include the request_tools meta-tool.
+        let mut core_tools: Vec<ToolDefinition> = tools
+            .iter()
+            .filter(|t| crate::tools::classify_tool_tier(&t.name) == crate::tools::ToolTier::Core)
+            .cloned()
+            .collect();
+        core_tools.push(crate::tools::request_tools_definition());
+
+        let system_prompt_tokens = token_estimate::estimate_tokens(&system_prompt);
+        let tools_tokens = token_estimate::estimate_tools_tokens(&core_tools);
         AgentSession {
             provider,
-            tools,
+            all_tools: tools,
+            tools: core_tools,
             messages: Vec::new(),
             system_prompt,
             event_tx,
@@ -74,6 +103,13 @@ impl AgentSession {
             session_tokens_in: 0,
             session_tokens_out: 0,
             warned: false,
+            context_window: crate::context_limits::DEFAULT_CONTEXT_WINDOW,
+            system_prompt_tokens,
+            tools_tokens,
+            reserved_output: 4096,
+            initialized: false,
+            model_name: String::new(),
+            enabled_categories: std::collections::HashSet::new(),
         }
     }
 
@@ -86,7 +122,10 @@ impl AgentSession {
     /// cached — the pricing table doesn't change at runtime, so every
     /// subsequent round can skip the prefix-scan + lowercase alloc.
     pub fn with_budget(mut self, model: impl AsRef<str>, budget: crate::BudgetConfig) -> Self {
-        self.price = crate::pricing::lookup(model.as_ref());
+        let model_str = model.as_ref();
+        self.price = crate::pricing::lookup(model_str);
+        self.context_window = crate::context_limits::lookup(model_str);
+        self.model_name = model_str.to_string();
         self.budget = budget;
         self
     }
@@ -256,26 +295,125 @@ impl AgentSession {
         }
     }
 
-    /// Trim message history to stay within bounds.
+    /// Available token budget for message history.
+    fn available_message_budget(&self) -> u64 {
+        self.context_window
+            .saturating_sub(self.system_prompt_tokens)
+            .saturating_sub(self.tools_tokens)
+            .saturating_sub(self.reserved_output)
+    }
+
+    /// Trim message history to stay within token budget AND hard message cap.
     /// Keeps the first message (initial user context) and the most recent messages.
     fn trim_messages(&mut self) {
-        if self.messages.len() <= self.max_messages {
-            return;
-        }
-        let excess = self.messages.len() - self.max_messages;
-        // Keep first message for context, trim from position 1
-        if self.messages.len() > 1 {
+        // Hard cap on message count (secondary safeguard)
+        if self.messages.len() > self.max_messages && self.messages.len() > 1 {
+            let excess = self.messages.len() - self.max_messages;
             let trim_count = excess.min(self.messages.len() - 1);
             self.messages.drain(1..1 + trim_count);
             debug!(
                 trimmed = trim_count,
                 remaining = self.messages.len(),
-                "trimmed conversation history"
+                "trimmed by message count"
+            );
+        }
+
+        // Token-aware pruning: drop oldest non-first messages until within budget
+        let budget = self.available_message_budget();
+        loop {
+            let total = token_estimate::estimate_messages_tokens(&self.messages);
+            if total <= budget || self.messages.len() <= 1 {
+                break;
+            }
+            // Remove the oldest message after the first
+            self.messages.remove(1);
+        }
+
+        if self.messages.len() > 1 {
+            let total = token_estimate::estimate_messages_tokens(&self.messages);
+            debug!(
+                messages = self.messages.len(),
+                estimated_tokens = total,
+                budget,
+                "post-trim message state"
+            );
+        }
+    }
+
+    /// Aggressively prune messages — drop oldest 25% by count.
+    /// Used for context overflow recovery.
+    fn aggressive_prune(&mut self) {
+        if self.messages.len() <= 2 {
+            return;
+        }
+        let to_remove = (self.messages.len() - 1) / 4; // 25% of non-first messages
+        let to_remove = to_remove.max(1);
+        self.messages.drain(1..1 + to_remove);
+        warn!(
+            removed = to_remove,
+            remaining = self.messages.len(),
+            "aggressively pruned messages for context overflow recovery"
+        );
+    }
+
+    /// Truncate a tool result if it exceeds 25% of available message budget.
+    fn truncate_tool_result(&self, result: &mut ToolResult) {
+        let budget = self.available_message_budget();
+        let max_result_tokens = budget / 4;
+        let result_tokens = token_estimate::estimate_tokens(&result.output);
+        if result_tokens > max_result_tokens && max_result_tokens > 100 {
+            // Truncate to roughly max_result_tokens * 4 bytes
+            let max_bytes = (max_result_tokens * 4) as usize;
+            let truncated = if result.output.len() > max_bytes {
+                let safe_end = result.output.floor_char_boundary(max_bytes);
+                &result.output[..safe_end]
+            } else {
+                &result.output
+            };
+            let original_tokens = result_tokens;
+            result.output = format!(
+                "{}\n...\n[truncated — {} tokens, showing first {}]",
+                truncated, original_tokens, max_result_tokens
+            );
+            debug!(
+                original_tokens,
+                truncated_to = max_result_tokens,
+                "truncated oversized tool result"
             );
         }
     }
 
     async fn handle_prompt(&mut self, prompt: String) {
+        // Session initialization: emit context info on first prompt
+        if !self.initialized {
+            self.initialized = true;
+            let budget = self.available_message_budget();
+            info!(
+                model = %self.model_name,
+                context_window = self.context_window,
+                system_prompt_tokens = self.system_prompt_tokens,
+                tools_tokens = self.tools_tokens,
+                tool_count = self.tools.len(),
+                available_budget = budget,
+                "AI session initialized"
+            );
+            let status = format!(
+                "AI: {}, {}K context, {}K available, {} tools",
+                if self.model_name.is_empty() {
+                    "unknown"
+                } else {
+                    &self.model_name
+                },
+                self.context_window / 1000,
+                budget / 1000,
+                self.tools.len(),
+            );
+            let _ = self
+                .event_tx
+                .send(AiEvent::TextResponse(format!("[{}]", status)))
+                .await;
+        }
+
         self.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(prompt),
@@ -317,6 +455,9 @@ impl AgentSession {
                 );
             }
 
+            // Token-aware trim before every provider call (not just the first)
+            self.trim_messages();
+
             let response = match self
                 .provider
                 .send(&self.messages, &self.tools, &self.system_prompt)
@@ -340,12 +481,47 @@ impl AgentSession {
                         round,
                         error = %e.message,
                         retryable = e.retryable,
+                        kind = ?e.kind,
                         consecutive_errors = self.consecutive_errors,
                         "AI provider error"
                     );
 
+                    // Context overflow recovery: aggressively prune and retry once
+                    if e.kind == ErrorKind::ContextOverflow {
+                        warn!("context overflow detected — pruning old messages and retrying");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                "Context window full — pruning old messages, retrying...".into(),
+                            ))
+                            .await;
+                        self.aggressive_prune();
+                        self.trim_messages();
+                        // Retry once
+                        match self
+                            .provider
+                            .send(&self.messages, &self.tools, &self.system_prompt)
+                            .await
+                        {
+                            Ok(r) => {
+                                self.consecutive_errors = 0;
+                                self.update_cost(&r).await;
+                                r
+                            }
+                            Err(retry_err) => {
+                                let _ = self
+                                    .event_tx
+                                    .send(AiEvent::Error(format!(
+                                        "Context overflow recovery failed: {}",
+                                        retry_err.message
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
                     // Circuit breaker: if retryable and under threshold, backoff and retry
-                    if e.retryable && self.consecutive_errors <= 3 {
+                    else if e.retryable && self.consecutive_errors <= 3 {
                         let backoff = std::time::Duration::from_millis(
                             500 * (1 << (self.consecutive_errors - 1)),
                         );
@@ -356,10 +532,10 @@ impl AgentSession {
                         );
                         tokio::time::sleep(backoff).await;
                         continue;
+                    } else {
+                        let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
+                        return;
                     }
-
-                    let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
-                    return;
                 }
             };
 
@@ -385,14 +561,67 @@ impl AgentSession {
                 return;
             }
 
-            // Record assistant message with tool calls
+            // Record assistant message with tool calls (preserve text if present)
+            let content = if let Some(text) = response.text.clone() {
+                MessageContent::TextWithToolCalls {
+                    text,
+                    tool_calls: response.tool_calls.clone(),
+                }
+            } else {
+                MessageContent::ToolCalls(response.tool_calls.clone())
+            };
             self.messages.push(Message {
                 role: Role::Assistant,
-                content: MessageContent::ToolCalls(response.tool_calls.clone()),
+                content,
             });
 
             // Execute each tool call
             for call in &response.tool_calls {
+                // request_tools meta-tool: extend the active tool set
+                if call.name == "request_tools" {
+                    let categories_str = call
+                        .arguments
+                        .get("categories")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let categories = crate::tools::parse_categories(categories_str);
+                    let mut added_names = Vec::new();
+                    for cat in &categories {
+                        if self.enabled_categories.insert(*cat) {
+                            // Add tools from this category
+                            for tool in &self.all_tools {
+                                if crate::tools::classify_tool_category(&tool.name) == Some(*cat)
+                                    && !self.tools.iter().any(|t| t.name == tool.name)
+                                {
+                                    added_names.push(tool.name.clone());
+                                    self.tools.push(tool.clone());
+                                }
+                            }
+                        }
+                    }
+                    // Recache tools token estimate
+                    self.tools_tokens = token_estimate::estimate_tools_tokens(&self.tools);
+                    let output = if added_names.is_empty() {
+                        "No new tools added (categories already enabled or not recognized).".into()
+                    } else {
+                        format!(
+                            "Added {} tools: {}",
+                            added_names.len(),
+                            added_names.join(", ")
+                        )
+                    };
+                    info!(categories = %categories_str, added = added_names.len(), "request_tools");
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            success: true,
+                            output,
+                        }),
+                    });
+                    continue;
+                }
+
                 // shell_exec runs async on this task — no need to cross to main thread
                 if call.name == "shell_exec" {
                     let command_arg = call
@@ -405,12 +634,13 @@ impl AgentSession {
                         command = command_arg,
                         "executing shell command on AI task"
                     );
-                    let result = Self::execute_shell(call).await;
+                    let mut result = Self::execute_shell(call).await;
                     debug!(
                         tool = "shell_exec",
                         success = result.success,
                         "shell command complete"
                     );
+                    self.truncate_tool_result(&mut result);
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(result),
@@ -438,8 +668,9 @@ impl AgentSession {
                 }
 
                 match reply_rx.await {
-                    Ok(result) => {
+                    Ok(mut result) => {
                         debug!(tool = %call.name, success = result.success, "tool result received");
+                        self.truncate_tool_result(&mut result);
                         self.messages.push(Message {
                             role: Role::Tool,
                             content: MessageContent::ToolResult(result),
@@ -502,6 +733,7 @@ mod tests {
                 Err(ProviderError {
                     message: "No more mock responses".into(),
                     retryable: false,
+                    kind: ErrorKind::Unknown,
                 })
             } else {
                 Ok(responses.remove(0))
@@ -510,6 +742,16 @@ mod tests {
 
         fn name(&self) -> &str {
             "mock"
+        }
+    }
+
+    /// Drain the one-time session initialization TextResponse.
+    async fn drain_init_message(rx: &mut mpsc::Receiver<AiEvent>) {
+        match rx.recv().await.unwrap() {
+            AiEvent::TextResponse(t) => {
+                assert!(t.starts_with("[AI:"), "expected init message, got: {}", t);
+            }
+            other => panic!("expected init TextResponse, got {:?}", other),
         }
     }
 
@@ -530,6 +772,9 @@ mod tests {
         tokio::spawn(session.run());
 
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
+
+        // Drain init message
+        drain_init_message(&mut event_rx).await;
 
         // Should get TextResponse then SessionComplete
         match event_rx.recv().await.unwrap() {
@@ -579,6 +824,9 @@ mod tests {
             .await
             .unwrap();
 
+        // Drain init message
+        drain_init_message(&mut event_rx).await;
+
         // TextResponse from first response
         match event_rx.recv().await.unwrap() {
             AiEvent::TextResponse(t) => assert_eq!(t, "Let me check."),
@@ -627,6 +875,9 @@ mod tests {
         tokio::spawn(session.run());
 
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
+
+        // Drain init message
+        drain_init_message(&mut event_rx).await;
 
         match event_rx.recv().await.unwrap() {
             AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
@@ -769,6 +1020,9 @@ mod tests {
             .await
             .unwrap();
 
+        // Drain init message
+        drain_init_message(&mut event_rx).await;
+
         // Should NOT get a ToolCallRequest — shell_exec is handled locally.
         // We should get TextResponse then SessionComplete.
         match event_rx.recv().await.unwrap() {
@@ -891,6 +1145,7 @@ mod tests {
                     Err(ProviderError {
                         message: format!("rate limited (attempt {})", count),
                         retryable: true,
+                        kind: ErrorKind::RateLimit,
                     })
                 } else {
                     Ok(ProviderResponse {
@@ -919,6 +1174,9 @@ mod tests {
         for _ in 0..10 {
             match tokio::time::timeout(std::time::Duration::from_secs(10), event_rx.recv()).await {
                 Ok(Some(AiEvent::TextResponse(t))) => {
+                    if t.starts_with("[AI:") {
+                        continue; // skip init message
+                    }
                     assert_eq!(t, "recovered!");
                     got_response = true;
                     break;

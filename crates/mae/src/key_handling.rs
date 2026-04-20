@@ -1590,7 +1590,7 @@ pub fn handle_command_mode(
 
             // :ai-status — show AI configuration
             if cmd == "ai-status" {
-                let config = load_ai_config();
+                let config = load_ai_config(editor);
                 if let Some(ref cfg) = config {
                     editor.set_status(format!(
                         "AI: provider={}, model={}, connected={}",

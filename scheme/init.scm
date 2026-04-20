@@ -69,7 +69,18 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; 5. AI configuration
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; AI agent command for SPC a a. Default: "claude" (Claude Code).
+;; AI API provider for SPC a p (chat): claude, openai, gemini, ollama, deepseek
+;; (set-option! "ai-provider" "claude")
+;; (set-option! "ai-model" "claude-sonnet-4-5")
+;;
+;; Shell command to retrieve the API key (e.g. from pass, 1Password):
+;; (set-option! "ai-api-key-command" "pass show my-provider/api-key")
+;;
+;; Custom API base URL (for self-hosted / proxy endpoints):
+;; (set-option! "ai-base-url" "http://localhost:8080/v1")
+;;
+;; AI agent command for SPC a a (shell). Default: "claude" (Claude Code).
+;; This launches a CLI agent in a terminal — NOT the API chat.
 ;; Other examples: "gemini" (Gemini CLI), "aider", "copilot".
 ;; (set-option! "ai-editor" "claude")
 

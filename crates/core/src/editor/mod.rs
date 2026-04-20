@@ -366,6 +366,15 @@ pub struct Editor {
     /// AI editor/agent command to launch in a shell (e.g. "claude", "aider").
     /// Used by `open-ai-agent` to spawn an agent shell.
     pub ai_editor: String,
+    /// AI provider name: "claude", "openai", "gemini", "ollama", "deepseek".
+    /// Set via `(set-option! "ai-provider" "deepseek")` or config.toml.
+    pub ai_provider: String,
+    /// AI model identifier. Empty = use provider default.
+    pub ai_model: String,
+    /// Shell command whose stdout is the API key (e.g. "pass show deepseek/api-key").
+    pub ai_api_key_command: String,
+    /// Base URL override for the AI API.
+    pub ai_base_url: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
     /// Shared heartbeat counter — incremented each event loop tick by the
@@ -491,6 +500,10 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             ai_editor: "claude".to_string(),
+            ai_provider: String::new(),
+            ai_model: String::new(),
+            ai_api_key_command: String::new(),
+            ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
@@ -621,6 +634,10 @@ impl Editor {
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
             ai_editor: "claude".to_string(),
+            ai_provider: String::new(),
+            ai_model: String::new(),
+            ai_api_key_command: String::new(),
+            ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
@@ -676,6 +693,10 @@ impl Editor {
             "clipboard" => self.clipboard.clone(),
             "ai_tier" => self.ai_permission_tier.clone(),
             "ai_editor" => self.ai_editor.clone(),
+            "ai_provider" => self.ai_provider.clone(),
+            "ai_model" => self.ai_model.clone(),
+            "ai_api_key_command" => self.ai_api_key_command.clone(),
+            "ai_base_url" => self.ai_base_url.clone(),
             "restore_session" => self.restore_session.to_string(),
             _ => return None,
         };
@@ -753,6 +774,18 @@ impl Editor {
             },
             "ai_editor" => {
                 self.ai_editor = value.to_string();
+            }
+            "ai_provider" => {
+                self.ai_provider = value.to_string();
+            }
+            "ai_model" => {
+                self.ai_model = value.to_string();
+            }
+            "ai_api_key_command" => {
+                self.ai_api_key_command = value.to_string();
+            }
+            "ai_base_url" => {
+                self.ai_base_url = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;
@@ -1064,6 +1097,81 @@ impl Editor {
         // `n`/`N` navigation are correct.
         self.recompute_search_matches();
         true
+    }
+
+    /// Returns true if the buffer at `idx` is a Conversation buffer.
+    pub fn is_conversation_buffer(&self, idx: usize) -> bool {
+        idx < self.buffers.len() && self.buffers[idx].kind == crate::BufferKind::Conversation
+    }
+
+    /// Switch to buffer `idx` but avoid stealing focus from a conversation window.
+    ///
+    /// If the focused window shows a conversation buffer, the new buffer is
+    /// routed to another window (or a new split is created). This keeps `*AI*`
+    /// visible during AI tool calls that open/switch files.
+    pub fn switch_to_buffer_non_conversation(&mut self, idx: usize) -> bool {
+        if idx >= self.buffers.len() {
+            return false;
+        }
+        let focused_buf = self.active_buffer_idx();
+        if !self.is_conversation_buffer(focused_buf) {
+            return self.switch_to_buffer(idx);
+        }
+        // Focused window is conversation — route to another window.
+        let focused_id = self.window_mgr.focused_id();
+        // Find a non-conversation window.
+        let other = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id != focused_id)
+            .map(|w| w.id);
+        if let Some(other_id) = other {
+            if let Some(win) = self.window_mgr.window_mut(other_id) {
+                win.buffer_idx = idx;
+                win.cursor_row = 0;
+                win.cursor_col = 0;
+            }
+            true
+        } else {
+            // Single window — auto-split vertically.
+            let area = self.default_area();
+            match self
+                .window_mgr
+                .split(crate::window::SplitDirection::Vertical, idx, area)
+            {
+                Ok(_new_id) => true,
+                Err(_) => {
+                    // Too small to split — fall back to normal switch.
+                    self.switch_to_buffer(idx)
+                }
+            }
+        }
+    }
+
+    /// Open a file without stealing focus from a conversation window.
+    ///
+    /// If the focused window is `*AI*`, the file is opened normally (which
+    /// pushes a new buffer and switches focus), then focus is restored to the
+    /// conversation and the new buffer is routed via
+    /// `switch_to_buffer_non_conversation`.
+    pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
+        let focused_buf = self.active_buffer_idx();
+        if !self.is_conversation_buffer(focused_buf) {
+            self.open_file(path);
+            return;
+        }
+        let conv_idx = focused_buf;
+        self.open_file(path);
+        let new_buf_idx = self.active_buffer_idx();
+        if new_buf_idx == conv_idx {
+            return; // open_file failed or was a no-op
+        }
+        // Restore conversation in focused window.
+        self.window_mgr.focused_window_mut().buffer_idx = conv_idx;
+        self.window_mgr.focused_window_mut().cursor_row = 0;
+        self.window_mgr.focused_window_mut().cursor_col = 0;
+        // Route the new buffer to a non-conversation window.
+        self.switch_to_buffer_non_conversation(new_buf_idx);
     }
 
     /// Save current mode to the active buffer before switching away.

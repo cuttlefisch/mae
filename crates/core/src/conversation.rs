@@ -343,6 +343,16 @@ impl Conversation {
         lines
     }
 
+    /// Flatten all rendered lines into a single string for visual mode operations.
+    /// This is the text that visual mode selection coordinates map to.
+    pub fn flat_text(&self) -> String {
+        self.rendered_lines()
+            .iter()
+            .map(|rl| rl.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Total rendered line count (for scroll calculations).
     pub fn line_count(&self) -> usize {
         self.rendered_lines().len()
@@ -638,6 +648,28 @@ mod tests {
         assert_eq!(conv.entries.len(), 2);
         assert_eq!(conv.entries[1].role, ConversationRole::Assistant);
         assert_eq!(conv.entries[1].content, "response");
+    }
+
+    #[test]
+    fn flat_text_joins_rendered_lines() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let flat = conv.flat_text();
+        assert!(flat.contains("[You]"));
+        assert!(flat.contains("hello"));
+        assert!(flat.contains("[AI]"));
+        assert!(flat.contains("world"));
+        // Lines are joined with newlines
+        assert!(flat.contains('\n'));
+    }
+
+    #[test]
+    fn flat_text_empty_conversation() {
+        let conv = Conversation::new();
+        let flat = conv.flat_text();
+        // Should just be the input prompt
+        assert!(flat.contains("> "));
     }
 
     #[test]

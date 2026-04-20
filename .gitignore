@@ -8,3 +8,5 @@ Cargo.lock
 .envrc
 README.org
 .mcp.json
+.gemini/
+.claude/

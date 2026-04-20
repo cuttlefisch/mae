@@ -41,7 +41,7 @@ clipboard = "unnamed"
 restore_session = false
 
 [ai]
-# AI provider: "claude", "openai", or "ollama"
+# AI provider: "claude", "openai", "gemini", "ollama", or "deepseek"
 provider = "claude"
 
 # AI permission tier: ReadOnly, Write, Shell, Privileged
@@ -55,6 +55,10 @@ editor = "claude"
 # api_key is read from ANTHROPIC_API_KEY env var (preferred)
 # model = "claude-sonnet-4-20250514"
 
+# Shell command to retrieve API key from a secrets manager.
+# Stdout is trimmed and used as the key. Precedence: env var > command > literal.
+# api_key_command = "pass show ai/anthropic-api-key"
+
 # OpenAI API configuration
 # api_key is read from OPENAI_API_KEY env var
 # model = "gpt-4o"
@@ -63,6 +67,11 @@ editor = "claude"
 # Ollama configuration (local models)
 # model = "llama3"
 # base_url = "http://localhost:11434"
+
+# DeepSeek configuration
+# provider = "deepseek"
+# model = "deepseek-chat"
+# api_key is read from DEEPSEEK_API_KEY env var
 
 [agents]
 # Auto-write .mcp.json to project root on first shell spawn

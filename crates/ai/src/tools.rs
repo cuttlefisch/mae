@@ -1499,6 +1499,91 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     ]
 }
 
+/// Tool tiers for payload optimization — only core tools are sent by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolTier {
+    /// Always sent (~15 tools). Essential for basic editing workflows.
+    Core,
+    /// Sent on request via `request_tools` meta-tool.
+    Extended,
+}
+
+/// Tool categories for the `request_tools` meta-tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolCategory {
+    Lsp,
+    Dap,
+    Knowledge,
+    ShellMgmt,
+    Commands,
+}
+
+/// Classify a tool into Core or Extended tier.
+pub fn classify_tool_tier(name: &str) -> ToolTier {
+    match name {
+        // Core tools — always sent
+        "buffer_read" | "buffer_write" | "cursor_info" | "open_file" | "switch_buffer"
+        | "create_file" | "close_buffer" | "list_buffers" | "editor_state" | "project_search"
+        | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
+        | "help_open" | "file_read" | "self_test_suite" => ToolTier::Core,
+        // Everything else is extended
+        _ => ToolTier::Extended,
+    }
+}
+
+/// Classify a tool into its category for request_tools.
+pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
+    if name.starts_with("lsp_") || name == "syntax_tree" {
+        Some(ToolCategory::Lsp)
+    } else if name.starts_with("dap_") || name == "debug_state" {
+        Some(ToolCategory::Dap)
+    } else if name.starts_with("kb_") || name == "help_open" {
+        Some(ToolCategory::Knowledge)
+    } else if name.starts_with("shell_") && name != "shell_exec" {
+        Some(ToolCategory::ShellMgmt)
+    } else if name.starts_with("command_") {
+        Some(ToolCategory::Commands)
+    } else {
+        None
+    }
+}
+
+/// Parse category names from a comma-separated string.
+pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
+    input
+        .split(',')
+        .filter_map(|s| match s.trim().to_ascii_lowercase().as_str() {
+            "lsp" => Some(ToolCategory::Lsp),
+            "dap" => Some(ToolCategory::Dap),
+            "knowledge" | "kb" => Some(ToolCategory::Knowledge),
+            "shell" | "shell_mgmt" => Some(ToolCategory::ShellMgmt),
+            "commands" | "command" => Some(ToolCategory::Commands),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Build the `request_tools` meta-tool definition.
+pub fn request_tools_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "request_tools".into(),
+        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands. Returns tool names added.".into(),
+        parameters: ToolParameters {
+            schema_type: "object".into(),
+            properties: HashMap::from([(
+                "categories".into(),
+                ToolProperty {
+                    prop_type: "string".into(),
+                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands".into(),
+                    enum_values: None,
+                },
+            )]),
+            required: vec!["categories".into()],
+        },
+        permission: Some(PermissionTier::ReadOnly),
+    }
+}
+
 /// Classify a command's permission tier based on its name.
 pub fn classify_command_permission(name: &str) -> PermissionTier {
     match name {
@@ -1701,6 +1786,104 @@ mod tests {
                 opt.name
             );
         }
+    }
+
+    #[test]
+    fn core_tools_under_20() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        let core_count = tools
+            .iter()
+            .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
+            .count();
+        assert!(
+            core_count < 20,
+            "core tools should be < 20, got {}",
+            core_count
+        );
+        assert!(
+            core_count >= 10,
+            "core tools should be >= 10, got {}",
+            core_count
+        );
+    }
+
+    #[test]
+    fn extended_tools_over_40() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        let extended_count = tools
+            .iter()
+            .filter(|t| classify_tool_tier(&t.name) == ToolTier::Extended)
+            .count();
+        assert!(
+            extended_count > 40,
+            "extended tools should be > 40, got {}",
+            extended_count
+        );
+    }
+
+    #[test]
+    fn request_tools_meta_tool_has_categories_param() {
+        let def = request_tools_definition();
+        assert_eq!(def.name, "request_tools");
+        assert!(def.parameters.properties.contains_key("categories"));
+        assert!(def.parameters.required.contains(&"categories".into()));
+    }
+
+    #[test]
+    fn parse_categories_works() {
+        let cats = parse_categories("lsp, dap, knowledge");
+        assert_eq!(cats.len(), 3);
+        assert!(cats.contains(&ToolCategory::Lsp));
+        assert!(cats.contains(&ToolCategory::Dap));
+        assert!(cats.contains(&ToolCategory::Knowledge));
+    }
+
+    #[test]
+    fn parse_categories_unknown_ignored() {
+        let cats = parse_categories("lsp, bogus, dap");
+        assert_eq!(cats.len(), 2);
+    }
+
+    #[test]
+    fn classify_lsp_tools() {
+        assert_eq!(
+            classify_tool_category("lsp_definition"),
+            Some(ToolCategory::Lsp)
+        );
+        assert_eq!(
+            classify_tool_category("lsp_references"),
+            Some(ToolCategory::Lsp)
+        );
+        assert_eq!(
+            classify_tool_category("syntax_tree"),
+            Some(ToolCategory::Lsp)
+        );
+    }
+
+    #[test]
+    fn classify_dap_tools() {
+        assert_eq!(classify_tool_category("dap_start"), Some(ToolCategory::Dap));
+        assert_eq!(
+            classify_tool_category("debug_state"),
+            Some(ToolCategory::Dap)
+        );
+    }
+
+    #[test]
+    fn classify_kb_tools() {
+        assert_eq!(
+            classify_tool_category("kb_search"),
+            Some(ToolCategory::Knowledge)
+        );
+    }
+
+    #[test]
+    fn shell_exec_is_not_shell_mgmt() {
+        assert_eq!(classify_tool_category("shell_exec"), None);
+        assert_eq!(
+            classify_tool_category("shell_list"),
+            Some(ToolCategory::ShellMgmt)
+        );
     }
 
     #[test]

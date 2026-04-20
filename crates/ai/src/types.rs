@@ -86,6 +86,13 @@ pub enum Role {
 pub enum MessageContent {
     Text(String),
     ToolCalls(Vec<ToolCall>),
+    /// Assistant returned both reasoning text and tool calls in the same turn.
+    /// Reasoning models (DeepSeek, etc.) commonly do this — the text must be
+    /// preserved in message history so the model can track its own progress.
+    TextWithToolCalls {
+        text: String,
+        tool_calls: Vec<ToolCall>,
+    },
     ToolResult(ToolResult),
 }
 

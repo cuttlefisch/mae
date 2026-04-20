@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::provider::ErrorKind;
 use crate::provider::*;
 use crate::types::*;
 
@@ -51,6 +52,20 @@ impl ClaudeProvider {
     }
 
     /// Convert canonical Messages to Claude's message format.
+    fn serialize_tool_use_blocks(calls: &[ToolCall]) -> Vec<serde_json::Value> {
+        calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": call.arguments,
+                })
+            })
+            .collect()
+    }
+
     pub fn serialize_messages(messages: &[Message]) -> serde_json::Value {
         let mut result = Vec::new();
 
@@ -69,17 +84,21 @@ impl ClaudeProvider {
                     }));
                 }
                 (Role::Assistant, MessageContent::ToolCalls(calls)) => {
-                    let content: Vec<serde_json::Value> = calls
-                        .iter()
-                        .map(|call| {
-                            json!({
-                                "type": "tool_use",
-                                "id": call.id,
-                                "name": call.name,
-                                "input": call.arguments,
-                            })
-                        })
-                        .collect();
+                    let content = Self::serialize_tool_use_blocks(calls);
+                    result.push(json!({
+                        "role": "assistant",
+                        "content": content,
+                    }));
+                }
+                (
+                    Role::Assistant,
+                    MessageContent::TextWithToolCalls {
+                        text,
+                        tool_calls: calls,
+                    },
+                ) => {
+                    let mut content = vec![json!({ "type": "text", "text": text })];
+                    content.extend(Self::serialize_tool_use_blocks(calls));
                     result.push(json!({
                         "role": "assistant",
                         "content": content,
@@ -110,6 +129,7 @@ impl ClaudeProvider {
             .ok_or_else(|| ProviderError {
                 message: "Missing 'content' array in response".into(),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             })?;
 
         let mut text_parts = Vec::new();
@@ -226,6 +246,7 @@ impl AgentProvider for ClaudeProvider {
                 ProviderError {
                     message: format!("HTTP error: {}", e),
                     retryable: e.is_timeout(),
+                    kind: ErrorKind::Unknown,
                 }
             })?;
 
@@ -237,15 +258,29 @@ impl AgentProvider for ClaudeProvider {
             ProviderError {
                 message: format!("JSON parse error: {}", e),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             }
         })?;
 
         if !status.is_success() {
             let retryable = status.as_u16() == 429 || status.as_u16() >= 500;
-            warn!(status = %status, retryable, "Claude API error response");
+            let body_lower = resp_body.to_string().to_ascii_lowercase();
+            let kind = if body_lower.contains("context_length")
+                || body_lower.contains("too many tokens")
+            {
+                ErrorKind::ContextOverflow
+            } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                ErrorKind::Auth
+            } else if status.as_u16() == 429 {
+                ErrorKind::RateLimit
+            } else {
+                ErrorKind::Unknown
+            };
+            warn!(status = %status, retryable, ?kind, "Claude API error response");
             return Err(ProviderError {
                 message: format!("API error {}: {}", status, resp_body),
                 retryable,
+                kind,
             });
         }
 

@@ -95,13 +95,14 @@ fn main() -> io::Result<()> {
         println!("  {}", config::config_path().display());
         println!();
         println!("ENVIRONMENT:");
-        println!("  MAE_AI_PROVIDER     claude | openai | gemini | ollama");
+        println!("  MAE_AI_PROVIDER     claude | openai | gemini | ollama | deepseek");
         println!("  MAE_AI_MODEL        model identifier");
         println!("  MAE_AI_BASE_URL     custom API base URL (for Ollama/vLLM/proxies)");
         println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
         println!("  ANTHROPIC_API_KEY   Claude API key");
         println!("  OPENAI_API_KEY      OpenAI API key");
         println!("  GEMINI_API_KEY      Gemini API key");
+        println!("  DEEPSEEK_API_KEY    DeepSeek API key");
         println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");

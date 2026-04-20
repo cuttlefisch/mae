@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::provider::ErrorKind;
 use crate::provider::*;
 use crate::types::*;
 
@@ -53,6 +54,22 @@ impl OpenAiProvider {
             .collect()
     }
 
+    fn serialize_tool_calls(calls: &[ToolCall]) -> Vec<serde_json::Value> {
+        calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": call.arguments.to_string(),
+                    },
+                })
+            })
+            .collect()
+    }
+
     /// Convert canonical Messages to OpenAI's message format.
     pub fn serialize_messages(messages: &[Message], system_prompt: &str) -> serde_json::Value {
         let mut result = vec![json!({
@@ -75,21 +92,24 @@ impl OpenAiProvider {
                     }));
                 }
                 (Role::Assistant, MessageContent::ToolCalls(calls)) => {
-                    let tool_calls: Vec<serde_json::Value> = calls
-                        .iter()
-                        .map(|call| {
-                            json!({
-                                "id": call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": call.name,
-                                    "arguments": call.arguments.to_string(),
-                                },
-                            })
-                        })
-                        .collect();
+                    let tool_calls = Self::serialize_tool_calls(calls);
                     result.push(json!({
                         "role": "assistant",
+                        "content": serde_json::Value::Null,
+                        "tool_calls": tool_calls,
+                    }));
+                }
+                (
+                    Role::Assistant,
+                    MessageContent::TextWithToolCalls {
+                        text,
+                        tool_calls: calls,
+                    },
+                ) => {
+                    let tool_calls = Self::serialize_tool_calls(calls);
+                    result.push(json!({
+                        "role": "assistant",
+                        "content": text,
                         "tool_calls": tool_calls,
                     }));
                 }
@@ -116,11 +136,13 @@ impl OpenAiProvider {
             .ok_or_else(|| ProviderError {
                 message: "Missing 'choices' array in response".into(),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             })?;
 
         let message = choice.get("message").ok_or_else(|| ProviderError {
             message: "Missing 'message' in choice".into(),
             retryable: false,
+            kind: ErrorKind::Unknown,
         })?;
 
         let text = message
@@ -236,28 +258,66 @@ impl AgentProvider for OpenAiProvider {
                 ProviderError {
                     message: format!("HTTP error: {}", e),
                     retryable: e.is_timeout(),
+                    kind: ErrorKind::Transport,
                 }
             })?;
 
         let status = response.status();
         debug!(status = %status, "OpenAI API response received");
 
-        let resp_body: serde_json::Value = response.json().await.map_err(|e| {
-            warn!(error = %e, "OpenAI response JSON parse error");
+        // Read raw body first so we can give useful error messages for
+        // non-JSON responses (e.g. HTML error pages from auth failures).
+        let raw_body = response.bytes().await.map_err(|e| {
+            warn!(error = %e, "failed to read response body");
             ProviderError {
-                message: format!("JSON parse error: {}", e),
+                message: format!("Failed to read response body: {}", e),
                 retryable: false,
+                kind: ErrorKind::Transport,
             }
         })?;
 
         if !status.is_success() {
             let retryable = status.as_u16() == 429 || status.as_u16() >= 500;
-            warn!(status = %status, retryable, "OpenAI API error response");
+            let body_preview = String::from_utf8_lossy(&raw_body);
+            let body_preview = if body_preview.len() > 500 {
+                format!("{}...", &body_preview[..500])
+            } else {
+                body_preview.to_string()
+            };
+            let hint = if status.as_u16() == 401 {
+                " (check API key / api_key_command in config)"
+            } else {
+                ""
+            };
+            let body_lower = body_preview.to_lowercase();
+            let kind = if body_lower.contains("context_length_exceeded")
+                || body_lower.contains("maximum context length")
+            {
+                ErrorKind::ContextOverflow
+            } else if status.as_u16() == 401 {
+                ErrorKind::Auth
+            } else if status.as_u16() == 429 {
+                ErrorKind::RateLimit
+            } else {
+                ErrorKind::Unknown
+            };
+            warn!(status = %status, retryable, "API error response");
             return Err(ProviderError {
-                message: format!("API error {}: {}", status, resp_body),
+                message: format!("API error {}{}: {}", status, hint, body_preview),
                 retryable,
+                kind,
             });
         }
+
+        let resp_body: serde_json::Value = serde_json::from_slice(&raw_body).map_err(|e| {
+            let preview = String::from_utf8_lossy(&raw_body[..raw_body.len().min(200)]);
+            warn!(error = %e, body_preview = %preview, "response JSON parse error");
+            ProviderError {
+                message: format!("JSON parse error: {} (body starts with: {})", e, preview),
+                retryable: false,
+                kind: ErrorKind::Unknown,
+            }
+        })?;
 
         Self::parse_response(&resp_body)
     }

@@ -81,6 +81,22 @@ Examples: `command_save`, `command_undo`, `command_redo`, `command_move_down`, `
 9. Use `open_file` to work across multiple files — you can read/write any open buffer by name
 10. Use `command_list` to discover available commands if you're unsure what's possible
 
+## Context Budget Awareness
+Your context window is limited. Budget your tool calls accordingly:
+- Avoid requesting large files in full — use `buffer_read` with line ranges
+- Prefer `project_search` over reading entire files when looking for specific content
+- Batch related operations — read → plan → write in as few rounds as possible
+- Avoid redundant tool calls (e.g., don't call `cursor_info` repeatedly without changing position)
+- If a tool result is very large, focus on the relevant portion rather than processing it all
+
+## Tool Tiers
+Core tools are available by default. Additional tool categories can be enabled by calling `request_tools`:
+- **lsp**: Code navigation (definition, references, hover, diagnostics, symbols)
+- **dap**: Debugging (breakpoints, stepping, variable inspection)
+- **knowledge**: Knowledge base and help system
+- **shell_mgmt**: Terminal/shell management beyond basic `shell_exec`
+- **commands**: Full editor command palette
+
 ## What You Cannot Do (yet)
 - Drive DAP sessions interactively (tools exist but require active debug session)
 - Evaluate Scheme directly (tell user to use `:eval` command)

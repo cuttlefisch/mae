@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "mae-editor": {
-      "command": "/home/heimdall/.local/bin/mae-mcp-shim",
-      "trust": true
-    }
-  }
-}

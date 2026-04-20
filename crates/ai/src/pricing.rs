@@ -212,6 +212,21 @@ const TABLE: &[(&str, ModelPrice)] = &[
             output_per_mtok: 2.50,
         },
     ),
+    // ---- DeepSeek ----
+    (
+        "deepseek-reasoner",
+        ModelPrice {
+            input_per_mtok: 0.55,
+            output_per_mtok: 2.19,
+        },
+    ),
+    (
+        "deepseek-chat",
+        ModelPrice {
+            input_per_mtok: 0.27,
+            output_per_mtok: 1.10,
+        },
+    ),
 ];
 
 #[cfg(test)]
@@ -272,6 +287,20 @@ mod tests {
             p.input_per_mtok < 1.0,
             "gpt-4o-mini is supposed to be the cheap tier"
         );
+    }
+
+    #[test]
+    fn deepseek_chat_lookup() {
+        let p = lookup("deepseek-chat").unwrap();
+        assert_eq!(p.input_per_mtok, 0.27);
+        assert_eq!(p.output_per_mtok, 1.10);
+    }
+
+    #[test]
+    fn deepseek_reasoner_lookup() {
+        let p = lookup("deepseek-reasoner").unwrap();
+        assert_eq!(p.input_per_mtok, 0.55);
+        assert_eq!(p.output_per_mtok, 2.19);
     }
 
     #[test]

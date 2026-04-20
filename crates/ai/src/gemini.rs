@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::provider::ErrorKind;
 use crate::provider::*;
 use crate::types::*;
 
@@ -53,6 +54,20 @@ impl GeminiProvider {
         json!([{ "function_declarations": function_declarations }])
     }
 
+    fn serialize_function_call_parts(calls: &[ToolCall]) -> Vec<serde_json::Value> {
+        calls
+            .iter()
+            .map(|call| {
+                json!({
+                    "function_call": {
+                        "name": call.name,
+                        "args": call.arguments,
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Convert canonical Messages to Gemini's content format.
     pub fn serialize_messages(messages: &[Message]) -> serde_json::Value {
         let mut result = Vec::new();
@@ -72,17 +87,21 @@ impl GeminiProvider {
                     }));
                 }
                 (Role::Assistant, MessageContent::ToolCalls(calls)) => {
-                    let parts: Vec<serde_json::Value> = calls
-                        .iter()
-                        .map(|call| {
-                            json!({
-                                "function_call": {
-                                    "name": call.name,
-                                    "args": call.arguments,
-                                }
-                            })
-                        })
-                        .collect();
+                    let parts = Self::serialize_function_call_parts(calls);
+                    result.push(json!({
+                        "role": "model",
+                        "parts": parts,
+                    }));
+                }
+                (
+                    Role::Assistant,
+                    MessageContent::TextWithToolCalls {
+                        text,
+                        tool_calls: calls,
+                    },
+                ) => {
+                    let mut parts = vec![json!({ "text": text })];
+                    parts.extend(Self::serialize_function_call_parts(calls));
                     result.push(json!({
                         "role": "model",
                         "parts": parts,
@@ -120,12 +139,14 @@ impl GeminiProvider {
             .ok_or_else(|| ProviderError {
                 message: format!("Missing 'candidates' in Gemini response: {}", body),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             })?;
 
         if candidates.is_empty() {
             return Err(ProviderError {
                 message: "Empty candidates in Gemini response".into(),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             });
         }
 
@@ -135,6 +156,7 @@ impl GeminiProvider {
             .ok_or_else(|| ProviderError {
                 message: "Missing 'content' in Gemini candidate".into(),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             })?;
 
         let parts = content
@@ -143,6 +165,7 @@ impl GeminiProvider {
             .ok_or_else(|| ProviderError {
                 message: "Missing 'parts' in Gemini content".into(),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             })?;
 
         let mut text_parts = Vec::new();
@@ -292,6 +315,7 @@ impl AgentProvider for GeminiProvider {
                 ProviderError {
                     message: format!("HTTP error: {}", e),
                     retryable: e.is_timeout(),
+                    kind: ErrorKind::Transport,
                 }
             })?;
 
@@ -303,15 +327,30 @@ impl AgentProvider for GeminiProvider {
             ProviderError {
                 message: format!("JSON parse error: {}", e),
                 retryable: false,
+                kind: ErrorKind::Unknown,
             }
         })?;
 
         if !status.is_success() {
             let retryable = status.as_u16() == 429 || status.as_u16() >= 500;
             warn!(status = %status, retryable, "Gemini API error response: {}", resp_body);
+            let body_lower = resp_body.to_string().to_ascii_lowercase();
+            let kind = if body_lower.contains("context_length")
+                || body_lower.contains("token limit")
+                || body_lower.contains("too long")
+            {
+                ErrorKind::ContextOverflow
+            } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                ErrorKind::Auth
+            } else if status.as_u16() == 429 {
+                ErrorKind::RateLimit
+            } else {
+                ErrorKind::Unknown
+            };
             return Err(ProviderError {
                 message: format!("API error {}: {}", status, resp_body),
                 retryable,
+                kind,
             });
         }
 

@@ -23,11 +23,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::*;
 
+/// Broad classification of provider errors for retry/recovery logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// The request payload exceeded the model's context window.
+    ContextOverflow,
+    /// Rate-limited (429). Retryable with backoff.
+    RateLimit,
+    /// Authentication failure (401/403).
+    Auth,
+    /// Network / HTTP transport error.
+    Transport,
+    /// Everything else.
+    Unknown,
+}
+
 /// Error type for provider operations.
 #[derive(Debug)]
 pub struct ProviderError {
     pub message: String,
     pub retryable: bool,
+    pub kind: ErrorKind,
 }
 
 impl std::fmt::Display for ProviderError {
