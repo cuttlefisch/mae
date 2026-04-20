@@ -35,14 +35,14 @@ impl Editor {
         }
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             self.set_status("eval-region: empty selection");
             return;
         }
         let idx = self.active_buffer_idx();
         let text = self.buffers[idx].text_range(start, end);
         let text = text.trim().to_string();
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
         if text.is_empty() {
             self.set_status("eval-region: empty selection");
             return;
@@ -124,12 +124,12 @@ impl Editor {
             return;
         }
         let Some(shell_idx) = self.find_shell_target() else {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             self.set_status("send-region-to-shell: no active terminal");
             return;
         };
         let (start, end) = self.visual_selection_range();
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
         if start >= end {
             self.set_status("send-region-to-shell: empty selection");
             return;

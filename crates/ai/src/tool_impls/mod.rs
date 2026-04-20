@@ -24,7 +24,7 @@ pub use dap::{
 pub use editor_tools::{
     execute_command_list, execute_debug_state, execute_editor_state, execute_event_recording,
     execute_get_option, execute_mouse_event, execute_render_inspect, execute_set_option,
-    execute_shell_scrollback, execute_theme_inspect, execute_window_layout,
+    execute_shell_scrollback, execute_theme_inspect, execute_trigger_hook, execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,

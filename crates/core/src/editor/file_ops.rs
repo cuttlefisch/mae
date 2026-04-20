@@ -75,7 +75,7 @@ impl Editor {
     pub fn open_conversation_buffer(&mut self) {
         let idx = self.ensure_conversation_buffer_idx();
         self.window_mgr.focused_window_mut().buffer_idx = idx;
-        self.mode = crate::Mode::ConversationInput;
+        self.set_mode(crate::Mode::ConversationInput);
     }
 
     /// Persist the AI conversation to a JSON file (`:ai-save <path>`).

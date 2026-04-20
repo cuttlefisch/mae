@@ -208,7 +208,7 @@ pub fn manage_shell_lifecycle(
     }
     for buf_idx in exited_shells {
         if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         if let Some(shell) = shell_terminals.remove(&buf_idx) {
             shell.shutdown();
@@ -357,7 +357,7 @@ pub fn health_check(
     for buf_idx in zombies {
         warn!(buf_idx, "health check: found zombie shell — cleaning up");
         if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         if let Some(shell) = shell_terminals.remove(&buf_idx) {
             shell.shutdown();

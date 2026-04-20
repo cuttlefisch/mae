@@ -23,7 +23,8 @@ use crate::tool_impls::{
     execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
     execute_render_inspect, execute_set_option, execute_shell_list, execute_shell_read_output,
     execute_shell_scrollback, execute_shell_send_input, execute_switch_buffer,
-    execute_switch_project, execute_syntax_tree, execute_theme_inspect, execute_window_layout,
+    execute_switch_project, execute_syntax_tree, execute_theme_inspect, execute_trigger_hook,
+    execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -306,6 +307,7 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "mouse_event" => execute_mouse_event(editor, &call.arguments),
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
         "introspect" => execute_introspect(editor, &call.arguments),
+        "trigger_hook" => execute_trigger_hook(editor, &call.arguments),
         "event_recording" => execute_event_recording(editor, &call.arguments),
 
         // --- Git operations ---
@@ -839,6 +841,25 @@ fn build_self_test_plan(filter: &str) -> String {
             "cleanup": [
                 "Call command_ debug-stop to tear down the session",
                 "Switch back to *AI* buffer"
+            ]
+        }));
+    }
+
+    if include("hooks") {
+        categories.push(serde_json::json!({
+            "name": "hooks",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "trigger_hook",
+                    "args": {"hook_name": "buffer-open"},
+                    "assert": "Hook 'buffer-open' triggered"
+                },
+                {
+                    "tool": "trigger_hook",
+                    "args": {"hook_name": "app-start"},
+                    "assert": "Hook 'app-start' triggered"
+                }
             ]
         }));
     }
@@ -1932,5 +1953,26 @@ mod tests {
         assert_eq!(bench["size"], 100);
         assert!(bench["duration_us"].as_u64().unwrap() > 0);
         assert!(bench["ops_per_sec"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn trigger_hook_queues_hooks() {
+        let mut editor = Editor::new();
+        // Register a dummy function so fire_hook actually queues something
+        editor.hooks.add("buffer-open", "my-fn");
+
+        let call = make_call(
+            "trigger_hook",
+            serde_json::json!({"hook_name": "buffer-open"}),
+        );
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        assert_eq!(editor.pending_hook_evals.len(), 1);
+        assert_eq!(editor.pending_hook_evals[0].0, "buffer-open");
     }
 }

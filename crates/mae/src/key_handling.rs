@@ -292,17 +292,17 @@ fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str)
 fn handle_search_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.search_input.clear();
             editor.search_state.highlight_active = false;
         }
         KeyCode::Enter => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.execute_search();
         }
         KeyCode::Backspace => {
             if editor.search_input.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.search_input.pop();
             }
@@ -318,7 +318,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
     let picker = match editor.file_picker.as_mut() {
         Some(p) => p,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -326,13 +326,13 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             editor.file_picker = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
             if let Some(path) = picker.selected_path() {
                 let creating = picker.query_selected && !path.exists();
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 if creating {
                     // Create parent directories and an empty file, then open it.
                     if let Some(parent) = path.parent() {
@@ -348,7 +348,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
                 }
             } else {
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("No file selected");
             }
         }
@@ -377,7 +377,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Backspace => {
             if picker.query.is_empty() {
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 picker.query.pop();
                 picker.update_filter();
@@ -404,7 +404,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             editor.file_picker = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char(ch) => {
             picker.query.push(ch);
@@ -433,7 +433,7 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
     let browser = match editor.file_browser.as_mut() {
         Some(b) => b,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -443,7 +443,7 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
         match key.code {
             KeyCode::Char('c') => {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 return;
             }
             KeyCode::Char('j') => {
@@ -466,16 +466,16 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             editor.file_browser = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char('q') if browser.query.is_empty() => {
             editor.file_browser = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter | KeyCode::Char('l') if browser.query.is_empty() => {
             if let Activation::OpenFile(path) = browser.activate() {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.open_file(&path);
             }
             // Descended / Nothing: stay in browser mode with refreshed listing.
@@ -499,12 +499,12 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
                     browser.refresh();
                 } else if let Activation::OpenFile(path) = browser.activate() {
                     editor.file_browser = None;
-                    editor.mode = Mode::Normal;
+                    editor.set_mode(Mode::Normal);
                     editor.open_file(&path);
                 }
             } else if let Activation::OpenFile(path) = browser.activate() {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.open_file(&path);
             }
         }
@@ -540,7 +540,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
     let palette = match editor.command_palette.as_mut() {
         Some(p) => p,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -548,14 +548,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
     match key.code {
         KeyCode::Esc => {
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
             let name = palette.selected_name().map(|s| s.to_string());
             let purpose = palette.purpose;
             let query = palette.query.clone();
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             match (name, purpose) {
                 (Some(cmd), PalettePurpose::Execute) => dispatch_command(editor, scheme, &cmd),
                 (Some(cmd), PalettePurpose::Describe) => {
@@ -605,7 +605,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         KeyCode::Backspace => {
             if palette.query.is_empty() {
                 editor.command_palette = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 palette.query.pop();
                 palette.update_filter();
@@ -619,7 +619,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char(ch) => {
             palette.query.push(ch);
@@ -1108,7 +1108,7 @@ fn handle_normal_mode(
                 return;
             }
             KeyCode::Char('i') | KeyCode::Char('a') if !ctrl => {
-                editor.mode = Mode::ConversationInput;
+                editor.set_mode(Mode::ConversationInput);
                 editor.count_prefix = None;
                 return;
             }
@@ -1354,7 +1354,7 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
         None => (false, false),
     };
     if !has_input {
-        editor.mode = Mode::Normal;
+        editor.set_mode(Mode::Normal);
         return;
     }
     if already_streaming {
@@ -1391,7 +1391,7 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
             conv.end_streaming();
         }
     }
-    editor.mode = Mode::Normal;
+    editor.set_mode(Mode::Normal);
 }
 
 fn handle_conversation_input(
@@ -1404,7 +1404,7 @@ fn handle_conversation_input(
     match key.code {
         // --- Mode transitions ---
         KeyCode::Esc => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
             conv_submit(editor, ai_tx);
@@ -1577,13 +1577,13 @@ pub fn handle_command_mode(
     pending_keys.clear();
     match key.code {
         KeyCode::Esc => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
         }
         KeyCode::Enter => {
             let cmd = editor.command_line.clone();
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
 
@@ -1770,21 +1770,21 @@ pub fn handle_command_mode(
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if editor.command_line.is_empty() {
                 // C-d on empty line = abort (like in shells)
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_delete_forward();
             }
         }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if editor.command_line.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
             }
         }
         KeyCode::Backspace => {
             if editor.command_line.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
             }

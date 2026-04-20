@@ -147,7 +147,7 @@ impl Editor {
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;
-        self.mode = Mode::Visual(VisualType::Char);
+        self.set_mode(Mode::Visual(VisualType::Char));
     }
 
     /// Return the full S-expression of the buffer's parsed tree.

@@ -109,14 +109,14 @@ impl Editor {
     pub(crate) fn enter_insert_for_change(&mut self, command: &str) {
         let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::BufferKind::Shell {
-            self.mode = Mode::ShellInsert;
+            self.set_mode(Mode::ShellInsert);
             return;
         }
         let win = self.window_mgr.focused_window();
         let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
         self.insert_start_offset = Some(offset);
         self.insert_initiated_by = Some(command.to_string());
-        self.mode = Mode::Insert;
+        self.set_mode(Mode::Insert);
     }
 
     /// Called when exiting insert mode to finalize the dot-repeat record.
@@ -232,7 +232,7 @@ impl Editor {
                     win.cursor_col = new_offset.saturating_sub(line_start);
                 }
                 // Exit insert mode without recording (would overwrite the repeat record)
-                self.mode = Mode::Normal;
+                self.set_mode(Mode::Normal);
                 self.insert_initiated_by = None;
                 self.insert_start_offset = None;
                 // Restore the last_edit since dispatch_builtin would have set up
@@ -255,7 +255,7 @@ impl Editor {
                     win.cursor_row = new_row;
                     win.cursor_col = new_offset.saturating_sub(line_start);
                 }
-                self.mode = Mode::Normal;
+                self.set_mode(Mode::Normal);
                 self.insert_initiated_by = None;
                 self.insert_start_offset = None;
                 self.last_edit = Some(record);

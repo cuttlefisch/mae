@@ -10,7 +10,7 @@ impl Editor {
         let win = self.window_mgr.focused_window();
         self.visual_anchor_row = win.cursor_row;
         self.visual_anchor_col = win.cursor_col;
-        self.mode = Mode::Visual(vtype);
+        self.set_mode(Mode::Visual(vtype));
     }
 
     /// Compute the ordered char-offset range for the current visual selection.
@@ -46,7 +46,7 @@ impl Editor {
     pub fn visual_delete(&mut self) {
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
@@ -61,7 +61,7 @@ impl Editor {
         win.cursor_row = new_row;
         win.cursor_col = start.saturating_sub(line_start);
         win.clamp_cursor(&self.buffers[idx]);
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Yank the visual selection into the default register without deleting.
@@ -73,13 +73,13 @@ impl Editor {
             if let Some(text) = self.conversation_visual_yank_text() {
                 self.save_yank(text);
             }
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
 
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let text = self.buffers[idx].text_range(start, end);
@@ -91,7 +91,7 @@ impl Editor {
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = new_row;
         win.cursor_col = start - line_start;
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Extract the selected text from a conversation buffer's flat_text.
@@ -160,7 +160,7 @@ impl Editor {
     /// Change the visual selection: delete it and enter insert mode.
     pub fn visual_change(&mut self) {
         self.visual_delete();
-        self.mode = Mode::Insert;
+        self.set_mode(Mode::Insert);
     }
 
     /// Save the current visual state for `gv` (reselect-visual).
@@ -198,7 +198,7 @@ impl Editor {
             let line_start = self.buffers[idx].rope().line_to_char(row);
             self.buffers[idx].insert_text_at(line_start, "    ");
         }
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Dedent all lines in the visual selection by up to 4 spaces.
@@ -217,7 +217,7 @@ impl Editor {
                 self.buffers[idx].delete_range(line_start, line_start + spaces);
             }
         }
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Join all lines in the visual selection.
@@ -233,7 +233,7 @@ impl Editor {
         for _ in 0..join_count {
             self.join_line();
         }
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Replace visual selection with register contents without clobbering the register.
@@ -243,7 +243,7 @@ impl Editor {
         let paste = self.paste_text();
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
@@ -271,7 +271,7 @@ impl Editor {
             win.cursor_row = new_row;
             win.cursor_col = start.saturating_sub(line_start);
         }
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Uppercase the visual selection text.
@@ -279,7 +279,7 @@ impl Editor {
         self.save_visual_state();
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
@@ -287,7 +287,7 @@ impl Editor {
         let upper = text.to_uppercase();
         self.buffers[idx].delete_range(start, end);
         self.buffers[idx].insert_text_at(start, &upper);
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 
     /// Lowercase the visual selection text.
@@ -295,7 +295,7 @@ impl Editor {
         self.save_visual_state();
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
@@ -303,6 +303,6 @@ impl Editor {
         let lower = text.to_lowercase();
         self.buffers[idx].delete_range(start, end);
         self.buffers[idx].insert_text_at(start, &lower);
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
     }
 }

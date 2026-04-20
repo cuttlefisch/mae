@@ -30,8 +30,8 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, trace, warn};
 
 use bootstrap::{
-    find_conversation_buffer_mut, init_logging, load_history, load_init_file, save_history,
-    setup_ai, setup_dap, setup_lsp,
+    debug_dump, find_conversation_buffer_mut, init_logging, load_history, load_init_file,
+    save_history, setup_ai, setup_dap, setup_lsp,
 };
 use key_handling::handle_key;
 
@@ -255,6 +255,10 @@ fn main() -> io::Result<()> {
     // Load init.scm and history.scm
     load_init_file(&mut scheme, &mut editor);
     load_history(&mut scheme, &mut editor);
+
+    // Fire app-start hook after initialization is complete.
+    editor.fire_hook("app-start");
+
     // --debug: enable debug mode (RSS/CPU/frame time in status bar)
     if args.iter().any(|a| a == "--debug") {
         editor.debug_mode = true;
@@ -565,9 +569,17 @@ async fn run_terminal_loop(
         if !editor.running {
             info!("editor shutting down");
 
+            // Fire app-exit hook.
+            editor.fire_hook("app-exit");
+
             // Persist history
             if let Err(e) = save_history(&editor) {
                 error!(error = %e, "failed to save history");
+            }
+
+            // If debug mode is enabled, save a tombstone dump.
+            if editor.debug_mode {
+                debug_dump(&editor);
             }
 
             // AI session persistence
@@ -1025,13 +1037,13 @@ fn handle_shell_key(
             let keys_to_send = std::mem::take(shell_pending_keys);
 
             let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) else {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("Terminal exited — returned to normal mode");
                 return;
             };
 
             if shell.has_exited() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("Terminal process has exited");
                 return;
             }
@@ -1971,8 +1983,42 @@ impl GuiApp {
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
-    fn shutdown(&self) {
+    fn shutdown(&mut self) {
         info!("editor shutting down (GUI)");
+
+        // Fire app-exit hook.
+        self.editor.fire_hook("app-exit");
+
+        // Persist history
+        if let Err(e) = save_history(&self.editor) {
+            error!(error = %e, "failed to save history");
+        }
+
+        // If debug mode is enabled, save a tombstone dump.
+        if self.editor.debug_mode {
+            debug_dump(&self.editor);
+        }
+
+        // AI session persistence
+        if self.editor.restore_session {
+            if let Some(root) = self.editor.active_project_root() {
+                let session_path = root.join(".mae/conversation.json");
+                if let Some(parent) = session_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match self.editor.ai_save(&session_path) {
+                    Ok(n) => {
+                        info!(path = %session_path.display(), entries = n, "AI session persisted")
+                    }
+                    Err(e) => {
+                        if !e.contains("No conversation buffer") {
+                            warn!(path = %session_path.display(), error = %e, "failed to persist AI session");
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(ref tx) = self.ai_command_tx {
             let _ = tx.try_send(AiCommand::Shutdown);
         }

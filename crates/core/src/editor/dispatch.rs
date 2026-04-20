@@ -648,27 +648,27 @@ impl Editor {
             // Mode changes
             "enter-insert-mode" => {
                 if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
-                    self.mode = Mode::ShellInsert;
+                    self.set_mode(Mode::ShellInsert);
                 } else {
-                    self.mode = Mode::Insert;
+                    self.set_mode(Mode::Insert);
                 }
             }
             "enter-insert-mode-after" => {
                 if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
-                    self.mode = Mode::ShellInsert;
+                    self.set_mode(Mode::ShellInsert);
                 } else {
                     let buf = &self.buffers[self.active_buffer_idx()];
                     self.window_mgr.focused_window_mut().move_right(buf);
-                    self.mode = Mode::Insert;
+                    self.set_mode(Mode::Insert);
                 }
             }
             "enter-insert-mode-eol" => {
                 if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
-                    self.mode = Mode::ShellInsert;
+                    self.set_mode(Mode::ShellInsert);
                 } else {
                     let buf = &self.buffers[self.active_buffer_idx()];
                     self.window_mgr.focused_window_mut().move_to_line_end(buf);
-                    self.mode = Mode::Insert;
+                    self.set_mode(Mode::Insert);
                 }
             }
             // Repeat f/F/t/T (;/,)
@@ -700,7 +700,7 @@ impl Editor {
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = cr;
                     win.cursor_col = cc;
-                    self.mode = Mode::Visual(vtype);
+                    self.set_mode(Mode::Visual(vtype));
                 }
             }
 
@@ -720,10 +720,10 @@ impl Editor {
                     let w = self.window_mgr.focused_window();
                     self.last_insert_pos = Some((idx, w.cursor_row, w.cursor_col));
                 }
-                self.mode = Mode::Normal;
+                self.set_mode(Mode::Normal);
             }
             "enter-command-mode" => {
-                self.mode = Mode::Command;
+                self.set_mode(Mode::Command);
                 self.command_line.clear();
                 self.command_cursor = 0;
             }
@@ -761,28 +761,36 @@ impl Editor {
                 }
             }
             "focus-left" => {
+                self.fire_hook("focus-out");
                 self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Left, area);
                 self.sync_mode_to_buffer();
+                self.fire_hook("focus-in");
             }
             "focus-right" => {
+                self.fire_hook("focus-out");
                 self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Right, area);
                 self.sync_mode_to_buffer();
+                self.fire_hook("focus-in");
             }
             "focus-up" => {
+                self.fire_hook("focus-out");
                 self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Up, area);
                 self.sync_mode_to_buffer();
+                self.fire_hook("focus-in");
             }
             "focus-down" => {
+                self.fire_hook("focus-out");
                 self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.focus_direction(Direction::Down, area);
                 self.sync_mode_to_buffer();
+                self.fire_hook("focus-in");
             }
 
             // Diagnostics
@@ -808,7 +816,7 @@ impl Editor {
                     self.alternate_buffer_idx = Some(prev);
                     self.window_mgr.focused_window_mut().buffer_idx = idx;
                 }
-                self.mode = Mode::Normal;
+                self.set_mode(Mode::Normal);
             }
             "toggle-scratch-buffer" => {
                 let current = self.active_buffer_idx();
@@ -837,7 +845,7 @@ impl Editor {
                         self.alternate_buffer_idx = Some(current);
                         self.window_mgr.focused_window_mut().buffer_idx = idx;
                     }
-                    self.mode = Mode::Normal;
+                    self.set_mode(Mode::Normal);
                 }
             }
 
@@ -859,7 +867,7 @@ impl Editor {
                 self.command_palette = Some(
                     crate::command_palette::CommandPalette::for_help_search(&nodes),
                 );
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
             "help-reopen" => {
                 self.help_reopen();
@@ -878,7 +886,7 @@ impl Editor {
                 let idx = self.buffers.len() - 1;
                 self.pending_shell_spawns.push(idx);
                 self.switch_to_buffer(idx);
-                self.mode = Mode::ShellInsert;
+                self.set_mode(Mode::ShellInsert);
             }
             "terminal-reset" => {
                 let idx = self.active_buffer_idx();
@@ -890,14 +898,14 @@ impl Editor {
                 }
             }
             "shell-normal-mode" => {
-                self.mode = Mode::Normal;
+                self.set_mode(Mode::Normal);
                 self.set_status("Terminal: normal mode");
             }
             "terminal-close" => {
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].kind == crate::BufferKind::Shell {
                     self.pending_shell_closes.push(idx);
-                    self.mode = Mode::Normal;
+                    self.set_mode(Mode::Normal);
                 } else {
                     self.set_status("Not a terminal buffer");
                 }
@@ -920,7 +928,7 @@ impl Editor {
 
             "command-palette" => {
                 self.command_palette = Some(CommandPalette::from_registry(&self.commands));
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
             "next-buffer" => {
                 if self.buffers.len() <= 1 {
@@ -1043,7 +1051,7 @@ impl Editor {
                 self.command_palette = Some(crate::command_palette::CommandPalette::for_buffers(
                     &name_refs,
                 ));
-                self.mode = crate::Mode::CommandPalette;
+                self.set_mode(crate::Mode::CommandPalette);
             }
             "find-file" => {
                 let root = self
@@ -1052,7 +1060,7 @@ impl Editor {
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_default();
                 self.file_picker = Some(FilePicker::scan(&root));
-                self.mode = Mode::FilePicker;
+                self.set_mode(Mode::FilePicker);
             }
             // Ranger/dired-style directory browser. Opens at the active
             // buffer's parent dir (so `-` in normal mode feels spatial),
@@ -1065,7 +1073,7 @@ impl Editor {
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_default();
                 self.file_browser = Some(crate::FileBrowser::open(&start));
-                self.mode = Mode::FileBrowser;
+                self.set_mode(Mode::FileBrowser);
             }
             "recent-files" => self.recent_files_palette(),
             "ai-prompt" => {
@@ -1098,7 +1106,7 @@ impl Editor {
                 // but flag the purpose so Enter opens the help buffer
                 // instead of executing the command.
                 self.command_palette = Some(CommandPalette::for_describe(&self.commands));
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
             "describe-option" => {
                 // Open the *Options* buffer listing all options.
@@ -1111,7 +1119,7 @@ impl Editor {
                 self.command_palette = Some(crate::command_palette::CommandPalette::for_themes(
                     &name_refs,
                 ));
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
             "cycle-theme" => {
                 self.cycle_theme();
@@ -1119,7 +1127,7 @@ impl Editor {
             "set-splash-art" => {
                 self.command_palette =
                     Some(crate::command_palette::CommandPalette::for_splash_art());
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
 
             // Debug commands
@@ -1129,7 +1137,7 @@ impl Editor {
             "debug-start" => {
                 // Pre-fill the command line so the user can type
                 // adapter + program args interactively.
-                self.mode = Mode::Command;
+                self.set_mode(Mode::Command);
                 self.command_line = "debug-start ".to_string();
                 self.command_cursor = self.command_line.len();
             }
@@ -1209,13 +1217,13 @@ impl Editor {
 
             // Visual mode
             "enter-visual-char" => match self.mode {
-                Mode::Visual(VisualType::Char) => self.mode = Mode::Normal,
-                Mode::Visual(VisualType::Line) => self.mode = Mode::Visual(VisualType::Char),
+                Mode::Visual(VisualType::Char) => self.set_mode(Mode::Normal),
+                Mode::Visual(VisualType::Line) => self.set_mode(Mode::Visual(VisualType::Char)),
                 _ => self.enter_visual_mode(VisualType::Char),
             },
             "enter-visual-line" => match self.mode {
-                Mode::Visual(VisualType::Line) => self.mode = Mode::Normal,
-                Mode::Visual(VisualType::Char) => self.mode = Mode::Visual(VisualType::Line),
+                Mode::Visual(VisualType::Line) => self.set_mode(Mode::Normal),
+                Mode::Visual(VisualType::Char) => self.set_mode(Mode::Visual(VisualType::Line)),
                 _ => self.enter_visual_mode(VisualType::Line),
             },
             "visual-delete" => {
@@ -1254,12 +1262,12 @@ impl Editor {
             "search-forward-start" => {
                 self.search_state.direction = crate::SearchDirection::Forward;
                 self.search_input.clear();
-                self.mode = Mode::Search;
+                self.set_mode(Mode::Search);
             }
             "search-backward-start" => {
                 self.search_state.direction = crate::SearchDirection::Backward;
                 self.search_input.clear();
-                self.mode = Mode::Search;
+                self.set_mode(Mode::Search);
             }
             "search-next" => {
                 self.record_jump();
@@ -1651,7 +1659,7 @@ impl Editor {
             }
             "lsp-rename" => {
                 // Pre-fill command line for user to enter new name
-                self.mode = crate::Mode::Command;
+                self.set_mode(crate::Mode::Command);
                 self.command_line = "lsp-rename ".to_string();
                 self.command_cursor = self.command_line.len();
                 self.set_status("Enter new name for symbol");
@@ -1741,7 +1749,7 @@ impl Editor {
                     .file_path()
                     .map(|p| p.display().to_string());
                 if let Some(ps) = path_str {
-                    self.mode = crate::Mode::Command;
+                    self.set_mode(crate::Mode::Command);
                     self.command_line = format!("rename {}", ps);
                     self.command_cursor = self.command_line.len();
                     self.set_status("Rename file: edit path and press Enter");
@@ -1750,7 +1758,7 @@ impl Editor {
                 }
             }
             "save-as" => {
-                self.mode = crate::Mode::Command;
+                self.set_mode(crate::Mode::Command);
                 self.command_line = "saveas ".to_string();
                 self.command_cursor = self.command_line.len();
                 self.set_status("Save as: enter path and press Enter");
@@ -1856,7 +1864,7 @@ impl Editor {
                 self.command_palette = Some(
                     crate::command_palette::CommandPalette::for_help_search(&nodes),
                 );
-                self.mode = Mode::CommandPalette;
+                self.set_mode(Mode::CommandPalette);
             }
 
             // Operator-pending mode: bare d/c/y enter pending state
@@ -2023,7 +2031,7 @@ impl Editor {
                 // and the buffer auto-closes.
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
-                self.mode = Mode::ShellInsert;
+                self.set_mode(Mode::ShellInsert);
             }
 
             _ => return false,

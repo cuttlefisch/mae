@@ -156,6 +156,70 @@ pub fn load_history(scheme: &mut SchemeRuntime, editor: &mut Editor) {
     }
 }
 
+/// Create a comprehensive debug dump of the editor state.
+pub fn debug_dump(editor: &Editor) {
+    use serde_json::json;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+
+    let dir = state_home.join("mae/dumps");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("debug_dump_{}.json", timestamp));
+
+    let messages = editor
+        .message_log
+        .entries()
+        .into_iter()
+        .map(|e| {
+            json!({
+                "level": e.level.to_string(),
+                "target": e.target,
+                "message": e.message,
+                "seq": e.seq,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let conversation = editor.conversation().map(|c| {
+        c.entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "role": format!("{:?}", e.role),
+                    "content": e.content,
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let dump = json!({
+        "timestamp": timestamp,
+        "editor_mode": format!("{:?}", editor.mode),
+        "buffer_count": editor.buffers.len(),
+        "window_count": editor.window_mgr.window_count(),
+        "recent_files": editor.recent_files.list(),
+        "recent_projects": editor.recent_projects.list(),
+        "messages": messages,
+        "ai_conversation": conversation,
+    });
+
+    if let Ok(content) = serde_json::to_string_pretty(&dump) {
+        if let Err(e) = std::fs::write(&path, content) {
+            error!(path = %path.display(), error = %e, "failed to write debug dump");
+        } else {
+            info!(path = %path.display(), "debug dump saved");
+        }
+    }
+}
+
 /// Tracing layer that captures events into the in-editor MessageLog.
 /// This makes log entries viewable via `:messages` without requiring
 /// external log tooling — the Emacs `*Messages*` pattern.

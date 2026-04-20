@@ -1043,6 +1043,14 @@ impl Editor {
             .find_map(|b| b.conversation.as_mut())
     }
 
+    /// Set the editor mode and fire the `mode-change` hook.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.fire_hook("mode-change");
+        }
+    }
+
     /// Sync the rope of the first buffer containing a conversation.
     pub fn sync_conversation_buffer_rope(&mut self) {
         if let Some(buf) = self
@@ -1222,7 +1230,7 @@ impl Editor {
                 _ => !matches!(saved, Mode::ShellInsert),
             };
             if valid {
-                self.mode = saved;
+                self.set_mode(saved);
                 return;
             }
         }
@@ -1230,11 +1238,11 @@ impl Editor {
         // No saved mode or invalid — use default.
         match kind {
             crate::BufferKind::Shell => {
-                self.mode = Mode::ShellInsert;
+                self.set_mode(Mode::ShellInsert);
             }
             _ => {
                 if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
-                    self.mode = Mode::Normal;
+                    self.set_mode(Mode::Normal);
                 }
             }
         }
@@ -1394,7 +1402,7 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             self.visual_anchor_row = win.cursor_row;
             self.visual_anchor_col = win.cursor_col;
-            self.mode = crate::Mode::Visual(crate::VisualType::Char);
+            self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
         }
 
         let win = self.window_mgr.focused_window_mut();

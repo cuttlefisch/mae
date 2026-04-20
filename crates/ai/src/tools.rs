@@ -1208,6 +1208,28 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "trigger_hook".into(),
+            description: "Manually fire a lifecycle hook by name. This triggers all Scheme functions registered for that hook point.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "hook_name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name of the hook to fire (e.g. 'app-start', 'buffer-open')".into(),
+                        enum_values: Some(
+                            mae_core::hooks::HOOK_NAMES
+                                .iter()
+                                .map(|s: &&str| s.to_string())
+                                .collect(),
+                        ),
+                    },
+                )]),
+                required: vec!["hook_name".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Conversation persistence ---
         ToolDefinition {
             name: "ai_save".into(),
@@ -1879,7 +1901,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 73);
+        assert_eq!(tools.len(), 74);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"git_status"));

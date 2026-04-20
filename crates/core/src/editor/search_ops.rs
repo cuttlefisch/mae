@@ -137,7 +137,7 @@ impl Editor {
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;
-        self.mode = crate::Mode::Visual(crate::VisualType::Char);
+        self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
         true
     }
 

@@ -392,3 +392,20 @@ pub fn execute_render_inspect(editor: &Editor, args: &serde_json::Value) -> Resu
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
+
+pub fn execute_trigger_hook(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let hook_name = args
+        .get("hook_name")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'hook_name' parameter")?;
+
+    if !mae_core::hooks::HOOK_NAMES.contains(&hook_name) {
+        return Err(format!("Invalid hook name: '{}'", hook_name));
+    }
+
+    editor.fire_hook(hook_name);
+    Ok(format!("Hook '{}' triggered", hook_name))
+}

@@ -4432,3 +4432,27 @@ fn test_open_file_non_conv_preserves_ai() {
     // Cleanup.
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_focus_hooks_fired() {
+    let mut ed = Editor::new();
+    // Register dummy functions so fire_hook actually queues something
+    ed.hooks.add("focus-out", "dummy-fn");
+    ed.hooks.add("focus-in", "dummy-fn");
+
+    // Create a split so we can switch focus
+    ed.buffers.push(Buffer::new());
+    let area = ed.default_area();
+    ed.window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    ed.execute_command("focus-right");
+    let hooks: Vec<_> = ed
+        .pending_hook_evals
+        .iter()
+        .map(|(h, _)| h.as_str())
+        .collect();
+    assert!(hooks.contains(&"focus-out"));
+    assert!(hooks.contains(&"focus-in"));
+}

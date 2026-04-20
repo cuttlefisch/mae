@@ -23,7 +23,7 @@ impl Editor {
         win.buffer_idx = buf_idx;
         win.cursor_row = 0;
         win.cursor_col = 0;
-        self.mode = crate::Mode::Normal;
+        self.set_mode(crate::Mode::Normal);
     }
 
     /// Close the debug panel buffer and switch to alternate.
