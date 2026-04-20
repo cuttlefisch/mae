@@ -1,48 +1,126 @@
-;; mae init.scm — bootstrap for the Modern AI Editor Scheme runtime
-;; This file is loaded when the editor starts.
+;; init.scm — MAE (Modern AI Editor) user configuration
 ;;
-;; MAE is a lisp machine: every command the user or AI can run is
-;; callable from Scheme. The same primitives are available to:
-;;   - init.scm (this file, loaded on startup)
-;;   - :eval <code> (interactive evaluation from command mode)
-;;   - SPC e l / SPC e b / SPC e r (eval line/buffer/region)
-;;   - AI agent (via the tool-calling interface)
-;;   - Scheme-defined commands (define-command + define-key)
+;; MAE is a lisp machine. Every primitive is callable from Scheme by
+;; both the human user and the AI agent — they are peer actors sharing
+;; the same API surface. Customize this file, then reload with :source
+;; or restart the editor.
+;;
+;; Evaluation entry points:
+;;   init.scm        — loaded on startup (this file)
+;;   :eval <expr>    — interactive eval from command mode
+;;   SPC e l/b/r     — eval line / buffer / region
+;;   AI agent        — tool-calling interface (same primitives)
 
-;; ── Available Scheme primitives ─────────────────────────────────
-;;
-;; Configuration:
-;;   (define-key MAP KEY COMMAND)    — bind a key in a keymap
-;;   (define-command NAME DOC FN)    — register a user command
-;;   (set-theme NAME)                — switch color theme
-;;   (set-status MSG)                — display in status bar
-;;   (set-option! KEY VALUE)         — set an editor option at runtime
-;;
-;; Live editing:
-;;   (buffer-insert TEXT)            — insert at cursor
-;;   (cursor-goto ROW COL)          — move cursor (0-indexed)
-;;   (buffer-line N)                 — read line N (0-indexed)
-;;   (open-file PATH)               — open file in new buffer
-;;   (run-command NAME)              — dispatch any registered command
-;;   (message TEXT)                  — append to *Messages* log
-;;
-;; Read-only state (injected before each eval):
-;;   *buffer-name*                   — current buffer name
-;;   *buffer-text*                   — full buffer contents
-;;   *buffer-modified?*              — unsaved changes?
-;;   *buffer-line-count*             — number of lines
-;;   *buffer-count*                  — number of open buffers
-;;   *cursor-row*                    — cursor row (0-indexed)
-;;   *cursor-col*                    — cursor column (0-indexed)
-;;   *mode*                          — current mode name string
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 1. UI
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-;; ── Example: custom commands ────────────────────────────────────
+;; Font size for the GUI backend (6–72, ignored in TUI).
+;; (set-option! "font-size" "14.0")
+
+;; Splash screen art variant.
+;; (set-option! "splash-art" "bat")
+
+;; Show FPS overlay (useful for profiling the GUI backend).
+;; (set-option! "show-fps" "false")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 2. Theme
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Available: default, dracula, gruvbox-dark, catppuccin-mocha,
+;;            nord, solarized-dark, solarized-light, tokyo-night, one-dark
+
+(set-theme "catppuccin-mocha")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 3. Editor options
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Uncomment to override defaults. Use :describe-option <name> for docs.
+;; Use :set-save <name> <value> to persist changes to config.toml.
+
+;; Line numbers
+(set-option! "line-numbers" "true")
+;; (set-option! "relative-line-numbers" "false")
+
+;; Word wrap
+;; (set-option! "word-wrap" "false")
+;; (set-option! "break-indent" "true")
+;; (set-option! "show-break" "↪ ")
+
+;; Clipboard: "unnamed" (vim default) or "unnamedplus" (system)
+;; (set-option! "clipboard-mode" "unnamed")
+
+;; Debug stats in status bar
+;; (set-option! "debug-mode" "false")
+
+;; Auto-restore previous session on startup
+;; (set-option! "restore-session" "false")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 4. Keybindings
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Maps: "normal", "insert", "visual"
+;; Keys: single chars, C-x (ctrl), or SPC-prefixed leader sequences.
+
+;; (define-key "normal" "Q" "quit")
+;; (define-key "normal" "SPC i t" "insert-timestamp")
+;; (define-key "normal" "SPC i i" "buffer-info")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 5. AI configuration
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; AI agent command for SPC a a. Default: "claude" (Claude Code).
+;; Other examples: "aider", "copilot", any CLI that speaks stdio.
+;; (set-option! "ai-editor" "claude")
+
+;; Permission tier: ReadOnly, Write, Shell, Privileged
+;; Controls what the AI agent is allowed to do. Can also be set via
+;; MAE_AI_PERMISSIONS env var or config.toml.
+;; (set-option! "ai-tier" "ReadOnly")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 6. Shell
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; The embedded shell (SPC o s) runs your $SHELL inside the editor.
+;; Exit shell-insert mode with the configured exit sequence (default:
+;; Ctrl-\ Ctrl-n). Remap via the shell-insert keymap if desired.
+;;
+;; Shell hooks and functions:
+;;   (shell-send-input BUF-IDX TEXT) — send text to a shell buffer
+;;   (shell-cwd BUF-IDX)            — get shell working directory
+;;   (shell-read-output BUF-IDX)    — read recent shell output
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 7. Hooks
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Available hooks:
+;;   before-save, after-save, buffer-open, buffer-close,
+;;   mode-change, file-changed-on-disk
+
+;; Log every file open to *Messages*.
+;; (define (on-buffer-open)
+;;   (message (string-append "Opened: " *buffer-name*)))
+;; (add-hook! "buffer-open" "on-buffer-open")
+
+;; Notify on external file changes.
+;; (define (on-file-changed)
+;;   (message (string-append "File changed on disk: " *buffer-name*)))
+;; (add-hook! "file-changed-on-disk" "on-file-changed")
+
+;; Log mode transitions.
+;; (define (on-mode-change)
+;;   (message (string-append "Mode → " *mode*)))
+;; (add-hook! "mode-change" "on-mode-change")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 8. Custom commands
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ;; Insert a timestamp at the cursor.
 (define (insert-timestamp)
   (buffer-insert
     (string-append "["
-      (number->string 2026) "-04-17"  ; Steel lacks date libs
+      (number->string 2026) "-04-20"  ; Steel lacks date libs
       "]")))
 
 (define-command "insert-timestamp"
@@ -62,14 +140,11 @@
   "Show buffer name, line count, and cursor position"
   "buffer-info")
 
-;; ── AI agent configuration ───────────────────────────────────
-;; Set the command for SPC a a (open-ai-agent).
-;; Default: "claude" (Claude Code). Other examples: "aider", "copilot".
-;; (set-option! "ai_editor" "claude")
+;; Scratch note — open a throw-away buffer for quick notes.
+;; (define (scratch-note)
+;;   (run-command "scratch"))
+;; (define-command "scratch-note" "Open scratch buffer" "scratch-note")
 
-;; ── Example: keybinding customization ───────────────────────────
-
-;; Uncomment to remap:
-;; (define-key "normal" "Q" "quit")
-;; (define-key "normal" "SPC i t" "insert-timestamp")
-;; (define-key "normal" "SPC i i" "buffer-info")
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Local Variables — add machine-local overrides below this line.
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

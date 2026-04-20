@@ -21,21 +21,11 @@ pub struct TimestampedEvent {
 }
 
 /// Records input events with timing information.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct EventRecorder {
     recording: bool,
     events: VecDeque<TimestampedEvent>,
     start_time: Option<Instant>,
-}
-
-impl Default for EventRecorder {
-    fn default() -> Self {
-        EventRecorder {
-            recording: false,
-            events: VecDeque::new(),
-            start_time: None,
-        }
-    }
 }
 
 impl EventRecorder {

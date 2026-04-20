@@ -84,6 +84,7 @@ fn main() -> io::Result<()> {
         println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
+        println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
         println!("CONFIG:");
@@ -144,6 +145,32 @@ fn main() -> io::Result<()> {
             }
         }
         config::run_wizard()?;
+        return Ok(());
+    }
+
+    // --check-config: bootstrap editor + Scheme, load init.scm, exit with status.
+    // Useful in CI to validate that init.scm parses and evaluates cleanly.
+    if args.iter().any(|a| a == "--check-config") {
+        let mut editor = Editor::new();
+        let app_config = config::load_config();
+        if let Some(ref theme) = app_config.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        let mut scheme = match SchemeRuntime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("mae: scheme runtime init failed: {}", e.message);
+                std::process::exit(1);
+            }
+        };
+        load_init_file(&mut scheme, &mut editor);
+        // Check if init.scm set an error status
+        let status = &editor.status_msg;
+        if status.starts_with("Error in") {
+            eprintln!("mae: {}", status);
+            std::process::exit(1);
+        }
+        println!("mae: config OK");
         return Ok(());
     }
 

@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks self-test help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks self-test check-config help
 
 # Default target: release build
 all: build
@@ -139,6 +139,10 @@ ci: fmt-check
 setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks configured to use .githooks/"
+
+## check-config: validate init.scm + config.toml without launching the editor
+check-config: build-tui
+	$(RELEASE_BIN) --check-config
 
 ## self-test: run AI-driven e2e self-test headless (requires AI provider)
 self-test: build

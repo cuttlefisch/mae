@@ -14,6 +14,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
   - `make build` now builds with GUI by default (`--features gui`)
   - `make build-tui` for terminal-only build
   - `make ci` still excludes GUI (skia system deps)
+  - `make check-config` validates init.scm + config.toml without launching the editor
 - **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`.
 
 ## Crate Layout
@@ -107,7 +108,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M4 COMPLETE (1,470 tests)
+### Phase 8: GUI Rendering Backend — M1-M4 COMPLETE (1,484 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -139,7 +140,12 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Shell CPU idle: generation-based dirty tracking (30%→~0%) ✅
 - `find-file` uses project root with CWD fallback ✅
 - Debug stats show FPS instead of μs frame timing ✅
-- **Next: Doom-style init.scm (Phase 7 M4), line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
+- Debugging powerhouse: watchdog thread, introspect AI tool, event recording, DAP attach/evaluate ✅
+- Conditional/logpoint breakpoints, lock contention tracking, anomaly detection ✅
+- Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
+- Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
+- `--check-config` CLI flag + CI E2E validation step ✅
+- **Next: line numbers/gutter in GUI (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), mouse gestures (M8)**
 
 ## Key Design Decisions Already Made
 

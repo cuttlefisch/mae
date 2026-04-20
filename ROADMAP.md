@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,509 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,484 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
@@ -13,7 +13,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,509 tests)
+### What We Have (1,484 tests)
 
 | Category | Features |
 |----------|----------|
@@ -32,14 +32,14 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer, multi-file tools, project search |
 | **Scheme** | Steel runtime, init.scm, define-key, eval REPL |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
-| **Debug** | Self-debug state inspection, DAP protocol types, debug panel (threads/frames/scopes/variables) |
+| **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
-| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints, step/continue, 11 AI debug tools |
+| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 15 AI debug tools |
 | **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
 | **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
 | **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
-| **CI** | GitHub Actions (check/test/clippy/fmt), tag-based release, dependabot, git-cliff changelog |
+| **CI** | GitHub Actions (check/test/clippy/fmt/e2e), tag-based release, dependabot, git-cliff changelog, `--check-config` validation |
 
 ### Remaining Tier 1: Blocking Self-Hosting
 
@@ -63,7 +63,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 11 | Session persistence | v0.3.0 ✅ |
 | 12 | README badges (CI status, Rust version, license, crate count) | v0.3.0 ✅ |
 | 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
-| 14 | Doom-style `init.scm`: documented API reference, keybinding examples, hook usage, option config, module system | Phase 7 |
+| 14 | Doom-style `init.scm`: documented API reference, keybinding examples, hook usage, option config, module system | v0.3.0 ✅ |
 | 15 | Privileged scope escalation: TRAMP-style sudo for editing protected files, timed sudo sessions, AI privilege elevation UX | future |
 | 16 | Security & vulnerability audit: enterprise hardening, dependency audit, shell injection review, AI permission boundary testing, sandboxing | future |
 | 17 | Per-buffer project roots, `active_project()`, multi-project support | v0.3.0 ✅ |
@@ -616,6 +616,15 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [x] `DebugState::find_variable` encapsulates scope iteration (no leak to tool layer)
 - [x] `editor_state` reports `debug_panel_open` + `breakpoint_count`
 - [x] Self-test suite: `dap` category with 6 tests (conditional, skippable)
+- [x] `dap_evaluate` AI tool — evaluate expressions in debug context
+- [x] `dap_disconnect` AI tool — disconnect from debug session
+- [x] `:debug-attach <adapter> <pid>` — attach to running process
+- [x] `:debug-eval <expr>` — evaluate in debug context
+- [x] Conditional breakpoints (condition, hitCondition, logMessage)
+- [x] `introspect` AI tool — diagnostic snapshot (threads/perf/locks/buffers/shell/ai)
+- [x] `event_recording` AI tool — dump/save event recordings
+- [x] Watchdog thread: heartbeat monitoring, stall detection, /proc thread dumps
+- [x] Lock contention tracking (FairMutex wait times, holder info)
 - [ ] Scheme exposure: `(dap-continue)`, `(dap-inspect)` — deferred
 
 ---
@@ -813,15 +822,17 @@ docs to help users effectively. Builds on the existing KB + help buffer.
 - [ ] User help nodes persisted to `~/.config/mae/help/` directory
 - [ ] Org-mode format for user-authored help (parsed by existing org parser)
 
-### M4: Doom-style init.scm — Configuration Framework
+### M4: Doom-style init.scm — Configuration Framework ✅ (partial)
 Inspired by Doom Emacs's module system: declarative, layered, well-documented.
 
-- [ ] Ship `assets/init.scm` — comprehensive documented default config
+- [x] Ship `scheme/init.scm` — comprehensive documented default config
   - All keybinding examples with comments
   - Hook usage patterns (before-save, after-save, buffer-open, etc.)
-  - Option configuration via `(set-option! ...)` with all options listed
-  - Theme selection, font size, clipboard mode
-  - AI provider configuration examples
+  - Option configuration via `(set-option! ...)` with all 14 options listed
+  - Theme selection, font size, clipboard mode, AI provider configuration
+  - 8 sections: UI, Theme, Editor Options, Keybindings, AI, Shell, Hooks, Custom Commands
+- [x] `--check-config` CLI flag — validate init.scm + config.toml without launching editor
+- [x] CI E2E step — builds TUI binary and runs `--check-config` to validate init.scm
 - [ ] Module system: `(mae/module! :editor :ai :lsp :dap :shell :kb)`
   - Each module self-contained, can be enabled/disabled
   - Modules declare dependencies (`:lsp` requires `:editor`)
@@ -1073,7 +1084,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │       │
     │       └─→ Phase 6 M5 (magit parity) ← builds on M1 PTY shell + SPC g stubs
     │
-    ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm next
+    ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm done, module system next
     │
     ├─→ Phase 8 (GUI backend) ✅ M1-M4, M3 remaining items
     │
@@ -1084,7 +1095,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
 
 **Next priority order:**
 1. **Phase 8 M3 remaining** (GUI polish) — line numbers/gutter, syntax highlighting colors, visual selection in GUI, Unicode/glyph fallback
-2. **Phase 7 M4** (Doom-style init.scm) — documented API reference, keybinding examples, hook usage, option config, module system
+2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
 3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
 4. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
 5. **Phase 4c M3 remaining** — variable hover, watch expressions
@@ -1109,5 +1120,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 6     | 146 ✅ | shell terminal, hooks, options, MCP bridge, file auto-reload |
 | 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
-| 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close |
-| **Total** | **1,509** | All passing, 0 failures |
+| 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
+| **Total** | **1,484** | All passing, 0 failures |
