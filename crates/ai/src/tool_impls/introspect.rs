@@ -96,18 +96,37 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
     let mut by_kind: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut total_bytes: usize = 0;
     let mut shell_count = 0;
+    let mut buffers = Vec::new();
     for b in &editor.buffers {
         *by_kind.entry(format!("{:?}", b.kind)).or_default() += 1;
         total_bytes += b.rope().len_bytes();
         if b.kind == BufferKind::Shell {
             shell_count += 1;
         }
+
+        let mut b_info = json!({
+            "name": b.name,
+            "kind": format!("{:?}", b.kind),
+            "modified": b.modified,
+            "line_count": b.line_count(),
+            "folded_ranges_count": b.folded_ranges.len(),
+            "has_git_status": b.git_status.is_some(),
+        });
+
+        if b.kind == BufferKind::GitStatus {
+            if let Some(ref gs) = b.git_status {
+                b_info["git_repo_root"] = json!(gs.repo_root);
+            }
+        }
+
+        buffers.push(b_info);
     }
     json!({
         "total": editor.buffers.len(),
         "by_kind": by_kind,
         "total_rope_bytes": total_bytes,
         "shell_buffers": shell_count,
+        "buffer_details": buffers,
     })
 }
 

@@ -4,6 +4,7 @@
 //! Full integration deferred to Phase 6 (Embedded Shell + Magit Parity).
 
 use crate::buffer::Buffer;
+use tracing::{error, info};
 
 use super::Editor;
 
@@ -90,9 +91,11 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
 
+        info!(path = %root.display(), "refreshing git status");
         let (ok, stdout, stderr) =
             self.run_git_porcelain(&["status", "--porcelain=v2", "--branch"]);
         if !ok {
+            error!(error = %stderr, "git status failed");
             self.set_status(format!("git status failed: {}", stderr));
             return;
         }
@@ -234,21 +237,25 @@ impl Editor {
     }
 
     pub fn git_stage_file(&mut self, path: &str) {
+        info!(path, "git staging path");
         let (ok, _, stderr) = self.run_git_porcelain(&["add", path]);
         if ok {
             self.set_status(format!("Staged {}", path));
             self.git_status(); // Refresh
         } else {
+            error!(path, error = %stderr, "git add failed");
             self.set_status(format!("git add failed: {}", stderr));
         }
     }
 
     pub fn git_unstage_file(&mut self, path: &str) {
+        info!(path, "git unstaging path");
         let (ok, _, stderr) = self.run_git_porcelain(&["reset", "HEAD", "--", path]);
         if ok {
             self.set_status(format!("Unstaged {}", path));
             self.git_status(); // Refresh
         } else {
+            error!(path, error = %stderr, "git reset failed");
             self.set_status(format!("git reset failed: {}", stderr));
         }
     }
@@ -259,6 +266,7 @@ impl Editor {
             .file_path()
             .map(|p| p.display().to_string());
         if let Some(path) = file {
+            info!(path, "showing git blame");
             self.git_command_to_buffer(&["blame", &path], "*git-blame*");
         } else {
             self.set_status("git blame: buffer has no file path");
@@ -266,6 +274,7 @@ impl Editor {
     }
 
     pub(crate) fn git_diff(&mut self) {
+        info!("showing git diff");
         self.git_command_to_buffer(&["diff"], "*git-diff*");
     }
     pub(crate) fn git_commit(&mut self) {
@@ -276,12 +285,14 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
 
+        info!("opening commit message buffer");
         let commit_file = root.join(".git/COMMIT_EDITMSG");
         self.open_file(&commit_file);
         self.set_status("Edit commit message and save to commit");
     }
 
     pub(crate) fn git_log(&mut self) {
+        info!("showing git log");
         self.git_command_to_buffer(&["log", "--oneline", "-50"], "*git-log*");
     }
 }

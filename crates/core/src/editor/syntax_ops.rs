@@ -14,6 +14,7 @@
 use crate::{Mode, VisualType};
 
 use super::Editor;
+use tracing::info;
 
 impl Editor {
     /// Enter charwise Visual mode selecting the tree-sitter node at the cursor.
@@ -185,6 +186,8 @@ impl Editor {
             return;
         }
 
+        info!(buf_idx, "org cycling at cursor");
+
         let win = self.window_mgr.focused_window();
         let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
         let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
@@ -247,6 +250,8 @@ impl Editor {
         if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
             return;
         }
+
+        info!(buf_idx, forward, "org todo cycle");
         // Trivial string replacement logic for now
         let row = self.window_mgr.focused_window().cursor_row;
         let line = self.buffers[buf_idx].rope().line(row);
@@ -311,6 +316,8 @@ impl Editor {
         if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
             return;
         }
+
+        info!(buf_idx, "org open link at cursor");
 
         let win = self.window_mgr.focused_window();
         let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);

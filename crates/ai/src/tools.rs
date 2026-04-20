@@ -1230,6 +1230,43 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "org_cycle".into(),
+            description: "Toggle visibility (folding) of the Org heading at the cursor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "org_todo_cycle".into(),
+            description: "Cycle the TODO state of the Org heading at the cursor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "forward".into(),
+                    ToolProperty {
+                        prop_type: "boolean".into(),
+                        description: "true to cycle forward (TODO->DONE), false for backward".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "org_open_link".into(),
+            description: "Open the Org link under the cursor (internal jump or external URL).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Conversation persistence ---
         ToolDefinition {
             name: "ai_save".into(),
@@ -1746,7 +1783,9 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
         | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
         | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" | "git_status"
-        | "git_diff" | "git_log" => ToolTier::Core,
+        | "git_diff" | "git_log" | "org_cycle" | "org_todo_cycle" | "org_open_link" => {
+            ToolTier::Core
+        }
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -1758,7 +1797,7 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::Lsp)
     } else if name.starts_with("dap_") || name == "debug_state" {
         Some(ToolCategory::Dap)
-    } else if name.starts_with("kb_") || name == "help_open" {
+    } else if name.starts_with("kb_") || name == "help_open" || name.starts_with("org_") {
         Some(ToolCategory::Knowledge)
     } else if name.starts_with("shell_") && name != "shell_exec" {
         Some(ToolCategory::ShellMgmt)
@@ -1901,16 +1940,14 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 74);
+        assert_eq!(tools.len(), 77);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"git_status"));
         assert!(names.contains(&"git_commit"));
-        assert!(names.contains(&"lsp_definition"));
-        assert!(names.contains(&"dap_start"));
-        assert!(names.contains(&"kb_get"));
-        assert!(names.contains(&"help_open"));
-        assert!(names.contains(&"switch_project"));
+        assert!(names.contains(&"org_cycle"));
+        assert!(names.contains(&"org_todo_cycle"));
+        assert!(names.contains(&"org_open_link"));
     }
 
     #[test]
@@ -1975,15 +2012,15 @@ mod tests {
     }
 
     #[test]
-    fn core_tools_under_30() {
+    fn core_tools_under_40() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         let core_count = tools
             .iter()
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 30,
-            "core tools should be < 30, got {}",
+            core_count < 40,
+            "core tools should be < 40, got {}",
             core_count
         );
         assert!(

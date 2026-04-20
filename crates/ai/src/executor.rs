@@ -20,11 +20,11 @@ use crate::tool_impls::{
     execute_git_unstage, execute_help_open, execute_introspect, execute_kb_get, execute_kb_graph,
     execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_search,
     execute_list_buffers, execute_lsp_diagnostics, execute_mouse_event, execute_open_file,
-    execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
-    execute_render_inspect, execute_set_option, execute_shell_list, execute_shell_read_output,
-    execute_shell_scrollback, execute_shell_send_input, execute_switch_buffer,
-    execute_switch_project, execute_syntax_tree, execute_theme_inspect, execute_trigger_hook,
-    execute_window_layout,
+    execute_org_cycle, execute_org_open_link, execute_org_todo_cycle, execute_project_files,
+    execute_project_info, execute_project_search, execute_rename_file, execute_render_inspect,
+    execute_set_option, execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
+    execute_shell_send_input, execute_switch_buffer, execute_switch_project, execute_syntax_tree,
+    execute_theme_inspect, execute_trigger_hook, execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -308,6 +308,9 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
         "introspect" => execute_introspect(editor, &call.arguments),
         "trigger_hook" => execute_trigger_hook(editor, &call.arguments),
+        "org_cycle" => execute_org_cycle(editor),
+        "org_todo_cycle" => execute_org_todo_cycle(editor, &call.arguments),
+        "org_open_link" => execute_org_open_link(editor),
         "event_recording" => execute_event_recording(editor, &call.arguments),
 
         // --- Git operations ---

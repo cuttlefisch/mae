@@ -409,3 +409,25 @@ pub fn execute_trigger_hook(
     editor.fire_hook(hook_name);
     Ok(format!("Hook '{}' triggered", hook_name))
 }
+
+pub fn execute_org_cycle(editor: &mut Editor) -> Result<String, String> {
+    editor.org_cycle();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_org_todo_cycle(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let forward = args
+        .get("forward")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    editor.org_todo_cycle(forward);
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_org_open_link(editor: &mut Editor) -> Result<String, String> {
+    editor.org_open_link();
+    Ok(editor.status_msg.clone())
+}
