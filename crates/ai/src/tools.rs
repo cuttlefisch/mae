@@ -1267,6 +1267,237 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Visual Debugger ---
+        ToolDefinition {
+            name: "visual_buffer_add_rect".into(),
+            description: "Add a rectangle to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "X coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Y coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "w".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Width".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "h".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Height".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "fill".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Fill hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "stroke".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x".into(), "y".into(), "w".into(), "h".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_line".into(),
+            description: "Add a line to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x1".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Start X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y1".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Start Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "x2".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "End X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y2".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "End Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "color".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "thickness".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Line thickness (default: 1.0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x1".into(), "y1".into(), "x2".into(), "y2".into(), "color".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_circle".into(),
+            description: "Add a circle to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "cx".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Center X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "cy".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Center Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "r".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Radius".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "fill".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Fill hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "stroke".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["cx".into(), "cy".into(), "r".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_text".into(),
+            description: "Add text to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "X coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Y coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "text".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text to display".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "font_size".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Font size".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "color".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x".into(), "y".into(), "text".into(), "font_size".into(), "color".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_clear".into(),
+            description: "Clear all elements from the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Conversation persistence ---
         ToolDefinition {
             name: "ai_save".into(),
@@ -1940,7 +2171,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 77);
+        assert_eq!(tools.len(), 82);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"git_status"));

@@ -170,6 +170,11 @@ impl SkiaCanvas {
         let _ = self.sb_surface.resize(w, h);
     }
 
+    /// Access the underlying Skia canvas for direct drawing.
+    pub fn canvas(&mut self) -> &skia_safe::Canvas {
+        self.surface.canvas()
+    }
+
     /// Begin a new frame: clear the surface with the theme's background color.
     pub fn begin_frame(&mut self, theme: &Theme) {
         let bg_style = theme.style("ui.background");
@@ -207,9 +212,7 @@ impl SkiaCanvas {
         if ch != ' ' {
             let mut fg_paint = Paint::new(fg, None);
             fg_paint.set_anti_alias(true);
-            let baseline = y + self.ascent;
-            let text = ch.to_string();
-            canvas.draw_str(&text, (x, baseline), &self.font, &fg_paint);
+            self.draw_char(row, col, ch, fg, false, false, 1.0);
         }
     }
 
@@ -226,7 +229,7 @@ impl SkiaCanvas {
                 continue;
             }
 
-            self.draw_char(row, col, cell.ch, cell.fg, cell.bold);
+            self.draw_char(row, col, cell.ch, cell.fg, cell.bold, cell.italic, 1.0);
 
             if cell.underline {
                 let x = col as f32 * self.cell_width;
@@ -265,31 +268,68 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
     }
 
-    /// Draw a single character at a specific (row, col) with optional bold/icon fallback.
-    pub fn draw_char(&mut self, row: usize, col: usize, ch: char, fg: Color4f, bold: bool) {
+    /// Draw a single character at a specific (row, col) with optional bold/italic/icon/scale fallback.
+    pub fn draw_char(
+        &mut self,
+        _row: usize,
+        col: usize,
+        ch: char,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
         let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-        let baseline = y + self.ascent;
+        let y = _row as f32 * self.cell_height;
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
         let text = ch.to_string();
 
-        // 1. Try primary font (bold or normal)
-        let primary_font = if bold { &self.bold_font } else { &self.font };
-        if primary_font.unichar_to_glyph(ch as i32) != 0 {
+        let mut font = if bold {
+            self.bold_font.clone()
+        } else {
+            self.font.clone()
+        };
+
+        if scale != 1.0 {
+            font.set_size(font.size() * scale);
+        }
+
+        let (_, metrics) = font.metrics();
+        let baseline = y - metrics.ascent;
+
+        if italic {
+            self.surface.canvas().save();
+            // Simulate italic with a slight skew.
+            let mut skew_matrix = skia_safe::Matrix::new_identity();
+            skew_matrix.pre_skew((-0.2, 0.0), None);
+            // We need to translate so the skew happens relative to the character position.
+            self.surface.canvas().translate((x, baseline));
+            self.surface.canvas().concat(&skew_matrix);
+            // Now draw at (0,0) because of the translation.
+            self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+            self.surface.canvas().restore();
+            return;
+        }
+
+        // 1. Try primary font
+        if font.unichar_to_glyph(ch as i32) != 0 {
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), primary_font, &paint);
+                .draw_str(&text, (x, baseline), &font, &paint);
             return;
         }
 
         // 2. Try icon font fallback
-        if let Some(ref icon_font) = self.icon_font {
+        if let Some(mut icon_font) = self.icon_font.clone() {
+            if scale != 1.0 {
+                icon_font.set_size(icon_font.size() * scale);
+            }
             if icon_font.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), icon_font, &paint);
+                    .draw_str(&text, (x, baseline), &icon_font, &paint);
                 return;
             }
         }
@@ -305,29 +345,31 @@ impl SkiaCanvas {
             &[], // bcp47
             ch as i32,
         ) {
-            let fallback_font = Font::from_typeface(fallback_tf, self.font.size());
+            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+            let (_, fb_metrics) = fallback_font.metrics();
+            let fb_baseline = y - fb_metrics.ascent;
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), &fallback_font, &paint);
+                .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
         } else {
-            // Last resort: draw with primary font anyway (likely renders as tofu/replacement char)
+            // Last resort
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), primary_font, &paint);
+                .draw_str(&text, (x, baseline), &font, &paint);
         }
     }
 
     /// Draw text at a specific (row, col) cell position with given fg color.
     pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
         for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, false);
+            self.draw_char(row, col + i, ch, fg, false, false, 1.0);
         }
     }
 
     /// Draw text at a specific (row, col) with bold font.
     pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
         for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, true);
+            self.draw_char(row, col + i, ch, fg, true, false, 1.0);
         }
     }
 
@@ -376,6 +418,22 @@ impl SkiaCanvas {
         let cols = (self.width as f32 / self.cell_width) as usize;
         self.draw_rect_fill(row, 0, cols, 1, status_bg);
         self.draw_text_at(row, 0, text, status_fg);
+    }
+
+    /// Draw a horizontal line exactly under a cell (for underlining).
+    pub fn draw_hline_exact(&mut self, row: usize, col: usize, color: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let baseline = y + self.ascent;
+        let underline_y = baseline + 1.0;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface.canvas().draw_line(
+            (x, underline_y),
+            (x + self.cell_width, underline_y),
+            &paint,
+        );
     }
 
     /// End the frame: blit the Skia raster pixels to the OS window via softbuffer.

@@ -48,6 +48,43 @@ struct SharedState {
     pending_recent_files: Vec<String>,
     /// Recent projects to add: (path).
     pending_recent_projects: Vec<String>,
+    /// Visual buffer operations.
+    pending_visual_ops: Vec<VisualOp>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VisualOp {
+    AddRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fill: Option<String>,
+        stroke: Option<String>,
+    },
+    AddLine {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        color: String,
+        thickness: f32,
+    },
+    AddCircle {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fill: Option<String>,
+        stroke: Option<String>,
+    },
+    AddText {
+        x: f32,
+        y: f32,
+        text: String,
+        font_size: f32,
+        color: String,
+    },
+    Clear,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -224,6 +261,78 @@ impl SchemeRuntime {
             s.lock().unwrap().pending_recent_projects.push(path);
             SteelVal::Void
         });
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-rect!",
+            move |x: f64, y: f64, w: f64, h: f64, fill: Option<String>, stroke: Option<String>| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddRect {
+                    x: x as f32,
+                    y: y as f32,
+                    w: w as f32,
+                    h: h as f32,
+                    fill,
+                    stroke,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn("visual-buffer-clear!", move || {
+            s.lock().unwrap().pending_visual_ops.push(VisualOp::Clear);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-line!",
+            move |x1: f64, y1: f64, x2: f64, y2: f64, color: String, thickness: f64| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddLine {
+                    x1: x1 as f32,
+                    y1: y1 as f32,
+                    x2: x2 as f32,
+                    y2: y2 as f32,
+                    color,
+                    thickness: thickness as f32,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-circle!",
+            move |cx: f64, cy: f64, r: f64, fill: Option<String>, stroke: Option<String>| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddCircle {
+                    cx: cx as f32,
+                    cy: cy as f32,
+                    r: r as f32,
+                    fill,
+                    stroke,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-text!",
+            move |x: f64, y: f64, text: String, font_size: f64, color: String| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddText {
+                    x: x as f32,
+                    y: y as f32,
+                    text,
+                    font_size: font_size as f32,
+                    color,
+                });
+                SteelVal::Void
+            },
+        );
 
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
@@ -505,6 +614,85 @@ impl SchemeRuntime {
         }
         for path in state.pending_recent_projects.drain(..) {
             editor.recent_projects.push(std::path::PathBuf::from(path));
+        }
+
+        // Visual buffer operations
+        let visual_ops = std::mem::take(&mut state.pending_visual_ops);
+        if !visual_ops.is_empty() {
+            let buf_idx = editor.active_buffer_idx();
+            if editor.buffers[buf_idx].kind == mae_core::BufferKind::Visual {
+                if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+                    for op in visual_ops {
+                        match op {
+                            VisualOp::AddRect {
+                                x,
+                                y,
+                                w,
+                                h,
+                                fill,
+                                stroke,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Rect {
+                                    x,
+                                    y,
+                                    w,
+                                    h,
+                                    fill,
+                                    stroke,
+                                });
+                            }
+                            VisualOp::AddLine {
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                color,
+                                thickness,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Line {
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    color,
+                                    thickness,
+                                });
+                            }
+                            VisualOp::AddCircle {
+                                cx,
+                                cy,
+                                r,
+                                fill,
+                                stroke,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Circle {
+                                    cx,
+                                    cy,
+                                    r,
+                                    fill,
+                                    stroke,
+                                });
+                            }
+                            VisualOp::AddText {
+                                x,
+                                y,
+                                text,
+                                font_size,
+                                color,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Text {
+                                    x,
+                                    y,
+                                    text,
+                                    font_size,
+                                    color,
+                                });
+                            }
+                            VisualOp::Clear => vb.clear(),
+                        }
+                    }
+                }
+            }
         }
 
         // Drop the lock before dispatching commands (which may call

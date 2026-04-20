@@ -7,6 +7,7 @@ use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
 use crate::git_status::GitStatusView;
 use crate::help_view::HelpView;
+use crate::visual_buffer::VisualBuffer;
 use crate::window::Window;
 
 /// What kind of content this buffer holds.
@@ -33,6 +34,8 @@ pub enum BufferKind {
     Dashboard,
     /// Git status "porcelain" UI (Phase 6 M5).
     GitStatus,
+    /// Visual scene-graph buffer (Phase 1 Visual Debugger).
+    Visual,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -70,6 +73,8 @@ pub struct Buffer {
     pub debug_view: Option<DebugView>,
     /// Git status view state. Present iff `kind == BufferKind::GitStatus`.
     pub git_status: Option<GitStatusView>,
+    /// Visual scene-graph state. Present iff `kind == BufferKind::Visual`.
+    pub visual: Option<VisualBuffer>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// Last known modification time of the backing file on disk.
@@ -109,6 +114,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -132,6 +138,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -155,6 +162,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -178,6 +186,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -202,6 +211,7 @@ impl Buffer {
             help_view: Some(HelpView::new(start)),
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -225,6 +235,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -248,6 +259,7 @@ impl Buffer {
             help_view: None,
             debug_view: Some(DebugView::new()),
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
@@ -277,6 +289,7 @@ impl Buffer {
             help_view: None,
             debug_view: None,
             git_status: None,
+            visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: mtime,

@@ -24,7 +24,9 @@ use crate::tool_impls::{
     execute_project_info, execute_project_search, execute_rename_file, execute_render_inspect,
     execute_set_option, execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
     execute_shell_send_input, execute_switch_buffer, execute_switch_project, execute_syntax_tree,
-    execute_theme_inspect, execute_trigger_hook, execute_window_layout,
+    execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
+    execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
+    execute_visual_buffer_clear, execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -308,6 +310,11 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "render_inspect" => execute_render_inspect(editor, &call.arguments),
         "introspect" => execute_introspect(editor, &call.arguments),
         "trigger_hook" => execute_trigger_hook(editor, &call.arguments),
+        "visual_buffer_add_rect" => execute_visual_buffer_add_rect(editor, &call.arguments),
+        "visual_buffer_add_line" => execute_visual_buffer_add_line(editor, &call.arguments),
+        "visual_buffer_add_circle" => execute_visual_buffer_add_circle(editor, &call.arguments),
+        "visual_buffer_add_text" => execute_visual_buffer_add_text(editor, &call.arguments),
+        "visual_buffer_clear" => execute_visual_buffer_clear(editor),
         "org_cycle" => execute_org_cycle(editor),
         "org_todo_cycle" => execute_org_todo_cycle(editor, &call.arguments),
         "org_open_link" => execute_org_open_link(editor),

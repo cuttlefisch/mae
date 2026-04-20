@@ -26,6 +26,7 @@ pub mod search;
 pub mod session;
 pub mod syntax;
 pub mod theme;
+pub mod visual_buffer;
 pub mod window;
 pub mod word;
 pub mod wrap;

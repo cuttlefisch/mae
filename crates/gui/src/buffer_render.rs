@@ -92,6 +92,17 @@ pub fn render_buffer_content(
         let is_stopped_line = stopped_line == Some(line_idx as u32);
         let text_col = area_col + gutter_w;
 
+        let is_org_heading = needs_spans
+            && syntax_spans
+                .and_then(|spans| {
+                    let line_char_start = buf.rope().line_to_char(line_idx);
+                    let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                    spans.iter().find(|s| {
+                        s.byte_start == line_byte_start && s.theme_key == "markup.heading"
+                    })
+                })
+                .is_some();
+
         let full_chars: Vec<char> = full_display.chars().collect();
         let full_count = full_chars.len();
 
@@ -311,9 +322,14 @@ pub fn render_buffer_content(
                         underline: cs.underline,
                     })
                     .collect();
-                draw_styled_at(canvas, screen_row, current_col, &styled);
+
+                let scale = if is_org_heading { 1.5 } else { 1.0 };
+                draw_styled_at(canvas, screen_row, current_col, &styled, scale);
 
                 display_row += 1;
+                if is_org_heading {
+                    display_row += 1; // Org headings take 2 rows for height.
+                }
                 is_first = false;
                 pos = end;
                 if pos >= full_count {
@@ -366,13 +382,16 @@ pub fn render_buffer_content(
                 })
                 .collect();
 
-            draw_styled_at(canvas, screen_row, text_col, &styled);
+            let scale = if is_org_heading { 1.5 } else { 1.0 };
+            draw_styled_at(canvas, screen_row, text_col, &styled, scale);
             display_row += 1;
+            if is_org_heading {
+                display_row += 1;
+            }
         }
 
         line_idx += 1;
     }
-
     // Tilde lines past EOF.
     while display_row < area_height {
         let screen_row = area_row + display_row;
@@ -383,16 +402,29 @@ pub fn render_buffer_content(
 }
 
 /// Draw a styled line at an absolute position.
-fn draw_styled_at(canvas: &mut SkiaCanvas, row: usize, col: usize, cells: &[StyledCell]) {
+fn draw_styled_at(
+    canvas: &mut SkiaCanvas,
+    row: usize,
+    col: usize,
+    cells: &[StyledCell],
+    scale: f32,
+) {
     for (i, cell) in cells.iter().enumerate() {
         if let Some(bg) = cell.bg {
             canvas.draw_rect_fill(row, col + i, 1, 1, bg);
         }
         if cell.ch != ' ' || cell.bold || cell.italic || cell.underline {
-            if cell.bold {
-                canvas.draw_text_bold(row, col + i, &cell.ch.to_string(), cell.fg);
-            } else {
-                canvas.draw_text_at(row, col + i, &cell.ch.to_string(), cell.fg);
+            canvas.draw_char(
+                row,
+                col + i,
+                cell.ch,
+                cell.fg,
+                cell.bold,
+                cell.italic,
+                scale,
+            );
+            if cell.underline {
+                canvas.draw_hline_exact(row, col + i, cell.fg);
             }
         }
     }

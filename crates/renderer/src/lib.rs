@@ -7,6 +7,7 @@ use crossterm::{
 use mae_core::{Editor, HighlightSpan};
 use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::HashMap;
 
 mod buffer_render;
@@ -347,6 +348,11 @@ fn render_window_area(
                         );
                     }
                 }
+                mae_core::BufferKind::Visual => {
+                    if let Some(ref vb) = buf.visual {
+                        render_visual_buffer(frame, ratatui_rect, vb);
+                    }
+                }
                 _ => {
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
                     buffer_render::render_window(
@@ -362,4 +368,22 @@ fn render_window_area(
             }
         }
     }
+}
+
+fn render_visual_buffer(frame: &mut Frame, area: Rect, vb: &mae_core::visual_buffer::VisualBuffer) {
+    let count = vb.elements.len();
+    let text = format!("[Visual Buffer: {} elements]", count);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Visual Debugger ")
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center),
+        Rect::new(inner.x, inner.y + inner.height / 2, inner.width, 1),
+    );
 }

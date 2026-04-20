@@ -50,6 +50,7 @@ use std::rc::Rc;
 use mae_core::{BufferKind, Editor, HighlightSpan};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
+use skia_safe::Color4f;
 use tracing::{debug, info, trace_span};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -522,6 +523,12 @@ fn render_window_area(
                         );
                     }
                 }
+                BufferKind::Visual => {
+                    // Phase 1 Visual Debugger rendering
+                    if let Some(ref vb) = buf.visual {
+                        render_visual_buffer(canvas, vb, r_row, r_col, r_width, r_height);
+                    }
+                }
                 _ => {
                     // Text (and Preview) buffers: border + syntax-highlighted content.
                     let border_fg = if is_focused {
@@ -568,6 +575,123 @@ fn render_window_area(
                     win_rect.y as usize + win_rect.height as usize,
                     border_fg,
                 );
+            }
+        }
+    }
+}
+
+fn render_visual_buffer(
+    canvas: &mut canvas::SkiaCanvas,
+    vb: &mae_core::visual_buffer::VisualBuffer,
+    r_row: usize,
+    r_col: usize,
+    r_width: usize,
+    r_height: usize,
+) {
+    use mae_core::visual_buffer::VisualElement;
+    use skia_safe::{Color4f, Paint, PaintStyle};
+
+    // Draw background
+    canvas.draw_rect_fill(
+        r_row,
+        r_col,
+        r_width,
+        r_height,
+        Color4f::new(0.05, 0.05, 0.05, 1.0),
+    );
+
+    let (cw, ch) = canvas.cell_size();
+    let x_off = r_col as f32 * cw;
+    let y_off = r_row as f32 * ch;
+
+    for element in &vb.elements {
+        match element {
+            VisualElement::Rect {
+                x,
+                y,
+                w,
+                h,
+                fill,
+                stroke,
+            } => {
+                let rect = skia_safe::Rect::from_xywh(x_off + x, y_off + y, *w, *h);
+                if let Some(f) = fill {
+                    if let Some(c) = theme::parse_hex_to_skia(f) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_style(PaintStyle::Fill);
+                        canvas.canvas().draw_rect(rect, &paint);
+                    }
+                }
+                if let Some(s) = stroke {
+                    if let Some(c) = theme::parse_hex_to_skia(s) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_style(PaintStyle::Stroke);
+                        paint.set_stroke_width(1.0);
+                        canvas.canvas().draw_rect(rect, &paint);
+                    }
+                }
+            }
+            VisualElement::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                color,
+                thickness,
+            } => {
+                if let Some(c) = theme::parse_hex_to_skia(color) {
+                    let mut paint = Paint::new(c, None);
+                    paint.set_stroke_width(*thickness);
+                    paint.set_style(PaintStyle::Stroke);
+                    canvas.canvas().draw_line(
+                        (x_off + x1, y_off + y1),
+                        (x_off + x2, y_off + y2),
+                        &paint,
+                    );
+                }
+            }
+            VisualElement::Circle {
+                cx,
+                cy,
+                r,
+                fill,
+                stroke,
+            } => {
+                if let Some(f) = fill {
+                    if let Some(c) = theme::parse_hex_to_skia(f) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_style(PaintStyle::Fill);
+                        canvas
+                            .canvas()
+                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                    }
+                }
+                if let Some(s) = stroke {
+                    if let Some(c) = theme::parse_hex_to_skia(s) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_style(PaintStyle::Stroke);
+                        paint.set_stroke_width(1.0);
+                        canvas
+                            .canvas()
+                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                    }
+                }
+            }
+            VisualElement::Text {
+                x,
+                y,
+                text,
+                font_size,
+                color,
+            } => {
+                if let Some(c) = theme::parse_hex_to_skia(color) {
+                    let mut paint = Paint::new(c, None);
+                    paint.set_anti_alias(true);
+                    let font = skia_safe::Font::default(); // TODO: use real font
+                    canvas
+                        .canvas()
+                        .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                }
             }
         }
     }
