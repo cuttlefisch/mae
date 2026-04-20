@@ -1,6 +1,7 @@
 //! Text buffer rendering: gutter, syntax highlighting, selection, search,
 //! cursorline, hex color preview, tilde lines past EOF.
 
+use mae_core::wrap::{find_wrap_break, leading_indent_len};
 use mae_core::{Editor, HighlightSpan, Mode, Window};
 use skia_safe::Color4f;
 
@@ -57,6 +58,13 @@ pub fn render_buffer_content(
     let col_offset = win.col_offset;
     let text_width = area_width.saturating_sub(gutter_w);
 
+    let wrap = editor.word_wrap && text_width > 0;
+    let show_break_width = if wrap {
+        editor.show_break.chars().count()
+    } else {
+        0
+    };
+
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
 
@@ -68,30 +76,14 @@ pub fn render_buffer_content(
             .collect();
 
         let is_cursor_line = focused && line_idx == win.cursor_row;
-        let screen_row = area_row + display_row;
-
-        // Gutter.
-        gutter::render_gutter_line(
-            canvas,
-            editor,
-            screen_row,
-            area_col,
-            line_idx,
-            gutter_w,
-            win.cursor_row,
-            is_cursor_line,
-            &breakpoint_lines,
-            stopped_line,
-            &line_severities,
-        );
-
-        let text_col = area_col + gutter_w;
         let is_stopped_line = stopped_line == Some(line_idx as u32);
+        let text_col = area_col + gutter_w;
 
-        if needs_spans {
+        let full_chars: Vec<char> = full_display.chars().collect();
+        let full_count = full_chars.len();
+
+        let char_styles = if needs_spans {
             let line_char_start = buf.rope().line_to_char(line_idx);
-            let full_chars: Vec<char> = full_display.chars().collect();
-            let full_count = full_chars.len();
             let line_char_end = line_char_start + full_count;
 
             // Base style: per-char fg/bg.
@@ -100,7 +92,7 @@ pub fn render_buffer_content(
             } else {
                 text_fg
             };
-            let mut char_styles: Vec<CharStyle> = vec![
+            let mut styles: Vec<CharStyle> = vec![
                 CharStyle {
                     fg: base_fg,
                     bg: None,
@@ -129,7 +121,7 @@ pub fn render_buffer_content(
                         .min(full_count);
                     let ts = editor.theme.style(span.theme_key);
                     let fg = theme::color_or(ts.fg, base_fg);
-                    for cs in char_styles[sc..ec].iter_mut() {
+                    for cs in styles[sc..ec].iter_mut() {
                         cs.fg = fg;
                         if ts.bold {
                             cs.bold = true;
@@ -148,17 +140,15 @@ pub fn render_buffer_content(
             }
 
             // Layer 2: Hex color preview.
-            apply_hex_color_preview(&full_chars, &mut char_styles);
+            apply_hex_color_preview(&full_chars, &mut styles);
 
             // Layer 3: Cursorline bg.
             if show_cursorline && is_cursor_line {
                 if let Some(bg_tc) = cursorline_style.bg {
                     let bg = theme::theme_color_to_skia(&bg_tc);
-                    for cs in char_styles.iter_mut() {
+                    for cs in styles.iter_mut() {
                         cs.bg = Some(bg);
                     }
-                    // Also fill the text area bg.
-                    canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
                 }
             }
 
@@ -168,7 +158,7 @@ pub fn render_buffer_content(
                 let e = (sel_end - line_char_start).min(full_count);
                 let sel_fg = theme::color_or(selection_style.fg, text_fg);
                 let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
-                for cs in char_styles[s..e].iter_mut() {
+                for cs in styles[s..e].iter_mut() {
                     cs.fg = sel_fg;
                     if let Some(bg) = sel_bg {
                         cs.bg = Some(bg);
@@ -186,7 +176,7 @@ pub fn render_buffer_content(
                     }
                     let ms = m.start.saturating_sub(line_char_start);
                     let me = (m.end - line_char_start).min(full_count);
-                    for cs in char_styles[ms..me].iter_mut() {
+                    for cs in styles[ms..me].iter_mut() {
                         cs.fg = search_fg;
                         if let Some(bg) = search_bg {
                             cs.bg = Some(bg);
@@ -194,8 +184,149 @@ pub fn render_buffer_content(
                     }
                 }
             }
+            styles
+        } else {
+            let base_fg = if is_stopped_line {
+                stopped_line_fg
+            } else {
+                text_fg
+            };
+            vec![
+                CharStyle {
+                    fg: base_fg,
+                    bg: if show_cursorline && is_cursor_line {
+                        cursorline_style.bg.map(|c| theme::theme_color_to_skia(&c))
+                    } else {
+                        None
+                    },
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                };
+                full_count
+            ]
+        };
 
-            // Apply horizontal scroll and build styled line.
+        if wrap {
+            let indent_len = if editor.break_indent {
+                leading_indent_len(&full_chars)
+            } else {
+                0
+            };
+            let cont_prefix_w = indent_len + show_break_width;
+            let cont_text_w = if text_width > cont_prefix_w {
+                text_width - cont_prefix_w
+            } else {
+                text_width
+            };
+
+            let mut pos = 0;
+            let mut is_first = true;
+            loop {
+                if display_row >= area_height {
+                    break;
+                }
+                let screen_row = area_row + display_row;
+
+                if is_first {
+                    // Gutter.
+                    gutter::render_gutter_line(
+                        canvas,
+                        editor,
+                        screen_row,
+                        area_col,
+                        line_idx,
+                        gutter_w,
+                        win.cursor_row,
+                        is_cursor_line,
+                        &breakpoint_lines,
+                        stopped_line,
+                        &line_severities,
+                    );
+                } else {
+                    // Continuation line gutter.
+                    let gutter_fg = theme::ts_fg(editor, "ui.gutter");
+                    let padding = " ".repeat(gutter_w);
+                    canvas.draw_text_at(screen_row, area_col, &padding, gutter_fg);
+                }
+
+                let avail = if is_first { text_width } else { cont_text_w };
+                let end = find_wrap_break(&full_chars, pos, avail);
+                let chunk_chars = &full_chars[pos..end];
+                let chunk_styles = &char_styles[pos..end];
+
+                // If cursorline is active, fill the background for the whole line.
+                if show_cursorline && is_cursor_line {
+                    if let Some(bg_tc) = cursorline_style.bg {
+                        let bg = theme::theme_color_to_skia(&bg_tc);
+                        canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                    }
+                }
+
+                let mut current_col = text_col;
+                if !is_first {
+                    // Indent + showbreak prefix
+                    let prefix_fg = theme::ts_fg(editor, "ui.gutter");
+                    if indent_len > 0 {
+                        let indent = " ".repeat(indent_len);
+                        canvas.draw_text_at(screen_row, current_col, &indent, prefix_fg);
+                        current_col += indent_len;
+                    }
+                    if !editor.show_break.is_empty() {
+                        canvas.draw_text_at(screen_row, current_col, &editor.show_break, prefix_fg);
+                        current_col += show_break_width;
+                    }
+                }
+
+                let styled: StyledLine = chunk_chars
+                    .iter()
+                    .zip(chunk_styles)
+                    .map(|(&ch, cs)| StyledCell {
+                        ch,
+                        fg: cs.fg,
+                        bg: cs.bg,
+                        bold: cs.bold,
+                        italic: cs.italic,
+                        underline: cs.underline,
+                    })
+                    .collect();
+                draw_styled_at(canvas, screen_row, current_col, &styled);
+
+                display_row += 1;
+                is_first = false;
+                pos = end;
+                if pos >= full_count {
+                    if full_count == 0 {
+                        // Empty line still takes one row
+                    }
+                    break;
+                }
+            }
+        } else {
+            // No wrap.
+            let screen_row = area_row + display_row;
+            gutter::render_gutter_line(
+                canvas,
+                editor,
+                screen_row,
+                area_col,
+                line_idx,
+                gutter_w,
+                win.cursor_row,
+                is_cursor_line,
+                &breakpoint_lines,
+                stopped_line,
+                &line_severities,
+            );
+
+            // Cursorline full-width background.
+            if show_cursorline && is_cursor_line {
+                if let Some(bg_tc) = cursorline_style.bg {
+                    let bg = theme::theme_color_to_skia(&bg_tc);
+                    canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                }
+            }
+
             let visible_start = col_offset.min(full_count);
             let visible_chars = &full_chars[visible_start..];
             let visible_styles = &char_styles[visible_start..];
@@ -215,30 +346,9 @@ pub fn render_buffer_content(
                 .collect();
 
             draw_styled_at(canvas, screen_row, text_col, &styled);
-        } else {
-            // Simple rendering: no spans needed.
-            let base_fg = if is_stopped_line {
-                stopped_line_fg
-            } else {
-                text_fg
-            };
-            let display: String = full_display
-                .chars()
-                .skip(col_offset)
-                .take(text_width)
-                .collect();
-            canvas.draw_text_at(screen_row, text_col, &display, base_fg);
-
-            if show_cursorline && is_cursor_line {
-                if let Some(bg_tc) = cursorline_style.bg {
-                    let bg = theme::theme_color_to_skia(&bg_tc);
-                    canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
-                    canvas.draw_text_at(screen_row, text_col, &display, base_fg);
-                }
-            }
+            display_row += 1;
         }
 
-        display_row += 1;
         line_idx += 1;
     }
 

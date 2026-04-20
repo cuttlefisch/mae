@@ -1043,6 +1043,17 @@ impl Editor {
             .find_map(|b| b.conversation.as_mut())
     }
 
+    /// Sync the rope of the first buffer containing a conversation.
+    pub fn sync_conversation_buffer_rope(&mut self) {
+        if let Some(buf) = self
+            .buffers
+            .iter_mut()
+            .find(|b| b.kind == crate::buffer::BufferKind::Conversation)
+        {
+            buf.sync_conversation_rope();
+        }
+    }
+
     /// Index of the conversation buffer, creating `*AI*` if none exists.
     /// Used by both interactive open and programmatic load to keep the
     /// "find or create by kind" logic in one place.
@@ -1254,6 +1265,19 @@ impl Editor {
     /// Consume the count prefix, returning the count (default 1).
     pub fn take_count(&mut self) -> usize {
         self.count_prefix.take().unwrap_or(1)
+    }
+
+    /// Calculate the actual inner height (text rows) for the focused window.
+    /// This accounts for the window manager layout AND window borders.
+    pub fn focused_window_viewport_height(&self, total_area: Rect) -> usize {
+        let rects = self.window_mgr.layout_rects(total_area);
+        let focused_id = self.window_mgr.focused_id();
+        if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+            // Every window currently has a top and bottom border (2 rows total).
+            (rect.height as usize).saturating_sub(2)
+        } else {
+            (total_area.height as usize).saturating_sub(2)
+        }
     }
 
     /// Default area for window operations when we don't have the real terminal size.

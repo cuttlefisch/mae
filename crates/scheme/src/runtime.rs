@@ -225,6 +225,17 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        // Register default values for state-injected variables.
+        // This prevents FreeIdentifier errors in init.scm during startup.
+        engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
+        engine.register_value("*buffer-modified?*", SteelVal::BoolV(false));
+        engine.register_value("*buffer-line-count*", SteelVal::IntV(0));
+        engine.register_value("*buffer-char-count*", SteelVal::IntV(0));
+        engine.register_value("*cursor-row*", SteelVal::IntV(1));
+        engine.register_value("*cursor-col*", SteelVal::IntV(1));
+        engine.register_value("*mode*", SteelVal::StringV("normal".into()));
+        engine.register_value("*shell-buffers*", SteelVal::ListV(vec![].into()));
+
         Ok(SchemeRuntime {
             engine,
             shared,

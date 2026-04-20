@@ -358,6 +358,31 @@ impl AgentSession {
         let to_remove = (self.messages.len() - 1) / 4; // 25% of non-first messages
         let to_remove = to_remove.max(1);
         self.messages.drain(1..1 + to_remove);
+
+        // Enforce OpenAI tool call schema:
+        // A Tool message MUST be preceded by an Assistant message with tool_calls.
+        // If our arbitrary prune cut off the Assistant message, or left an Assistant message
+        // with tool_calls but dropped its corresponding Tool messages, we must drop them too.
+        while self.messages.len() > 1 {
+            let msg = &self.messages[1];
+            if msg.role == Role::Tool {
+                self.messages.remove(1);
+            } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
+                msg.content
+            {
+                // Assistant message with tool calls at the boundary is unsafe to keep,
+                // as its matching ToolResults might have been pruned.
+                self.messages.remove(1);
+            } else {
+                break;
+            }
+        }
+
+        // Adjust transaction_start_idx if it was affected
+        if let Some(idx) = self.transaction_start_idx {
+            self.transaction_start_idx = Some(idx.saturating_sub(to_remove).max(1));
+        }
+
         warn!(
             removed = to_remove,
             remaining = self.messages.len(),

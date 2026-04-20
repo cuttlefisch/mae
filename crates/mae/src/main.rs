@@ -498,7 +498,14 @@ async fn run_terminal_loop(
 
         editor.clamp_all_cursors();
 
-        let viewport_height = renderer.viewport_height()?;
+        let (term_w, term_h) = renderer.size()?;
+        let total_window_area = mae_core::WinRect {
+            x: 0,
+            y: 0,
+            width: term_w,
+            height: term_h.saturating_sub(2),
+        };
+        let viewport_height = editor.focused_window_viewport_height(total_window_area);
         editor.viewport_height = viewport_height;
         editor
             .window_mgr
@@ -2263,7 +2270,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
-        if let Ok(vh) = self.renderer.viewport_height() {
+        if let Ok((w, h)) = self.renderer.size() {
+            let total_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h.saturating_sub(2),
+            };
+            let vh = self.editor.focused_window_viewport_height(total_area);
             self.editor.viewport_height = vh;
             self.editor
                 .window_mgr

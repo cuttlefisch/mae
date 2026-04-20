@@ -1377,6 +1377,8 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
         })
         .unwrap_or_default();
 
+    editor.sync_conversation_buffer_rope();
+
     if let Some(tx) = ai_tx {
         if tx.try_send(AiCommand::Prompt(input)).is_err() {
             warn!("AI command channel full or closed — prompt dropped");

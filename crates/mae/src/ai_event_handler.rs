@@ -78,18 +78,21 @@ pub fn handle_ai_event(
                 };
                 editor.set_status(display);
             }
+            editor.sync_conversation_buffer_rope();
         }
         AiEvent::StreamChunk(text) => {
             editor.ai_streaming = true;
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.append_streaming_chunk(&text);
             }
+            editor.sync_conversation_buffer_rope();
         }
         AiEvent::SessionComplete(_text) => {
             info!("AI session complete");
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.end_streaming();
             }
+            editor.sync_conversation_buffer_rope();
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
             editor.set_status("[AI] Done");
@@ -100,6 +103,7 @@ pub fn handle_ai_event(
                 conv_buf.push_system(format!("Error: {}", msg));
                 conv_buf.end_streaming();
             }
+            editor.sync_conversation_buffer_rope();
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
             editor.set_status(format!("[AI error] {}", msg));

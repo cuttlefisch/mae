@@ -4357,13 +4357,17 @@ fn set_project_root_command() {
 
 #[test]
 fn test_switch_non_conv_normal_window() {
-    // When focused window is NOT conversation, delegates normally.
+    // When focused window is NOT conversation, it still avoids stealing focus
+    // by splitting or using another window.
     let mut ed = Editor::new();
     ed.buffers.push(Buffer::new());
     assert!(!ed.is_conversation_buffer(ed.active_buffer_idx()));
     let ok = ed.switch_to_buffer_non_conversation(1);
     assert!(ok);
-    assert_eq!(ed.active_buffer_idx(), 1);
+    // Focus remains on buffer 0
+    assert_eq!(ed.active_buffer_idx(), 0);
+    // Buffer 1 is now visible in another window (the split)
+    assert!(ed.window_mgr.iter_windows().any(|w| w.buffer_idx == 1));
 }
 
 #[test]

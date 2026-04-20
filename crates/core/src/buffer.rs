@@ -741,6 +741,15 @@ impl Buffer {
         let line_start = rope.line_to_char(win.cursor_row);
         win.cursor_col = pos - line_start;
     }
+
+    /// Rebuild the buffer's rope from the flattened conversation text.
+    /// This allows standard motions and visual mode to work on the AI history.
+    pub fn sync_conversation_rope(&mut self) {
+        if let Some(ref conv) = self.conversation {
+            let flat = conv.flat_text();
+            self.rope = Rope::from_str(&flat);
+        }
+    }
 }
 
 #[cfg(test)]
