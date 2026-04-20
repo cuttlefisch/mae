@@ -1998,6 +1998,10 @@ impl Editor {
                 self.gui_font_size = 14.0;
                 self.set_status("Font size: 14 (default)");
             }
+            "debug-path" => {
+                let path = std::env::var("PATH").unwrap_or_else(|_| "not set".to_string());
+                self.set_status(format!("PATH={}", path));
+            }
 
             // AI agent launcher
             "open-ai-agent" => {

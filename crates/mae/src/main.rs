@@ -53,6 +53,10 @@ fn main() -> io::Result<()> {
 
     info!(version = env!("CARGO_PKG_VERSION"), "mae starting");
 
+    // Sync PATH from user's shell (login/interactive) so we can find binaries
+    // even when launched from a desktop environment with a minimal PATH.
+    mae_shell::path::sync_path_from_shell();
+
     // Set up panic hook to restore terminal on crash
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -122,7 +126,7 @@ fn main() -> io::Result<()> {
             .unwrap_or_else(|| std::path::PathBuf::from("."));
 
         for agent in agents::builtin_agents() {
-            match agents::setup_agent(&agent.name, &dir) {
+            match agents::setup_agent(agent.name, &dir) {
                 Ok(msg) => println!("  {}: {}", agent.name, msg),
                 Err(e) => eprintln!("  {}: Failed: {}", agent.name, e),
             }

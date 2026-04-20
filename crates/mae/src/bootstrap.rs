@@ -183,6 +183,10 @@ pub fn setup_ai(
     tokio::sync::mpsc::Receiver<AiEvent>,
     Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
+    // Ensure PATH is populated from the user's shell environment so we can
+    // find agent binaries like 'gemini' or 'claude' when running in GUI mode.
+    mae_shell::path::sync_path_from_shell();
+
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<AiCommand>(8);
 

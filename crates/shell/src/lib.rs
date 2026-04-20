@@ -9,6 +9,7 @@
 //! vim, less, top, fzf, and tmux work correctly.
 
 mod event;
+pub mod path;
 mod terminal;
 
 pub use event::{ShellEvent, ShellEventListener};
