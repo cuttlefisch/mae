@@ -46,20 +46,17 @@ const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC f c", "Edit config", "edit-config"),
     ("SPC SPC", "Commands", "command-palette"),
     ("SPC :", "Command line", "command-mode"),
+    ("SPC a a", "AI agent", "open-ai-agent"),
     ("SPC a p", "AI prompt", "ai-prompt"),
     ("SPC h h", "Help", "help"),
+    ("SPC h t", "Tutorial", "tutor"),
     ("SPC t s", "Set theme", "theme-picker"),
     ("SPC q q", "Quit", "quit"),
 ];
 
 /// Returns true if the splash should be displayed.
 pub fn should_show_splash(editor: &Editor) -> bool {
-    let buf = editor.active_buffer();
-    buf.kind == mae_core::BufferKind::Text
-        && buf.name == "[scratch]"
-        && buf.rope().len_chars() == 0
-        && !buf.modified
-        && editor.buffers.len() == 1
+    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
 /// Render the splash screen centered in the available area.
@@ -209,24 +206,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn splash_shows_for_empty_scratch() {
-        let editor = Editor::default();
+    fn splash_shows_for_dashboard() {
+        let mut editor = Editor::default();
+        editor.install_dashboard();
         assert!(should_show_splash(&editor));
     }
 
     #[test]
-    fn splash_hidden_when_modified() {
+    fn splash_hidden_on_scratch() {
         let mut editor = Editor::default();
-        editor.buffers[0].modified = true;
+        editor.install_dashboard();
+        // Switch to scratch buffer (index 1).
+        editor.window_mgr.focused_window_mut().buffer_idx = 1;
         assert!(!should_show_splash(&editor));
     }
 
     #[test]
-    fn splash_hidden_when_multiple_buffers() {
+    fn splash_shows_after_returning_to_dashboard() {
         let mut editor = Editor::default();
-        // Create a second buffer to test multi-buffer condition.
-        let buf = mae_core::Buffer::new();
-        editor.buffers.push(buf);
+        editor.install_dashboard();
+        editor.window_mgr.focused_window_mut().buffer_idx = 1;
         assert!(!should_show_splash(&editor));
+        editor.window_mgr.focused_window_mut().buffer_idx = 0;
+        assert!(should_show_splash(&editor));
     }
 }

@@ -9,6 +9,19 @@ use mae_renderer::Renderer;
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
+/// Build the ANSI color table entries from the editor theme for shell terminals.
+/// Returns entries suitable for `ShellTerminal::set_theme_colors()`.
+fn theme_color_entries(editor: &Editor) -> Vec<(usize, (u8, u8, u8))> {
+    let (ansi16, fg, bg) = editor.theme.to_ansi_colors();
+    let mut entries = Vec::with_capacity(18);
+    for (i, color) in ansi16.iter().enumerate() {
+        entries.push((i, *color));
+    }
+    entries.push((256, fg)); // Foreground
+    entries.push((257, bg)); // Background
+    entries
+}
+
 use crate::agents;
 use crate::config;
 
@@ -46,16 +59,35 @@ pub fn spawn_pending_shells(
     app_config: &config::Config,
 ) {
     let shell_spawns = std::mem::take(&mut editor.pending_shell_spawns);
-    let had_shell_spawns = !shell_spawns.is_empty();
+    let agent_spawns = std::mem::take(&mut editor.pending_agent_spawns);
+    let had_shell_spawns = !shell_spawns.is_empty() || !agent_spawns.is_empty();
+
+    // Build theme-aware env vars and color entries once for all spawns.
+    let is_dark = editor.theme.is_dark();
+    let color_entries = theme_color_entries(editor);
+
+    let build_extra_env = |mcp_path: &str| -> HashMap<String, String> {
+        let mut env = HashMap::new();
+        env.insert("MAE_MCP_SOCKET".to_string(), mcp_path.to_string());
+        env.insert(
+            "COLORFGBG".to_string(),
+            if is_dark { "15;0" } else { "0;15" }.to_string(),
+        );
+        env.insert(
+            "TERM_BACKGROUND".to_string(),
+            if is_dark { "dark" } else { "light" }.to_string(),
+        );
+        env
+    };
 
     for buf_idx in shell_spawns {
         let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
-        let cwd = editor.project.as_ref().map(|p| p.root.clone());
-        let mut extra_env = HashMap::new();
-        extra_env.insert("MAE_MCP_SOCKET".to_string(), mcp_socket_path.to_string());
+        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
+        let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
             Ok(shell) => {
-                debug!(
+                shell.set_theme_colors(&color_entries);
+                info!(
                     buf_idx,
                     cols = inner_cols,
                     rows = inner_rows,
@@ -67,6 +99,27 @@ pub fn spawn_pending_shells(
             Err(e) => {
                 error!(buf_idx, error = %e, "failed to spawn shell terminal");
                 editor.set_status(format!("Terminal spawn failed: {}", e));
+            }
+        }
+    }
+
+    // Spawn agent shells: command runs directly as PTY program.
+    for (buf_idx, command) in agent_spawns {
+        let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
+        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
+        let extra_env = build_extra_env(mcp_socket_path);
+        match mae_shell::ShellTerminal::spawn_command(
+            inner_cols, inner_rows, &command, cwd, extra_env,
+        ) {
+            Ok(shell) => {
+                shell.set_theme_colors(&color_entries);
+                info!(buf_idx, %command, "agent terminal spawned");
+                shell_last_dims.insert(buf_idx, (inner_cols, inner_rows));
+                shell_terminals.insert(buf_idx, shell);
+            }
+            Err(e) => {
+                error!(buf_idx, error = %e, "failed to spawn agent terminal");
+                editor.set_status(format!("Agent spawn failed: {}", e));
             }
         }
     }
@@ -150,6 +203,9 @@ pub fn manage_shell_lifecycle(
     }
 
     // Handle exited shells.
+    for buf_idx in &exited_shells {
+        debug!(buf_idx, "shell exited — cleaning up buffer");
+    }
     for buf_idx in exited_shells {
         if editor.active_buffer_idx() == buf_idx && editor.mode == Mode::ShellInsert {
             editor.mode = Mode::Normal;
@@ -158,18 +214,98 @@ pub fn manage_shell_lifecycle(
             shell.shutdown();
         }
         if buf_idx < editor.buffers.len() {
-            let name = editor.buffers[buf_idx].name.clone();
-            if !name.contains("[exited]") {
-                editor.buffers[buf_idx].name = format!("{} [exited]", name);
+            // Auto-close the exited shell buffer (empty rope = useless frame).
+            let label = if editor.buffers[buf_idx].agent_shell {
+                "AI agent exited — buffer closed"
+            } else {
+                "Terminal exited — buffer closed"
+            };
+            if editor.active_buffer_idx() == buf_idx {
+                // Switch away before removing
+                let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                let target = if alt < editor.buffers.len() && alt != buf_idx {
+                    alt
+                } else {
+                    0
+                };
+                editor.window_mgr.focused_window_mut().buffer_idx = target;
             }
+            editor.buffers.remove(buf_idx);
+            // Fix up buffer indices in all windows after removal
+            for win in editor.window_mgr.iter_windows_mut() {
+                if win.buffer_idx > buf_idx {
+                    win.buffer_idx -= 1;
+                }
+            }
+            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
+                if *alt > buf_idx {
+                    *alt -= 1;
+                } else if *alt == buf_idx {
+                    *alt = 0;
+                }
+            }
+            editor.set_status(label);
         }
-        editor.set_status("Terminal process exited");
     }
 
     // Drain pending shell inputs.
     for (buf_idx, text) in std::mem::take(&mut editor.pending_shell_inputs) {
         if let Some(shell) = shell_terminals.get(&buf_idx) {
             shell.write_str(&text);
+        }
+    }
+
+    // Drain pending shell scroll.
+    if let Some(scroll_amount) = editor.pending_shell_scroll.take() {
+        let buf_idx = editor.active_buffer_idx();
+        if let Some(shell) = shell_terminals.get(&buf_idx) {
+            if scroll_amount == 0 {
+                shell.scroll_to_bottom();
+            } else {
+                shell.scroll_display(mae_shell::grid_types::Scroll::Delta(scroll_amount));
+            }
+        }
+    }
+
+    // Drain pending shell mouse click.
+    if let Some((row, col, button)) = editor.pending_shell_click.take() {
+        let buf_idx = editor.active_buffer_idx();
+        if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
+            match button {
+                mae_core::input::MouseButton::Left => {
+                    shell.clear_selection();
+                    shell.start_selection(row, col);
+                }
+                mae_core::input::MouseButton::Middle => {
+                    // Paste from default register into shell.
+                    if let Some(text) = editor.registers.get(&'"').cloned() {
+                        shell.write_str(&text);
+                    }
+                }
+                mae_core::input::MouseButton::Right => {}
+            }
+        }
+    }
+
+    // Drain pending shell mouse drag.
+    if let Some((row, col)) = editor.pending_shell_drag.take() {
+        let buf_idx = editor.active_buffer_idx();
+        if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
+            shell.update_selection(row, col);
+        }
+    }
+
+    // Drain pending shell mouse release — finalize selection and copy to registers.
+    if let Some((row, col)) = editor.pending_shell_release.take() {
+        let buf_idx = editor.active_buffer_idx();
+        if let Some(shell) = shell_terminals.get_mut(&buf_idx) {
+            shell.update_selection(row, col);
+            if let Some(text) = shell.finish_selection() {
+                if !text.is_empty() {
+                    editor.registers.insert('"', text.clone());
+                    editor.registers.insert('+', text);
+                }
+            }
         }
     }
 
@@ -187,6 +323,19 @@ pub fn manage_shell_lifecycle(
     editor
         .shell_cwds
         .retain(|idx, _| shell_terminals.contains_key(idx));
+}
+
+/// Update theme colors on all live shell terminals.
+/// Call after `:cycle-theme` or `:set-theme` to keep OSC 10/11 responses
+/// and ANSI color rendering in sync with the new theme.
+pub fn update_shell_theme_colors(
+    editor: &Editor,
+    shell_terminals: &HashMap<usize, mae_shell::ShellTerminal>,
+) {
+    let entries = theme_color_entries(editor);
+    for shell in shell_terminals.values() {
+        shell.set_theme_colors(&entries);
+    }
 }
 
 /// Periodic health check (call every ~30s). Belt-and-suspenders cleanup for:
@@ -214,9 +363,28 @@ pub fn health_check(
             shell.shutdown();
         }
         if buf_idx < editor.buffers.len() {
-            let name = editor.buffers[buf_idx].name.clone();
-            if !name.contains("[exited]") {
-                editor.buffers[buf_idx].name = format!("{} [exited]", name);
+            // Auto-close zombie shell buffer (same as normal exit)
+            if editor.active_buffer_idx() == buf_idx {
+                let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                let target = if alt < editor.buffers.len() && alt != buf_idx {
+                    alt
+                } else {
+                    0
+                };
+                editor.window_mgr.focused_window_mut().buffer_idx = target;
+            }
+            editor.buffers.remove(buf_idx);
+            for win in editor.window_mgr.iter_windows_mut() {
+                if win.buffer_idx > buf_idx {
+                    win.buffer_idx -= 1;
+                }
+            }
+            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
+                if *alt > buf_idx {
+                    *alt -= 1;
+                } else if *alt == buf_idx {
+                    *alt = 0;
+                }
             }
         }
     }

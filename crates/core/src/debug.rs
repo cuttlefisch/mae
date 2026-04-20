@@ -66,6 +66,12 @@ pub struct Breakpoint {
     pub verified: bool,
     pub source: String,
     pub line: i64,
+    /// Optional condition expression — the adapter only breaks when this
+    /// evaluates to true. `None` means unconditional.
+    pub condition: Option<String>,
+    /// Optional hit condition (e.g. `">= 5"`) — the adapter breaks only
+    /// after the breakpoint has been hit this many times.
+    pub hit_condition: Option<String>,
 }
 
 /// A captured Scheme evaluation error with stack trace.
@@ -201,6 +207,33 @@ impl DebugState {
             verified: true,
             source: source.to_string(),
             line,
+            condition: None,
+            hit_condition: None,
+        };
+        self.breakpoints
+            .entry(source.to_string())
+            .or_default()
+            .push(bp);
+        id
+    }
+
+    /// Add a conditional breakpoint. Returns the assigned id.
+    pub fn add_breakpoint_conditional(
+        &mut self,
+        source: &str,
+        line: i64,
+        condition: Option<String>,
+        hit_condition: Option<String>,
+    ) -> i64 {
+        let id = self.next_bp_id;
+        self.next_bp_id += 1;
+        let bp = Breakpoint {
+            id,
+            verified: true,
+            source: source.to_string(),
+            line,
+            condition,
+            hit_condition,
         };
         self.breakpoints
             .entry(source.to_string())
@@ -302,6 +335,8 @@ impl DebugState {
                 verified,
                 source: src.clone(),
                 line,
+                condition: None,
+                hit_condition: None,
             });
         }
         self.breakpoints.insert(src, bps);
@@ -353,6 +388,8 @@ impl DebugState {
                 verified: false,
                 source: src,
                 line,
+                condition: None,
+                hit_condition: None,
             });
         }
         list.iter().map(|b| b.line).collect()

@@ -6,6 +6,7 @@ mod config;
 mod gui_event;
 mod key_handling;
 mod shell_lifecycle;
+mod watchdog;
 
 use std::io;
 use std::panic;
@@ -26,7 +27,7 @@ use mae_lsp::{
 };
 use mae_renderer::{Renderer, TerminalRenderer};
 use mae_scheme::SchemeRuntime;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use bootstrap::{
     find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_dap, setup_lsp,
@@ -83,6 +84,7 @@ fn main() -> io::Result<()> {
         println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
+        println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
         println!("CONFIG:");
@@ -146,6 +148,32 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // --check-config: bootstrap editor + Scheme, load init.scm, exit with status.
+    // Useful in CI to validate that init.scm parses and evaluates cleanly.
+    if args.iter().any(|a| a == "--check-config") {
+        let mut editor = Editor::new();
+        let app_config = config::load_config();
+        if let Some(ref theme) = app_config.editor.theme {
+            editor.set_theme_by_name(theme);
+        }
+        let mut scheme = match SchemeRuntime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("mae: scheme runtime init failed: {}", e.message);
+                std::process::exit(1);
+            }
+        };
+        load_init_file(&mut scheme, &mut editor);
+        // Check if init.scm set an error status
+        let status = &editor.status_msg;
+        if status.starts_with("Error in") {
+            eprintln!("mae: {}", status);
+            std::process::exit(1);
+        }
+        println!("mae: config OK");
+        return Ok(());
+    }
+
     // First-run wizard: runs only when stdin is a TTY, no config file exists,
     // no AI env vars are set, and MAE_SKIP_WIZARD is not set. Must run before
     // the renderer takes over the terminal.
@@ -171,9 +199,16 @@ fn main() -> io::Result<()> {
             }
         }
     } else {
-        Editor::new()
+        let mut ed = Editor::new();
+        ed.install_dashboard();
+        ed
     };
     editor.message_log = message_log;
+
+    // Spawn the watchdog thread and wire heartbeat into the editor.
+    let watchdog_state = watchdog::spawn_watchdog();
+    editor.heartbeat = watchdog_state.heartbeat.clone();
+    editor.watchdog_stall_count = watchdog_state.stall_count.clone();
 
     // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
     if editor.project.is_none() {
@@ -185,6 +220,9 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Cache the current git branch for status line display.
+    editor.refresh_git_branch();
+
     // Apply editor preferences from config file.
     let app_config = config::load_config();
     if let Some(ref theme) = app_config.editor.theme {
@@ -192,6 +230,12 @@ fn main() -> io::Result<()> {
     }
     if let Some(ref art) = app_config.editor.splash_art {
         editor.splash_art = Some(art.clone());
+    }
+    if let Some(ref cmd) = app_config.ai.editor {
+        editor.ai_editor = cmd.clone();
+    }
+    if let Some(restore) = app_config.editor.restore_session {
+        editor.restore_session = restore;
     }
 
     // Initialize Scheme runtime
@@ -402,9 +446,26 @@ async fn run_terminal_loop(
     let mut shell_last_dims: std::collections::HashMap<usize, (u16, u16)> =
         std::collections::HashMap::new();
     let mut shell_pending_keys: Vec<KeyPress> = Vec::new();
+    let mut shell_generations: std::collections::HashMap<usize, u64> =
+        std::collections::HashMap::new();
     let mut last_health_check = tokio::time::Instant::now();
+    let mut last_theme_name = editor.theme.name.clone();
+    let mut tui_dirty = true; // start dirty for initial render
+
+    // Frame rate limiting: render at most once per MIN_FRAME_INTERVAL.
+    // First event after idle renders immediately (no input latency).
+    // Rapid events coalesce into the next frame slot (Alacritty/Helix pattern).
+    const MIN_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_micros(16_667); // ~60fps
+    let mut last_render = std::time::Instant::now() - MIN_FRAME_INTERVAL; // allow first render immediately
+    let mut render_pending = false;
 
     loop {
+        // Heartbeat for watchdog — tick each loop iteration so the watchdog
+        // thread knows the main thread is alive.
+        editor
+            .heartbeat
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
                 editor,
@@ -454,12 +515,24 @@ async fn run_terminal_loop(
             }
         }
 
-        let frame_start = std::time::Instant::now();
-        renderer.render(editor, &shell_terminals)?;
-        let frame_elapsed = frame_start.elapsed().as_micros() as u64;
-        editor.perf_stats.record_frame(frame_elapsed);
-        if editor.debug_mode {
-            editor.perf_stats.sample_process_stats();
+        if tui_dirty {
+            let since_last = last_render.elapsed();
+            if since_last >= MIN_FRAME_INTERVAL {
+                // Enough time has passed — render now (instant response).
+                let frame_start = std::time::Instant::now();
+                renderer.render(editor, &shell_terminals)?;
+                let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+                editor.perf_stats.record_frame(frame_elapsed);
+                if editor.debug_mode {
+                    editor.perf_stats.sample_process_stats();
+                }
+                last_render = std::time::Instant::now();
+                tui_dirty = false;
+                render_pending = false;
+            } else {
+                // Too soon — defer render to next frame slot.
+                render_pending = true;
+            }
         }
 
         if !editor.running {
@@ -478,6 +551,7 @@ async fn run_terminal_loop(
             break;
         }
 
+        trace!("drain_intents_and_lifecycle enter");
         drain_lsp_intents(editor, lsp_command_tx);
         drain_dap_intents(editor, dap_command_tx);
 
@@ -492,11 +566,22 @@ async fn run_terminal_loop(
         );
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
+        trace!("drain_intents_and_lifecycle exit");
+
+        // Detect theme changes and update shell terminal colors.
+        if editor.theme.name != last_theme_name {
+            last_theme_name = editor.theme.name.clone();
+            shell_lifecycle::update_shell_theme_colors(editor, &shell_terminals);
+        }
+
+        shell_generations.retain(|idx, _| shell_terminals.contains_key(idx));
 
         let has_shells = !shell_terminals.is_empty();
         let shell_tick = async {
             if has_shells {
-                tokio::time::sleep(std::time::Duration::from_millis(33)).await;
+                // 20fps for shell viewport refresh — smooth enough for terminal
+                // output while keeping idle CPU reasonable (~40% less than 30fps).
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             } else {
                 std::future::pending::<()>().await;
             }
@@ -513,10 +598,28 @@ async fn run_terminal_loop(
             }
         };
 
+        // Frame timer: fires at the next render slot when a deferred render is pending.
+        let frame_timer = async {
+            if render_pending {
+                let elapsed = last_render.elapsed();
+                if elapsed < MIN_FRAME_INTERVAL {
+                    tokio::time::sleep(MIN_FRAME_INTERVAL - elapsed).await;
+                }
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
         tokio::select! {
+            _ = frame_timer => {
+                // Frame slot arrived — mark dirty so the render section fires.
+                tui_dirty = true;
+                render_pending = false;
+            }
             maybe_event = event_stream.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                        tui_dirty = true;
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
@@ -540,8 +643,11 @@ async fn run_terminal_loop(
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx);
                         }
                     }
-                    Some(Ok(Event::Resize(_w, _h))) => {}
+                    Some(Ok(Event::Resize(_w, _h))) => {
+                        tui_dirty = true;
+                    }
                     Some(Err(e)) => {
+                        tui_dirty = true;
                         editor.set_status(format!("Input error: {}", e));
                     }
                     None => break,
@@ -549,12 +655,14 @@ async fn run_terminal_loop(
                 }
             }
             Some(ai_event) = ai_event_rx.recv() => {
+                tui_dirty = true;
                 ai_event_handler::handle_ai_event(
                     editor, ai_event, all_tools, permission_policy,
                     &mut deferred_ai_reply, lsp_command_tx,
                 );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
+                tui_dirty = true;
                 ai_event_handler::try_resolve_deferred(editor, &lsp_event, &mut deferred_ai_reply);
                 if ai_event_handler::try_resolve_deferred_mcp(&lsp_event, &mut deferred_mcp_reply) {
                     last_mcp_activity = Some(tokio::time::Instant::now());
@@ -562,9 +670,19 @@ async fn run_terminal_loop(
                 handle_lsp_event(editor, lsp_command_tx, lsp_event);
             }
             Some(dap_event) = dap_event_rx.recv() => {
+                tui_dirty = true;
                 handle_dap_event(editor, dap_event);
             }
-            _ = shell_tick => {}
+            _ = shell_tick => {
+                // Shell tick — only mark dirty when a shell has new output
+                for (idx, term) in &shell_terminals {
+                    let gen = term.generation();
+                    if shell_generations.get(idx) != Some(&gen) {
+                        shell_generations.insert(*idx, gen);
+                        tui_dirty = true;
+                    }
+                }
+            }
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {
                     if ts.elapsed() > std::time::Duration::from_millis(500)
@@ -575,10 +693,12 @@ async fn run_terminal_loop(
                         }
                         editor.input_lock = mae_core::InputLock::None;
                         last_mcp_activity = None;
+                        tui_dirty = true;
                     }
                 }
             }
             Some(mcp_req) = mcp_tool_rx.recv() => {
+                tui_dirty = true;
                 editor.input_lock = mae_core::InputLock::McpBusy;
                 last_mcp_activity = Some(tokio::time::Instant::now());
                 let immediate = ai_event_handler::handle_mcp_request(
@@ -797,15 +917,18 @@ pub(crate) fn shell_dims_for_buffer(
     for win in editor.window_mgr.iter_windows() {
         if win.buffer_idx == buf_idx {
             if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == win.id) {
-                let cols = rect.width.saturating_sub(2); // border
-                let rows = rect.height;
+                let cols = rect.width.saturating_sub(2).max(2); // border
+                let rows = rect.height.saturating_sub(2).max(1); // border
                 return (cols, rows);
             }
         }
     }
 
     // Fallback: full terminal minus chrome.
-    (term_w.saturating_sub(4), term_h.saturating_sub(4))
+    (
+        term_w.saturating_sub(4).max(2),
+        term_h.saturating_sub(4).max(1),
+    )
 }
 
 /// pending keys are translated to PTY byte sequences and forwarded.
@@ -893,6 +1016,7 @@ fn keypress_to_pty_bytes(kp: &KeyPress) -> Vec<u8> {
         Key::Enter => vec![b'\r'],
         Key::Backspace => vec![0x7f],
         Key::Tab => vec![b'\t'],
+        Key::BackTab => b"\x1b[Z".to_vec(),
         Key::Escape => vec![0x1b],
         Key::Up => b"\x1b[A".to_vec(),
         Key::Down => b"\x1b[B".to_vec(),
@@ -1336,6 +1460,7 @@ fn dap_command_name(cmd: &DapCommand) -> &'static str {
         DapCommand::RefreshThreadsAndStack { .. } => "refresh-threads-and-stack",
         DapCommand::RequestScopes { .. } => "request-scopes",
         DapCommand::RequestVariables { .. } => "request-variables",
+        DapCommand::Evaluate { .. } => "evaluate",
         DapCommand::Terminate => "terminate",
         DapCommand::Disconnect { .. } => "disconnect",
         DapCommand::Shutdown => "shutdown",
@@ -1359,16 +1484,28 @@ fn intent_to_dap_command(intent: DapIntent) -> DapCommand {
             launch_args,
             attach,
         },
-        DapIntent::SetBreakpoints { source_path, lines } => DapCommand::SetBreakpoints {
+        DapIntent::SetBreakpoints {
             source_path,
-            breakpoints: lines
+            breakpoints,
+        } => DapCommand::SetBreakpoints {
+            source_path,
+            breakpoints: breakpoints
                 .into_iter()
-                .map(|line| SourceBreakpoint {
-                    line,
-                    condition: None,
-                    hit_condition: None,
+                .map(|bp| SourceBreakpoint {
+                    line: bp.line,
+                    condition: bp.condition,
+                    hit_condition: bp.hit_condition,
                 })
                 .collect(),
+        },
+        DapIntent::Evaluate {
+            expression,
+            frame_id,
+            context,
+        } => DapCommand::Evaluate {
+            expression,
+            frame_id,
+            context,
         },
         DapIntent::Continue { thread_id } => DapCommand::Continue { thread_id },
         DapIntent::Next { thread_id } => DapCommand::Next { thread_id },
@@ -1483,6 +1620,22 @@ fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
                 .collect();
             editor.apply_dap_breakpoints_set(source_path, entries);
         }
+        DapTaskEvent::EvaluateResult {
+            expression,
+            result,
+            type_field,
+            variables_reference: _,
+        } => {
+            if let Some(ref mut ds) = editor.debug_state {
+                ds.log(format!(
+                    "eval: {} = {} ({})",
+                    expression,
+                    result,
+                    type_field.as_deref().unwrap_or("?")
+                ));
+            }
+            editor.set_status(format!("= {}", result));
+        }
     }
 }
 
@@ -1556,6 +1709,7 @@ fn run_gui(
 
     info!("entering GUI event loop (run_app + EventLoopProxy)");
 
+    let last_theme_name = editor.theme.name.clone();
     let mut app = GuiApp {
         renderer,
         editor,
@@ -1576,11 +1730,16 @@ fn run_gui(
         app_config,
         ctrl_held: false,
         alt_held: false,
+        shift_held: false,
         dirty: true,
         cursor_x: 0.0,
         cursor_y: 0.0,
         scroll_accumulator: 0.0,
         mouse_pressed: false,
+        shell_generations: std::collections::HashMap::new(),
+        last_render: std::time::Instant::now(),
+        bell_sent: false,
+        last_theme_name,
         shell_active,
         mcp_active,
     };
@@ -1698,11 +1857,24 @@ struct GuiApp {
     // Input state
     ctrl_held: bool,
     alt_held: bool,
+    shift_held: bool,
     dirty: bool,
     cursor_x: f64,
     cursor_y: f64,
     scroll_accumulator: f64,
     mouse_pressed: bool,
+
+    // Shell generation tracking (dirty-check optimisation — TUI parity)
+    shell_generations: std::collections::HashMap<usize, u64>,
+
+    // Frame cap (60fps)
+    last_render: std::time::Instant,
+
+    // Bell urgency state
+    bell_sent: bool,
+
+    // Theme change tracking for shell color sync.
+    last_theme_name: String,
 
     // Shared atomics (read by bridge_task to gate conditional ticks)
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1732,6 +1904,16 @@ impl GuiApp {
             &mut self.shell_last_dims,
         );
         shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
+
+        // Detect theme changes and update shell terminal colors.
+        if self.editor.theme.name != self.last_theme_name {
+            self.last_theme_name = self.editor.theme.name.clone();
+            shell_lifecycle::update_shell_theme_colors(&self.editor, &self.shell_terminals);
+        }
+
+        // Clean up generation tracking for removed shells.
+        self.shell_generations
+            .retain(|idx, _| self.shell_terminals.contains_key(idx));
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
@@ -1812,7 +1994,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
-                self.dirty = true;
+                for (idx, term) in &self.shell_terminals {
+                    let gen = term.generation();
+                    if self.shell_generations.get(idx) != Some(&gen) {
+                        self.shell_generations.insert(*idx, gen);
+                        self.dirty = true;
+                    }
+                }
             }
             MaeEvent::McpIdleTick => {
                 if let Some(ts) = self.last_mcp_activity {
@@ -1837,10 +2025,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 );
             }
         }
-
-        // After handling any user event, drain intents so LSP/DAP commands
-        // are forwarded immediately.
-        self.drain_intents_and_lifecycle();
     }
 
     fn window_event(
@@ -1864,14 +2048,18 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let state = mods.state();
                 self.ctrl_held = state.control_key();
                 self.alt_held = state.alt_key();
+                self.shift_held = state.shift_key();
             }
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == winit::event::ElementState::Pressed =>
             {
                 self.dirty = true;
-                if let Some(mae_core::InputEvent::Key(kp)) =
-                    mae_gui::winit_event_to_input(&event, self.ctrl_held, self.alt_held)
-                {
+                if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
+                    &event,
+                    self.ctrl_held,
+                    self.alt_held,
+                    self.shift_held,
+                ) {
                     if self.editor.input_lock != mae_core::InputLock::None {
                         if kp.key == mae_core::Key::Escape
                             || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
@@ -1909,9 +2097,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             &self.ai_command_tx,
                         );
                     }
-
-                    // Drain intents after key handling (may have queued LSP/DAP).
-                    self.drain_intents_and_lifecycle();
 
                     // Check for editor shutdown after key handling.
                     if !self.editor.running {
@@ -1958,13 +2143,29 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 ..
             } => {
                 self.mouse_pressed = false;
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h as f64) as u16;
+                    self.editor.handle_mouse_release(row as usize, col as usize);
+                    self.dirty = true;
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as i16,
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                        debug!(y, "MouseWheel: LineDelta");
+                        y as i16
+                    }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
                         self.scroll_accumulator += pos.y;
                         let whole_lines = (self.scroll_accumulator / 20.0) as i16;
+                        debug!(
+                            pos_y = pos.y,
+                            accum = self.scroll_accumulator,
+                            whole_lines,
+                            "MouseWheel: PixelDelta"
+                        );
                         if whole_lines != 0 {
                             self.scroll_accumulator -= whole_lines as f64 * 20.0;
                         }
@@ -1977,14 +2178,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let frame_start = std::time::Instant::now();
+                self.last_render = std::time::Instant::now();
                 if let Err(e) = self
                     .renderer
                     .render(&mut self.editor, &self.shell_terminals)
                 {
                     warn!(error = %e, "GUI render error");
                 }
-                let frame_elapsed = frame_start.elapsed().as_micros() as u64;
+                let frame_elapsed = self.last_render.elapsed().as_micros() as u64;
                 self.editor.perf_stats.record_frame(frame_elapsed);
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
@@ -1995,7 +2196,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         use std::sync::atomic::Ordering::Relaxed;
 
         // Timeout deferred replies.
@@ -2034,9 +2235,33 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             Relaxed,
         );
 
-        // Request redraw if state changed.
+        // Bell → Wayland urgency hint (sway workspace highlight).
+        if self.editor.bell_active() {
+            if !self.bell_sent {
+                if let Some(window) = self.renderer.window() {
+                    window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                }
+                self.bell_sent = true;
+            }
+        } else {
+            self.bell_sent = false;
+        }
+
+        // Frame-capped redraw (60fps = 16.667ms).
         if self.dirty {
-            self.renderer.request_redraw();
+            let elapsed = self.last_render.elapsed();
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            if elapsed >= frame_budget {
+                self.renderer.request_redraw();
+            } else {
+                // Schedule wakeup for remaining budget.
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                    std::time::Instant::now() + (frame_budget - elapsed),
+                ));
+            }
+        } else {
+            // Not dirty — sleep until next event (no busy-loop).
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
     }
 }

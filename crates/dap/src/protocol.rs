@@ -432,6 +432,8 @@ impl DapBreakpoint {
                 .and_then(|s| s.path.clone().or_else(|| s.name.clone()))
                 .unwrap_or_default(),
             line: self.line.unwrap_or(0),
+            condition: None,
+            hit_condition: None,
         }
     }
 }

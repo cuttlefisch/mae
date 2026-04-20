@@ -146,6 +146,16 @@ impl Editor {
             variables_reference: 4,
             expensive: false,
         });
+        state.scopes.push(Scope {
+            name: "Performance".into(),
+            variables_reference: 5,
+            expensive: false,
+        });
+        state.scopes.push(Scope {
+            name: "Lock State".into(),
+            variables_reference: 6,
+            expensive: false,
+        });
 
         // Editor State variables
         let buf = self.active_buffer();
@@ -298,6 +308,86 @@ impl Editor {
             })
             .collect();
         state.variables.insert("All Buffers".into(), all_bufs);
+
+        // Performance variables
+        state.variables.insert(
+            "Performance".into(),
+            vec![
+                Variable {
+                    name: "frame_time_us".into(),
+                    value: format!("{}", self.perf_stats.frame_time_us),
+                    var_type: Some("u64".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "avg_frame_time_us".into(),
+                    value: format!("{}", self.perf_stats.avg_frame_time_us),
+                    var_type: Some("u64".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "fps".into(),
+                    value: format!("{:.1}", self.perf_stats.fps()),
+                    var_type: Some("f64".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "rss_bytes".into(),
+                    value: format!("{}", self.perf_stats.rss_bytes),
+                    var_type: Some("u64".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "cpu_percent".into(),
+                    value: format!("{:.1}", self.perf_stats.cpu_percent),
+                    var_type: Some("f32".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "stall_count".into(),
+                    value: format!("{}", self.perf_stats.stall_count),
+                    var_type: Some("u64".into()),
+                    variables_reference: 0,
+                },
+                Variable {
+                    name: "jank_count".into(),
+                    value: format!("{}", self.perf_stats.jank_count),
+                    var_type: Some("u64".into()),
+                    variables_reference: 0,
+                },
+            ],
+        );
+
+        // Lock State variables from global contention tracker
+        let lock_snapshot = crate::lock_stats::snapshot();
+        let lock_vars: Vec<Variable> = lock_snapshot
+            .iter()
+            .map(|(name, entry)| Variable {
+                name: name.clone(),
+                value: format!(
+                    "acq={} total_wait={}us max_wait={}us held={}",
+                    entry.acquisitions,
+                    entry.total_wait_us,
+                    entry.max_wait_us,
+                    entry.currently_held,
+                ),
+                var_type: Some("LockEntry".into()),
+                variables_reference: 0,
+            })
+            .collect();
+        state.variables.insert(
+            "Lock State".into(),
+            if lock_vars.is_empty() {
+                vec![Variable {
+                    name: "(none)".into(),
+                    value: "No lock sites instrumented yet".into(),
+                    var_type: Some("info".into()),
+                    variables_reference: 0,
+                }]
+            } else {
+                lock_vars
+            },
+        );
 
         // Mark as stopped (self-debug is always "stopped" — it's a snapshot)
         state.stopped_location = Some(("crates/mae/src/main.rs".into(), 0));
@@ -601,14 +691,33 @@ impl Editor {
                 // Track recent files
                 if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
                     self.recent_files.push(canonical.clone());
-                    // Auto-detect project root if not yet set
-                    if self.project.is_none() {
-                        if let Some(root) = crate::project::detect_project_root(&canonical) {
-                            self.recent_projects.push(root.clone());
+                    // Auto-detect project root from the opened file's location
+                    if let Some(root) = crate::project::detect_project_root(&canonical) {
+                        self.recent_projects.push(root.clone());
+                        // Switch project context if it differs from current
+                        let should_switch = self
+                            .project
+                            .as_ref()
+                            .map(|p| p.root != root)
+                            .unwrap_or(true);
+                        if should_switch {
                             self.project = Some(crate::project::Project::from_root(root));
+                            self.refresh_git_branch();
                         }
-                    } else if let Some(ref proj) = self.project {
-                        self.recent_projects.push(proj.root.clone());
+                    }
+                    // Ingest project as KB node
+                    if let Some(ref proj) = self.project {
+                        let config_body = proj
+                            .config
+                            .as_ref()
+                            .map(|c| {
+                                format!(
+                                    "Workspaces: {:?}\nResources: {:?}",
+                                    c.workspaces, c.required_resources
+                                )
+                            })
+                            .unwrap_or_default();
+                        self.kb.ingest_project(&proj.name, &proj.root, &config_body);
                     }
                 }
                 self.buffers.push(buf);

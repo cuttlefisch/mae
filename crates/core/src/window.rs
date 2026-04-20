@@ -84,6 +84,11 @@ impl Window {
     /// Helper: convert a char offset back to (row, col) and set cursor.
     fn set_cursor_from_offset(&mut self, buf: &crate::buffer::Buffer, char_pos: usize) {
         let rope = buf.rope();
+        if rope.len_chars() == 0 {
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            return;
+        }
         let pos = char_pos.min(rope.len_chars().saturating_sub(1));
         self.cursor_row = rope.char_to_line(pos);
         let line_start = rope.line_to_char(self.cursor_row);

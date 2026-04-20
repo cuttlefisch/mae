@@ -65,8 +65,10 @@ pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC f c", "Edit config", "edit-config"),
     ("SPC SPC", "Commands", "command-palette"),
     ("SPC :", "Command line", "command-mode"),
+    ("SPC a a", "AI agent", "open-ai-agent"),
     ("SPC a p", "AI prompt", "ai-prompt"),
     ("SPC h h", "Help", "help"),
+    ("SPC h t", "Tutorial", "tutor"),
     ("SPC t s", "Set theme", "theme-picker"),
     ("SPC q q", "Quit", "quit"),
 ];
@@ -76,15 +78,10 @@ pub fn splash_action_count() -> usize {
     QUICK_ACTIONS.len()
 }
 
-/// Returns true if the splash should be displayed: the active buffer is the
-/// initial empty scratch buffer with no modifications.
+/// Returns true if the splash should be displayed: the active buffer is
+/// a Dashboard buffer.
 pub(crate) fn should_show_splash(editor: &Editor) -> bool {
-    let buf = editor.active_buffer();
-    buf.kind == mae_core::BufferKind::Text
-        && buf.name == "[scratch]"
-        && buf.rope().len_chars() == 0
-        && !buf.modified
-        && editor.buffers.len() == 1
+    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
 /// Render the splash screen centered in the given area.

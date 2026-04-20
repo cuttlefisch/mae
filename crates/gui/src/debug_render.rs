@@ -5,6 +5,7 @@
 use mae_core::{DebugLineItem, Editor, Window};
 
 use crate::canvas::SkiaCanvas;
+use crate::draw_window_border;
 use crate::theme;
 
 /// Render a debug panel window.
@@ -146,31 +147,6 @@ pub fn render_debug_window(
             canvas.draw_text_at(screen_row, inner_col, &display, fg);
         }
     }
-}
-
-fn draw_window_border(
-    canvas: &mut SkiaCanvas,
-    row: usize,
-    col: usize,
-    width: usize,
-    height: usize,
-    color: skia_safe::Color4f,
-    title: &str,
-) {
-    if width < 2 || height < 2 {
-        return;
-    }
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row, col, &top, color);
-    if title.len() + 2 < width {
-        canvas.draw_text_at(row, col + 1, title, color);
-    }
-    for r in 1..height.saturating_sub(1) {
-        canvas.draw_text_at(row + r, col, "│", color);
-        canvas.draw_text_at(row + r, col + width - 1, "│", color);
-    }
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 
 #[cfg(test)]

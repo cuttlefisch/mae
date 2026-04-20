@@ -27,6 +27,9 @@ pub enum BufferKind {
     /// DAP debug panel — read-only dashboard showing threads, stack frames,
     /// scopes, and variables from `DebugState`.
     Debug,
+    /// Startup dashboard — read-only buffer that shows the splash screen.
+    /// Unlike `Text` scratch, this buffer always renders the splash overlay.
+    Dashboard,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -67,6 +70,17 @@ pub struct Buffer {
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
+    /// Project root associated with this buffer, detected from its file path.
+    /// When set, `Editor::active_project_root()` prefers this over the
+    /// editor-wide `project` field, enabling per-buffer project context.
+    pub project_root: Option<PathBuf>,
+    /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
+    /// Agent shells are auto-closed when the process exits.
+    pub agent_shell: bool,
+    /// Per-buffer mode persistence (evil-mode pattern).  When switching away
+    /// from a buffer the editor saves its current mode here; switching back
+    /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
+    pub saved_mode: Option<crate::Mode>,
 }
 
 impl Default for Buffer {
@@ -90,6 +104,30 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
+        }
+    }
+
+    /// Create a dashboard buffer (startup splash screen).
+    pub fn new_dashboard() -> Self {
+        Buffer {
+            rope: Rope::new(),
+            file_path: None,
+            modified: false,
+            name: String::from("[dashboard]"),
+            kind: BufferKind::Dashboard,
+            read_only: true,
+            conversation: None,
+            help_view: None,
+            debug_view: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -108,6 +146,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -126,6 +167,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -145,6 +189,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -163,6 +210,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -181,6 +231,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
+            project_root: None,
+            agent_shell: false,
+            saved_mode: None,
         }
     }
 
@@ -188,6 +241,7 @@ impl Buffer {
         let content = fs::read_to_string(path)?;
         let rope = Rope::from_str(&content);
         let mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+        let project_root = crate::project::detect_project_root(path);
         Ok(Buffer {
             rope,
             name: path
@@ -204,6 +258,9 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: mtime,
+            project_root,
+            agent_shell: false,
+            saved_mode: None,
         })
     }
 
@@ -1410,5 +1467,19 @@ mod tests {
         assert!(temps.is_empty(), "temp file left behind: {:?}", temps);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn buffer_from_file_detects_project_root() {
+        // Create a temp dir with a Cargo.toml marker
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        let sub = dir.path().join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        let file = sub.join("main.rs");
+        std::fs::write(&file, "fn main() {}").unwrap();
+
+        let buf = Buffer::from_file(&file).unwrap();
+        assert_eq!(buf.project_root, Some(dir.path().to_path_buf()));
     }
 }

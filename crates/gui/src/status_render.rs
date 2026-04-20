@@ -103,9 +103,50 @@ pub fn render_status_bar(
     // File info.
     let modified = if buf.modified { " [+]" } else { "" };
     let file_info = format!(" {}{}", buf.name, modified);
-    canvas.draw_text_at(row, mode_len, &file_info, sl_fg);
 
-    // Right-aligned: AI info + cursor position.
+    // Git branch
+    let git_info = editor
+        .git_branch
+        .as_ref()
+        .map(|b| format!("  {}", b))
+        .unwrap_or_default();
+
+    // Project root basename
+    let project_info = editor
+        .project
+        .as_ref()
+        .map(|p| format!(" [{}]", p.name))
+        .unwrap_or_default();
+
+    let left_text = format!("{}{}{}", file_info, git_info, project_info);
+    canvas.draw_text_at(row, mode_len, &left_text, sl_fg);
+
+    // Right section: file type, percentage, AI tier, debug, fps, AI tokens, position
+    let buf_idx = win.buffer_idx;
+    let file_type = editor
+        .syntax
+        .language_of(buf_idx)
+        .map(|l| l.id())
+        .unwrap_or("");
+    let file_type_str = if file_type.is_empty() {
+        String::new()
+    } else {
+        format!(" {} ", file_type)
+    };
+
+    let total_lines = buf.line_count();
+    let pct = if total_lines <= 1 {
+        "All".to_string()
+    } else if win.cursor_row == 0 {
+        "Top".to_string()
+    } else if win.cursor_row + 1 >= total_lines {
+        "Bot".to_string()
+    } else {
+        format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+    };
+
+    let tier_str = format!(" [AI:{}]", editor.ai_permission_tier);
+
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
 
     let ai_info = if editor.ai_session_tokens_in == 0 && editor.ai_session_tokens_out == 0 {
@@ -126,8 +167,10 @@ pub fn render_status_bar(
     let debug_info = if editor.debug_mode {
         let rss_mb = editor.perf_stats.rss_bytes as f64 / (1024.0 * 1024.0);
         format!(
-            " [DBG] {:.0}MB {:.1}% {}μs ",
-            rss_mb, editor.perf_stats.cpu_percent, editor.perf_stats.avg_frame_time_us,
+            " [DBG] {:.0}MB {:.1}% {:.0}fps ",
+            rss_mb,
+            editor.perf_stats.cpu_percent,
+            editor.perf_stats.fps(),
         )
     } else {
         String::new()
@@ -142,9 +185,13 @@ pub fn render_status_bar(
         String::new()
     };
 
-    let right_text = format!("{}{}{}{}", debug_info, fps_info, ai_info, position);
-    let right_col = cols.saturating_sub(right_text.len());
-    canvas.draw_text_at(row, right_col, &right_text, sl_fg);
+    let right_text = format!(
+        "{}{}{}{}{}{}",
+        file_type_str, pct, tier_str, debug_info, fps_info, ai_info
+    );
+    let right_with_pos = format!("{}{}", right_text, position);
+    let right_col = cols.saturating_sub(right_with_pos.len());
+    canvas.draw_text_at(row, right_col, &right_with_pos, sl_fg);
 }
 
 fn format_tokens(n: u64) -> String {

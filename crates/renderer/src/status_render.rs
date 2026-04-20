@@ -74,13 +74,56 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
 
     let modified = if buf.modified { " [+]" } else { "" };
     let file_info = format!(" {}{}", buf.name, modified);
+
+    // Git branch
+    let git_info = editor
+        .git_branch
+        .as_ref()
+        .map(|b| format!("  {}", b))
+        .unwrap_or_default();
+
+    // Project root basename
+    let project_info = editor
+        .project
+        .as_ref()
+        .map(|p| format!(" [{}]", p.name))
+        .unwrap_or_default();
+
+    // Right section: file type, percentage, AI tier, position
+    let buf_idx = win.buffer_idx;
+    let file_type = editor
+        .syntax
+        .language_of(buf_idx)
+        .map(|l| l.id())
+        .unwrap_or("");
+    let file_type_str = if file_type.is_empty() {
+        String::new()
+    } else {
+        format!(" {} ", file_type)
+    };
+
+    let total_lines = buf.line_count();
+    let pct = if total_lines <= 1 {
+        "All".to_string()
+    } else if win.cursor_row == 0 {
+        "Top".to_string()
+    } else if win.cursor_row + 1 >= total_lines {
+        "Bot".to_string()
+    } else {
+        format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+    };
+
+    let tier_str = format!(" [AI:{}]", editor.ai_permission_tier);
+
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
 
     let debug_info: String = if editor.debug_mode {
         let rss_mb = editor.perf_stats.rss_bytes as f64 / (1024.0 * 1024.0);
         format!(
-            " [DBG] {:.0}MB {:.1}% {}μs ",
-            rss_mb, editor.perf_stats.cpu_percent, editor.perf_stats.avg_frame_time_us,
+            " [DBG] {:.0}MB {:.1}% {:.0}fps ",
+            rss_mb,
+            editor.perf_stats.cpu_percent,
+            editor.perf_stats.fps(),
         )
     } else {
         String::new()
@@ -101,19 +144,24 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         }
     };
 
+    let left_text = format!("{}{}{}", file_info, git_info, project_info);
+    let right_extra = format!("{}{}{}", file_type_str, pct, tier_str);
+
     let remaining = (area.width as usize)
         .saturating_sub(mode_str.len())
-        .saturating_sub(file_info.len())
+        .saturating_sub(left_text.len())
         .saturating_sub(debug_info.len())
         .saturating_sub(ai_info.len())
+        .saturating_sub(right_extra.len())
         .saturating_sub(position.len());
 
     let status_line = Line::from(vec![
         Span::styled(mode_str, mode_style),
-        Span::styled(file_info, sl_style),
+        Span::styled(left_text, sl_style),
         Span::styled(" ".repeat(remaining), sl_style),
         Span::styled(debug_info, sl_style),
         Span::styled(ai_info, sl_style),
+        Span::styled(right_extra, sl_style),
         Span::styled(position, sl_style),
     ]);
 

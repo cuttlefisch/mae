@@ -270,6 +270,89 @@ impl Theme {
         ThemeStyle::default()
     }
 
+    /// Convert the theme palette to 16 standard ANSI color RGB values.
+    /// Used to configure shell terminal emulators with theme-aware colors.
+    /// Returns: [Black, Red, Green, Yellow, Blue, Magenta, Cyan, White,
+    ///           BrightBlack, BrightRed, BrightGreen, BrightYellow,
+    ///           BrightBlue, BrightMagenta, BrightCyan, BrightWhite]
+    /// Also returns (fg, bg) as separate tuples.
+    #[allow(clippy::type_complexity)]
+    pub fn to_ansi_colors(&self) -> ([(u8, u8, u8); 16], (u8, u8, u8), (u8, u8, u8)) {
+        let colors = [
+            resolve_style_or_palette(self, &["black", "bg0", "base", "crust"], (0, 0, 0)),
+            resolve_style_or_palette(self, &["red", "maroon"], (204, 36, 29)),
+            resolve_style_or_palette(self, &["green"], (152, 151, 26)),
+            resolve_style_or_palette(self, &["yellow", "peach", "orange"], (215, 153, 33)),
+            resolve_style_or_palette(self, &["blue", "sapphire"], (69, 133, 136)),
+            resolve_style_or_palette(
+                self,
+                &["magenta", "purple", "pink", "mauve"],
+                (177, 98, 134),
+            ),
+            resolve_style_or_palette(self, &["cyan", "aqua", "teal", "sky"], (104, 157, 106)),
+            resolve_style_or_palette(
+                self,
+                &["white", "fg0", "fg1", "text", "fg"],
+                (235, 219, 178),
+            ),
+            // Bright variants
+            resolve_style_or_palette(
+                self,
+                &["bright_black", "bg3", "overlay0", "comment"],
+                (146, 131, 116),
+            ),
+            resolve_style_or_palette(self, &["bright_red"], (251, 73, 52)),
+            resolve_style_or_palette(self, &["bright_green"], (184, 187, 38)),
+            resolve_style_or_palette(self, &["bright_yellow"], (250, 189, 47)),
+            resolve_style_or_palette(self, &["bright_blue"], (131, 165, 152)),
+            resolve_style_or_palette(self, &["bright_purple", "bright_magenta"], (211, 134, 155)),
+            resolve_style_or_palette(self, &["bright_cyan", "bright_aqua"], (142, 192, 124)),
+            resolve_style_or_palette(self, &["bright_white", "fg0"], (253, 244, 193)),
+        ];
+
+        // FG from ui.text, BG from ui.background
+        let fg = self
+            .style("ui.text")
+            .fg
+            .map(|c| match c {
+                ThemeColor::Rgb(r, g, b) => (r, g, b),
+                ThemeColor::Named(n) => named_to_rgb(n),
+            })
+            .unwrap_or((235, 219, 178));
+
+        let bg = self
+            .style("ui.background")
+            .bg
+            .map(|c| match c {
+                ThemeColor::Rgb(r, g, b) => (r, g, b),
+                ThemeColor::Named(n) => named_to_rgb(n),
+            })
+            .unwrap_or((0, 0, 0));
+
+        (colors, fg, bg)
+    }
+
+    /// Compute the relative luminance of the `ui.background` bg color.
+    /// Returns a value in [0.0, 1.0] where 0 = black, 1 = white.
+    /// Uses the sRGB luminance formula: 0.2126*R + 0.7152*G + 0.0722*B.
+    pub fn background_luminance(&self) -> f64 {
+        let (_, _, bg) = self.to_ansi_colors();
+        (0.2126 * bg.0 as f64 + 0.7152 * bg.1 as f64 + 0.0722 * bg.2 as f64) / 255.0
+    }
+
+    /// Whether this theme is considered "dark" (background luminance < 0.5).
+    pub fn is_dark(&self) -> bool {
+        self.background_luminance() < 0.5
+    }
+
+    /// Resolve a ThemeColor to concrete RGB values.
+    pub fn resolve_to_rgb(color: &ThemeColor) -> (u8, u8, u8) {
+        match color {
+            ThemeColor::Rgb(r, g, b) => (*r, *g, *b),
+            ThemeColor::Named(n) => named_to_rgb(*n),
+        }
+    }
+
     /// List all available style keys in this theme (sorted).
     pub fn style_keys(&self) -> Vec<&str> {
         let mut keys: Vec<&str> = self.styles.keys().map(|s| s.as_str()).collect();
@@ -346,6 +429,43 @@ fn parse_style_value(
         _ => Err(ThemeError::ParseError(
             "style value must be a string or table".into(),
         )),
+    }
+}
+
+fn resolve_style_or_palette(
+    theme: &Theme,
+    candidates: &[&str],
+    fallback: (u8, u8, u8),
+) -> (u8, u8, u8) {
+    for name in candidates {
+        if let Some(color) = theme.palette.get(*name) {
+            return match color {
+                ThemeColor::Rgb(r, g, b) => (*r, *g, *b),
+                ThemeColor::Named(named) => named_to_rgb(*named),
+            };
+        }
+    }
+    fallback
+}
+
+fn named_to_rgb(named: NamedColor) -> (u8, u8, u8) {
+    match named {
+        NamedColor::Black => (0, 0, 0),
+        NamedColor::Red => (204, 36, 29),
+        NamedColor::Green => (152, 151, 26),
+        NamedColor::Yellow => (215, 153, 33),
+        NamedColor::Blue => (69, 133, 136),
+        NamedColor::Magenta => (177, 98, 134),
+        NamedColor::Cyan => (104, 157, 106),
+        NamedColor::White => (235, 219, 178),
+        NamedColor::DarkGray => (146, 131, 116),
+        NamedColor::LightRed => (251, 73, 52),
+        NamedColor::LightGreen => (184, 187, 38),
+        NamedColor::LightYellow => (250, 189, 47),
+        NamedColor::LightBlue => (131, 165, 152),
+        NamedColor::LightMagenta => (211, 134, 155),
+        NamedColor::LightCyan => (142, 192, 124),
+        NamedColor::Gray => (168, 153, 132),
     }
 }
 
@@ -530,5 +650,65 @@ red = "#cc0000"
         assert!(style.italic);
         assert!(!style.dim);
         assert!(!style.underline);
+    }
+
+    #[test]
+    fn background_luminance_dark_theme() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("gruvbox-dark", &resolver).unwrap();
+        assert!(theme.is_dark(), "gruvbox-dark should be dark");
+        assert!(
+            theme.background_luminance() < 0.3,
+            "dark theme bg luminance should be low"
+        );
+    }
+
+    #[test]
+    fn background_luminance_light_theme() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("gruvbox-light", &resolver).unwrap();
+        assert!(!theme.is_dark(), "gruvbox-light should not be dark");
+        assert!(
+            theme.background_luminance() > 0.5,
+            "light theme bg luminance should be high"
+        );
+    }
+
+    #[test]
+    fn catppuccin_mocha_ui_background_is_base() {
+        // Regression: ui.background must resolve to the theme's palette "base"
+        // color, not a fallback.
+        let resolver = BundledResolver;
+        let theme = Theme::load("catppuccin-mocha", &resolver).unwrap();
+        let style = theme.style("ui.background");
+        assert_eq!(
+            style.bg,
+            Some(ThemeColor::Rgb(0x1e, 0x1e, 0x2e)),
+            "catppuccin-mocha ui.background should be #1e1e2e"
+        );
+    }
+
+    #[test]
+    fn to_ansi_colors_bg_fallback_is_black() {
+        // Regression: default bg fallback should be (0,0,0), not (40,40,40).
+        let toml = r#"
+[styles]
+"ui.text" = { fg = "white" }
+"#;
+        let theme = Theme::from_toml("minimal", toml).unwrap();
+        let (_, _, bg) = theme.to_ansi_colors();
+        assert_eq!(bg, (0, 0, 0), "bg fallback should be black");
+    }
+
+    #[test]
+    fn resolve_to_rgb_named_colors() {
+        assert_eq!(
+            Theme::resolve_to_rgb(&ThemeColor::Rgb(10, 20, 30)),
+            (10, 20, 30)
+        );
+        assert_eq!(
+            Theme::resolve_to_rgb(&ThemeColor::Named(NamedColor::Red)),
+            (204, 36, 29)
+        );
     }
 }

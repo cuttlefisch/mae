@@ -47,3 +47,16 @@ jobs:
       - name: cargo fmt
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
+
+  # E2E smoke test: build TUI binary and validate init.scm loads without errors.
+  e2e:
+    name: e2e / check-config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build TUI binary
+        run: cargo build --release --workspace --exclude mae-gui
+      - name: Validate init.scm
+        run: ./target/release/mae --check-config

@@ -49,6 +49,9 @@ pub struct AiSection {
     ///   "full"      — everything including quit/force-quit
     /// Env override: MAE_AI_PERMISSIONS (highest precedence).
     pub auto_approve_tier: Option<String>,
+    /// Command to launch for AI agent shell sessions (SPC a a).
+    /// Default: "claude"
+    pub editor: Option<String>,
     /// Per-session spend guardrails. Both fields optional — setting
     /// neither disables budgeting, setting only the warn threshold
     /// keeps the session running with visibility but no hard limits.
@@ -64,6 +67,8 @@ pub struct EditorSection {
     pub splash_art: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
+    /// Restore previous session on startup (per-project).
+    pub restore_session: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -292,6 +297,8 @@ pub fn persist_editor_preference(key: &str, value: &str) {
     match key {
         "theme" => cfg.editor.theme = Some(value.to_string()),
         "splash_art" => cfg.editor.splash_art = Some(value.to_string()),
+        "ai_editor" => cfg.ai.editor = Some(value.to_string()),
+        "restore_session" => cfg.editor.restore_session = Some(value == "true"),
         _ => {
             warn!(key, value, "unknown editor preference key");
             return;

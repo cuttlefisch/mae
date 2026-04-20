@@ -128,7 +128,7 @@ mod tests {
             },
             server_info: serde_json::json!({
                 "name": "mae-editor",
-                "version": "0.1.0",
+                "version": "0.3.0",
             }),
         };
         let json = serde_json::to_string(&result).unwrap();

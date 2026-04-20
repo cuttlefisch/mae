@@ -406,6 +406,37 @@ impl DapClient {
         .await
     }
 
+    /// Evaluate an expression in the debuggee's context.
+    pub async fn evaluate(
+        &self,
+        expression: &str,
+        frame_id: Option<i64>,
+        context: Option<&str>,
+    ) -> Result<EvaluateResponseBody, String> {
+        let args = EvaluateArguments {
+            expression: expression.to_string(),
+            frame_id,
+            context: context.map(|s| s.to_string()),
+        };
+        let resp = self
+            .request(
+                "evaluate",
+                Some(serde_json::to_value(&args).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(10),
+            )
+            .await?;
+        if !resp.success {
+            return Err(format!(
+                "evaluate failed: {}",
+                resp.message.unwrap_or_default()
+            ));
+        }
+        let body = resp
+            .body
+            .ok_or_else(|| "evaluate response missing body".to_string())?;
+        serde_json::from_value(body).map_err(|e| format!("malformed evaluate body: {}", e))
+    }
+
     /// Ask the adapter to terminate the debuggee (soft, if supported).
     pub async fn terminate(&self) -> Result<DapResponse, String> {
         self.request("terminate", None, std::time::Duration::from_secs(5))

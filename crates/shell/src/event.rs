@@ -47,6 +47,11 @@ impl EventListener for ShellEventListener {
             AE::PtyWrite(s) => ShellEvent::PtyWrite(s),
             AE::ClipboardStore(_, s) => ShellEvent::ClipboardStore(s),
             AE::Exit => ShellEvent::ChildExit(0),
+            // ColorRequest (OSC 10/11/4) is intentionally NOT forwarded.
+            // Responding requires locking the terminal FairMutex, which
+            // contends with the I/O thread and can freeze the event loop.
+            // Theme colors are communicated via COLORFGBG, TERM_BACKGROUND
+            // env vars and the ANSI palette (set_theme_colors) instead.
             // Events we don't need to forward yet.
             _ => return,
         };

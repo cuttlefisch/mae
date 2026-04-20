@@ -612,8 +612,24 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "mode".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "'launch' (default) to start a new process, 'attach' to connect to an existing process by pid".into(),
+                            enum_values: Some(vec!["launch".into(), "attach".into()]),
+                        },
+                    ),
+                    (
+                        "pid".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Process ID to attach to (required when mode='attach')".into(),
+                            enum_values: None,
+                        },
+                    ),
                 ]),
-                required: vec!["adapter".into(), "program".into()],
+                required: vec!["adapter".into()],
             },
             // Privileged because launching arbitrary programs under a
             // debug adapter is roughly equivalent to shell exec.
@@ -621,7 +637,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_set_breakpoint".into(),
-            description: "Set a breakpoint at source:line. Idempotent — no-op if already set. Works before or during a session; pending breakpoints are synced to the adapter on session start. Lines are 1-indexed.".into(),
+            description: "Set a breakpoint at source:line. Idempotent — no-op if already set. Works before or during a session; pending breakpoints are synced to the adapter on session start. Lines are 1-indexed. Supports optional condition and hit_condition for conditional breakpoints.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -638,6 +654,22 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "integer".into(),
                             description: "1-indexed line number".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "condition".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional condition expression — adapter breaks only when this evaluates to true".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "hit_condition".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional hit condition (e.g. '>= 5') — adapter breaks only after this many hits".into(),
                             enum_values: None,
                         },
                     ),
@@ -814,6 +846,58 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "dap_evaluate".into(),
+            description: "Evaluate an expression in the debuggee's context. Result arrives asynchronously — call `dap_output` or `debug_state` after to see it. The result is also shown in the status bar and appended to the debug output log.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "expression".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Expression to evaluate in the debuggee".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "frame_id".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Optional stack frame id for evaluation context (default: topmost frame)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "context".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Evaluation context: 'watch', 'repl', or 'hover' (default: 'repl')".into(),
+                            enum_values: Some(vec!["watch".into(), "repl".into(), "hover".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["expression".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "dap_disconnect".into(),
+            description: "Disconnect from the debug adapter. Optionally terminate the debuggee process.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "terminate_debuggee".into(),
+                    ToolProperty {
+                        prop_type: "boolean".into(),
+                        description: "If true, also terminate the debugged process (default: false — detach only)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
         },
         // ---- Knowledge base (shared with :help) ----
         //
@@ -1215,6 +1299,203 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Introspection: theme, shell scrollback, mouse, render ---
+        ToolDefinition {
+            name: "theme_inspect".into(),
+            description: "Look up a resolved theme style by semantic key (e.g. 'conversation.user.text', 'ui.statusline'). Returns JSON with fg, bg, bold, italic, dim, underline.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "key".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Theme style key (dot-namespaced, e.g. 'ui.statusline')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["key".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "shell_scrollback".into(),
+            description: "Read text lines from a shell terminal's scrollback/viewport. Returns the cached viewport text for the given buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the shell terminal (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "offset".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Lines from the bottom to start reading (default: 0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "lines".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of lines to return (default: 50)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "mouse_event".into(),
+            description: "Simulate a mouse event (scroll or click) in the editor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "event_type".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Type of mouse event".into(),
+                            enum_values: Some(vec!["scroll".into(), "click".into()]),
+                        },
+                    ),
+                    (
+                        "row".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen row for click events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "col".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen column for click events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "delta".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Scroll delta (positive=up, negative=down) for scroll events".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "button".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Mouse button for click events".into(),
+                            enum_values: Some(vec!["left".into(), "right".into(), "middle".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["event_type".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "render_inspect".into(),
+            description: "Inspect what is rendered at a given screen position. Returns the buffer name, buffer kind, and theme colors at that cell.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "row".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen row to inspect".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "col".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Screen column to inspect".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["row".into(), "col".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "introspect".into(),
+            description: "Comprehensive diagnostic introspection of MAE's internal state. Returns structured JSON covering threads, performance, locks, buffers, shell, and AI state.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: {
+                    let mut p = HashMap::new();
+                    p.insert(
+                        "section".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Section to inspect: 'all', 'threads', 'locks', 'perf', 'buffers', 'shell', 'ai'".into(),
+                            enum_values: Some(vec![
+                                "all".into(),
+                                "threads".into(),
+                                "locks".into(),
+                                "perf".into(),
+                                "buffers".into(),
+                                "shell".into(),
+                                "ai".into(),
+                            ]),
+                        },
+                    );
+                    p
+                },
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "event_recording".into(),
+            description: "Control input event recording for debugging. Actions: start, stop, status, dump.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: {
+                    let mut p = HashMap::new();
+                    p.insert(
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Action to perform: 'start', 'stop', 'status', 'dump'"
+                                .into(),
+                            enum_values: Some(vec![
+                                "start".into(),
+                                "stop".into(),
+                                "status".into(),
+                                "dump".into(),
+                            ]),
+                        },
+                    );
+                    p.insert(
+                        "last_n".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description:
+                                "Number of recent events to return (for 'dump' action, default 50)"
+                                    .into(),
+                            enum_values: None,
+                        },
+                    );
+                    p
+                },
+                required: vec!["action".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
 
@@ -1312,7 +1593,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 56);
+        assert_eq!(tools.len(), 64);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"buffer_write"));
@@ -1349,6 +1630,8 @@ mod tests {
         assert!(names.contains(&"dap_select_frame"));
         assert!(names.contains(&"dap_select_thread"));
         assert!(names.contains(&"dap_output"));
+        assert!(names.contains(&"dap_evaluate"));
+        assert!(names.contains(&"dap_disconnect"));
         assert!(names.contains(&"kb_get"));
         assert!(names.contains(&"kb_search"));
         assert!(names.contains(&"kb_list"));

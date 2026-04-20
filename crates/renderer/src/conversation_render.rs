@@ -83,9 +83,9 @@ pub(crate) fn render_conversation_window(
                         ts(editor, "conversation.system")
                     }
                 }
-                mae_core::conversation::LineStyle::UserText => ts(editor, "ui.text"),
+                mae_core::conversation::LineStyle::UserText => ts(editor, "conversation.user.text"),
                 mae_core::conversation::LineStyle::AssistantText => {
-                    ts(editor, "conversation.assistant")
+                    ts(editor, "conversation.assistant.text")
                 }
                 mae_core::conversation::LineStyle::ToolCallHeader => {
                     ts(editor, "conversation.tool")

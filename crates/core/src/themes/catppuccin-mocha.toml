@@ -68,6 +68,8 @@ crust = "#11111b"
 "conversation.tool" = { fg = "peach" }
 "conversation.tool.result" = { fg = "overlay1" }
 "conversation.input" = { fg = "sapphire" }
+"conversation.user.text" = { fg = "text" }
+"conversation.assistant.text" = { fg = "text" }
 
 "debug.current_line" = { bg = "yellow", fg = "base" }
 "debug.breakpoint" = { fg = "red", bold = true }

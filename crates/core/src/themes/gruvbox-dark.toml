@@ -66,6 +66,8 @@ bright_orange = "#fe8019"
 "conversation.tool" = { fg = "bright_orange" }
 "conversation.tool.result" = { fg = "fg4" }
 "conversation.input" = { fg = "bright_aqua" }
+"conversation.user.text" = { fg = "fg1" }
+"conversation.assistant.text" = { fg = "fg1" }
 
 "debug.current_line" = { bg = "bright_yellow", fg = "bg0" }
 "debug.breakpoint" = { fg = "bright_red", bold = true }

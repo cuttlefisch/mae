@@ -12,17 +12,23 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ProjectConfig {
+    /// Project name. Supports both `name` and `project-name`.
+    #[serde(alias = "project-name")]
     pub name: Option<String>,
     pub root_directory: Option<String>,
     pub required_resources: Option<Vec<String>>,
     pub workspaces: Option<Vec<String>>,
     #[serde(default)]
     pub symlinks: Vec<SymlinkEntry>,
+    /// Dependencies — other projects to auto-clone (future).
+    #[serde(default)]
+    pub deps: Vec<String>,
 }
 
 /// A symlink entry in the `.project` file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SymlinkEntry {
+    #[serde(alias = "targ")]
     pub target: String,
     pub link: String,
 }
@@ -116,6 +122,11 @@ impl RecentProjects {
         while self.roots.len() > self.cap {
             self.roots.pop_back();
         }
+    }
+
+    /// Remove a project root from the list.
+    pub fn remove(&mut self, root: &Path) {
+        self.roots.retain(|r| r != root);
     }
 
     pub fn list(&self) -> &VecDeque<PathBuf> {
@@ -276,6 +287,34 @@ link = "README.org"
         assert_eq!(project.name, "mae_proj_test_noconfig");
         assert!(project.config.is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_config_with_deps() {
+        let toml_str = r#"
+name = "With Deps"
+deps = ["github.com/org/repo1", "github.com/org/repo2"]
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.deps.len(), 2);
+    }
+
+    #[test]
+    fn project_config_alias_project_name() {
+        let toml_str = "project-name = \"Aliased\"\n";
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.name.as_deref(), Some("Aliased"));
+    }
+
+    #[test]
+    fn symlink_entry_alias_targ() {
+        let toml_str = r#"
+[[symlinks]]
+targ = "~/notes/foo.org"
+link = "FOO.org"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.symlinks[0].target, "~/notes/foo.org");
     }
 
     #[test]

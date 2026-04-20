@@ -6,6 +6,7 @@ use mae_shell::grid_types::{CellFlags, Color as AColor, Colors, NamedColor};
 use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
+use tracing::trace;
 
 use crate::theme_convert::ts;
 
@@ -57,6 +58,11 @@ fn render_shell_grid(
     shell: &ShellTerminal,
     focused: bool,
 ) {
+    trace!(
+        width = area.width,
+        height = area.height,
+        "render_shell_grid enter"
+    );
     let term = shell.term();
     let content = term.renderable_content();
 
@@ -69,8 +75,11 @@ fn render_shell_grid(
     let rows = area.height as usize;
     let mut grid: Vec<Vec<(char, Style)>> = vec![vec![(' ', default_style); cols]; rows];
 
+    // Use the already-locked term to get display_offset — calling
+    // shell.display_offset() would deadlock (re-entrant FairMutex lock).
+    let display_offset = term.grid().display_offset() as i32;
     for indexed in content.display_iter {
-        let line_idx = indexed.point.line.0;
+        let line_idx = indexed.point.line.0 + display_offset;
         let col_idx = indexed.point.column.0;
 
         if line_idx < 0 || line_idx as usize >= rows || col_idx >= cols {
@@ -118,6 +127,31 @@ fn render_shell_grid(
         grid[line_idx as usize][col_idx] = (indexed.cell.c, style);
     }
 
+    // Overlay selection highlight if active.
+    if let Some(((sel_start_row, sel_start_col), (sel_end_row, sel_end_col))) =
+        shell.selection_range()
+    {
+        let sel_style = ts(editor, "ui.selection");
+        let sel_bg = sel_style.bg.unwrap_or(Color::Rgb(51, 76, 153));
+        for row_idx in sel_start_row..=sel_end_row.min(rows.saturating_sub(1)) {
+            let col_start = if row_idx == sel_start_row {
+                sel_start_col
+            } else {
+                0
+            };
+            let col_end = if row_idx == sel_end_row {
+                sel_end_col
+            } else {
+                cols.saturating_sub(1)
+            };
+            for col_idx in col_start..=col_end.min(cols.saturating_sub(1)) {
+                if let Some(cell) = grid.get_mut(row_idx).and_then(|row| row.get_mut(col_idx)) {
+                    cell.1 = cell.1.bg(sel_bg);
+                }
+            }
+        }
+    }
+
     // Render each line from the grid.
     for (row_idx, row) in grid.iter().enumerate() {
         let spans: Vec<Span> = row
@@ -131,13 +165,15 @@ fn render_shell_grid(
     }
 
     // Set cursor position for the terminal.
-    if focused && cursor_point.line.0 >= 0 {
-        let cursor_row = area.y + cursor_point.line.0 as u16;
+    let cursor_line = cursor_point.line.0 + display_offset;
+    if focused && cursor_line >= 0 {
+        let cursor_row = area.y + cursor_line as u16;
         let cursor_col = area.x + cursor_point.column.0 as u16;
         if cursor_row < area.y + area.height && cursor_col < area.x + area.width {
             frame.set_cursor_position((cursor_col, cursor_row));
         }
     }
+    trace!("render_shell_grid exit");
 }
 
 /// Convert an alacritty_terminal Color to a ratatui Color.

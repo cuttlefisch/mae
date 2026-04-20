@@ -2,12 +2,13 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C482%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C508%20passing-brightgreen.svg)](#)
 [![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/claude-code)
+[![Lines of Code](https://img.shields.io/badge/lines-~25k-informational.svg)](#)
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,482 tests. GPL-3.0-or-later.
+runtime. 1,508 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 

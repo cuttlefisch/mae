@@ -51,6 +51,15 @@ green = "#859900"
 "diagnostic.debug" = { fg = "base01" }
 "diagnostic.target" = { fg = "cyan" }
 
+"conversation.user" = { fg = "cyan", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "orange" }
+"conversation.tool.result" = { fg = "base01" }
+"conversation.input" = { fg = "cyan" }
+"conversation.user.text" = { fg = "base0" }
+"conversation.assistant.text" = { fg = "base0" }
+
 "keyword" = { fg = "green" }
 "string" = { fg = "cyan" }
 "number" = { fg = "magenta" }

@@ -90,6 +90,27 @@ fn open_file_command() {
 }
 
 #[test]
+fn set_status_echoes_to_message_log() {
+    let mut editor = Editor::new();
+    editor.set_status("hello from test");
+    let entries = editor.message_log.entries();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.message.contains("hello from test")),
+        "message_log should contain status message"
+    );
+}
+
+#[test]
+fn set_status_empty_does_not_log() {
+    let mut editor = Editor::new();
+    let before = editor.message_log.entries().len();
+    editor.set_status("");
+    assert_eq!(editor.message_log.entries().len(), before);
+}
+
+#[test]
 fn unknown_command_sets_status() {
     let mut editor = Editor::new();
     let result = editor.execute_command("bogus");
@@ -187,9 +208,14 @@ fn leader_bindings_exist() {
         normal.lookup(&parse_key_seq_spaced("SPC w v")),
         LookupResult::Exact("split-vertical")
     );
-    // SPC a a should be ai-prompt
+    // SPC a a should be open-ai-agent
     assert_eq!(
         normal.lookup(&parse_key_seq_spaced("SPC a a")),
+        LookupResult::Exact("open-ai-agent")
+    );
+    // SPC a p should be ai-prompt
+    assert_eq!(
+        normal.lookup(&parse_key_seq_spaced("SPC a p")),
         LookupResult::Exact("ai-prompt")
     );
 }
@@ -737,6 +763,51 @@ fn next_buffer_single_is_noop() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("next-buffer");
     assert_eq!(editor.active_buffer_idx(), 0);
+}
+
+#[test]
+fn install_dashboard_inserts_at_front() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    assert_eq!(editor.buffers.len(), 2);
+    assert_eq!(editor.buffers[0].kind, crate::BufferKind::Dashboard);
+    assert_eq!(editor.buffers[0].name, "[dashboard]");
+    assert_eq!(editor.buffers[1].name, "[scratch]");
+    assert_eq!(editor.active_buffer_idx(), 0);
+}
+
+#[test]
+fn dashboard_command_finds_existing() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // Switch away from dashboard.
+    editor.window_mgr.focused_window_mut().buffer_idx = 1;
+    assert_eq!(editor.active_buffer().name, "[scratch]");
+    // :dashboard should return to it.
+    editor.execute_command("dashboard");
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Dashboard);
+}
+
+#[test]
+fn dashboard_command_creates_if_missing() {
+    let mut editor = Editor::new();
+    // No dashboard installed.
+    assert_eq!(editor.buffers.len(), 1);
+    editor.execute_command("dashboard");
+    assert_eq!(editor.buffers.len(), 2);
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Dashboard);
+}
+
+#[test]
+fn toggle_scratch_buffer_switches() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // From dashboard, toggle should go to scratch.
+    editor.execute_command("toggle-scratch-buffer");
+    assert_eq!(editor.active_buffer().name, "[scratch]");
+    // From scratch, toggle should go back.
+    editor.execute_command("toggle-scratch-buffer");
+    assert_ne!(editor.active_buffer().name, "[scratch]");
 }
 
 #[test]
@@ -3707,11 +3778,17 @@ fn recent_projects_push_dedup_bounded() {
 }
 
 #[test]
-fn project_switch_palette_empty_shows_status() {
+fn project_switch_palette_empty_opens_palette() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("project-switch");
-    assert!(editor.status_msg.contains("No recent projects"));
-    assert!(editor.command_palette.is_none());
+    // Even with no recent projects, the palette opens so the user can type a path
+    assert!(editor.command_palette.is_some());
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert_eq!(
+        palette.purpose,
+        crate::command_palette::PalettePurpose::SwitchProject
+    );
+    assert!(palette.entries.is_empty());
 }
 
 #[test]
@@ -3979,9 +4056,9 @@ fn mouse_click_left_places_cursor() {
     let win = editor.window_mgr.focused_window_mut();
     editor.buffers[0].insert_char(win, 'o');
 
-    // Gutter is 5 cols wide when show_line_numbers is true (default).
-    // Click at row 1 (content row 0 after border offset), col 5+2 = col 7.
-    editor.handle_mouse_click(1, 7, crate::input::MouseButton::Left);
+    // Dynamic gutter: 1 line → digits=1, max(1,2)+1 = 3 cols gutter.
+    // Click at row 1 (content row 0 after border offset), col 3+2 = col 5.
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_row, 0);
     assert_eq!(win.cursor_col, 2);
@@ -3993,10 +4070,10 @@ fn mouse_click_in_gutter_ignored() {
     let win = editor.window_mgr.focused_window_mut();
     editor.buffers[0].insert_char(win, 'A');
 
-    // Click in gutter area (col < 5).
+    // Click in gutter area (col < 3 for dynamic gutter with 1 line).
     let orig_row = editor.window_mgr.focused_window().cursor_row;
     let orig_col = editor.window_mgr.focused_window().cursor_col;
-    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 1, crate::input::MouseButton::Left);
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.cursor_row, orig_row);
     assert_eq!(win.cursor_col, orig_col);
@@ -4016,6 +4093,92 @@ fn mouse_click_clamps_to_line_length() {
     assert_eq!(win.cursor_row, 0);
     // Line "AB" has len 2, max col = 1.
     assert!(win.cursor_col <= 1);
+}
+
+#[test]
+fn mouse_click_dynamic_gutter_large_file() {
+    // Regression: gutter width should scale with line count.
+    // 120 lines → 3 digits → gutter = max(3,2)+1 = 4 cols.
+    let mut editor = Editor::new();
+    for _ in 0..120 {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, '\n');
+    }
+    // Move to line 0 so we can test clicking
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 0;
+    win.scroll_offset = 0;
+
+    // Click at col 4 (gutter) → should be ignored.
+    editor.handle_mouse_click(1, 3, crate::input::MouseButton::Left);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 0, "click in gutter should be ignored");
+
+    // Click at col 5 (first text column) → cursor at text_col 0.
+    editor.handle_mouse_click(1, 4, crate::input::MouseButton::Left);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 0, "first text column after gutter");
+}
+
+#[test]
+fn mouse_click_shell_buffer_routes_to_pending() {
+    // Shell buffer clicks should set pending_shell_click, not manipulate rope cursor.
+    let mut editor = Editor::new();
+    let shell_buf = crate::buffer::Buffer::new_shell("test-shell");
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    editor.window_mgr.focused_window_mut().buffer_idx = shell_idx;
+
+    editor.handle_mouse_click(5, 10, crate::input::MouseButton::Left);
+
+    // Should have set pending_shell_click (with border offset subtracted).
+    assert!(editor.pending_shell_click.is_some());
+    let (row, col, _) = editor.pending_shell_click.unwrap();
+    assert_eq!(row, 4); // 5 - 1 border
+    assert_eq!(col, 9); // 10 - 1 border
+}
+
+#[test]
+fn mouse_drag_shell_buffer_routes_to_pending() {
+    let mut editor = Editor::new();
+    let shell_buf = crate::buffer::Buffer::new_shell("test-shell");
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    editor.window_mgr.focused_window_mut().buffer_idx = shell_idx;
+
+    editor.handle_mouse_drag(3, 7);
+
+    assert!(editor.pending_shell_drag.is_some());
+    let (row, col) = editor.pending_shell_drag.unwrap();
+    assert_eq!(row, 2);
+    assert_eq!(col, 6);
+    // Should NOT enter Visual mode for shell buffers.
+    assert!(!matches!(editor.mode, crate::Mode::Visual(_)));
+}
+
+#[test]
+fn mouse_release_shell_buffer_routes_to_pending() {
+    let mut editor = Editor::new();
+    let shell_buf = crate::buffer::Buffer::new_shell("test-shell");
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    editor.window_mgr.focused_window_mut().buffer_idx = shell_idx;
+
+    editor.handle_mouse_release(8, 15);
+
+    assert!(editor.pending_shell_release.is_some());
+    let (row, col) = editor.pending_shell_release.unwrap();
+    assert_eq!(row, 7);
+    assert_eq!(col, 14);
+}
+
+#[test]
+fn mouse_release_text_buffer_is_noop() {
+    let mut editor = Editor::new();
+    editor.handle_mouse_release(5, 10);
+    // Text buffer → no pending shell release.
+    assert!(editor.pending_shell_release.is_none());
 }
 
 #[test]
@@ -4139,4 +4302,53 @@ fn option_registry_has_debug_mode() {
     assert_eq!(opt.kind, crate::options::OptionKind::Bool);
     // Also works via alias
     assert!(reg.find("debug-mode").is_some());
+}
+
+#[test]
+fn active_project_root_falls_back_to_editor_project() {
+    let mut ed = Editor::new();
+    // No project set anywhere
+    assert!(ed.active_project_root().is_none());
+
+    // Set editor-wide project
+    ed.project = Some(crate::project::Project::from_root(
+        std::path::PathBuf::from("/tmp"),
+    ));
+    assert_eq!(
+        ed.active_project_root().unwrap(),
+        std::path::Path::new("/tmp")
+    );
+}
+
+#[test]
+fn active_project_root_prefers_buffer_project() {
+    let mut ed = Editor::new();
+    ed.project = Some(crate::project::Project::from_root(
+        std::path::PathBuf::from("/editor-wide"),
+    ));
+    ed.buffers[0].project_root = Some(std::path::PathBuf::from("/buffer-specific"));
+    assert_eq!(
+        ed.active_project_root().unwrap(),
+        std::path::Path::new("/buffer-specific")
+    );
+}
+
+#[test]
+fn set_project_root_command() {
+    let mut ed = Editor::new();
+    // Valid directory
+    ed.execute_command("set-project-root /tmp");
+    assert_eq!(
+        ed.buffers[0].project_root,
+        Some(std::path::PathBuf::from("/tmp"))
+    );
+    assert!(ed.status_msg.contains("Project root set"));
+
+    // Invalid directory
+    ed.execute_command("set-project-root /nonexistent_mae_test_xyz");
+    assert!(ed.status_msg.contains("Not a directory"));
+
+    // No args
+    ed.execute_command("set-project-root");
+    assert!(ed.status_msg.contains("Usage"));
 }

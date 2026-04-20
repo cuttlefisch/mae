@@ -15,7 +15,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use alacritty_terminal::tty;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 use crate::event::{ShellEvent, ShellEventListener};
 
@@ -48,6 +48,15 @@ impl Dimensions for TermSize {
     }
 }
 
+/// Custom text selection tracker for shell terminals.
+/// alacritty_terminal v0.26.0 doesn't expose a public Selection API,
+/// so we track selection state ourselves and read text from the grid.
+pub struct ShellSelection {
+    start: (usize, usize), // (row, col)
+    end: (usize, usize),
+    active: bool,
+}
+
 /// A running terminal emulator backed by a PTY + alacritty_terminal.
 pub struct ShellTerminal {
     /// The terminal state, shared with the I/O thread via FairMutex.
@@ -78,6 +87,45 @@ pub struct ShellTerminal {
     /// new data from the PTY. Renderers compare this to a cached value to
     /// avoid needless redraws when the shell is idle.
     generation: u64,
+
+    /// Custom text selection state for mouse-based text selection.
+    selection: Option<ShellSelection>,
+}
+
+/// Ensure common user binary directories are in PATH.
+///
+/// When MAE is launched from a desktop file (GNOME, sway, etc.), the parent
+/// process has a minimal PATH that omits `~/.local/bin`, `~/.cargo/bin`, etc.
+/// Terminal emulators (Alacritty, kitty, wezterm) all solve this by sourcing
+/// the user's shell profile. We take a simpler approach: prepend the standard
+/// directories if they exist and aren't already in PATH.
+fn augment_path(env: &mut std::collections::HashMap<String, String>) {
+    let home = match env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+    {
+        Some(h) => h,
+        None => return,
+    };
+    let extra_dirs = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.cargo/bin"),
+        format!("{home}/bin"),
+        format!("{home}/.npm-global/bin"),
+    ];
+    let current_path = env.get("PATH").cloned().unwrap_or_default();
+    let path_entries: std::collections::HashSet<&str> = current_path.split(':').collect();
+    let mut prepend = Vec::new();
+    for dir in &extra_dirs {
+        if !path_entries.contains(dir.as_str()) && std::path::Path::new(dir).is_dir() {
+            prepend.push(dir.as_str());
+        }
+    }
+    if !prepend.is_empty() {
+        let new_path = format!("{}:{}", prepend.join(":"), current_path);
+        env.insert("PATH".to_string(), new_path);
+    }
 }
 
 impl ShellTerminal {
@@ -93,6 +141,80 @@ impl ShellTerminal {
         Self::spawn_with_env(cols, rows, working_dir, std::collections::HashMap::new())
     }
 
+    /// Spawn a terminal running a specific command (not the user's shell).
+    /// When the command exits, the PTY exits — ideal for agent processes
+    /// where the lifecycle should be tied to the command, not a shell.
+    pub fn spawn_command(
+        cols: u16,
+        rows: u16,
+        command: &str,
+        working_dir: Option<std::path::PathBuf>,
+        extra_env: std::collections::HashMap<String, String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cols = cols.max(2);
+        let rows = rows.max(1);
+        let columns = cols as usize;
+        let screen_lines = rows as usize;
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let listener = ShellEventListener::new(event_tx);
+
+        let config = TermConfig::default();
+        let size = TermSize::new(columns, screen_lines);
+        let term = Term::new(config, &size, listener.clone());
+        let term = Arc::new(FairMutex::new(term));
+
+        // Parse command into program + args (simple space-split).
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        let (program, args) = if parts.is_empty() {
+            return Err("empty command".into());
+        } else {
+            (
+                parts[0].to_string(),
+                parts[1..].iter().map(|s| s.to_string()).collect(),
+            )
+        };
+
+        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+        env.insert("MAE_TERMINAL".to_string(), "1".to_string());
+        env.extend(extra_env);
+        augment_path(&mut env);
+        let pty_opts = tty::Options {
+            shell: Some(tty::Shell::new(program, args)),
+            working_directory: working_dir,
+            env,
+            ..Default::default()
+        };
+
+        let window_size = WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width: 1,
+            cell_height: 1,
+        };
+
+        tty::setup_env();
+        let pty = tty::new(&pty_opts, window_size, 0)?;
+        let child_pid = pty.child().id();
+        let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, true, false)?;
+        let pty_tx = event_loop.channel();
+        let io_thread = event_loop.spawn();
+
+        debug!(cols, rows, command, "agent terminal spawned");
+
+        Ok(ShellTerminal {
+            term,
+            pty_tx,
+            event_rx,
+            _io_thread: io_thread,
+            title: String::new(),
+            exited: false,
+            child_pid,
+            generation: 0,
+            selection: None,
+        })
+    }
+
     /// Spawn a new terminal with extra environment variables injected
     /// into the child process (e.g. `MAE_MCP_SOCKET`).
     pub fn spawn_with_env(
@@ -101,6 +223,8 @@ impl ShellTerminal {
         working_dir: Option<std::path::PathBuf>,
         extra_env: std::collections::HashMap<String, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cols = cols.max(2);
+        let rows = rows.max(1);
         let columns = cols as usize;
         let screen_lines = rows as usize;
 
@@ -117,9 +241,10 @@ impl ShellTerminal {
         let term = Arc::new(FairMutex::new(term));
 
         // PTY options.
-        let mut env = std::collections::HashMap::new();
+        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
         env.insert("MAE_TERMINAL".to_string(), "1".to_string());
         env.extend(extra_env);
+        augment_path(&mut env);
         let pty_opts = tty::Options {
             working_directory: working_dir,
             env,
@@ -153,7 +278,7 @@ impl ShellTerminal {
         let pty_tx = event_loop.channel();
         let io_thread = event_loop.spawn();
 
-        debug!(cols, rows, "shell terminal spawned");
+        debug!(cols, rows, program = ?pty_opts.shell, "shell terminal spawned");
 
         Ok(ShellTerminal {
             term,
@@ -164,6 +289,7 @@ impl ShellTerminal {
             exited: false,
             child_pid,
             generation: 0,
+            selection: None,
         })
     }
 
@@ -226,7 +352,13 @@ impl ShellTerminal {
 
     /// Access the terminal state for rendering (locks the mutex).
     pub fn term(&self) -> impl std::ops::Deref<Target = Term<ShellEventListener>> + '_ {
-        self.term.lock()
+        let lock_start = std::time::Instant::now();
+        let guard = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired"
+        );
+        guard
     }
 
     /// Whether the child process has exited.
@@ -283,7 +415,111 @@ impl ShellTerminal {
 
     /// Get the current display offset (0 = at bottom/live, >0 = scrolled up).
     pub fn display_offset(&self) -> usize {
-        self.term.lock().grid().display_offset()
+        let lock_start = std::time::Instant::now();
+        let term = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired (display_offset)"
+        );
+        term.grid().display_offset()
+    }
+
+    /// Start a new text selection at the given grid position.
+    pub fn start_selection(&mut self, row: usize, col: usize) {
+        self.selection = Some(ShellSelection {
+            start: (row, col),
+            end: (row, col),
+            active: true,
+        });
+    }
+
+    /// Update the selection endpoint (called during mouse drag).
+    pub fn update_selection(&mut self, row: usize, col: usize) {
+        if let Some(ref mut sel) = self.selection {
+            if sel.active {
+                sel.end = (row, col);
+            }
+        }
+    }
+
+    /// Finish the selection and extract the selected text from the grid.
+    pub fn finish_selection(&mut self) -> Option<String> {
+        let sel = self.selection.as_mut()?;
+        sel.active = false;
+
+        let (start, end) = if sel.start <= sel.end {
+            (sel.start, sel.end)
+        } else {
+            (sel.end, sel.start)
+        };
+
+        let term = self.term.lock();
+        let content = term.renderable_content();
+
+        // Collect cells from renderable_content (same approach as read_viewport).
+        let mut text = String::new();
+        let mut last_line: Option<usize> = None;
+        let mut line_buf = String::new();
+
+        for cell in content.display_iter {
+            let row_idx = cell.point.line.0 as usize;
+            let col_idx = cell.point.column.0;
+
+            if row_idx < start.0 || row_idx > end.0 {
+                continue;
+            }
+
+            let col_start = if row_idx == start.0 { start.1 } else { 0 };
+            let col_end = if row_idx == end.0 { end.1 } else { usize::MAX };
+
+            if col_idx < col_start || col_idx > col_end {
+                continue;
+            }
+
+            if last_line.is_some() && last_line != Some(row_idx) {
+                // Flush previous line.
+                text.push_str(line_buf.trim_end());
+                text.push('\n');
+                line_buf.clear();
+            }
+            last_line = Some(row_idx);
+            line_buf.push(cell.c);
+        }
+        // Flush final line.
+        text.push_str(line_buf.trim_end());
+
+        Some(text.trim_end().to_string())
+    }
+
+    /// Clear any active selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// Get the current selection range for rendering highlights.
+    /// Returns `((start_row, start_col), (end_row, end_col))` in normalized order.
+    pub fn selection_range(&self) -> Option<((usize, usize), (usize, usize))> {
+        let sel = self.selection.as_ref()?;
+        if sel.start <= sel.end {
+            Some((sel.start, sel.end))
+        } else {
+            Some((sel.end, sel.start))
+        }
+    }
+
+    /// Pre-populate the terminal's color palette from the editor theme.
+    ///
+    /// This makes OSC 10/11 color queries return the correct theme colors,
+    /// and ensures programs that inspect terminal colors see theme-aware
+    /// values. Call after spawn and on theme change.
+    ///
+    /// Indices: 0-15 = ANSI base colors, 256 = foreground, 257 = background.
+    pub fn set_theme_colors(&self, colors: &[(usize, (u8, u8, u8))]) {
+        use alacritty_terminal::vte::ansi::{Handler, Rgb};
+        let mut term = self.term.lock();
+        for &(idx, (r, g, b)) in colors {
+            term.set_color(idx, Rgb { r, g, b });
+        }
     }
 
     /// Read a line of text from the terminal grid (0-indexed from top of viewport).
@@ -302,7 +538,12 @@ impl ShellTerminal {
 
     /// Read recent terminal output as a string (last N lines of the viewport).
     pub fn read_viewport(&self, max_lines: usize) -> Vec<String> {
+        let lock_start = std::time::Instant::now();
         let term = self.term.lock();
+        trace!(
+            wait_us = lock_start.elapsed().as_micros() as u64,
+            "term lock acquired (read_viewport)"
+        );
         let content = term.renderable_content();
         let mut lines: Vec<String> = Vec::new();
         let mut current_line = String::new();

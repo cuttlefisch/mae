@@ -150,6 +150,10 @@ impl Editor {
         // LSP diagnostics (Phase 4a M3)
         normal.bind(parse_key_seq("]d"), "lsp-next-diagnostic");
         normal.bind(parse_key_seq("[d"), "lsp-prev-diagnostic");
+        // Font zoom (GUI)
+        normal.bind(vec![KeyPress::ctrl('=')], "increase-font-size");
+        normal.bind(vec![KeyPress::ctrl('-')], "decrease-font-size");
+        normal.bind(vec![KeyPress::ctrl('0')], "reset-font-size");
         // Alternate file
         normal.bind(vec![KeyPress::ctrl('6')], "alternate-file");
         // Dot repeat
@@ -219,18 +223,23 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC w k"), "focus-up");
         normal.bind(parse_key_seq_spaced("SPC w l"), "focus-right");
         // +ai
-        normal.bind(parse_key_seq_spaced("SPC a a"), "ai-prompt");
+        normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
+        normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
         normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
         // +help
         normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
         normal.bind(parse_key_seq_spaced("SPC h c"), "describe-command");
         normal.bind(parse_key_seq_spaced("SPC h o"), "describe-option");
+        normal.bind(parse_key_seq_spaced("SPC h t"), "tutor");
         normal.bind(parse_key_seq_spaced("SPC h s"), "help-search");
         normal.bind(parse_key_seq_spaced("SPC h b"), "help-back");
         normal.bind(parse_key_seq_spaced("SPC h f"), "help-forward");
         normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
         normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
+        normal.bind(parse_key_seq_spaced("SPC h d"), "dashboard");
+        // +scratch
+        normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");
         // +theme
         normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
         normal.bind(parse_key_seq_spaced("SPC t s"), "set-theme");

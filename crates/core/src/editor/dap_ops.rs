@@ -17,7 +17,7 @@
 //! state updates here — three small, testable modules instead of one
 //! inscrutable 3000-line file.
 
-use crate::dap_intent::{DapIntent, DapSpawnConfig, StepKind};
+use crate::dap_intent::{BreakpointSpec, DapIntent, DapSpawnConfig, StepKind};
 use crate::debug::{DebugState, DebugTarget, DebugThread, Scope, StackFrame, Variable};
 
 use super::Editor;
@@ -84,6 +84,88 @@ impl Editor {
         Ok(())
     }
 
+    /// Start a DAP attach session. The adapter connects to an existing
+    /// process identified by `pid`.
+    ///
+    /// Returns `Err(msg)` if the adapter name is unknown or if a debug
+    /// session is already active.
+    pub fn dap_attach_with_adapter(&mut self, adapter: &str, pid: u32) -> Result<(), String> {
+        if self.debug_state.is_some() {
+            return Err("A debug session is already active".into());
+        }
+        let spawn = default_spawn_for_adapter(adapter).ok_or_else(|| {
+            format!(
+                "Unknown adapter: {} (known: lldb, debugpy, codelldb)",
+                adapter
+            )
+        })?;
+        let launch_args = match adapter {
+            "debugpy" | "python" => serde_json::json!({
+                "request": "attach",
+                "type": "python",
+                "processId": pid,
+            }),
+            _ => serde_json::json!({
+                "request": "attach",
+                "pid": pid,
+            }),
+        };
+        self.dap_start_session(spawn, format!("pid:{}", pid), launch_args, true);
+        Ok(())
+    }
+
+    /// Queue a DAP evaluate request for an expression.
+    ///
+    /// The result arrives asynchronously via `DapTaskEvent::EvaluateResult`
+    /// and is surfaced in the status bar and debug log.
+    pub fn dap_evaluate(&mut self, expression: &str, frame_id: Option<i64>, context: Option<&str>) {
+        self.pending_dap_intents.push(DapIntent::Evaluate {
+            expression: expression.to_string(),
+            frame_id,
+            context: context.map(|s| s.to_string()),
+        });
+    }
+
+    /// Set a breakpoint with an optional condition.
+    pub fn dap_set_breakpoint_conditional(
+        &mut self,
+        source_path: String,
+        line: i64,
+        condition: Option<String>,
+        hit_condition: Option<String>,
+    ) -> Vec<i64> {
+        let state = self
+            .debug_state
+            .get_or_insert_with(|| DebugState::new(DebugTarget::SelfDebug));
+
+        // Check if already set at this line.
+        let existing = state
+            .breakpoints
+            .get(&source_path)
+            .map(|bps| bps.iter().any(|b| b.line == line))
+            .unwrap_or(false);
+        if existing {
+            // Update condition on existing breakpoint.
+            if let Some(bps) = state.breakpoints.get_mut(&source_path) {
+                if let Some(bp) = bps.iter_mut().find(|b| b.line == line) {
+                    bp.condition = condition;
+                    bp.hit_condition = hit_condition;
+                }
+            }
+        } else {
+            state.add_breakpoint_conditional(&source_path, line, condition, hit_condition);
+        }
+
+        let lines: Vec<i64> = state
+            .breakpoints
+            .get(&source_path)
+            .map(|bps| bps.iter().map(|b| b.line).collect())
+            .unwrap_or_default();
+
+        self.push_set_breakpoints_from_state(source_path);
+        lines
+    }
+
     /// Toggle a breakpoint at the cursor's current line in the active
     /// buffer, then push a `SetBreakpoints` intent (if in a DAP session)
     /// with the resulting line set so the adapter replaces its view.
@@ -133,10 +215,7 @@ impl Editor {
         };
 
         if is_dap {
-            self.pending_dap_intents.push(DapIntent::SetBreakpoints {
-                source_path,
-                lines: remaining_lines,
-            });
+            self.push_set_breakpoints_from_state(source_path);
         }
         self.set_status(status);
     }
@@ -199,16 +278,38 @@ impl Editor {
     }
 
     /// Push a `SetBreakpoints` intent iff the current session is DAP.
-    /// Extracted so set/remove share one place to decide whether the
-    /// adapter needs to hear about a breakpoint change.
-    fn push_set_breakpoints_if_dap(&mut self, source_path: String, lines: Vec<i64>) {
-        if matches!(
+    /// Reads the breakpoint state for this source to include conditions.
+    fn push_set_breakpoints_if_dap(&mut self, source_path: String, _lines: Vec<i64>) {
+        self.push_set_breakpoints_from_state(source_path);
+    }
+
+    /// Push a `SetBreakpoints` intent iff the current session is DAP,
+    /// reading conditions from `DebugState.breakpoints` for the source.
+    fn push_set_breakpoints_from_state(&mut self, source_path: String) {
+        if !matches!(
             self.debug_state.as_ref().map(|s| &s.target),
             Some(DebugTarget::Dap { .. })
         ) {
-            self.pending_dap_intents
-                .push(DapIntent::SetBreakpoints { source_path, lines });
+            return;
         }
+        let specs = self
+            .debug_state
+            .as_ref()
+            .and_then(|s| s.breakpoints.get(&source_path))
+            .map(|bps| {
+                bps.iter()
+                    .map(|b| BreakpointSpec {
+                        line: b.line,
+                        condition: b.condition.clone(),
+                        hit_condition: b.hit_condition.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.pending_dap_intents.push(DapIntent::SetBreakpoints {
+            source_path,
+            breakpoints: specs,
+        });
     }
 
     /// Push SetBreakpoints intents for every source in `debug_state`.
@@ -218,14 +319,26 @@ impl Editor {
         let Some(state) = self.debug_state.as_ref() else {
             return;
         };
-        let entries: Vec<(String, Vec<i64>)> = state
+        let entries: Vec<(String, Vec<BreakpointSpec>)> = state
             .breakpoints
             .iter()
-            .map(|(src, bps)| (src.clone(), bps.iter().map(|b| b.line).collect()))
+            .map(|(src, bps)| {
+                let specs = bps
+                    .iter()
+                    .map(|b| BreakpointSpec {
+                        line: b.line,
+                        condition: b.condition.clone(),
+                        hit_condition: b.hit_condition.clone(),
+                    })
+                    .collect();
+                (src.clone(), specs)
+            })
             .collect();
-        for (source_path, lines) in entries {
-            self.pending_dap_intents
-                .push(DapIntent::SetBreakpoints { source_path, lines });
+        for (source_path, breakpoints) in entries {
+            self.pending_dap_intents.push(DapIntent::SetBreakpoints {
+                source_path,
+                breakpoints,
+            });
         }
     }
 
@@ -661,9 +774,13 @@ mod tests {
         ed.dap_toggle_breakpoint_at_cursor();
         assert_eq!(ed.pending_dap_intents.len(), 1);
         match &ed.pending_dap_intents[0] {
-            DapIntent::SetBreakpoints { source_path, lines } => {
+            DapIntent::SetBreakpoints {
+                source_path,
+                breakpoints,
+            } => {
                 assert_eq!(source_path, "/tmp/a.rs");
-                assert_eq!(lines, &vec![1]);
+                assert_eq!(breakpoints.len(), 1);
+                assert_eq!(breakpoints[0].line, 1);
             }
             other => panic!("expected SetBreakpoints, got {:?}", other),
         }
@@ -1081,5 +1198,138 @@ mod tests {
         assert!(err.contains("already active"));
         // No extra intent should have been queued by the rejected call.
         assert_eq!(ed.pending_dap_intents.len(), intents_before);
+    }
+
+    // ---- Tier 4 tests: attach, evaluate, conditional breakpoints ----
+
+    #[test]
+    fn dap_attach_with_adapter_queues_attach_intent() {
+        let mut ed = Editor::new();
+        ed.dap_attach_with_adapter("lldb", 12345).unwrap();
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        assert!(matches!(
+            ed.pending_dap_intents[0],
+            DapIntent::StartSession { attach: true, .. }
+        ));
+        let state = ed.debug_state.as_ref().unwrap();
+        assert!(matches!(state.target, DebugTarget::Dap { .. }));
+    }
+
+    #[test]
+    fn dap_attach_unknown_adapter_errors() {
+        let mut ed = Editor::new();
+        let err = ed.dap_attach_with_adapter("bogus", 1).unwrap_err();
+        assert!(err.contains("Unknown adapter"));
+    }
+
+    #[test]
+    fn dap_attach_rejects_concurrent_session() {
+        let mut ed = Editor::new();
+        ed.dap_attach_with_adapter("lldb", 1).unwrap();
+        let err = ed.dap_attach_with_adapter("lldb", 2).unwrap_err();
+        assert!(err.contains("already active"));
+    }
+
+    #[test]
+    fn dap_evaluate_queues_intent() {
+        let mut ed = Editor::new();
+        ed.debug_state = Some(DebugState::new(DebugTarget::Dap {
+            adapter_name: "lldb".into(),
+            program: "x".into(),
+        }));
+        ed.dap_evaluate("1 + 2", Some(100), Some("repl"));
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        match &ed.pending_dap_intents[0] {
+            DapIntent::Evaluate {
+                expression,
+                frame_id,
+                context,
+            } => {
+                assert_eq!(expression, "1 + 2");
+                assert_eq!(*frame_id, Some(100));
+                assert_eq!(context.as_deref(), Some("repl"));
+            }
+            other => panic!("expected Evaluate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dap_evaluate_no_frame_no_context() {
+        let mut ed = Editor::new();
+        ed.dap_evaluate("x", None, None);
+        match &ed.pending_dap_intents[0] {
+            DapIntent::Evaluate {
+                expression,
+                frame_id,
+                context,
+            } => {
+                assert_eq!(expression, "x");
+                assert!(frame_id.is_none());
+                assert!(context.is_none());
+            }
+            other => panic!("expected Evaluate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dap_set_breakpoint_conditional_stores_condition() {
+        let mut ed = Editor::new();
+        let lines =
+            ed.dap_set_breakpoint_conditional("/a.rs".into(), 10, Some("x > 5".into()), None);
+        assert_eq!(lines, vec![10]);
+        let state = ed.debug_state.as_ref().unwrap();
+        let bp = &state.breakpoints["/a.rs"][0];
+        assert_eq!(bp.condition.as_deref(), Some("x > 5"));
+        assert!(bp.hit_condition.is_none());
+    }
+
+    #[test]
+    fn dap_set_breakpoint_conditional_updates_existing() {
+        let mut ed = Editor::new();
+        // First set without condition.
+        ed.dap_set_breakpoint("/a.rs".into(), 10);
+        // Now update with condition.
+        ed.dap_set_breakpoint_conditional(
+            "/a.rs".into(),
+            10,
+            Some("i == 42".into()),
+            Some(">= 3".into()),
+        );
+        let state = ed.debug_state.as_ref().unwrap();
+        let bps = &state.breakpoints["/a.rs"];
+        assert_eq!(bps.len(), 1); // Not duplicated.
+        assert_eq!(bps[0].condition.as_deref(), Some("i == 42"));
+        assert_eq!(bps[0].hit_condition.as_deref(), Some(">= 3"));
+    }
+
+    #[test]
+    fn dap_set_breakpoint_conditional_with_hit_condition() {
+        let mut ed = Editor::new();
+        let lines =
+            ed.dap_set_breakpoint_conditional("/a.rs".into(), 5, None, Some(">= 10".into()));
+        assert_eq!(lines, vec![5]);
+        let state = ed.debug_state.as_ref().unwrap();
+        let bp = &state.breakpoints["/a.rs"][0];
+        assert!(bp.condition.is_none());
+        assert_eq!(bp.hit_condition.as_deref(), Some(">= 10"));
+    }
+
+    #[test]
+    fn dap_resync_carries_conditions() {
+        let mut ed = Editor::new();
+        let mut state = DebugState::new(DebugTarget::Dap {
+            adapter_name: "lldb".into(),
+            program: "x".into(),
+        });
+        state.add_breakpoint_conditional("/a.rs", 10, Some("x > 0".into()), None);
+        ed.debug_state = Some(state);
+        ed.dap_resync_breakpoints();
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        match &ed.pending_dap_intents[0] {
+            DapIntent::SetBreakpoints { breakpoints, .. } => {
+                assert_eq!(breakpoints[0].condition.as_deref(), Some("x > 0"));
+            }
+            other => panic!("expected SetBreakpoints, got {:?}", other),
+        }
     }
 }

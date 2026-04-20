@@ -30,10 +30,20 @@ pub fn winit_key_to_keypress(event: &KeyEvent) -> Option<KeyPress> {
 
 /// Convert a winit KeyEvent to an InputEvent, applying modifier state.
 /// Used by the GUI event loop (main.rs with --gui flag).
-pub fn winit_event_to_input(event: &KeyEvent, ctrl: bool, alt: bool) -> Option<InputEvent> {
+pub fn winit_event_to_input(
+    event: &KeyEvent,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> Option<InputEvent> {
     let mut kp = winit_key_to_keypress(event)?;
     kp.ctrl = ctrl;
     kp.alt = alt;
+
+    // Shift+Tab → BackTab (winit sends Tab with shift modifier)
+    if shift && kp.key == Key::Tab {
+        kp.key = Key::BackTab;
+    }
 
     // Ctrl+letter normalization: winit may produce uppercase characters
     // when Ctrl is held. Normalize to lowercase for consistency with the
@@ -196,6 +206,12 @@ mod tests {
             Some(MouseButton::Middle)
         );
         assert_eq!(winit_mouse_button(&winit::event::MouseButton::Back), None);
+    }
+
+    #[test]
+    fn tab_key() {
+        let key = WinitKey::Named(NamedKey::Tab);
+        assert_eq!(logical_key_to_mae(&key).unwrap(), Key::Tab);
     }
 
     #[test]

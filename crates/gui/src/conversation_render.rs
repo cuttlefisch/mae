@@ -3,6 +3,7 @@
 use mae_core::{conversation::LineStyle, Editor, Mode, Window};
 
 use crate::canvas::SkiaCanvas;
+use crate::draw_window_border;
 use crate::theme;
 
 /// Render a conversation buffer window.
@@ -110,8 +111,8 @@ pub fn render_conversation_window(
                         theme::ts_fg(editor, "conversation.system")
                     }
                 }
-                LineStyle::UserText => theme::ts_fg(editor, "ui.text"),
-                LineStyle::AssistantText => theme::ts_fg(editor, "conversation.assistant"),
+                LineStyle::UserText => theme::ts_fg(editor, "conversation.user.text"),
+                LineStyle::AssistantText => theme::ts_fg(editor, "conversation.assistant.text"),
                 LineStyle::ToolCallHeader => theme::ts_fg(editor, "conversation.tool"),
                 LineStyle::ToolResultText => theme::ts_fg(editor, "conversation.tool.result"),
                 LineStyle::SystemText => theme::ts_fg(editor, "conversation.system"),
@@ -123,31 +124,6 @@ pub fn render_conversation_window(
             canvas.draw_text_at(row, inner_col, &display, fg);
         }
     }
-}
-
-fn draw_window_border(
-    canvas: &mut SkiaCanvas,
-    row: usize,
-    col: usize,
-    width: usize,
-    height: usize,
-    color: skia_safe::Color4f,
-    title: &str,
-) {
-    if width < 2 || height < 2 {
-        return;
-    }
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row, col, &top, color);
-    if title.len() + 2 < width {
-        canvas.draw_text_at(row, col + 1, title, color);
-    }
-    for r in 1..height.saturating_sub(1) {
-        canvas.draw_text_at(row + r, col, "│", color);
-        canvas.draw_text_at(row + r, col + width - 1, "│", color);
-    }
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
-    canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 
 #[cfg(test)]

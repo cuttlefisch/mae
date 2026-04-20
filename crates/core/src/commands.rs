@@ -325,6 +325,10 @@ impl CommandRegistry {
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
 
+        // Dashboard / scratch
+        reg.register_builtin("dashboard", "Show the startup dashboard");
+        reg.register_builtin("toggle-scratch-buffer", "Toggle the scratch buffer (SPC x)");
+
         // Leader key placeholder commands
         reg.register_builtin("command-palette", "Search and run any command");
         reg.register_builtin("kill-buffer", "Close current buffer");
@@ -474,6 +478,14 @@ impl CommandRegistry {
         reg.register_builtin(
             "debug-panel",
             "Toggle debug panel showing threads, stack, and variables (SPC d p)",
+        );
+        reg.register_builtin(
+            "debug-attach",
+            "Attach debugger to a running process (:debug-attach <adapter> <pid>)",
+        );
+        reg.register_builtin(
+            "debug-eval",
+            "Evaluate expression in debug context (:debug-eval <expression>)",
         );
 
         // LSP (Phase 4a)
@@ -694,6 +706,36 @@ impl CommandRegistry {
             "Run AI-driven self-test to validate editor tools and integrations (:self-test [categories])",
         );
 
+        // Font zoom (GUI)
+        reg.register_builtin("increase-font-size", "Increase GUI font size by 1pt");
+        reg.register_builtin("decrease-font-size", "Decrease GUI font size by 1pt");
+        reg.register_builtin("reset-font-size", "Reset GUI font size to default (14pt)");
+
+        // AI agent launcher
+        reg.register_builtin("open-ai-agent", "Open AI agent in a shell terminal");
+
+        // Tutorial
+        reg.register_builtin("tutor", "Open interactive MAE tutorial");
+
+        // Session persistence
+        reg.register_builtin(
+            "session-save",
+            "Save current session (open buffers + cursors) to .mae/session.json",
+        );
+        reg.register_builtin("session-load", "Restore session from .mae/session.json");
+
+        // Project management
+        reg.register_builtin("add-project", "Add a project directory and switch to it");
+        reg.register_builtin("remove-project", "Remove a project from the recent list");
+
+        // Event recording
+        reg.register_builtin("record-start", "Start event recording for debugging");
+        reg.register_builtin("record-stop", "Stop event recording");
+        reg.register_builtin(
+            "record-save",
+            "Save recorded events to JSON file (:record-save <path>)",
+        );
+
         reg
     }
 }
@@ -785,6 +827,16 @@ mod tests {
     fn with_builtins_has_self_test() {
         let reg = CommandRegistry::with_builtins();
         assert!(reg.contains("self-test"));
+    }
+
+    #[test]
+    fn with_builtins_has_debug_and_recording() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("debug-attach"));
+        assert!(reg.contains("debug-eval"));
+        assert!(reg.contains("record-start"));
+        assert!(reg.contains("record-stop"));
+        assert!(reg.contains("record-save"));
     }
 
     #[test]

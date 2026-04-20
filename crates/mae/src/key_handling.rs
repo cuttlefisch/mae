@@ -23,6 +23,7 @@ pub fn keypress_to_crossterm(kp: &KeyPress) -> KeyEvent {
         Key::Enter => KeyCode::Enter,
         Key::Backspace => KeyCode::Backspace,
         Key::Tab => KeyCode::Tab,
+        Key::BackTab => KeyCode::BackTab,
         Key::Up => KeyCode::Up,
         Key::Down => KeyCode::Down,
         Key::Left => KeyCode::Left,
@@ -78,6 +79,7 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
         KeyCode::Enter => Key::Enter,
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Tab => Key::Tab,
+        KeyCode::BackTab => Key::BackTab,
         KeyCode::Up => Key::Up,
         KeyCode::Down => Key::Down,
         KeyCode::Left => Key::Left,
@@ -100,12 +102,7 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
 
 /// Check if the splash screen is currently visible.
 fn is_splash_visible(editor: &Editor) -> bool {
-    let buf = editor.active_buffer();
-    buf.kind == mae_core::BufferKind::Text
-        && buf.name == "[scratch]"
-        && buf.rope().len_chars() == 0
-        && !buf.modified
-        && editor.buffers.len() == 1
+    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
 pub fn handle_key(
@@ -556,6 +553,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         KeyCode::Enter => {
             let name = palette.selected_name().map(|s| s.to_string());
             let purpose = palette.purpose;
+            let query = palette.query.clone();
             editor.command_palette = None;
             editor.mode = Mode::Normal;
             match (name, purpose) {
@@ -585,13 +583,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                     crate::config::persist_editor_preference("splash_art", &art);
                 }
                 (Some(root_str), PalettePurpose::SwitchProject) => {
-                    let root = std::path::PathBuf::from(&root_str);
-                    if root.is_dir() {
-                        editor.recent_projects.push(root.clone());
-                        editor.project = Some(mae_core::project::Project::from_root(root));
-                        editor.set_status(format!("Switched to project: {}", root_str));
+                    editor.add_project(&root_str);
+                }
+                (None, PalettePurpose::SwitchProject) => {
+                    // No match selected — treat query as a typed path
+                    if !query.is_empty() {
+                        editor.add_project(&query);
                     } else {
-                        editor.set_status(format!("Project root not found: {}", root_str));
+                        editor.set_status("No project selected");
                     }
                 }
                 (None, _) => editor.set_status("No command selected"),

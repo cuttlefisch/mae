@@ -50,7 +50,7 @@ use std::rc::Rc;
 use mae_core::{BufferKind, Editor, HighlightSpan};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
-use tracing::{info, trace_span};
+use tracing::{debug, info, trace_span};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
@@ -235,6 +235,7 @@ impl Renderer for GuiRenderer {
 
         // Check for fullscreen overlays first.
         if editor.file_picker.is_some() {
+            debug!("render: file_picker overlay");
             render_window_area(
                 canvas,
                 editor,
@@ -249,6 +250,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_file_picker(canvas, editor, cols, rows);
         } else if editor.file_browser.is_some() {
+            debug!("render: file_browser overlay");
             render_window_area(
                 canvas,
                 editor,
@@ -263,6 +265,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_file_browser(canvas, editor, cols, rows);
         } else if editor.command_palette.is_some() {
+            debug!("render: command_palette overlay");
             render_window_area(
                 canvas,
                 editor,
@@ -277,6 +280,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_command_palette(canvas, editor, cols, rows);
         } else if !editor.which_key_prefix.is_empty() {
+            debug!("render: which_key popup");
             let entries = if let Some(km) = editor.keymaps.get("normal") {
                 km.which_key_entries(&editor.which_key_prefix, &editor.commands)
             } else {
@@ -307,10 +311,12 @@ impl Renderer for GuiRenderer {
                 &entries,
             );
         } else if splash_render::should_show_splash(editor) {
+            debug!("render: splash screen");
             splash_render::render_splash(canvas, editor, 0, 0, cols, window_height);
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
+            debug!("render: normal window area");
             render_window_area(
                 canvas,
                 editor,
@@ -625,7 +631,11 @@ fn render_gui_cursor(
 // Shared border helper
 // ---------------------------------------------------------------------------
 
-fn draw_window_border(
+/// Draw a box border with an optional title embedded in the top edge.
+///
+/// The title is rendered as part of the border string so that dashes don't
+/// overlap the title glyphs (which causes a strikethrough effect in Skia).
+pub(crate) fn draw_window_border(
     canvas: &mut canvas::SkiaCanvas,
     row: usize,
     col: usize,
@@ -637,16 +647,20 @@ fn draw_window_border(
     if width < 2 || height < 2 {
         return;
     }
-    let top = format!("┌{}┐", "─".repeat(width.saturating_sub(2)));
+    let inner_w = width.saturating_sub(2);
+    let title_len = title.chars().count();
+    let top = if !title.is_empty() && title_len < inner_w {
+        let pad = inner_w - title_len;
+        format!("┌{}{}┐", title, "─".repeat(pad))
+    } else {
+        format!("┌{}┐", "─".repeat(inner_w))
+    };
     canvas.draw_text_at(row, col, &top, color);
-    if title.chars().count() + 2 < width {
-        canvas.draw_text_at(row, col + 1, title, color);
-    }
     for r in 1..height.saturating_sub(1) {
         canvas.draw_text_at(row + r, col, "│", color);
         canvas.draw_text_at(row + r, col + width - 1, "│", color);
     }
-    let bottom = format!("└{}┘", "─".repeat(width.saturating_sub(2)));
+    let bottom = format!("└{}┘", "─".repeat(inner_w));
     canvas.draw_text_at(row + height - 1, col, &bottom, color);
 }
 
