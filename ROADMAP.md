@@ -893,9 +893,9 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | AI/LSP/DAP/MCP channels | ✅ Done | M2 |
 | Shell terminals | ✅ Done | M2 |
 | Cursor rendering | ✅ Done | M3 |
-| Line numbers / gutter | ❌ Not yet | M3 |
+| Line numbers / gutter | ✅ Done | M3 |
 | Command line display | ✅ Done | M3 |
-| Syntax highlighting colors | ❌ Not yet | M3 |
+| Syntax highlighting colors | ✅ Done | M3 |
 | Splash screen | ✅ Done | M3 |
 | Mouse (click, scroll) | ✅ Done | M3 |
 | Shell scrollback | ✅ Done | M3 |
@@ -909,7 +909,10 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Org-mode image preview | ❌ Not yet | M6 |
 | PDF preview | ❌ Not yet | M7 |
 | Mouse click + scroll | ✅ Done | M3 |
-| Mouse click-drag select | ❌ Not yet | M8 |
+| Mouse click-drag select | ✅ Done | M8 |
+| Selection highlighting (visual mode) | ✅ Done | M3 |
+| Unicode/glyph fallback (font chain) | ✅ Done | M3 |
+| Scrollbar (vertical) | ❌ Not yet | M8 |
 
 ### M3: Visual Polish — COMPLETE
 - [x] Cursor rendering in GUI (block/line per mode)
@@ -927,10 +930,10 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] 30-second health check for zombie shell detection
 - [x] Font zoom keybindings: `Ctrl+=` increase, `Ctrl+-` decrease, `Ctrl+0` reset
 - [x] BackTab / Shift-Tab passthrough in shell-insert mode
-- [ ] Unicode/glyph fallback: load fallback font chain for characters missing from primary monospace font (Nerd Font glyphs, box-drawing, emoji, CJK) — currently renders replacement glyph (U+FFFD)
-- [ ] Line numbers and gutter in GUI
-- [ ] Syntax highlighting colors in GUI
-- [ ] Visual mode selection highlighting in GUI
+- [x] Unicode/glyph fallback: 7-level font chain (configured → JetBrainsMono Nerd Font → Fira Code → Cascadia Code → monospace)
+- [x] Line numbers and gutter in GUI (`gutter.rs`: relative/absolute, breakpoint/diagnostic markers)
+- [x] Syntax highlighting colors in GUI (tree-sitter spans → theme keys → per-char style)
+- [x] Visual mode selection highlighting in GUI (charwise + linewise, multi-line clipping)
 - [ ] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — investigate color attribute leak during insert-mode rendering
 
 ### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
@@ -970,10 +973,10 @@ Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `Even
 
 ### M8: Mouse & Selection
 - [x] Click to place cursor (done in M3)
-- [ ] Click-drag to select text
+- [x] Click-drag to select text (mouse press/drag/release → visual selection)
 - [ ] Scrollbar (vertical)
 - [x] Mouse wheel scroll (done in M3)
-- [ ] Selection highlighting
+- [x] Selection highlighting (done in M3 — visual mode bg/fg in buffer_render.rs)
 
 ---
 
@@ -1095,7 +1098,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M3 remaining** (GUI polish) — line numbers/gutter, syntax highlighting colors, visual selection in GUI, Unicode/glyph fallback
+1. **Phase 8 M3 remaining** (GUI polish) — vertical line color bug in insert mode
 2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
 3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
 4. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
