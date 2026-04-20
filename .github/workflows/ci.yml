@@ -57,6 +57,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --exclude mae-gui
+        run: cargo build --release --workspace --exclude mae-gui
       - name: Validate init.scm
         run: ./target/release/mae --check-config

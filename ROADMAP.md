@@ -931,6 +931,7 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [ ] Line numbers and gutter in GUI
 - [ ] Syntax highlighting colors in GUI
 - [ ] Visual mode selection highlighting in GUI
+- [ ] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — investigate color attribute leak during insert-mode rendering
 
 ### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
 
