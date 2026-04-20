@@ -1602,21 +1602,20 @@ mod tests {
     }
 
     #[test]
-    fn dap_start_tool_requires_privileged_tier() {
+    fn dap_start_tool_is_allowed_at_shell_tier() {
         let mut editor = Editor::new();
         let call = make_call(
             "dap_start",
             serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
         );
-        // Default policy allows up to Shell — should be denied.
+        // Default policy allows up to Shell — should be allowed.
         let result = unwrap_immediate(execute_tool(
             &mut editor,
             &call,
             &all_tools(),
             &PermissionPolicy::default(),
         ));
-        assert!(!result.success);
-        assert!(result.output.contains("Permission denied"));
+        assert!(result.success);
     }
 
     #[test]

@@ -44,6 +44,10 @@ struct SharedState {
     pending_messages: Vec<String>,
     /// Shell inputs to send: (buffer_index, text).
     pending_shell_inputs: Vec<(usize, String)>,
+    /// Recent files to add: (path).
+    pending_recent_files: Vec<String>,
+    /// Recent projects to add: (path).
+    pending_recent_projects: Vec<String>,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -206,6 +210,18 @@ impl SchemeRuntime {
                 .unwrap()
                 .pending_shell_inputs
                 .push((buf_idx as usize, text));
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("recent-files-add!", move |path: String| {
+            s.lock().unwrap().pending_recent_files.push(path);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("recent-projects-add!", move |path: String| {
+            s.lock().unwrap().pending_recent_projects.push(path);
             SteelVal::Void
         });
 
@@ -469,6 +485,14 @@ impl SchemeRuntime {
         // (shell-send-input BUF-IDX TEXT) — queue shell terminal input.
         for (buf_idx, text) in state.pending_shell_inputs.drain(..) {
             editor.pending_shell_inputs.push((buf_idx, text));
+        }
+
+        // Recent files and projects
+        for path in state.pending_recent_files.drain(..) {
+            editor.recent_files.push(std::path::PathBuf::from(path));
+        }
+        for path in state.pending_recent_projects.drain(..) {
+            editor.recent_projects.push(std::path::PathBuf::from(path));
         }
 
         // Drop the lock before dispatching commands (which may call
@@ -1015,5 +1039,38 @@ mod tests {
         let result = rt.eval("*shell-buffers*").unwrap();
         // Should contain the index of the shell buffer (1).
         assert!(result.contains("1"));
+    }
+
+    #[test]
+    fn test_recent_files_and_projects() {
+        let mut editor = Editor::new();
+        let mut runtime = SchemeRuntime::new().unwrap();
+
+        // Initially empty
+        assert_eq!(editor.recent_files.len(), 0);
+        assert_eq!(editor.recent_projects.len(), 0);
+
+        // Evaluate scheme calls
+        runtime
+            .eval("(recent-files-add! \"/tmp/test.txt\")")
+            .unwrap();
+        runtime
+            .eval("(recent-projects-add! \"/tmp/project\")")
+            .unwrap();
+
+        // Apply to editor
+        runtime.apply_to_editor(&mut editor);
+
+        // Verify editor state updated
+        assert_eq!(editor.recent_files.len(), 1);
+        assert_eq!(
+            editor.recent_files.list()[0],
+            std::path::PathBuf::from("/tmp/test.txt")
+        );
+        assert_eq!(editor.recent_projects.len(), 1);
+        assert_eq!(
+            editor.recent_projects.list()[0],
+            std::path::PathBuf::from("/tmp/project")
+        );
     }
 }

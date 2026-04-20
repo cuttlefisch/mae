@@ -631,9 +631,9 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                 ]),
                 required: vec!["adapter".into()],
             },
-            // Privileged because launching arbitrary programs under a
+            // Shell tier because launching programs under a
             // debug adapter is roughly equivalent to shell exec.
-            permission: Some(PermissionTier::Privileged),
+            permission: Some(PermissionTier::Shell),
         },
         ToolDefinition {
             name: "dap_set_breakpoint".into(),
@@ -1525,7 +1525,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         "buffer_read" | "buffer_write" | "cursor_info" | "open_file" | "switch_buffer"
         | "create_file" | "close_buffer" | "list_buffers" | "editor_state" | "project_search"
         | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
-        | "help_open" | "file_read" | "self_test_suite" => ToolTier::Core,
+        | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
+        | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -1789,34 +1790,34 @@ mod tests {
     }
 
     #[test]
-    fn core_tools_under_20() {
+    fn core_tools_under_30() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         let core_count = tools
             .iter()
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 20,
-            "core tools should be < 20, got {}",
+            core_count < 30,
+            "core tools should be < 30, got {}",
             core_count
         );
         assert!(
-            core_count >= 10,
-            "core tools should be >= 10, got {}",
+            core_count >= 15,
+            "core tools should be >= 15, got {}",
             core_count
         );
     }
 
     #[test]
-    fn extended_tools_over_40() {
+    fn extended_tools_over_35() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         let extended_count = tools
             .iter()
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Extended)
             .count();
         assert!(
-            extended_count > 40,
-            "extended tools should be > 40, got {}",
+            extended_count >= 35,
+            "extended tools should be >= 35, got {}",
             extended_count
         );
     }

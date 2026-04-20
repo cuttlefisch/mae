@@ -96,6 +96,66 @@ fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
     Some((path, Mutex::new(file)))
 }
 
+/// Resolve the history file path (~/.local/state/mae/history.scm).
+pub fn history_file_path() -> Option<PathBuf> {
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
+    let dir = state_home.join("mae");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("history.scm"))
+}
+
+/// Serialize editor history (recent files/projects) into executable Scheme.
+pub fn save_history(editor: &Editor) -> std::io::Result<()> {
+    let Some(path) = history_file_path() else {
+        return Ok(());
+    };
+
+    let mut script = String::new();
+    script.push_str(";; MAE generated history file. Do not edit by hand.\n\n");
+
+    // We write them in reverse order, so that when executed, the
+    // push operation preserves the same MRU ordering.
+    for file in editor.recent_files.list().iter().rev() {
+        script.push_str(&format!(
+            "(recent-files-add! \"{}\")\n",
+            file.to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        ));
+    }
+
+    for project in editor.recent_projects.list().iter().rev() {
+        script.push_str(&format!(
+            "(recent-projects-add! \"{}\")\n",
+            project
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        ));
+    }
+
+    std::fs::write(path, script)
+}
+
+/// Load and evaluate the history Scheme file.
+pub fn load_history(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    if let Some(path) = history_file_path() {
+        if path.exists() {
+            match scheme.load_file(&path) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    debug!(path = %path.display(), "history loaded successfully");
+                }
+                Err(e) => {
+                    error!(path = %path.display(), error = %e, "history load failed");
+                }
+            }
+        }
+    }
+}
+
 /// Tracing layer that captures events into the in-editor MessageLog.
 /// This makes log entries viewable via `:messages` without requiring
 /// external log tooling — the Emacs `*Messages*` pattern.

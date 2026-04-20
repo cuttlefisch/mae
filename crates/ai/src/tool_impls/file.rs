@@ -34,6 +34,8 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
     } else {
+        let idx = editor.active_buffer_idx();
+        editor.ai_target_buffer_idx = Some(idx);
         Ok(format!(
             "Opened '{}' ({} lines)",
             editor.active_buffer().name,
@@ -56,6 +58,7 @@ pub fn execute_switch_buffer(
         .ok_or_else(|| format!("No buffer named '{}'", name))?;
 
     editor.switch_to_buffer_non_conversation(idx);
+    editor.ai_target_buffer_idx = Some(idx);
     Ok(format!("Switched to buffer '{}'", name))
 }
 

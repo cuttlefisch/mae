@@ -30,7 +30,8 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, trace, warn};
 
 use bootstrap::{
-    find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_dap, setup_lsp,
+    find_conversation_buffer_mut, init_logging, load_history, load_init_file, save_history,
+    setup_ai, setup_dap, setup_lsp,
 };
 use key_handling::handle_key;
 
@@ -253,9 +254,9 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Load init.scm if it exists
+    // Load init.scm and history.scm
     load_init_file(&mut scheme, &mut editor);
-
+    load_history(&mut scheme, &mut editor);
     // --debug: enable debug mode (RSS/CPU/frame time in status bar)
     if args.iter().any(|a| a == "--debug") {
         editor.debug_mode = true;
@@ -558,6 +559,11 @@ async fn run_terminal_loop(
 
         if !editor.running {
             info!("editor shutting down");
+
+            // Persist history
+            if let Err(e) = save_history(&editor) {
+                error!(error = %e, "failed to save history");
+            }
 
             // AI session persistence
             if editor.restore_session {

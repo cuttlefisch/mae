@@ -346,6 +346,10 @@ pub struct Editor {
     pub ai_current_round: usize,
     /// Current transaction start index in history.
     pub ai_transaction_start_idx: Option<usize>,
+    /// AI's target buffer context. When set, buffer/LSP tools operate here
+    /// instead of the human-focused active buffer. This allows the AI to
+    /// edit files while the human watches the *AI* conversation.
+    pub ai_target_buffer_idx: Option<usize>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -502,6 +506,7 @@ impl Editor {
             ai_streaming: false,
             ai_current_round: 0,
             ai_transaction_start_idx: None,
+            ai_target_buffer_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
@@ -638,6 +643,7 @@ impl Editor {
             ai_streaming: false,
             ai_current_round: 0,
             ai_transaction_start_idx: None,
+            ai_target_buffer_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
