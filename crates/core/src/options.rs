@@ -103,6 +103,14 @@ impl OptionRegistry {
                     config_key: Some("editor.show_break"),
                 },
                 OptionDef {
+                    name: "org_hide_emphasis_markers",
+                    aliases: &["org-hide-emphasis-markers"],
+                    doc: "Hide *bold* and /italic/ markers in Org-mode",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.org_hide_emphasis_markers"),
+                },
+                OptionDef {
                     name: "show_fps",
                     aliases: &["show-fps"],
                     doc: "Show FPS/frame-timing overlay in the status bar",
@@ -117,6 +125,22 @@ impl OptionRegistry {
                     kind: OptionKind::Float,
                     default_value: "14.0",
                     config_key: Some("editor.font_size"),
+                },
+                OptionDef {
+                    name: "font_family",
+                    aliases: &["font-family"],
+                    doc: "Primary GUI monospace font family",
+                    kind: OptionKind::String,
+                    default_value: "",
+                    config_key: Some("editor.font_family"),
+                },
+                OptionDef {
+                    name: "icon_font_family",
+                    aliases: &["icon-font-family"],
+                    doc: "Secondary GUI font family for icons and symbols (fallback)",
+                    kind: OptionKind::String,
+                    default_value: "",
+                    config_key: Some("editor.icon_font_family"),
                 },
                 OptionDef {
                     name: "theme",

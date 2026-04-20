@@ -5,6 +5,7 @@ use std::time::SystemTime;
 
 use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
+use crate::git_status::GitStatusView;
 use crate::help_view::HelpView;
 use crate::window::Window;
 
@@ -30,6 +31,8 @@ pub enum BufferKind {
     /// Startup dashboard — read-only buffer that shows the splash screen.
     /// Unlike `Text` scratch, this buffer always renders the splash overlay.
     Dashboard,
+    /// Git status "porcelain" UI (Phase 6 M5).
+    GitStatus,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -65,6 +68,8 @@ pub struct Buffer {
     pub help_view: Option<HelpView>,
     /// Debug panel view state. Present iff `kind == BufferKind::Debug`.
     pub debug_view: Option<DebugView>,
+    /// Git status view state. Present iff `kind == BufferKind::GitStatus`.
+    pub git_status: Option<GitStatusView>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// Last known modification time of the backing file on disk.
@@ -77,6 +82,8 @@ pub struct Buffer {
     /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
+    /// Line indices that are currently folded (hidden).
+    pub folded_ranges: Vec<(usize, usize)>,
     /// Per-buffer mode persistence (evil-mode pattern).  When switching away
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
@@ -101,11 +108,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -122,11 +131,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -143,11 +154,13 @@ impl Buffer {
             conversation: Some(Conversation::new()),
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -164,11 +177,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -186,11 +201,13 @@ impl Buffer {
             conversation: None,
             help_view: Some(HelpView::new(start)),
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -207,11 +224,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -228,11 +247,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: Some(DebugView::new()),
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: None,
             project_root: None,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         }
     }
@@ -255,11 +276,13 @@ impl Buffer {
             conversation: None,
             help_view: None,
             debug_view: None,
+            git_status: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             file_mtime: mtime,
             project_root,
             agent_shell: false,
+            folded_ranges: Vec::new(),
             saved_mode: None,
         })
     }

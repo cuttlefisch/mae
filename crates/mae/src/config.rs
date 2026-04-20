@@ -70,7 +70,9 @@ pub struct EditorSection {
     pub theme: Option<String>,
     pub splash_art: Option<String>,
     pub font_family: Option<String>,
+    pub icon_font_family: Option<String>,
     pub font_size: Option<f32>,
+    pub org_hide_emphasis_markers: Option<bool>,
     /// Restore previous session on startup (per-project).
     pub restore_session: Option<bool>,
 }
@@ -405,6 +407,10 @@ pub fn persist_editor_preference(key: &str, value: &str) {
         "theme" => cfg.editor.theme = Some(value.to_string()),
         "splash_art" => cfg.editor.splash_art = Some(value.to_string()),
         "ai_editor" => cfg.ai.editor = Some(value.to_string()),
+        "font_family" => cfg.editor.font_family = Some(value.to_string()),
+        "icon_font_family" => cfg.editor.icon_font_family = Some(value.to_string()),
+        "font_size" => cfg.editor.font_size = value.parse().ok(),
+        "org_hide_emphasis_markers" => cfg.editor.org_hide_emphasis_markers = Some(value == "true"),
         "restore_session" => cfg.editor.restore_session = Some(value == "true"),
         _ => {
             warn!(key, value, "unknown editor preference key");

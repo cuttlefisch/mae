@@ -333,6 +333,7 @@ impl SchemeRuntime {
             mae_core::Mode::FileBrowser => "file-browser",
             mae_core::Mode::CommandPalette => "command-palette",
             mae_core::Mode::ShellInsert => "shell-insert",
+            mae_core::Mode::GitStatus => "git-status",
         };
         self.engine
             .register_value("*mode*", SteelVal::StringV(mode_str.into()));

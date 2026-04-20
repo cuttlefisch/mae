@@ -1,11 +1,12 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.0 (1,484 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
-Terminal editor with vi-like modal editing, Scheme runtime, Claude/OpenAI/Ollama
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.5 (1,324 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Terminal editor with vi-like modal editing, Scheme runtime, Gemini/Claude/OpenAI
 integration, search, visual mode, text objects, change/repeat/replace, scroll,
 indent/dedent, case change, line join, fuzzy file picker, command history, shell
-escape, horizontal scroll, multi-file AI tools, embedded terminal emulator
-(alacritty_terminal), Scheme hooks, and `set-option!` all working.
+escape, horizontal scroll, multi-file AI tools, transactional tool callstack,
+embedded terminal emulator (alacritty_terminal), Scheme hooks, and `set-option!`
+all working.
 
 Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 
@@ -29,8 +30,8 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Claude/OpenAI/Ollama tool-calling, conversation buffer, streaming, elapsed timer, multi-file tools, project search |
-| **Scheme** | Steel runtime, init.scm, define-key, eval REPL |
+| **AI** | Gemini/Claude/OpenAI tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools |
+| **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
@@ -60,7 +61,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | 8 | Mouse support | future |
 | 9 | `:read !cmd` | v0.3.0 ✅ |
 | 10 | Multiple cursors | future |
-| 11 | Session persistence | v0.3.0 ✅ |
+| 11 | Session persistence (history.scm) | v0.3.0 | **DONE** |
 | 12 | README badges (CI status, Rust version, license, crate count) | v0.3.0 ✅ |
 | 13 | File tree sidebar (NERDTree/neotree): persistent project tree pane with expand/collapse, file ops | future |
 | 14 | Doom-style `init.scm`: documented API reference, keybinding examples, hook usage, option config, module system | v0.3.0 ✅ |
@@ -795,7 +796,7 @@ M1 PTY shell and the existing `SPC g` stubs.
 - [ ] Blame: `SPC g b` — line-by-line blame in gutter or dedicated buffer
 - [ ] Stash: `z z` — stash, `z p` — pop, `z l` — list stashes
 - [ ] Keybindings match magit conventions where possible (s/u/c/l/z prefixes)
-- [ ] AI tools: `git_status`, `git_diff`, `git_log` — structured JSON for agent use
+- [x] AI tools: `git_status`, `git_diff`, `git_log`, `git_commit`, `git_stage`, `git_push`, `git_pull` — structured JSON for agent use (M5a)
 - [ ] Scheme exposure: `(git-status)`, `(git-stage FILE)`, `(git-commit MSG)`
 
 ---
@@ -1125,4 +1126,4 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
-| **Total** | **1,484** | All passing, 0 failures |
+| **Total** | **1,324** | All passing, 0 failures |

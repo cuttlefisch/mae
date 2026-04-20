@@ -19,6 +19,7 @@ pub struct SkiaCanvas {
     surface: Surface,
     font: Font,
     bold_font: Font,
+    icon_font: Option<Font>,
     cell_width: f32,
     cell_height: f32,
     /// Distance from cell top to the text baseline (= magnitude of ascent).
@@ -41,6 +42,7 @@ impl SkiaCanvas {
         height: u32,
         window: Rc<Window>,
         font_family: Option<&str>,
+        icon_font_family: Option<&str>,
         font_size_override: Option<f32>,
     ) -> io::Result<Self> {
         let surface = surfaces::raster_n32_premul((width as i32, height as i32))
@@ -49,6 +51,7 @@ impl SkiaCanvas {
         // Load a monospace font. If a family is configured, try it first.
         // The default chain prefers Nerd Font variants (icon/glyph support).
         let font_mgr = FontMgr::default();
+
         let typeface = font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
             .or_else(|| {
@@ -78,9 +81,19 @@ impl SkiaCanvas {
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
             .unwrap_or_else(|| typeface.clone());
 
+        let icon_typeface = icon_font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
+            .or_else(|| {
+                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", FontStyle::normal())
+            })
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", FontStyle::normal()))
+            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font Mono", FontStyle::normal()))
+            .or_else(|| font_mgr.match_family_style("Symbols Nerd Font", FontStyle::normal()));
+
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
         let bold_font = Font::from_typeface(bold_typeface, font_size);
+        let icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, font_size));
 
         // Measure a reference character for cell dimensions.
         let (_, bounds) = font.measure_str("M", None);
@@ -106,6 +119,7 @@ impl SkiaCanvas {
             surface,
             font,
             bold_font,
+            icon_font,
             cell_width,
             cell_height,
             ascent,
@@ -120,9 +134,11 @@ impl SkiaCanvas {
     pub fn update_font_size(&mut self, size: f32) {
         let typeface = self.font.typeface();
         let bold_typeface = self.bold_font.typeface();
+        let icon_typeface = self.icon_font.as_ref().map(|f| f.typeface());
 
         self.font = Font::from_typeface(typeface, size);
         self.bold_font = Font::from_typeface(bold_typeface, size);
+        self.icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, size));
 
         let (_, bounds) = self.font.measure_str("M", None);
         self.cell_width = bounds.width().max(size * 0.6);
@@ -200,60 +216,30 @@ impl SkiaCanvas {
     /// Draw a line of individually-styled cells at the given row.
     #[allow(dead_code)]
     pub fn draw_styled_line(&mut self, row: usize, cells: &StyledLine) {
-        let y = row as f32 * self.cell_height;
-        let baseline = y + self.ascent;
-        let canvas = self.surface.canvas();
-
         for (col, cell) in cells.iter().enumerate() {
-            let x = col as f32 * self.cell_width;
-
             // Background rect if specified.
             if let Some(bg_color) = cell.bg {
-                let bg_paint = fill_paint(bg_color);
-                canvas.draw_rect(
-                    skia_safe::Rect::from_xywh(x, y, self.cell_width, self.cell_height),
-                    &bg_paint,
-                );
+                self.draw_rect_fill(row, col, 1, 1, bg_color);
             }
 
             if cell.ch == ' ' && !cell.underline {
                 continue;
             }
 
-            let font = if cell.bold {
-                &self.bold_font
-            } else {
-                &self.font
-            };
-            let mut fg_paint = Paint::new(cell.fg, None);
-            fg_paint.set_anti_alias(true);
-            if cell.bold && std::ptr::eq(font, &self.font) {
-                // Fallback bold simulation if bold font is same as normal.
-                fg_paint.set_style(skia_safe::PaintStyle::StrokeAndFill);
-                fg_paint.set_stroke_width(0.5);
-            }
-
-            if cell.italic {
-                canvas.save();
-                // Simulate italic with a slight skew.
-                let mut skew_matrix = skia_safe::Matrix::new_identity();
-                skew_matrix.pre_skew((-0.2, 0.0), None);
-                canvas.concat(&skew_matrix);
-                let skewed_x = x + self.cell_width * 0.15; // compensate offset
-                canvas.draw_str(cell.ch.to_string(), (skewed_x, baseline), font, &fg_paint);
-                canvas.restore();
-            } else {
-                canvas.draw_str(cell.ch.to_string(), (x, baseline), font, &fg_paint);
-            }
+            self.draw_char(row, col, cell.ch, cell.fg, cell.bold);
 
             if cell.underline {
+                let x = col as f32 * self.cell_width;
+                let y = row as f32 * self.cell_height;
+                let baseline = y + self.ascent;
                 let underline_y = baseline + 1.0;
-                fg_paint.set_style(skia_safe::PaintStyle::Stroke);
-                fg_paint.set_stroke_width(1.0);
-                canvas.draw_line(
+                let mut paint = Paint::new(cell.fg, None);
+                paint.set_style(skia_safe::PaintStyle::Stroke);
+                paint.set_stroke_width(1.0);
+                self.surface.canvas().draw_line(
                     (x, underline_y),
                     (x + self.cell_width, underline_y),
-                    &fg_paint,
+                    &paint,
                 );
             }
         }
@@ -279,28 +265,70 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
     }
 
-    /// Draw text at a specific (row, col) cell position with given fg color.
-    pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
+    /// Draw a single character at a specific (row, col) with optional bold/icon fallback.
+    pub fn draw_char(&mut self, row: usize, col: usize, ch: char, fg: Color4f, bold: bool) {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
         let baseline = y + self.ascent;
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
-        self.surface
-            .canvas()
-            .draw_str(text, (x, baseline), &self.font, &paint);
+
+        let text = ch.to_string();
+
+        // 1. Try primary font (bold or normal)
+        let primary_font = if bold { &self.bold_font } else { &self.font };
+        if primary_font.unichar_to_glyph(ch as i32) != 0 {
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, baseline), primary_font, &paint);
+            return;
+        }
+
+        // 2. Try icon font fallback
+        if let Some(ref icon_font) = self.icon_font {
+            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+                self.surface
+                    .canvas()
+                    .draw_str(&text, (x, baseline), icon_font, &paint);
+                return;
+            }
+        }
+
+        // 3. System fallback via FontMgr
+        let font_mgr = FontMgr::default();
+        let family_name = self.font.typeface().family_name();
+        let style = self.font.typeface().font_style();
+
+        if let Some(fallback_tf) = font_mgr.match_family_style_character(
+            family_name.as_str(),
+            style,
+            &[], // bcp47
+            ch as i32,
+        ) {
+            let fallback_font = Font::from_typeface(fallback_tf, self.font.size());
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, baseline), &fallback_font, &paint);
+        } else {
+            // Last resort: draw with primary font anyway (likely renders as tofu/replacement char)
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, baseline), primary_font, &paint);
+        }
+    }
+
+    /// Draw text at a specific (row, col) cell position with given fg color.
+    pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
+        for (i, ch) in text.chars().enumerate() {
+            self.draw_char(row, col + i, ch, fg, false);
+        }
     }
 
     /// Draw text at a specific (row, col) with bold font.
     pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
-        let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-        let baseline = y + self.ascent;
-        let mut paint = Paint::new(fg, None);
-        paint.set_anti_alias(true);
-        self.surface
-            .canvas()
-            .draw_str(text, (x, baseline), &self.bold_font, &paint);
+        for (i, ch) in text.chars().enumerate() {
+            self.draw_char(row, col + i, ch, fg, true);
+        }
     }
 
     /// Draw a horizontal line across a full row (cell-based).

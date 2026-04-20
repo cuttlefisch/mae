@@ -145,7 +145,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
 - Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
 - `--check-config` CLI flag + CI E2E validation step ✅
-- **Next: vertical line color bug (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), scrollbar (M8)**
+- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Variable-height lines (8 M5)**
 
 ## Key Design Decisions Already Made
 

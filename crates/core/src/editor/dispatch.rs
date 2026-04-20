@@ -23,6 +23,91 @@ impl Editor {
         self.last_motion_linewise = Self::is_linewise_motion(name);
 
         match name {
+            // --- Git (Magit-lite) ---
+            "git-status" => {
+                self.git_status();
+            }
+            "git-stage" => {
+                let win = self.window_mgr.focused_window();
+                let idx = self.active_buffer_idx();
+                let path = if let Some(ref view) = self.buffers[idx].git_status {
+                    if let Some(line) = view.lines.get(win.cursor_row) {
+                        line.file_path.clone()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(p) = path {
+                    self.git_stage_file(&p);
+                }
+            }
+            "git-unstage" => {
+                let win = self.window_mgr.focused_window();
+                let idx = self.active_buffer_idx();
+                let path = if let Some(ref view) = self.buffers[idx].git_status {
+                    if let Some(line) = view.lines.get(win.cursor_row) {
+                        line.file_path.clone()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                if let Some(p) = path {
+                    self.git_unstage_file(&p);
+                }
+            }
+            "git-stage-all" => {
+                self.git_stage_file(".");
+            }
+            "git-unstage-all" => {
+                self.git_unstage_file(".");
+            }
+            "git-commit" => {
+                self.git_commit();
+            }
+            "git-log" => {
+                self.git_log();
+            }
+            "git-status-toggle" => {
+                // For now, toggle section/hunk not implemented, just refresh
+                self.git_status();
+            }
+            "git-status-open" => {
+                let win = self.window_mgr.focused_window();
+                let idx = self.active_buffer_idx();
+                let (path, repo_root) = if let Some(ref view) = self.buffers[idx].git_status {
+                    if let Some(line) = view.lines.get(win.cursor_row) {
+                        (line.file_path.clone(), Some(view.repo_root.clone()))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+
+                if let (Some(p), Some(root)) = (path, repo_root) {
+                    let full_path = root.join(p);
+                    self.open_file(full_path);
+                }
+            }
+
+            // --- Org-mode ---
+            "org-cycle" => {
+                self.org_cycle();
+            }
+            "org-todo-next" => {
+                self.org_todo_cycle(true);
+            }
+            "org-todo-prev" => {
+                self.org_todo_cycle(false);
+            }
+            "org-open-link" => {
+                self.org_open_link();
+            }
+
             // Movement — operates on focused window + its buffer
             "move-up" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
@@ -324,8 +409,9 @@ impl Editor {
                 match kind {
                     crate::BufferKind::Conversation => {
                         if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            let c: &mut crate::conversation::Conversation = conv;
                             for _ in 0..n {
-                                conv.scroll_up(amount);
+                                c.scroll_up(amount);
                             }
                         }
                     }
@@ -357,8 +443,9 @@ impl Editor {
                 match kind {
                     crate::BufferKind::Conversation => {
                         if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            let c: &mut crate::conversation::Conversation = conv;
                             for _ in 0..n {
-                                conv.scroll_down(amount);
+                                c.scroll_down(amount);
                             }
                         }
                     }
@@ -1047,7 +1134,8 @@ impl Editor {
             }
             "switch-buffer" => {
                 let names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
-                let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+                let name_refs: Vec<&str> = names.iter().map(|s: &String| s.as_str()).collect();
+
                 self.command_palette = Some(crate::command_palette::CommandPalette::for_buffers(
                     &name_refs,
                 ));
@@ -1848,10 +1936,8 @@ impl Editor {
             }
 
             // +git (SPC g)
-            "git-status" => self.git_status(),
             "git-blame" => self.git_blame(),
             "git-diff" => self.git_diff(),
-            "git-log" => self.git_log(),
 
             // +notes (SPC n)
             "kb-find" => {

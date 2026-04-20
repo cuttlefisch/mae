@@ -386,7 +386,7 @@ impl Editor {
         let item = match self.buffers[debug_idx]
             .debug_view
             .as_ref()
-            .and_then(|v| v.cursor_item().cloned())
+            .and_then(|v: &crate::debug_view::DebugView| v.cursor_item().cloned())
         {
             Some(item) => item,
             None => return,
@@ -418,7 +418,9 @@ impl Editor {
                 let now_expanded = self.buffers[debug_idx]
                     .debug_view
                     .as_mut()
-                    .map(|v| v.toggle_expand(variables_reference))
+                    .map(|v: &mut crate::debug_view::DebugView| {
+                        v.toggle_expand(variables_reference)
+                    })
                     .unwrap_or(false);
 
                 if now_expanded {
@@ -426,7 +428,9 @@ impl Editor {
                     let has_children = self.buffers[debug_idx]
                         .debug_view
                         .as_ref()
-                        .map(|v| v.child_variables.contains_key(&variables_reference))
+                        .map(|v: &crate::debug_view::DebugView| {
+                            v.child_variables.contains_key(&variables_reference)
+                        })
                         .unwrap_or(false);
                     if !has_children {
                         self.dap_request_variables(scope, variables_reference);
@@ -740,7 +744,7 @@ mod tests {
         ed.debug_panel_select();
 
         // Should have expanded and queued a variables request.
-        let view = ed
+        let view: &crate::debug_view::DebugView = ed
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)

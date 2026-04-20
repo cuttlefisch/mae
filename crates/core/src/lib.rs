@@ -10,6 +10,7 @@ pub mod editor;
 pub mod event_record;
 pub mod file_browser;
 pub mod file_picker;
+pub mod git_status;
 pub mod grapheme;
 pub mod help_view;
 pub mod hooks;
@@ -82,6 +83,8 @@ pub enum Mode {
     FilePicker,
     FileBrowser,
     CommandPalette,
+    /// Git status "porcelain" UI (Phase 6 M5).
+    GitStatus,
     /// Terminal emulator — keys go directly to PTY. Exit with Ctrl-\ Ctrl-n.
     ShellInsert,
 }

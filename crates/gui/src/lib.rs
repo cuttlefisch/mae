@@ -72,6 +72,8 @@ pub struct GuiRenderer {
     last_frame_start: Option<std::time::Instant>,
     /// Configured font family (None = use default fallback chain).
     font_family: Option<String>,
+    /// Configured icon font family (None = use default fallback chain).
+    icon_font_family: Option<String>,
     /// Configured font size (None = 14.0).
     font_size: Option<f32>,
 }
@@ -90,13 +92,20 @@ impl GuiRenderer {
             cell_height: 0.0,
             last_frame_start: None,
             font_family: None,
+            icon_font_family: None,
             font_size: None,
         }
     }
 
     /// Set the font family and size before window initialization.
-    pub fn set_font_config(&mut self, family: Option<String>, size: Option<f32>) {
+    pub fn set_font_config(
+        &mut self,
+        family: Option<String>,
+        icon_family: Option<String>,
+        size: Option<f32>,
+    ) {
         self.font_family = family;
+        self.icon_font_family = icon_family;
         self.font_size = size;
     }
 
@@ -117,6 +126,7 @@ impl GuiRenderer {
             size.height,
             window.clone(),
             self.font_family.as_deref(),
+            self.icon_font_family.as_deref(),
             self.font_size,
         )?;
 

@@ -18,6 +18,10 @@
 ;; Font size for the GUI backend (6–72, ignored in TUI).
 ;; (set-option! "font-size" "14.0")
 
+;; Font families for GUI.
+;; (set-option! "font-family" "JetBrainsMono Nerd Font")
+;; (set-option! "icon-font-family" "Symbols Nerd Font Mono")
+
 ;; Splash screen art variant.
 ;; (set-option! "splash-art" "bat")
 
@@ -46,6 +50,7 @@
 ;; (set-option! "word-wrap" "false")
 ;; (set-option! "break-indent" "true")
 ;; (set-option! "show-break" "↪ ")
+;; (set-option! "org-hide-emphasis-markers" "false")
 
 ;; Clipboard: "unnamed" (vim default) or "unnamedplus" (system)
 ;; (set-option! "clipboard-mode" "unnamed")
@@ -106,7 +111,8 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; Available hooks:
 ;;   before-save, after-save, buffer-open, buffer-close,
-;;   mode-change, file-changed-on-disk
+;;   mode-change, file-changed-on-disk, app-start, app-exit,
+;;   focus-in, focus-out
 
 ;; Log every file open to *Messages*.
 ;; (define (on-buffer-open)

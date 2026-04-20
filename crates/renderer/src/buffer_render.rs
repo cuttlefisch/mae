@@ -136,6 +136,19 @@ pub(crate) fn render_buffer(
     let mut line_idx = win.scroll_offset;
 
     while display_row < viewport_height && line_idx < display_lines {
+        // Skip folded lines
+        let mut is_folded = false;
+        for (start, end) in &buf.folded_ranges {
+            if line_idx > *start && line_idx < *end {
+                is_folded = true;
+                break;
+            }
+        }
+        if is_folded {
+            line_idx += 1;
+            continue;
+        }
+
         let line_text = buf.rope().line(line_idx);
         let full_display: String = line_text
             .chars()
@@ -190,6 +203,16 @@ pub(crate) fn render_buffer(
                         .byte_to_char(eb)
                         .saturating_sub(line_char_start)
                         .min(full_count);
+
+                    if editor.org_hide_emphasis_markers
+                        && (span.theme_key == "markup.bold.marker"
+                            || span.theme_key == "markup.italic.marker")
+                    {
+                        // Hide these by setting them to the background color or empty style.
+                        // Actually, just skip patching the style.
+                        continue;
+                    }
+
                     let style = ts(editor, span.theme_key);
                     for s in styles[sc..ec].iter_mut() {
                         *s = s.patch(style);

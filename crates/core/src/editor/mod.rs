@@ -48,6 +48,7 @@ use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
 use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
 use crate::search::SearchState;
+use crate::syntax::Language;
 use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowManager};
 use crate::Mode;
@@ -330,6 +331,8 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Toggle: hide *bold* and /italic/ markers in Org-mode.
+    pub org_hide_emphasis_markers: bool,
     /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
     /// The binary drains this and calls `agents::setup_agent()`.
     /// `Some("__list__")` is the sentinel for `:agent-list`.
@@ -358,6 +361,10 @@ pub struct Editor {
     pub renderer_name: String,
     /// GUI font size in points. Default 14.0. Set via config.toml `[editor] font_size`.
     pub gui_font_size: f32,
+    /// GUI primary font family. Default "". Set via config.toml `[editor] font_family`.
+    pub gui_font_family: String,
+    /// GUI icon font family (fallback). Default "". Set via config.toml `[editor] icon_font_family`.
+    pub gui_icon_font_family: String,
     /// Registry of all configurable editor options — single source of truth
     /// for metadata, aliases, types, defaults, and config.toml paths.
     pub option_registry: OptionRegistry,
@@ -501,6 +508,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
@@ -510,6 +518,8 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_family: String::new(),
+            gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
             ai_provider: String::new(),
             ai_model: String::new(),
@@ -638,6 +648,7 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
@@ -647,6 +658,8 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_family: String::new(),
+            gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
             ai_provider: String::new(),
             ai_model: String::new(),
@@ -666,8 +679,20 @@ impl Editor {
 
     /// Get the keymap for the current mode.
     pub fn current_keymap(&self) -> Option<&Keymap> {
+        let idx = self.active_buffer_idx();
+        let kind = self.buffers[idx].kind;
+        let lang = self.syntax.language_of(idx);
+
         let name = match self.mode {
-            Mode::Normal => "normal",
+            Mode::Normal => {
+                if kind == crate::buffer::BufferKind::GitStatus {
+                    "git-status"
+                } else if lang == Some(Language::Org) {
+                    "org"
+                } else {
+                    "normal"
+                }
+            }
             Mode::Insert => "insert",
             Mode::Visual(_) => "visual",
             Mode::Command
@@ -676,6 +701,7 @@ impl Editor {
             | Mode::FilePicker
             | Mode::FileBrowser
             | Mode::CommandPalette => "command",
+            Mode::GitStatus => "git-status",
             Mode::ShellInsert => return None, // Keys handled by binary shell layer
         };
         self.keymaps.get(name)
@@ -684,8 +710,8 @@ impl Editor {
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
     pub fn active_project_root(&self) -> Option<&std::path::Path> {
         let buf = self.active_buffer();
-        if let Some(ref root) = buf.project_root {
-            return Some(root);
+        if let Some(root) = &buf.project_root {
+            return Some(root.as_path());
         }
         self.project.as_ref().map(|p| p.root.as_path())
     }
@@ -699,8 +725,11 @@ impl Editor {
             "word_wrap" => self.word_wrap.to_string(),
             "break_indent" => self.break_indent.to_string(),
             "show_break" => self.show_break.clone(),
+            "org_hide_emphasis_markers" => self.org_hide_emphasis_markers.to_string(),
             "show_fps" => self.show_fps.to_string(),
             "font_size" => self.gui_font_size.to_string(),
+            "font_family" => self.gui_font_family.clone(),
+            "icon_font_family" => self.gui_icon_font_family.clone(),
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "debug_mode" => self.debug_mode.to_string(),
@@ -740,6 +769,9 @@ impl Editor {
             "show_break" => {
                 self.show_break = value.to_string();
             }
+            "org_hide_emphasis_markers" => {
+                self.org_hide_emphasis_markers = parse_option_bool(value)?;
+            }
             "show_fps" => {
                 self.show_fps = parse_option_bool(value)?;
             }
@@ -751,6 +783,12 @@ impl Editor {
                     return Err("Font size must be between 6 and 72".into());
                 }
                 self.gui_font_size = size;
+            }
+            "font_family" => {
+                self.gui_font_family = value.to_string();
+            }
+            "icon_font_family" => {
+                self.gui_icon_font_family = value.to_string();
             }
             "theme" => {
                 self.set_theme_by_name(value);
@@ -1086,7 +1124,8 @@ impl Editor {
             .position(|b| b.kind == crate::buffer::BufferKind::Help)
         {
             if let Some(view) = self.buffers[idx].help_view.as_mut() {
-                view.navigate_to(node_id.to_string());
+                let v: &mut crate::help_view::HelpView = view;
+                v.navigate_to(node_id.to_string());
             }
             return idx;
         }
@@ -1240,8 +1279,14 @@ impl Editor {
             crate::BufferKind::Shell => {
                 self.set_mode(Mode::ShellInsert);
             }
+            crate::BufferKind::GitStatus => {
+                self.set_mode(Mode::GitStatus);
+            }
             _ => {
-                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
+                if matches!(
+                    self.mode,
+                    Mode::ShellInsert | Mode::ConversationInput | Mode::GitStatus
+                ) {
                     self.set_mode(Mode::Normal);
                 }
             }
@@ -1439,10 +1484,11 @@ impl Editor {
         match kind {
             crate::BufferKind::Conversation => {
                 if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
+                    let c: &mut crate::conversation::Conversation = conv;
                     if delta > 0 {
-                        conv.scroll_up(lines * scroll_speed);
+                        c.scroll_up(lines * scroll_speed);
                     } else {
-                        conv.scroll_down(lines * scroll_speed);
+                        c.scroll_down(lines * scroll_speed);
                     }
                 }
             }

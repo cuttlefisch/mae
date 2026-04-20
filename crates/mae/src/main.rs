@@ -1742,9 +1742,18 @@ fn run_gui(
     let mut renderer = mae_gui::GuiRenderer::new();
     renderer.set_font_config(
         app_config.editor.font_family.clone(),
+        app_config.editor.icon_font_family.clone(),
         app_config.editor.font_size,
     );
     editor.renderer_name = "gui".to_string();
+    editor.gui_font_size = app_config.editor.font_size.unwrap_or(14.0);
+    editor.gui_font_family = app_config.editor.font_family.clone().unwrap_or_default();
+    editor.gui_icon_font_family = app_config
+        .editor
+        .icon_font_family
+        .clone()
+        .unwrap_or_default();
+    editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
     editor.clipboard = "unnamedplus".to_string();
 
     // Create typed event loop with user events — must happen on main thread

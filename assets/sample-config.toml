@@ -22,8 +22,17 @@ break_indent = true
 # Character prefix for wrapped continuation lines
 show_break = "↪ "
 
+# Hide *bold* and /italic/ markers in Org-mode
+org_hide_emphasis_markers = false
+
 # Show FPS/frame-timing overlay in the status bar
 show_fps = false
+
+# GUI primary font family
+# font_family = "JetBrainsMono Nerd Font"
+
+# GUI icon font family (fallback for icons/symbols)
+# icon_font_family = "Symbols Nerd Font Mono"
 
 # GUI font size in points (6.0–72.0)
 font_size = 14.0

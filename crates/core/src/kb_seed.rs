@@ -500,6 +500,50 @@ The AI calls the `introspect` tool and receives a structured JSON report.\n\n\
 - AI behaving oddly → check AI section for session state.\n\n\
 See also: [[concept:watchdog]], [[concept:event-recording]], [[concept:ai-as-peer]], [[index]]\n";
 
+const CONCEPT_GIT_STATUS: &str = "\
+The **Git Status** buffer (`*git-status*`) is a high-fidelity \"porcelain\" UI \
+inspired by Emacs Magit. It allows you to manage your repository state \
+without leaving the editor.\n\n\
+## Keybindings\n\
+| Key | Action | Command |\n\
+|-----|--------|---------|\n\
+| `s` | Stage file/hunk | [[cmd:git-stage]] |\n\
+| `u` | Unstage file/hunk | [[cmd:git-unstage]] |\n\
+| `S` | Stage ALL | [[cmd:git-stage-all]] |\n\
+| `U` | Unstage ALL | [[cmd:git-unstage-all]] |\n\
+| `c c` | Commit | [[cmd:git-commit]] |\n\
+| `l l` | Log view | [[cmd:git-log]] |\n\
+| `g r` | Refresh | [[cmd:git-status]] |\n\
+| `TAB` | Toggle visibility | [[cmd:git-status-toggle]] |\n\
+| `Enter` | Open file | [[cmd:git-status-open]] |\n\
+| `q` | Exit | [[cmd:enter-normal-mode]] |\n\n\
+## Workflow\n\
+1. Open status via `SPC g s`.\n\
+2. Navigate with `j`/`k`.\n\
+3. Stage files with `s`.\n\
+4. Commit with `c c` (opens a commit message buffer).\n\n\
+See also: [[concept:project]], [[concept:terminal]]\n";
+
+const CONCEPT_ORG_MODE: &str = "\
+**Org-mode** in MAE provides structural editing and task management \
+capabilities for `.org` files.\n\n\
+## Core Features\n\n\
+### 1. Structural Folding\n\
+Press `TAB` on a heading to cycle its visibility:\n\
+**Folded** (heading only) -> **Children** (subheadings) -> **Subtree** (everything).\n\n\
+### 2. Task Management\n\
+- `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).\n\
+- `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).\n\n\
+### 3. Links\n\
+Press `Enter` on a `[[link]]` to follow it. Internal links jump to headings; \
+external links open in your browser.\n\n\
+### 4. Rich Rendering\n\
+- `*bold*` text is rendered in bold.\n\
+- `/italic/` text is rendered in italics.\n\
+- **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide \
+the surrounding `*` and `/` characters.\n\n\
+See also: [[concept:knowledge-base]], [[concept:options]]\n";
+
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
@@ -716,6 +760,20 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_INTROSPECT,
         )
         .with_tags(["debugging", "ai", "observability"]),
+        Node::new(
+            "concept:git-status",
+            "Concept: Git Status (Magit-lite)",
+            NodeKind::Concept,
+            CONCEPT_GIT_STATUS,
+        )
+        .with_tags(["git", "workflow"]),
+        Node::new(
+            "concept:org-mode",
+            "Concept: Org-mode",
+            NodeKind::Concept,
+            CONCEPT_ORG_MODE,
+        )
+        .with_tags(["org", "editing"]),
     ]
 }
 
@@ -740,6 +798,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:dap-attach|DAP Attach]] — cross-instance debugging with PID\n\
 - [[concept:introspect|Introspect]] — AI diagnostic snapshot (threads/perf/locks/buffers)
 - [[concept:gui|GUI Backend]] — dual rendering (terminal + GUI), mouse, font config
+- [[concept:git-status|Git Status]] — Magit-lite porcelain UI
+- [[concept:org-mode|Org-mode]] — Interactivity, folding, and task management
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -965,6 +1025,20 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `p` | [[cmd:ai-prompt]] | AI prompt |\n\
 | `a` | [[cmd:open-ai-agent]] | Launch agent in shell |\n\
 | `c` | [[cmd:ai-cancel]] | Cancel AI |\n\n\
+### SPC g — +git\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s` | [[cmd:git-status]] | Status buffer |\n\
+| `d` | [[cmd:git-diff]] | Diff current file |\n\
+| `l` | [[cmd:git-log]] | Commit log |\n\
+| `b` | [[cmd:git-blame]] | File blame |\n\n\
+### Org-mode\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `TAB` | [[cmd:org-cycle]] | Cycle folding |\n\
+| `S-Left` | [[cmd:org-todo-prev]] | Prev TODO state |\n\
+| `S-Right` | [[cmd:org-todo-next]] | Next TODO state |\n\
+| `Enter` | [[cmd:org-open-link]] | Follow link |\n\n\
 ### SPC h — +help\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
