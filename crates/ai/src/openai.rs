@@ -190,15 +190,27 @@ impl OpenAiProvider {
         };
 
         // OpenAI-compatible endpoints put token counts at the top level
-        // under "usage". Ollama's older builds may omit it — treat as
-        // absent (the session tracker will skip budget math for that
-        // turn rather than double-count the next one).
-        let usage = body.get("usage").map(|u| Usage {
-            prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            completion_tokens: u
+        // under "usage". DeepSeek (and potentially OpenAI) include cache details.
+        let usage = body.get("usage").map(|u| {
+            let prompt_tokens = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let completion_tokens = u
                 .get("completion_tokens")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+                .unwrap_or(0);
+
+            // DeepSeek specific: usage.prompt_tokens_details.cached_tokens
+            let cache_read = u
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            Usage {
+                prompt_tokens,
+                completion_tokens,
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: 0, // DeepSeek doesn't report creation separately yet
+            }
         });
 
         Ok(ProviderResponse {

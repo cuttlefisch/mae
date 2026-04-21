@@ -156,6 +156,40 @@ pub fn handle_ai_event(
             editor.input_lock = InputLock::None;
             editor.set_status(msg);
         }
+        AiEvent::AskUser { question, reply } => {
+            info!(%question, "AI asking user");
+            // Placeholder: In a real implementation, we'd open a popup/input field.
+            // For now, we'll append to the conversation and wait for the next user message.
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_system(format!("AI Question: {}", question));
+            }
+            editor.set_status(format!("AI: {}", question));
+            // We need to store this reply channel somewhere to fulfill it later.
+            // For this implementation, I'll just error out to keep the loop moving
+            // until we have a proper interactive UI.
+            let _ = reply.send("Interactive UI not yet implemented - please reply in chat".into());
+        }
+        AiEvent::ProposeChanges { changes, reply } => {
+            info!("AI proposing changes");
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_system("AI proposed changes (see Diff buffer)");
+            }
+            // Placeholder: Show diff and wait for approval.
+            let _ = reply.send(false); // Default to reject until UI is ready
+        }
+        AiEvent::Delegate {
+            profile,
+            objective,
+            reply,
+        } => {
+            info!(%profile, %objective, "AI delegating to sub-agent");
+            // Placeholder: Spawn a sub-session.
+            let _ = reply.send(ToolResult {
+                tool_call_id: "delegate".into(),
+                success: false,
+                output: "Sub-agent delegation not yet implemented".into(),
+            });
+        }
         AiEvent::RoundUpdate {
             round,
             transaction_start_idx,

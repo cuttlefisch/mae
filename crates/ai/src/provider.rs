@@ -145,6 +145,11 @@ pub struct ProviderResponse {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Tokens read from the provider's prompt cache (Anthropic/DeepSeek).
+    /// Usually priced at a 90% discount (DeepSeek) or 10% (Anthropic).
+    pub cache_read_tokens: u64,
+    /// Tokens added to the cache during this request.
+    pub cache_creation_tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

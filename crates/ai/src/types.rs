@@ -110,6 +110,23 @@ pub enum AiEvent {
     StreamChunk(String),
     /// AI session completed (final response).
     SessionComplete(String),
+    /// AI wants to ask the user a clarifying question.
+    AskUser {
+        question: String,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+    /// AI proposed file changes for approval.
+    ProposeChanges {
+        /// Array of {file_path, new_content}
+        changes: serde_json::Value,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    /// AI wants to spawn a sub-agent.
+    Delegate {
+        profile: String,
+        objective: String,
+        reply: tokio::sync::oneshot::Sender<ToolResult>,
+    },
     /// An error occurred in the AI transport.
     Error(String),
     /// Incremental cost tally after a successful provider round. The

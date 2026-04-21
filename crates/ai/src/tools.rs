@@ -46,6 +46,33 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     };
     vec![
         ToolDefinition {
+            name: "ai_set_budget".into(),
+            description: "Set the session budget guardrails (USD). 'warn' emits a one-shot warning, 'cap' terminates the session turn once reached. Set to 0 to disable a guardrail.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "warn".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "New session warning threshold in USD".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "cap".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "New session hard cap in USD".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
             name: "buffer_read".into(),
             description: "Read buffer contents. Returns text with line numbers.".into(),
             parameters: ToolParameters {
@@ -1161,6 +1188,160 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Shell),
         },
+        // --- Agent terminal tools ---
+        ToolDefinition {
+            name: "terminal_spawn".into(),
+            description: "Spawn a new interactive shell terminal buffer. Returns the buffer index. The terminal is visible to the user and supports long-running processes (compilers, servers).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional name for the terminal buffer (e.g. '*build*')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "command".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Initial command to run in the terminal (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "terminal_send".into(),
+            description: "Send input to a terminal spawned via terminal_spawn. Use for interactive prompts.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "input".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text to send (e.g. 'y\\n', 'Ctrl-C' via \\x03)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into(), "input".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "terminal_read".into(),
+            description: "Read the current screen content of a terminal. Returns the visible text (typically 24-80 lines).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Agent UX tools ---
+        ToolDefinition {
+            name: "ask_user".into(),
+            description: "Ask the user a clarifying question when the current instructions are ambiguous or more context is needed. The AI session will pause until the user replies.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "question".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The question to ask the user.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["question".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "propose_changes".into(),
+            description: "Propose a set of file changes for user approval. Displays a diff and waits for user to accept or reject. Use this for potentially destructive or large changes to ensure safety.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "changes".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of changes, each with file_path and new_content.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["changes".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Agent Orchestration & Memory ---
+        ToolDefinition {
+            name: "delegate".into(),
+            description: "Spawn a specialized sub-agent for a specific sub-task (e.g. 'explorer' for code mapping, 'planner' for drafting changes). The sub-agent has a separate context but shares the session budget.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "profile".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The prompt profile for the sub-agent (e.g. 'explorer', 'planner', 'reviewer').".into(),
+                            enum_values: Some(vec!["explorer".into(), "planner".into(), "reviewer".into()]),
+                        },
+                    ),
+                    (
+                        "objective".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The specific goal for the sub-agent.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["profile".into(), "objective".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "save_memory".into(),
+            description: "Persist a fact, project convention, or finding to the project's long-term memory. This information will be available to future sessions and sub-agents.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "fact".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The concise fact to remember.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["fact".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Permission introspection ---
         ToolDefinition {
             name: "ai_permissions".into(),
@@ -2171,8 +2352,16 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 82);
+        assert_eq!(tools.len(), 90);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ask_user"));
+        assert!(names.contains(&"propose_changes"));
+        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"save_memory"));
+        assert!(names.contains(&"terminal_spawn"));
+        assert!(names.contains(&"terminal_send"));
+        assert!(names.contains(&"terminal_read"));
+        assert!(names.contains(&"ai_set_budget"));
         assert!(names.contains(&"buffer_read"));
         assert!(names.contains(&"git_status"));
         assert!(names.contains(&"git_commit"));

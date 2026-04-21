@@ -273,7 +273,7 @@ impl AgentSession {
         self.session_tokens_out += usage.completion_tokens;
         let last_call_usd = match self.price {
             Some(price) => {
-                let c = price.cost_usd(usage.prompt_tokens, usage.completion_tokens);
+                let c = price.cost_usd(&usage);
                 self.session_cost_usd += c;
                 c
             }
@@ -725,6 +725,148 @@ impl AgentSession {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(result),
                     });
+                    continue;
+                }
+
+                // ai_set_budget updates session state directly
+                if call.name == "ai_set_budget" {
+                    if let Some(warn) = call.arguments.get("warn").and_then(|v| v.as_f64()) {
+                        self.budget.session_warn_usd = if warn > 0.0 { Some(warn) } else { None };
+                        self.warned = false; // Reset warning state
+                    }
+                    if let Some(cap) = call.arguments.get("cap").and_then(|v| v.as_f64()) {
+                        self.budget.session_hard_cap_usd = if cap > 0.0 { Some(cap) } else { None };
+                    }
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        success: true,
+                        output: format!("Budget updated: {:?}", self.budget),
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // ask_user pauses the session and waits for a string reply
+                if call.name == "ask_user" {
+                    let question = call.arguments["question"]
+                        .as_str()
+                        .unwrap_or("No question provided")
+                        .to_string();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::AskUser {
+                            question,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(reply) => {
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    success: true,
+                                    output: reply,
+                                }),
+                            });
+                        }
+                        Err(_) => {
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                }),
+                            });
+                        }
+                    }
+                    continue;
+                }
+
+                // propose_changes pauses and waits for a boolean approval
+                if call.name == "propose_changes" {
+                    let changes = call.arguments["changes"].clone();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ProposeChanges {
+                            changes,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(approved) => {
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    success: approved,
+                                    output: if approved {
+                                        "Changes approved and applied"
+                                    } else {
+                                        "Changes rejected by user"
+                                    }
+                                    .into(),
+                                }),
+                            });
+                        }
+                        Err(_) => {
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                }),
+                            });
+                        }
+                    }
+                    continue;
+                }
+
+                // delegate pauses and waits for a ToolResult from a sub-agent
+                if call.name == "delegate" {
+                    let profile = call.arguments["profile"]
+                        .as_str()
+                        .unwrap_or("pair-programmer")
+                        .to_string();
+                    let objective = call.arguments["objective"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::Delegate {
+                            profile,
+                            objective,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(mut result) => {
+                            self.truncate_tool_result(&mut result);
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(result),
+                            });
+                        }
+                        Err(_) => {
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    success: false,
+                                    output: "Sub-agent delegation failed".into(),
+                                }),
+                            });
+                        }
+                    }
                     continue;
                 }
 
@@ -1383,8 +1525,10 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 1_000,
-                completion_tokens: 500,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }),
         }]));
 
@@ -1424,8 +1568,10 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 1_000,
-                completion_tokens: 500,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }),
         }]));
 
@@ -1461,8 +1607,10 @@ mod tests {
                 }],
                 stop_reason: StopReason::ToolUse,
                 usage: Some(Usage {
-                    prompt_tokens: 1_000,
-                    completion_tokens: 500,
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }),
             },
             ProviderResponse {
@@ -1470,8 +1618,10 @@ mod tests {
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
                 usage: Some(Usage {
-                    prompt_tokens: 1_000,
-                    completion_tokens: 500,
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }),
             },
         ]));
@@ -1524,8 +1674,10 @@ mod tests {
                     }],
                     stop_reason: StopReason::ToolUse,
                     usage: Some(Usage {
-                        prompt_tokens: 10_000,
-                        completion_tokens: 2_000,
+                        prompt_tokens: 10,
+                        completion_tokens: 5,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     }),
                 })
             }

@@ -177,18 +177,25 @@ impl ClaudeProvider {
         };
 
         // Anthropic returns usage at the top level of the response body.
-        // Cached reads and writes are billed differently but the session
-        // tracker treats every input token as standard-rate — that
-        // over-estimates cost, which is the safe direction for a budget.
-        let usage = body.get("usage").map(|u| Usage {
-            prompt_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
-                + u.get("cache_read_input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0)
-                + u.get("cache_creation_input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0),
-            completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        let usage = body.get("usage").map(|u| {
+            let cache_read = u
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let cache_creation = u
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let prompt_tokens = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                + cache_read
+                + cache_creation;
+
+            Usage {
+                prompt_tokens,
+                completion_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                cache_read_tokens: cache_read,
+                cache_creation_tokens: cache_creation,
+            }
         });
 
         Ok(ProviderResponse {

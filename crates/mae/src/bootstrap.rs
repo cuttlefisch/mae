@@ -333,8 +333,14 @@ pub fn setup_ai(
             t
         };
 
-        let session = AgentSession::new(provider, tools, build_system_prompt(), event_tx, cmd_rx)
-            .with_budget(model, budget);
+        let session = AgentSession::new(
+            provider,
+            tools,
+            build_system_prompt("pair-programmer"),
+            event_tx,
+            cmd_rx,
+        )
+        .with_budget(model, budget);
 
         tokio::spawn(session.run());
 
@@ -354,21 +360,55 @@ pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
-fn build_system_prompt() -> String {
-    let base = include_str!("system_prompt.md");
-    let mut prompt = base.to_string();
+fn build_system_prompt(profile: &str) -> String {
+    let mut prompt = String::new();
 
-    // Add working directory context
+    // 1. Load the profile-specific base from prioritized locations:
+    //    Project-local (.mae/prompts/*.xml) > User-config (~/.config/mae/prompts/*.xml) > Bundled (prompts/*.xml)
+    let profile_filename = format!("{}.xml", profile);
+    let mut base_content = None;
+
+    // Check project-local
     if let Ok(cwd) = std::env::current_dir() {
-        prompt.push_str(&format!("\n\n## Working Directory\n`{}`\n", cwd.display()));
+        let path = cwd.join(".mae/prompts").join(&profile_filename);
+        if path.exists() {
+            base_content = std::fs::read_to_string(path).ok();
+        }
+    }
 
-        // Add project context from CLAUDE.md or README.md (truncated to ~2K tokens)
+    // Check user-config
+    if base_content.is_none() {
+        if let Some(config_dir) = dirs::config_dir() {
+            let path = config_dir.join("mae/prompts").join(&profile_filename);
+            if path.exists() {
+                base_content = std::fs::read_to_string(path).ok();
+            }
+        }
+    }
+
+    // Fall back to bundled
+    let content = base_content.unwrap_or_else(|| match profile {
+        "explorer" => include_str!("prompts/explorer.xml").to_string(),
+        "planner" => include_str!("prompts/planner.xml").to_string(),
+        "reviewer" => include_str!("prompts/reviewer.xml").to_string(),
+        _ => include_str!("prompts/pair-programmer.xml").to_string(),
+    });
+    prompt.push_str(&content);
+
+    // 2. Add dynamic context
+    if let Ok(cwd) = std::env::current_dir() {
+        prompt.push_str(&format!(
+            "\n\n<context>\n## Working Directory\n`{}`\n",
+            cwd.display()
+        ));
+
+        // Add project context from CLAUDE.md, README.md, etc.
         let project_files = ["CLAUDE.md", "README.md", "README.org", ".project"];
         for filename in &project_files {
             let path = cwd.join(filename);
             if path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    let max_chars = 8000; // ~2K tokens at 4 chars/token
+                    let max_chars = 8000;
                     let truncated = if content.len() > max_chars {
                         format!("{}...\n[truncated]", &content[..max_chars])
                     } else {
@@ -378,23 +418,56 @@ fn build_system_prompt() -> String {
                         "\n## Project Context ({})\n```\n{}\n```\n",
                         filename, truncated
                     ));
-                    break; // Only include the first found project file
+                    break;
                 }
             }
         }
-    }
 
-    // Add git status context if in a git repo
-    if let Ok(output) = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--branch"])
-        .output()
-    {
-        if output.status.success() {
-            let status = String::from_utf8_lossy(&output.stdout);
-            if !status.is_empty() {
-                prompt.push_str(&format!("\n## Git Status\n```\n{}```\n", status));
+        // Add memory context from .mae/memory/*.txt
+        let memory_dir = cwd.join(".mae/memory");
+        if memory_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(memory_dir) {
+                prompt.push_str("\n## Long-term Memory\n");
+                for entry in entries.flatten() {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        prompt.push_str(&format!("- {}\n", content.trim()));
+                    }
+                }
             }
         }
+
+        // Add active plans from .mae/plans/*.md
+        let plan_dir = cwd.join(".mae/plans");
+        if plan_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(plan_dir) {
+                prompt.push_str("\n## Active Plans\n");
+                for entry in entries.flatten() {
+                    if entry.path().extension().map_or(false, |e| e == "md") {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            prompt.push_str(&format!(
+                                "### Plan: {}\n```markdown\n{}\n```\n",
+                                entry.file_name().to_string_lossy(),
+                                content
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add git status
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["status", "--porcelain", "--branch"])
+            .output()
+        {
+            if output.status.success() {
+                let status = String::from_utf8_lossy(&output.stdout);
+                if !status.is_empty() {
+                    prompt.push_str(&format!("\n## Git Status\n```\n{}```\n", status));
+                }
+            }
+        }
+        prompt.push_str("</context>\n");
     }
 
     prompt

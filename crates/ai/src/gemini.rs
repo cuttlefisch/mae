@@ -226,6 +226,8 @@ impl GeminiProvider {
                 .get("candidatesTokenCount")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0),
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         });
 
         Ok(ProviderResponse {
