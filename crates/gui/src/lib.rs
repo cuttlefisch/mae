@@ -50,7 +50,6 @@ use std::rc::Rc;
 use mae_core::{BufferKind, Editor, HighlightSpan};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
-use skia_safe::Color4f;
 use tracing::{debug, info, trace_span};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -681,7 +680,7 @@ fn render_visual_buffer(
                 x,
                 y,
                 text,
-                font_size,
+                font_size: _,
                 color,
             } => {
                 if let Some(c) = theme::parse_hex_to_skia(color) {
