@@ -6,6 +6,9 @@
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 [![Lines of Code](https://img.shields.io/badge/lines-~26k-informational.svg)](#)
 
+> [!CAUTION]
+> **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
+
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
 runtime. 1,324 tests. GPL-3.0-or-later.

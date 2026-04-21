@@ -1,5 +1,8 @@
 # AI Development Guide (CLAUDE.md) — Modern AI Editor (MAE)
 
+> [!CAUTION]
+> **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail. Always monitor your API usage and costs directly in your provider dashboards.
+
 ## What This Project Is
 
 An AI-native lisp machine editor — a successor to GNU Emacs where the human user and an AI agent are **peer actors** calling the same Lisp primitives. The editor is built on a Rust core with an embedded Scheme (R7RS-small) runtime. LSP and DAP are first-class protocols exposed to both the Scheme extension layer and the AI agent's tool-calling interface.
