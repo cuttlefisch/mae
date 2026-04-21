@@ -36,6 +36,7 @@ pub use file::{
 pub use git::{
     execute_git_checkout, execute_git_commit, execute_git_diff, execute_git_log, execute_git_pull,
     execute_git_push, execute_git_stage, execute_git_status, execute_git_unstage,
+    execute_github_pr_create, execute_github_pr_status,
 };
 pub use help::execute_help_open;
 pub use introspect::execute_introspect;

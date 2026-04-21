@@ -212,3 +212,64 @@ pub fn execute_git_checkout(editor: &Editor, args: &serde_json::Value) -> Result
     }
     Ok(stdout)
 }
+
+pub fn execute_github_pr_status(editor: &Editor) -> Result<String, String> {
+    let (ok1, stdout1, stderr1) = run_gh(editor, &["pr", "status"]);
+    let (ok2, stdout2, stderr2) = run_gh(editor, &["pr", "checks"]);
+
+    let mut out = String::new();
+    if ok1 {
+        out.push_str("--- PR Status ---\n");
+        out.push_str(&stdout1);
+        out.push('\n');
+    } else {
+        out.push_str(&format!("gh pr status failed: {}\n", stderr1));
+    }
+
+    if ok2 {
+        out.push_str("--- PR Checks ---\n");
+        out.push_str(&stdout2);
+    } else {
+        out.push_str(&format!("gh pr checks failed: {}\n", stderr2));
+    }
+
+    Ok(out)
+}
+
+pub fn execute_github_pr_create(
+    editor: &Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let title = args
+        .get("title")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'title' argument")?;
+    let body = args
+        .get("body")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'body' argument")?;
+
+    let (ok, stdout, stderr) = run_gh(editor, &["pr", "create", "--title", title, "--body", body]);
+    if !ok {
+        return Err(format!("gh pr create failed: {}", stderr));
+    }
+    Ok(stdout)
+}
+
+fn run_gh(editor: &Editor, args: &[&str]) -> (bool, String, String) {
+    let root = editor
+        .active_project_root()
+        .map(|p| p.to_path_buf())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+
+    match Command::new("gh").args(args).current_dir(&root).output() {
+        Ok(output) => {
+            let success = output.status.success();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            (success, stdout, stderr)
+        }
+        Err(e) => (false, String::new(), format!("failed to spawn gh: {}", e)),
+    }
+}

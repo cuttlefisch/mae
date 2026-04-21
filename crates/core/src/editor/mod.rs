@@ -345,6 +345,9 @@ pub struct Editor {
     /// True while the AI session is actively streaming (text chunks or tool
     /// calls). Used to distinguish "AI thinking" from "idle but locked".
     pub ai_streaming: bool,
+    /// Set to true when the user requests AI cancellation (e.g. via `ai-cancel` command).
+    /// The event loop will read and reset this flag, sending the actual cancel command to the AI thread.
+    pub ai_cancel_requested: bool,
     /// AI operating mode (standard, plan, auto-accept).
     pub ai_mode: String,
     /// Active prompt profile name.
@@ -516,6 +519,7 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_cancel_requested: false,
             ai_mode: "standard".to_string(),
             ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,
@@ -658,6 +662,7 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_cancel_requested: false,
             ai_mode: "standard".to_string(),
             ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,

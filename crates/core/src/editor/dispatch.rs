@@ -1190,6 +1190,7 @@ impl Editor {
                     None => "No AI conversation active",
                 };
                 self.set_status(status);
+                self.ai_cancel_requested = true;
             }
             "describe-key" => {
                 // Arm the interactive "press a key to describe" flow.

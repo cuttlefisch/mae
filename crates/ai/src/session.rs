@@ -73,6 +73,10 @@ pub struct AgentSession {
     /// Optional name of the buffer to route output to (e.g. "*AI-Explorer*").
     /// If None, output goes to the default conversation buffer.
     target_buffer: Option<String>,
+    /// Last executed tool calls to detect infinite loops.
+    last_tool_calls: Option<Vec<ToolCall>>,
+    /// Number of times the exact same tool calls have been seen consecutively.
+    consecutive_identical_tools: usize,
 }
 
 impl AgentSession {
@@ -121,6 +125,8 @@ impl AgentSession {
             transaction_start_idx: None,
             current_round: 0,
             target_buffer: None,
+            last_tool_calls: None,
+            consecutive_identical_tools: 0,
         }
     }
 
@@ -656,6 +662,45 @@ impl AgentSession {
                     }
                 }
             };
+
+            if !response.tool_calls.is_empty() {
+                let current_identical = if let Some(ref last_calls) = self.last_tool_calls {
+                    if last_calls.len() == response.tool_calls.len() {
+                        let mut identical = true;
+                        for (c1, c2) in last_calls.iter().zip(response.tool_calls.iter()) {
+                            if c1.name != c2.name || c1.arguments != c2.arguments {
+                                identical = false;
+                                break;
+                            }
+                        }
+                        identical
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if current_identical {
+                    self.consecutive_identical_tools += 1;
+                    if self.consecutive_identical_tools >= 3 {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                "AI got stuck in an infinite tool loop — aborting".into(),
+                            ))
+                            .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
+                        return;
+                    }
+                } else {
+                    self.consecutive_identical_tools = 0;
+                }
+                self.last_tool_calls = Some(response.tool_calls.clone());
+            }
 
             // Send text response if present
             if let Some(ref text) = response.text {
@@ -1309,7 +1354,8 @@ mod tests {
                 tool_calls: vec![ToolCall {
                     id: format!("call_{}", i),
                     name: "cursor_info".into(),
-                    arguments: serde_json::json!({}),
+                    // Unique arguments per round to avoid tool-loop circuit breaker
+                    arguments: serde_json::json!({ "round": i }),
                 }],
                 stop_reason: StopReason::ToolUse,
                 usage: None,
@@ -1840,6 +1886,59 @@ mod tests {
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn test_tool_loop_circuit_breaker() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Provider returns the same tool call every time
+        let mut responses = Vec::new();
+        for i in 0..10 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: format!("call_{}", i),
+                    name: "cursor_info".into(),
+                    arguments: serde_json::json!({}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+
+        let provider = Box::new(MockProvider::new(responses));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_rounds = 20;
+
+        tokio::spawn(session.run());
+        cmd_tx.send(AiCommand::Prompt("loop".into())).await.unwrap();
+
+        let mut found_circuit_breaker = false;
+        for _ in 0..50 {
+            match event_rx.recv().await {
+                Some(AiEvent::Error(msg)) => {
+                    if msg.contains("stuck in an infinite tool loop") {
+                        found_circuit_breaker = true;
+                        break;
+                    }
+                }
+                Some(AiEvent::ToolCallRequest { reply, .. }) => {
+                    let _ = reply.send(ToolResult {
+                        tool_call_id: "x".into(),
+                        success: true,
+                        output: "ok".into(),
+                    });
+                }
+                _ => continue,
+            }
+        }
+        assert!(
+            found_circuit_breaker,
+            "should have triggered circuit breaker"
+        );
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
     #[test]
     fn test_trim_preserves_tool_call_pairs() {
         let (event_tx, _) = mpsc::channel(32);
@@ -1891,12 +1990,6 @@ mod tests {
         session.trim_messages();
 
         // Verify: messages.len() should be 3 (User + Assistant summary + Final)
-        // No, with max_messages = 3 it should keep index 0 and then indices [3, 4]
-        // Wait, drain(1..1+2) removes 1 and 2.
-        // Leaves: 0, 3, 4.
-        // Then schema loop: messages[1] is 3 (Tool). Removed.
-        // Leaves: 0, 4.
-        // 4 is Assistant(Text). Loop ends.
         assert!(session.messages.len() > 1);
         assert_ne!(
             session.messages[1].role,

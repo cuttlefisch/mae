@@ -2062,7 +2062,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "git_status".into(),
-            description: "Get structured git status: branch name, staged, unstaged, and untracked files.".into(),
+            description: "Get structured git status: branch name, staged, unstaged, and untracked files. Does NOT provide PR (Pull Request) or CI information.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
@@ -2256,6 +2256,43 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "github_pr_status".into(),
+            description: "Check the status of the current PR and its CI checks using the 'gh' CLI.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "github_pr_create".into(),
+            description: "Create a new GitHub pull request using the 'gh' CLI.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "title".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The PR title".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "body".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The PR body content".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["title".into(), "body".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
 
@@ -2445,7 +2482,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 94);
+        assert_eq!(tools.len(), 96);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));
@@ -2455,6 +2492,8 @@ mod tests {
         assert!(names.contains(&"save_memory"));
         assert!(names.contains(&"create_plan"));
         assert!(names.contains(&"update_plan"));
+        assert!(names.contains(&"github_pr_status"));
+        assert!(names.contains(&"github_pr_create"));
         assert!(names.contains(&"terminal_spawn"));
         assert!(names.contains(&"terminal_send"));
         assert!(names.contains(&"terminal_read"));

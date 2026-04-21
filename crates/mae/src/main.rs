@@ -240,6 +240,17 @@ fn main() -> io::Result<()> {
         editor.restore_session = restore;
     }
 
+    // Apply font settings from config early (init.scm can override).
+    if let Some(size) = app_config.editor.font_size {
+        editor.gui_font_size = size;
+    }
+    if let Some(ref family) = app_config.editor.font_family {
+        editor.gui_font_family = family.clone();
+    }
+    if let Some(ref icon_family) = app_config.editor.icon_font_family {
+        editor.gui_icon_font_family = icon_family.clone();
+    }
+
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {
@@ -713,6 +724,17 @@ async fn run_terminal_loop(
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
+
+                            // Handle cancellation requested via command (e.g. SPC a c)
+                            if editor.ai_cancel_requested {
+                                editor.ai_cancel_requested = false;
+                                if let Some(ref tx) = ai_command_tx {
+                                    let _ = tx.try_send(AiCommand::Cancel);
+                                }
+                                editor.ai_streaming = false;
+                                editor.input_lock = mae_core::InputLock::None;
+                                pending_interactive_event = None;
+                            }
                         }
                     }
                     Some(Ok(Event::Resize(_w, _h))) => {
@@ -1754,18 +1776,19 @@ fn run_gui(
 
     let mut renderer = mae_gui::GuiRenderer::new();
     renderer.set_font_config(
-        app_config.editor.font_family.clone(),
-        app_config.editor.icon_font_family.clone(),
-        app_config.editor.font_size,
+        if editor.gui_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_font_family.clone())
+        },
+        if editor.gui_icon_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_icon_font_family.clone())
+        },
+        Some(editor.gui_font_size),
     );
     editor.renderer_name = "gui".to_string();
-    editor.gui_font_size = app_config.editor.font_size.unwrap_or(14.0);
-    editor.gui_font_family = app_config.editor.font_family.clone().unwrap_or_default();
-    editor.gui_icon_font_family = app_config
-        .editor
-        .icon_font_family
-        .clone()
-        .unwrap_or_default();
     editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
     editor.clipboard = "unnamedplus".to_string();
 
@@ -2225,6 +2248,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             &self.ai_command_tx,
                             &mut self.pending_interactive_event,
                         );
+
+                        if self.editor.ai_cancel_requested {
+                            self.editor.ai_cancel_requested = false;
+                            if let Some(ref tx) = self.ai_command_tx {
+                                let _ = tx.try_send(AiCommand::Cancel);
+                            }
+                            self.editor.ai_streaming = false;
+                            self.editor.input_lock = mae_core::InputLock::None;
+                            self.pending_interactive_event = None;
+                        }
                     }
 
                     // Check for editor shutdown after key handling.
