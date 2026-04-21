@@ -1,4 +1,4 @@
-# CLAUDE.md — Modern AI Editor (MAE)
+# AI Development Guide (CLAUDE.md) — Modern AI Editor (MAE)
 
 ## What This Project Is
 
@@ -27,7 +27,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
-| `mae-ai` | AI agent integration — tool-calling transport, maps to Scheme API | `reqwest`, `serde_json` |
+| `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 
 ## Architecture Principles
@@ -66,7 +66,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - REPL / eval-expression (`:eval`)
 
 ### Phase 3: AI Integration — COMPLETE
-- Tool-calling transport (Claude API + OpenAI API)
+- Tool-calling transport (Claude, OpenAI, Gemini, and DeepSeek APIs)
 - Scheme API surface mapped to AI tool definitions (10 tools + all commands)
 - AI can read/edit buffers, navigate, execute commands, inspect editor state
 - Conversation buffer with streaming, tool call display

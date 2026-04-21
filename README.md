@@ -3,7 +3,7 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Tests](https://img.shields.io/badge/tests-1%2C324%20passing-brightgreen.svg)](#)
-[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code%20+%20Gemini-blueviolet.svg)](https://claude.ai/claude-code)
+[![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 [![Lines of Code](https://img.shields.io/badge/lines-~26k-informational.svg)](#)
 
 An editor where the human and the AI are peer actors calling the same
@@ -179,7 +179,7 @@ mae (binary)
  ├── mae-core       Buffer (rope), editor state, commands, keymap, search, themes, syntax
  ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
  ├── mae-scheme      Steel Scheme runtime, init.scm loading, hook dispatch
- ├── mae-ai          Claude + OpenAI providers, tool execution, conversation
+ ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
@@ -290,7 +290,7 @@ crates/
   core/         Buffer (rope), editor state, commands, keymap, search, themes, syntax
   renderer/     Terminal rendering (ratatui), status bar, popups, shell viewport
   scheme/       Steel Scheme runtime, init.scm loading, hook dispatch
-  ai/           Claude + OpenAI providers, tool execution, conversation
+  ai/           Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
   lsp/          LSP client — connection, navigation, diagnostics, completion
   dap/          DAP client — protocol types, transport, breakpoints, stepping
   kb/           Knowledge base — SQLite graph store, org-mode parser, FTS5 search
@@ -299,7 +299,7 @@ crates/
 
 ## Self-Hosting Goal
 
-The near-term goal is to use MAE + Claude to develop MAE itself. All Tier 1
+The near-term goal is to use MAE + AI (Claude/Gemini/DeepSeek) to develop MAE itself. All Tier 1
 blockers are complete: multi-file AI editing, LSP semantic understanding,
 tree-sitter syntax highlighting, DAP debugging, and the embedded terminal.
 MAE is now used as a terminal/GUI editor for its own development alongside Emacs.

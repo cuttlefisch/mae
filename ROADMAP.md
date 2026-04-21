@@ -8,7 +8,7 @@ escape, horizontal scroll, multi-file AI tools, transactional tool callstack,
 embedded terminal emulator (alacritty_terminal), Scheme hooks, and `set-option!`
 all working.
 
-Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
+Self-hosting goal: use MAE + AI (Claude/Gemini/DeepSeek) to develop MAE itself.
 
 ---
 
@@ -30,7 +30,7 @@ Self-hosting goal: use MAE + Claude/Ollama to develop MAE itself.
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Gemini/Claude/OpenAI tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools |
+| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
 | **Themes** | 7 bundled, TOML-based, hot-switchable |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
