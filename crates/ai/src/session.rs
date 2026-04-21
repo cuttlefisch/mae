@@ -500,7 +500,8 @@ impl AgentSession {
         });
         self.trim_messages();
 
-        for round in 0..self.max_rounds {
+        let mut round = 0;
+        loop {
             // Check for cancellation (e.g. double-esc from user)
             if let Ok(cmd) = self.command_rx.try_recv() {
                 match cmd {
@@ -557,7 +558,28 @@ impl AgentSession {
                     transaction_start_idx: self.transaction_start_idx,
                 })
                 .await;
-            debug!(round, max_rounds = self.max_rounds, "AI provider send");
+
+            // --- Mid-Flight Context Compaction ---
+            // If the active transaction has grown too large, collapse it into a reasoning summary
+            // to free up tokens and prevent context overflow before the turn ends.
+            if let Some(start_idx) = self.transaction_start_idx {
+                let transaction_size = self.messages.len().saturating_sub(start_idx);
+                let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+                let window_usage = current_tokens as f64 / self.context_window as f64;
+
+                if (transaction_size > 20 || window_usage > 0.75) && round > 0 {
+                    debug!(
+                        transaction_size,
+                        window_usage, "mid-flight context compaction triggered"
+                    );
+                    self.collapse_transaction(start_idx);
+                    // Point to the new summary message as the new transaction start,
+                    // preserving continuity for the next round's pruning logic.
+                    self.transaction_start_idx = Some(self.messages.len().saturating_sub(1));
+                }
+            }
+
+            debug!(round, "AI provider send");
 
             // Dynamic context-aware loop break: stop if we are running out of context
             // before the provider even errors out.
@@ -799,6 +821,14 @@ impl AgentSession {
 
             // Execute each tool call
             for call in &response.tool_calls {
+                // UI Notification: tool execution started
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::ToolCallStarted {
+                        name: call.name.clone(),
+                    })
+                    .await;
+
                 // request_tools meta-tool: extend the active tool set
                 if call.name == "request_tools" {
                     let categories_str = call
@@ -833,6 +863,13 @@ impl AgentSession {
                         )
                     };
                     info!(categories = %categories_str, added = added_names.len(), "request_tools");
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: output.clone(),
+                        })
+                        .await;
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(ToolResult {
@@ -862,10 +899,42 @@ impl AgentSession {
                         success = result.success,
                         "shell command complete"
                     );
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: result.success,
+                            output: result.output.clone(),
+                        })
+                        .await;
                     self.truncate_tool_result(&mut result);
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // log_activity (UI only reasoning step)
+                if call.name == "log_activity" {
+                    let activity = call
+                        .arguments
+                        .get("activity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Thinking...");
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: activity.to_string(),
+                        })
+                        .await;
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            success: true,
+                            output: activity.into(),
+                        }),
                     });
                     continue;
                 }
@@ -877,10 +946,18 @@ impl AgentSession {
                         .unwrap_or("standard")
                         .to_string();
                     let _ = self.event_tx.send(AiEvent::UpdateMode(mode.clone())).await;
+                    let result_text = format!("AI mode change requested: {}", mode);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
                         success: true,
-                        output: format!("AI mode change requested: {}", mode),
+                        output: result_text,
                     };
                     self.messages.push(Message {
                         role: Role::Tool,
@@ -899,10 +976,18 @@ impl AgentSession {
                         .event_tx
                         .send(AiEvent::UpdateProfile(profile.clone()))
                         .await;
+                    let result_text = format!("AI profile change requested: {}", profile);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
                         success: true,
-                        output: format!("AI profile change requested: {}", profile),
+                        output: result_text,
                     };
                     self.messages.push(Message {
                         role: Role::Tool,
@@ -920,10 +1005,18 @@ impl AgentSession {
                     if let Some(cap) = call.arguments.get("cap").and_then(|v| v.as_f64()) {
                         self.budget.session_hard_cap_usd = if cap > 0.0 { Some(cap) } else { None };
                     }
+                    let result_text = format!("Budget updated: {:?}", self.budget);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
                         success: true,
-                        output: format!("Budget updated: {:?}", self.budget),
+                        output: result_text,
                     };
                     self.messages.push(Message {
                         role: Role::Tool,
@@ -948,6 +1041,13 @@ impl AgentSession {
                         .await;
                     match reply_rx.await {
                         Ok(reply) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: true,
+                                    output: reply.clone(),
+                                })
+                                .await;
                             self.messages.push(Message {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
@@ -958,6 +1058,13 @@ impl AgentSession {
                             });
                         }
                         Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                })
+                                .await;
                             self.messages.push(Message {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
@@ -984,21 +1091,35 @@ impl AgentSession {
                         .await;
                     match reply_rx.await {
                         Ok(approved) => {
+                            let output = if approved {
+                                "Changes approved and applied"
+                            } else {
+                                "Changes rejected by user"
+                            };
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: approved,
+                                    output: output.into(),
+                                })
+                                .await;
                             self.messages.push(Message {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
                                     success: approved,
-                                    output: if approved {
-                                        "Changes approved and applied"
-                                    } else {
-                                        "Changes rejected by user"
-                                    }
-                                    .into(),
+                                    output: output.into(),
                                 }),
                             });
                         }
                         Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                })
+                                .await;
                             self.messages.push(Message {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
@@ -1033,6 +1154,13 @@ impl AgentSession {
                         .await;
                     match reply_rx.await {
                         Ok(mut result) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: result.success,
+                                    output: result.output.clone(),
+                                })
+                                .await;
                             self.truncate_tool_result(&mut result);
                             self.messages.push(Message {
                                 role: Role::Tool,
@@ -1040,6 +1168,13 @@ impl AgentSession {
                             });
                         }
                         Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "Sub-agent delegation failed".into(),
+                                })
+                                .await;
                             self.messages.push(Message {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
@@ -1079,6 +1214,13 @@ impl AgentSession {
                 match reply_rx.await {
                     Ok(mut result) => {
                         debug!(tool = %call.name, success = result.success, "tool result received");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::ToolCallFinished {
+                                success: result.success,
+                                output: result.output.clone(),
+                            })
+                            .await;
                         self.truncate_tool_result(&mut result);
                         self.messages.push(Message {
                             role: Role::Tool,
@@ -1087,6 +1229,13 @@ impl AgentSession {
                     }
                     Err(_) => {
                         error!(tool = %call.name, "tool result channel closed");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::ToolCallFinished {
+                                success: false,
+                                output: "Tool result channel closed".into(),
+                            })
+                            .await;
                         let _ = self
                             .event_tx
                             .send(AiEvent::Error("Tool result channel closed".into()))
@@ -1100,24 +1249,8 @@ impl AgentSession {
                 }
             }
             // Loop: provider sees tool results and may issue more calls
+            round += 1;
         }
-
-        warn!(
-            max_rounds = self.max_rounds,
-            "AI exceeded maximum tool call rounds"
-        );
-        let _ = self
-            .event_tx
-            .send(AiEvent::Error(format!(
-                "AI exceeded maximum tool call rounds ({})",
-                self.max_rounds
-            )))
-            .await;
-
-        if let Some(start_idx) = self.transaction_start_idx {
-            self.collapse_transaction(start_idx);
-        }
-        self.transaction_start_idx = None;
     }
 
     /// Collapse intermediate tool calls and results in the current transaction
@@ -1261,6 +1394,8 @@ mod tests {
             let evt = rx.recv().await.unwrap();
             match &evt {
                 AiEvent::RoundUpdate { .. } => continue,
+                AiEvent::ToolCallStarted { .. } => continue,
+                AiEvent::ToolCallFinished { .. } => continue,
                 AiEvent::TextResponse { text, .. } if text.starts_with("[AI:") => continue,
                 _ => return evt,
             }
@@ -1386,59 +1521,6 @@ mod tests {
             AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
             other => panic!("expected Error, got {:?}", other),
         }
-
-        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn max_rounds_exceeded() {
-        let (event_tx, mut event_rx) = mpsc::channel(64);
-        let (cmd_tx, cmd_rx) = mpsc::channel(8);
-
-        // Provider always returns a tool call — will hit max rounds
-        let mut responses = Vec::new();
-        for i in 0..25 {
-            responses.push(ProviderResponse {
-                text: None,
-                tool_calls: vec![ToolCall {
-                    id: format!("call_{}", i),
-                    name: "cursor_info".into(),
-                    // Unique arguments per round to avoid tool-loop circuit breaker
-                    arguments: serde_json::json!({ "round": i }),
-                }],
-                stop_reason: StopReason::ToolUse,
-                usage: None,
-            });
-        }
-
-        let provider = Box::new(MockProvider::new(responses));
-        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
-        session.max_rounds = 20; // Low limit so test doesn't need 250 mock responses
-
-        tokio::spawn(session.run());
-
-        cmd_tx.send(AiCommand::Prompt("loop".into())).await.unwrap();
-
-        // Drain events until we get the error
-        let mut found_error = false;
-        for _ in 0..100 {
-            match event_rx.recv().await {
-                Some(AiEvent::Error(msg)) => {
-                    assert!(msg.contains("exceeded maximum"));
-                    found_error = true;
-                    break;
-                }
-                Some(AiEvent::ToolCallRequest { reply, .. }) => {
-                    let _ = reply.send(ToolResult {
-                        tool_call_id: "x".into(),
-                        success: true,
-                        output: "ok".into(),
-                    });
-                }
-                _ => continue,
-            }
-        }
-        assert!(found_error, "should have received max rounds error");
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
     }

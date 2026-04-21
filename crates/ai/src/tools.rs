@@ -972,7 +972,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // are queryable here — the agent is a peer reader.
         ToolDefinition {
             name: "kb_get".into(),
-            description: "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'.".into(),
+            description: "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'. WARNING: Linkage is high; pull atomic info and avoid walking the entire graph.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -1316,6 +1316,23 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                     },
                 )]),
                 required: vec!["question".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "log_activity".into(),
+            description: "Log a visible status update or reasoning step to the user's AI buffer. Use this during long operations to keep the user informed of your progress and current focus.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "activity".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Description of the current activity or reasoning step.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["activity".into()],
             },
             permission: Some(PermissionTier::ReadOnly),
         },

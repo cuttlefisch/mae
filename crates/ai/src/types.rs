@@ -109,6 +109,10 @@ pub enum AiEvent {
         text: String,
         target_buffer: Option<String>,
     },
+    /// UI Notification: AI has started executing a tool.
+    ToolCallStarted { name: String },
+    /// UI Notification: AI has finished executing a tool.
+    ToolCallFinished { success: bool, output: String },
     /// Partial streaming token for real-time display.
     StreamChunk {
         text: String,

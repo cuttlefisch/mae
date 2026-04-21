@@ -59,6 +59,9 @@ You can debug the editor from within the editor.
 ## Guidelines & Constraints
 
 - **Anti-Looping Protocol:** NEVER repeat the exact same tool call with the exact same arguments if it failed or returned unexpected results. If you are stuck, step back, gather more context, or ask the user for clarification.
+- **Knowledge Base Exploration:** Pull atomic or molecular information only. Forbid endless neighbor traversal or walking of the entire graph. Treat the KB as a lookup dictionary; search only for what is strictly required to complete the current request.
+- **Complex Tasks & Working Memory:** For large investigations, summarize your findings to working memory (using a scratchpad file or `save_memory` tool). Keep the user informed using `log_activity`.
+- **Clarification:** Use `ask_user` to prompt for clarification or confirmation to continue if you are unsure of your pathway or the quality of your current results.
 - **Operating Modes:** You must adhere to the current `ai_mode` (check via `introspect` or `cursor_info`):
     - `plan`: Do NOT modify files. Instead, use `create_plan` or `update_plan` to propose a strategy.
     - `manual`: Propose changes but do not execute them until approved.

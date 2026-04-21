@@ -51,6 +51,8 @@ pub enum LineStyle {
 pub struct RenderedLine {
     pub text: String,
     pub style: LineStyle,
+    /// The index of the ConversationEntry this line belongs to, if any.
+    pub entry_index: Option<usize>,
 }
 
 /// Conversation state for an AI interaction pane.
@@ -229,23 +231,26 @@ impl Conversation {
     pub fn rendered_lines(&self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
 
-        for entry in &self.entries {
+        for (i, entry) in self.entries.iter().enumerate() {
             match &entry.role {
                 ConversationRole::User => {
                     lines.push(RenderedLine {
                         text: "[You]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::UserText,
+                            entry_index: Some(i),
                         });
                     }
                     if entry.content.is_empty() {
                         lines.push(RenderedLine {
                             text: String::new(),
                             style: LineStyle::UserText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -253,17 +258,20 @@ impl Conversation {
                     lines.push(RenderedLine {
                         text: "[AI]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::AssistantText,
+                            entry_index: Some(i),
                         });
                     }
                     if entry.content.is_empty() {
                         lines.push(RenderedLine {
                             text: String::new(),
                             style: LineStyle::AssistantText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -272,16 +280,19 @@ impl Conversation {
                         lines.push(RenderedLine {
                             text: format!("▸ [Tool: {}]", name),
                             style: LineStyle::ToolCallHeader,
+                            entry_index: Some(i),
                         });
                     } else {
                         lines.push(RenderedLine {
                             text: format!("▾ [Tool: {}]", name),
                             style: LineStyle::ToolCallHeader,
+                            entry_index: Some(i),
                         });
                         for line in entry.content.lines() {
                             lines.push(RenderedLine {
                                 text: format!("  {}", line),
                                 style: LineStyle::ToolResultText,
+                                entry_index: Some(i),
                             });
                         }
                     }
@@ -299,16 +310,19 @@ impl Conversation {
                         lines.push(RenderedLine {
                             text: header,
                             style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
                         });
                     } else {
                         lines.push(RenderedLine {
                             text: header,
                             style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
                         });
                         for line in entry.content.lines() {
                             lines.push(RenderedLine {
                                 text: format!("  {}", line),
                                 style: LineStyle::ToolResultText,
+                                entry_index: Some(i),
                             });
                         }
                     }
@@ -317,11 +331,13 @@ impl Conversation {
                     lines.push(RenderedLine {
                         text: "[System]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::SystemText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -331,6 +347,7 @@ impl Conversation {
             lines.push(RenderedLine {
                 text: String::new(),
                 style: LineStyle::Separator,
+                entry_index: None,
             });
         }
 
@@ -338,6 +355,7 @@ impl Conversation {
         lines.push(RenderedLine {
             text: format!("> {}", self.input_line),
             style: LineStyle::InputPrompt,
+            entry_index: None,
         });
 
         lines

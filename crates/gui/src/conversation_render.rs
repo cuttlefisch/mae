@@ -304,6 +304,7 @@ mod tests {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "short".into(),
             style: LineStyle::AssistantText,
+            entry_index: None,
         }];
         let wrapped = wrap_lines(&rendered, 80);
         assert_eq!(wrapped.len(), 1);
@@ -315,6 +316,7 @@ mod tests {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "a".repeat(20),
             style: LineStyle::AssistantText,
+            entry_index: None,
         }];
         let wrapped = wrap_lines(&rendered, 10);
         assert_eq!(wrapped.len(), 2);
@@ -351,6 +353,7 @@ mod tests {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "> ".to_string() + &"x".repeat(30),
             style: LineStyle::InputPrompt,
+            entry_index: None,
         }];
         let wrapped = wrap_lines(&rendered, 16);
         assert_eq!(wrapped.len(), 2);

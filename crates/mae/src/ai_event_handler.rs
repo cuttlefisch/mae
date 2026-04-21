@@ -115,6 +115,35 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             }
             editor.sync_conversation_buffer_rope();
         }
+        AiEvent::ToolCallStarted { name } => {
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_tool_call(&name);
+            }
+        }
+        AiEvent::ToolCallFinished { success, output } => {
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                // Auto-expand plans and large writes for better parity with Claude Code/Cursor
+                let expanded = if let Some(last) = conv.entries.last() {
+                    match &last.role {
+                        mae_core::conversation::ConversationRole::ToolCall { name } => {
+                            matches!(
+                                name.as_str(),
+                                "create_plan" | "update_plan" | "write_file" | "replace"
+                            )
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                conv.push_tool_result(success, &output, None);
+                if expanded {
+                    if let Some(last) = conv.entries.last_mut() {
+                        last.collapsed = false;
+                    }
+                }
+            }
+        }
         AiEvent::StreamChunk {
             text,
             target_buffer,

@@ -139,6 +139,27 @@ pub fn handle_key(
         editor.last_esc_time = None;
     }
 
+    // Toggle collapse in conversation buffers (Normal mode)
+    if editor.mode == Mode::Normal {
+        let idx = editor.active_buffer_idx();
+        if editor.buffers[idx].conversation.is_some()
+            && (key.code == KeyCode::Enter || key.code == KeyCode::Tab)
+        {
+            let win = editor.window_mgr.focused_window();
+            let row = win.cursor_row;
+            if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                let lines = conv.rendered_lines();
+                if let Some(line) = lines.get(row) {
+                    if let Some(entry_idx) = line.entry_index {
+                        conv.toggle_collapsed(entry_idx);
+                        editor.sync_conversation_buffer_rope();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
     // input_lock is guaranteed None (or the mode is ShellInsert, which
