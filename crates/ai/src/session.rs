@@ -331,17 +331,15 @@ impl AgentSession {
     /// Keeps the first message (initial user context) and the most recent messages.
     fn trim_messages(&mut self) {
         let original_len = self.messages.len();
+        let mut safe_boundary = self.transaction_start_idx.unwrap_or(self.messages.len());
 
         // 1. Hard cap on message count (secondary safeguard)
-        if self.messages.len() > self.max_messages && self.messages.len() > 1 {
-            let excess = self.messages.len() - self.max_messages;
-            let trim_count = excess.min(self.messages.len() - 1);
-            self.messages.drain(1..1 + trim_count);
-            debug!(
-                trimmed = trim_count,
-                remaining = self.messages.len(),
-                "trimmed by message count"
-            );
+        while self.messages.len() > self.max_messages && self.messages.len() > 1 {
+            if safe_boundary <= 1 {
+                break; // Protect current transaction
+            }
+            self.messages.remove(1);
+            safe_boundary -= 1;
         }
 
         // 2. Token-aware pruning: drop oldest non-first messages until within budget
@@ -351,8 +349,12 @@ impl AgentSession {
             if total <= budget {
                 break;
             }
+            if safe_boundary <= 1 {
+                break; // Protect current transaction
+            }
             // Remove the oldest message after the first
             self.messages.remove(1);
+            safe_boundary -= 1;
         }
 
         // 3. Enforce API schema: No orphaned Tool messages at the prune boundary.
@@ -363,23 +365,22 @@ impl AgentSession {
             let msg = &self.messages[1];
             if msg.role == Role::Tool {
                 self.messages.remove(1);
+                safe_boundary = safe_boundary.saturating_sub(1).max(1);
             } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
                 msg.content
             {
                 // Drop any Assistant message with tool calls at the boundary,
                 // as its matching ToolResults might have been pruned or partially pruned.
                 self.messages.remove(1);
+                safe_boundary = safe_boundary.saturating_sub(1).max(1);
             } else {
                 break;
             }
         }
 
-        if self.messages.len() < original_len {
-            let removed = original_len - self.messages.len();
-            if let Some(idx) = self.transaction_start_idx {
-                self.transaction_start_idx = Some(idx.saturating_sub(removed).max(1));
-            }
+        self.transaction_start_idx = self.transaction_start_idx.map(|_| safe_boundary);
 
+        if self.messages.len() < original_len {
             let total = token_estimate::estimate_messages_tokens(&self.messages);
             debug!(
                 messages = self.messages.len(),
@@ -512,6 +513,13 @@ impl AgentSession {
                         let _ = self
                             .event_tx
                             .send(AiEvent::TextResponse {
+                                text: "[Interrupted by user]".into(),
+                                target_buffer: self.target_buffer.clone(),
+                            })
+                            .await;
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::SessionComplete {
                                 text: "[Interrupted by user]".into(),
                                 target_buffer: self.target_buffer.clone(),
                             })
@@ -2037,5 +2045,135 @@ mod tests {
             Role::Tool,
             "Tool message was orphaned at boundary"
         );
+    }
+
+    #[test]
+    fn test_trim_messages_protects_active_transaction() {
+        let (event_tx, _) = mpsc::channel(32);
+        let (_, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // System prompt is ~3 tokens
+        // Each message is ~10 tokens
+        session.context_window = 100; // Very small
+        session.max_messages = 50;
+        session.reserved_output = 20;
+
+        session.messages = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("historical 1".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("historical 2".into()),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("START TRANSACTION".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("tool call 1".into()),
+            },
+            Message {
+                role: Role::Tool,
+                content: MessageContent::ToolResult(ToolResult {
+                    tool_call_id: "id1".into(),
+                    success: true,
+                    output: "tool result 1".into(),
+                }),
+            },
+        ];
+
+        // Mark the transaction start at "START TRANSACTION" (index 2)
+        session.transaction_start_idx = Some(2);
+
+        // Pre-trim state: 5 messages
+        assert_eq!(session.messages.len(), 5);
+
+        session.trim_messages();
+
+        // Verification:
+        // - "historical 1" (index 0) is kept because it's the first message.
+        // - "historical 2" (index 1) should be pruned because it's before transaction_start_idx and we're over budget.
+        // - "START TRANSACTION" (index 2) and beyond must be preserved.
+        assert_eq!(session.messages.len(), 4);
+        assert_eq!(
+            token_estimate::estimate_messages_tokens(&[session.messages[1].clone()]),
+            token_estimate::estimate_messages_tokens(&[Message {
+                role: Role::User,
+                content: MessageContent::Text("START TRANSACTION".into()),
+            }]),
+            "Transaction start message was pruned!"
+        );
+        assert_eq!(session.transaction_start_idx, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_session_cancel_emits_session_complete() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Setup a mock provider that returns a tool call to simulate being in the tool loop
+        let responses = vec![ProviderResponse {
+            text: Some("Thinking...".into()),
+            tool_calls: vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: serde_json::json!({"command": "sleep 10"}),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: None,
+        }];
+
+        let provider = Box::new(MockProvider::new(responses));
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // Start session in background
+        let session_task = tokio::spawn(session.run());
+
+        // Send a prompt to start the loop
+        cmd_tx
+            .send(AiCommand::Prompt("run something slow".into()))
+            .await
+            .unwrap();
+
+        // Wait for the first text response
+        let _ = event_rx.recv().await;
+
+        // While it's "executing" the tool, send a cancel
+        cmd_tx.send(AiCommand::Cancel).await.unwrap();
+
+        // Assert we receive TextResponse("[Interrupted by user]") followed by SessionComplete
+        let mut got_interrupted_text = false;
+        let mut got_session_complete = false;
+
+        for _ in 0..10 {
+            match event_rx.recv().await {
+                Some(AiEvent::TextResponse { text, .. }) => {
+                    if text.contains("[Interrupted by user]") {
+                        got_interrupted_text = true;
+                    }
+                }
+                Some(AiEvent::SessionComplete { text, .. }) => {
+                    if text.contains("[Interrupted by user]") {
+                        got_session_complete = true;
+                    }
+                    break;
+                }
+                _ => continue,
+            }
+        }
+
+        assert!(got_interrupted_text, "Missing interrupted text response");
+        assert!(
+            got_session_complete,
+            "Missing SessionComplete event after cancellation"
+        );
+
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+        let _ = session_task.await;
     }
 }
