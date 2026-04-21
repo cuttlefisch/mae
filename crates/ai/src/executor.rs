@@ -9,8 +9,8 @@ use crate::tool_impls::lsp::{
 };
 use crate::tool_impls::{
     execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
-    execute_close_buffer, execute_command_list, execute_create_file, execute_cursor_info,
-    execute_dap_continue, execute_dap_disconnect, execute_dap_evaluate,
+    execute_close_buffer, execute_command_list, execute_create_file, execute_create_plan,
+    execute_cursor_info, execute_dap_continue, execute_dap_disconnect, execute_dap_evaluate,
     execute_dap_expand_variable, execute_dap_inspect_variable, execute_dap_list_variables,
     execute_dap_output, execute_dap_remove_breakpoint, execute_dap_select_frame,
     execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
@@ -22,11 +22,12 @@ use crate::tool_impls::{
     execute_list_buffers, execute_lsp_diagnostics, execute_mouse_event, execute_open_file,
     execute_org_cycle, execute_org_open_link, execute_org_todo_cycle, execute_project_files,
     execute_project_info, execute_project_search, execute_rename_file, execute_render_inspect,
-    execute_set_option, execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
-    execute_shell_send_input, execute_switch_buffer, execute_switch_project, execute_syntax_tree,
-    execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
-    execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
-    execute_visual_buffer_clear, execute_window_layout,
+    execute_save_memory, execute_set_option, execute_shell_list, execute_shell_read_output,
+    execute_shell_scrollback, execute_shell_send_input, execute_switch_buffer,
+    execute_switch_project, execute_syntax_tree, execute_theme_inspect, execute_trigger_hook,
+    execute_update_plan, execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
+    execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
+    execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -219,6 +220,9 @@ pub fn execute_tool(
         "set_option",
         "ai_save",
         "ai_load",
+        "save_memory",
+        "create_plan",
+        "update_plan",
         "rename_file",
         "perf_stats",
         "perf_benchmark",
@@ -301,6 +305,9 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "shell_exec" => execute_shell_exec_sync(&call.arguments),
         "ai_save" => execute_ai_save(editor, &call.arguments),
         "ai_load" => execute_ai_load(editor, &call.arguments),
+        "save_memory" => execute_save_memory(&call.arguments),
+        "create_plan" => execute_create_plan(&call.arguments),
+        "update_plan" => execute_update_plan(&call.arguments),
         "rename_file" => execute_rename_file(editor, &call.arguments),
         "perf_stats" => execute_perf_stats(editor),
         "perf_benchmark" => execute_perf_benchmark(editor, &call.arguments),

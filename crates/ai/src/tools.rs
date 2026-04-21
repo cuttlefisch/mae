@@ -1381,6 +1381,60 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "create_plan".into(),
+            description: "Create a new implementation plan in the project's plans directory. Plans should be markdown files documenting complex tasks.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The name of the plan (e.g. 'feature-x')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "content".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The initial markdown content of the plan.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into(), "content".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "update_plan".into(),
+            description: "Update an existing implementation plan. Use this to refine steps as the task progresses.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The name of the plan to update.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "content".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The updated markdown content of the plan.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into(), "content".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Permission introspection ---
         ToolDefinition {
             name: "ai_permissions".into(),
@@ -2391,7 +2445,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 92);
+        assert_eq!(tools.len(), 94);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));
@@ -2399,6 +2453,8 @@ mod tests {
         assert!(names.contains(&"propose_changes"));
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"save_memory"));
+        assert!(names.contains(&"create_plan"));
+        assert!(names.contains(&"update_plan"));
         assert!(names.contains(&"terminal_spawn"));
         assert!(names.contains(&"terminal_send"));
         assert!(names.contains(&"terminal_read"));

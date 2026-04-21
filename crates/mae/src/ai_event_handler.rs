@@ -5,12 +5,28 @@
 //! This module provides a single implementation to avoid the duplication
 //! that historically plagues editor event loops (see: Emacs xdisp.c).
 
-use mae_ai::{execute_tool, AiEvent, DeferredKind, ExecuteResult, ToolResult};
+use mae_ai::{
+    execute_tool, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult, ToolResult,
+};
 use mae_core::{Editor, InputLock};
 use mae_lsp::LspCommand;
 use tracing::{debug, error, info, warn};
 
-use crate::bootstrap::find_conversation_buffer_mut;
+use crate::bootstrap::{
+    build_system_prompt, find_conversation_buffer_mut, load_ai_config, spawn_ai_session,
+};
+
+fn find_buffer_by_name_or_default_mut<'a>(
+    editor: &'a mut Editor,
+    name: Option<&str>,
+) -> Option<&'a mut mae_core::conversation::Conversation> {
+    if let Some(n) = name {
+        if let Some(idx) = editor.find_buffer_by_name(n) {
+            return editor.buffers[idx].conversation.as_mut();
+        }
+    }
+    find_conversation_buffer_mut(editor)
+}
 
 /// Type alias for the deferred AI reply state held across loop iterations.
 pub type DeferredAiReply = Option<(
@@ -36,6 +52,8 @@ pub fn handle_ai_event(
     permission_policy: &mae_ai::PermissionPolicy,
     deferred_ai_reply: &mut DeferredAiReply,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
+    ai_event_tx: &tokio::sync::mpsc::Sender<AiEvent>,
+    _ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
     match ai_event {
         AiEvent::ToolCallRequest { call, reply } => {
@@ -66,9 +84,14 @@ pub fn handle_ai_event(
                 }
             }
         }
-        AiEvent::TextResponse(text) => {
+        AiEvent::TextResponse {
+            text,
+            target_buffer,
+        } => {
             editor.ai_streaming = true;
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+            if let Some(conv_buf) =
+                find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
+            {
                 conv_buf.push_assistant(&text);
             } else {
                 let display = if text.len() > 120 {
@@ -80,16 +103,26 @@ pub fn handle_ai_event(
             }
             editor.sync_conversation_buffer_rope();
         }
-        AiEvent::StreamChunk(text) => {
+        AiEvent::StreamChunk {
+            text,
+            target_buffer,
+        } => {
             editor.ai_streaming = true;
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+            if let Some(conv_buf) =
+                find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
+            {
                 conv_buf.append_streaming_chunk(&text);
             }
             editor.sync_conversation_buffer_rope();
         }
-        AiEvent::SessionComplete(_text) => {
+        AiEvent::SessionComplete {
+            text: _text,
+            target_buffer,
+        } => {
             info!("AI session complete");
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+            if let Some(conv_buf) =
+                find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
+            {
                 conv_buf.end_streaming();
             }
             editor.sync_conversation_buffer_rope();
@@ -190,12 +223,95 @@ pub fn handle_ai_event(
             objective,
             reply,
         } => {
-            info!(%profile, %objective, "AI delegating to sub-agent");
-            // Placeholder: Spawn a sub-session.
-            let _ = reply.send(ToolResult {
-                tool_call_id: "delegate".into(),
-                success: false,
-                output: "Sub-agent delegation not yet implemented".into(),
+            let session_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let target_buf_name = format!("*AI-{}-{}*", profile, session_id);
+            info!(%profile, %target_buf_name, "AI delegating to sub-agent");
+
+            // 1. Create a dedicated buffer for the sub-agent
+            let mut sub_buf = mae_core::Buffer::new();
+            sub_buf.name = target_buf_name.clone();
+            sub_buf.conversation = Some(mae_core::conversation::Conversation::new());
+            editor.buffers.push(sub_buf);
+            if let Some(conv) = find_buffer_by_name_or_default_mut(editor, Some(&target_buf_name)) {
+                conv.push_system(format!("Objective: {}", objective));
+            }
+
+            // 2. Load config and construct session
+            let config = match load_ai_config(editor) {
+                Some(c) => c,
+                None => {
+                    let _ = reply.send(ToolResult {
+                        tool_call_id: "delegate".into(),
+                        success: false,
+                        output: "AI not configured".into(),
+                    });
+                    return;
+                }
+            };
+
+            let (sub_cmd_tx, sub_cmd_rx) = tokio::sync::mpsc::channel::<AiCommand>(8);
+            let (proxy_tx, mut proxy_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
+            let main_event_tx = ai_event_tx.clone();
+
+            let provider: Box<dyn mae_ai::AgentProvider> = match config.provider_type.as_str() {
+                "openai" => Box::new(mae_ai::OpenAiProvider::new(config.clone())),
+                "gemini" => Box::new(mae_ai::GeminiProvider::new(config.clone())),
+                _ => Box::new(mae_ai::ClaudeProvider::new(config.clone())),
+            };
+
+            let tools = {
+                let mut t = mae_ai::tools_from_registry(&editor.commands);
+                t.extend(mae_ai::ai_specific_tools(&editor.option_registry));
+                t
+            };
+
+            let sub_session = AgentSession::new(
+                provider,
+                tools,
+                build_system_prompt(&profile),
+                proxy_tx,
+                sub_cmd_rx,
+            )
+            .with_budget(config.model, config.budget)
+            .with_target_buffer(target_buf_name.clone());
+
+            // 3. Spawn the session
+            spawn_ai_session(sub_session);
+
+            // 4. Spawn proxy task to catch completion
+            tokio::spawn(async move {
+                let _ = sub_cmd_tx.send(AiCommand::Prompt(objective)).await;
+
+                while let Some(evt) = proxy_rx.recv().await {
+                    match &evt {
+                        AiEvent::SessionComplete { text, .. } => {
+                            let _ = reply.send(ToolResult {
+                                tool_call_id: "delegate".into(),
+                                success: true,
+                                output: text.clone(),
+                            });
+                            let _ = main_event_tx.send(evt).await;
+                            break;
+                        }
+                        AiEvent::Error(msg) => {
+                            let _ = reply.send(ToolResult {
+                                tool_call_id: "delegate".into(),
+                                success: false,
+                                output: format!("Sub-agent error: {}", msg),
+                            });
+                            let _ = main_event_tx.send(evt).await;
+                            break;
+                        }
+                        _ => {
+                            if main_event_tx.send(evt).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
             });
         }
         AiEvent::UpdateMode(mode) => {
@@ -216,6 +332,12 @@ pub fn handle_ai_event(
         } => {
             editor.ai_current_round = round;
             editor.ai_transaction_start_idx = transaction_start_idx;
+        }
+        AiEvent::EventMeta {
+            session_id,
+            agent_name,
+        } => {
+            debug!(%session_id, %agent_name, "AI event metadata received");
         }
     }
 }

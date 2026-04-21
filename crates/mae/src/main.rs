@@ -283,6 +283,7 @@ fn main() -> io::Result<()> {
     // `setup_ai`/`setup_lsp`/`setup_dap` call `tokio::spawn` internally.
     let (
         mut ai_event_rx,
+        ai_event_tx,
         ai_command_tx,
         mut lsp_event_rx,
         lsp_command_tx,
@@ -293,7 +294,7 @@ fn main() -> io::Result<()> {
         all_tools,
         permission_policy,
     ) = rt.block_on(async {
-        let (ai_event_rx, ai_command_tx) = setup_ai(&editor);
+        let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
             ai_configured = ai_command_tx.is_some(),
             "AI agent setup complete"
@@ -350,6 +351,7 @@ fn main() -> io::Result<()> {
 
         (
             ai_event_rx,
+            ai_event_tx,
             ai_command_tx,
             lsp_event_rx,
             lsp_command_tx,
@@ -404,6 +406,7 @@ fn main() -> io::Result<()> {
                 editor,
                 scheme,
                 ai_event_rx,
+                ai_event_tx,
                 ai_command_tx,
                 lsp_event_rx,
                 lsp_command_tx,
@@ -423,6 +426,7 @@ fn main() -> io::Result<()> {
         &mut editor,
         &mut scheme,
         &mut ai_event_rx,
+        &ai_event_tx,
         &ai_command_tx,
         &mut lsp_event_rx,
         &lsp_command_tx,
@@ -446,6 +450,7 @@ async fn run_terminal_loop(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     ai_event_rx: &mut tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_event_tx: &tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
     lsp_event_rx: &mut tokio::sync::mpsc::Receiver<LspTaskEvent>,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
@@ -725,6 +730,7 @@ async fn run_terminal_loop(
                 ai_event_handler::handle_ai_event(
                     editor, ai_event, all_tools, permission_policy,
                     &mut deferred_ai_reply, lsp_command_tx,
+                    ai_event_tx, ai_command_tx,
                 );
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
@@ -900,19 +906,19 @@ async fn run_headless_self_test(
                     }
                 }
             }
-            Some(AiEvent::TextResponse(text)) => {
+            Some(AiEvent::TextResponse { text, .. }) => {
                 full_report.push_str(&text);
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.push_assistant(&text);
                 }
             }
-            Some(AiEvent::StreamChunk(text)) => {
+            Some(AiEvent::StreamChunk { text, .. }) => {
                 full_report.push_str(&text);
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.append_streaming_chunk(&text);
                 }
             }
-            Some(AiEvent::SessionComplete(_)) => {
+            Some(AiEvent::SessionComplete { .. }) => {
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.end_streaming();
                 }
@@ -1723,6 +1729,7 @@ fn run_gui(
     mut editor: Editor,
     scheme: SchemeRuntime,
     ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     lsp_event_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
@@ -1793,6 +1800,7 @@ fn run_gui(
         shell_pending_keys: Vec::new(),
         shell_terminals: std::collections::HashMap::new(),
         shell_last_dims: std::collections::HashMap::new(),
+        ai_event_tx,
         ai_command_tx,
         deferred_ai_reply: None,
         deferred_mcp_reply: Vec::new(),
@@ -1914,6 +1922,7 @@ struct GuiApp {
     shell_last_dims: std::collections::HashMap<usize, (u16, u16)>,
 
     // AI/MCP state
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     deferred_ai_reply: ai_event_handler::DeferredAiReply,
     deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
@@ -2063,6 +2072,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     &self.permission_policy,
                     &mut self.deferred_ai_reply,
                     &self.lsp_command_tx,
+                    &self.ai_event_tx,
+                    &self.ai_command_tx,
                 );
                 self.dirty = true;
             }

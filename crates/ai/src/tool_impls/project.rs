@@ -131,6 +131,94 @@ pub fn execute_switch_project(
     Ok(format!("Switched to project '{}' at {}", name, path_str))
 }
 
+pub fn execute_save_memory(args: &serde_json::Value) -> Result<String, String> {
+    let fact = args
+        .get("fact")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'fact' argument".to_string())?;
+
+    let mae_dir = std::env::current_dir()
+        .map_err(|e| format!("failed to get current dir: {}", e))?
+        .join(".mae/memory");
+
+    if !mae_dir.exists() {
+        std::fs::create_dir_all(&mae_dir)
+            .map_err(|e| format!("failed to create memory dir: {}", e))?;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let filename = format!("memory_{}.txt", timestamp);
+    let path = mae_dir.join(filename);
+
+    std::fs::write(&path, fact).map_err(|e| format!("failed to write memory: {}", e))?;
+
+    Ok(format!("Fact remembered in {}", path.display()))
+}
+
+pub fn execute_create_plan(args: &serde_json::Value) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'name' argument".to_string())?;
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'content' argument".to_string())?;
+
+    let plan_dir = std::env::current_dir()
+        .map_err(|e| format!("failed to get current dir: {}", e))?
+        .join(".mae/plans");
+
+    if !plan_dir.exists() {
+        std::fs::create_dir_all(&plan_dir)
+            .map_err(|e| format!("failed to create plans dir: {}", e))?;
+    }
+
+    let filename = if name.ends_with(".md") {
+        name.to_string()
+    } else {
+        format!("{}.md", name)
+    };
+    let path = plan_dir.join(filename);
+
+    std::fs::write(&path, content).map_err(|e| format!("failed to write plan: {}", e))?;
+
+    Ok(format!("Plan created: {}", path.display()))
+}
+
+pub fn execute_update_plan(args: &serde_json::Value) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'name' argument".to_string())?;
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing 'content' argument".to_string())?;
+
+    let plan_dir = std::env::current_dir()
+        .map_err(|e| format!("failed to get current dir: {}", e))?
+        .join(".mae/plans");
+
+    let filename = if name.ends_with(".md") {
+        name.to_string()
+    } else {
+        format!("{}.md", name)
+    };
+    let path = plan_dir.join(filename);
+
+    if !path.exists() {
+        return Err(format!("Plan not found: {}", path.display()));
+    }
+
+    std::fs::write(&path, content).map_err(|e| format!("failed to update plan: {}", e))?;
+
+    Ok(format!("Plan updated: {}", path.display()))
+}
+
 /// Check if a command exists on PATH.
 fn which_exists(cmd: &str) -> bool {
     std::process::Command::new("which")

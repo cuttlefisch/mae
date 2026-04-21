@@ -105,11 +105,20 @@ pub enum AiEvent {
         reply: tokio::sync::oneshot::Sender<ToolResult>,
     },
     /// AI produced a text response.
-    TextResponse(String),
-    /// Partial streaming token for real-time display in conversation buffer.
-    StreamChunk(String),
+    TextResponse {
+        text: String,
+        target_buffer: Option<String>,
+    },
+    /// Partial streaming token for real-time display.
+    StreamChunk {
+        text: String,
+        target_buffer: Option<String>,
+    },
     /// AI session completed (final response).
-    SessionComplete(String),
+    SessionComplete {
+        text: String,
+        target_buffer: Option<String>,
+    },
     /// AI wants to ask the user a clarifying question.
     AskUser {
         question: String,
@@ -126,6 +135,11 @@ pub enum AiEvent {
         profile: String,
         objective: String,
         reply: tokio::sync::oneshot::Sender<ToolResult>,
+    },
+    /// Metadata about the session/event (e.g. session_id, agent_name).
+    EventMeta {
+        session_id: String,
+        agent_name: String,
     },
     /// An error occurred in the AI transport.
     Error(String),

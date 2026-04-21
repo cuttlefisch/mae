@@ -70,6 +70,9 @@ pub struct AgentSession {
     transaction_start_idx: Option<usize>,
     /// Current round in the tool loop. Exposed for introspection.
     current_round: usize,
+    /// Optional name of the buffer to route output to (e.g. "*AI-Explorer*").
+    /// If None, output goes to the default conversation buffer.
+    target_buffer: Option<String>,
 }
 
 impl AgentSession {
@@ -117,7 +120,13 @@ impl AgentSession {
             enabled_categories: std::collections::HashSet::new(),
             transaction_start_idx: None,
             current_round: 0,
+            target_buffer: None,
         }
+    }
+
+    pub fn with_target_buffer(mut self, name: String) -> Self {
+        self.target_buffer = Some(name);
+        self
     }
 
     /// Configure model + budget for this session. Called once by the
@@ -444,7 +453,10 @@ impl AgentSession {
             );
             let _ = self
                 .event_tx
-                .send(AiEvent::TextResponse(format!("[{}]", status)))
+                .send(AiEvent::TextResponse {
+                    text: format!("[{}]", status),
+                    target_buffer: self.target_buffer.clone(),
+                })
                 .await;
         }
 
@@ -619,7 +631,10 @@ impl AgentSession {
             if let Some(ref text) = response.text {
                 let _ = self
                     .event_tx
-                    .send(AiEvent::TextResponse(text.clone()))
+                    .send(AiEvent::TextResponse {
+                        text: text.clone(),
+                        target_buffer: self.target_buffer.clone(),
+                    })
                     .await;
             }
 
@@ -632,7 +647,10 @@ impl AgentSession {
                 });
                 let _ = self
                     .event_tx
-                    .send(AiEvent::SessionComplete(final_text))
+                    .send(AiEvent::SessionComplete {
+                        text: final_text,
+                        target_buffer: self.target_buffer.clone(),
+                    })
                     .await;
                 if let Some(start_idx) = self.transaction_start_idx {
                     self.collapse_transaction(start_idx);
@@ -1107,7 +1125,7 @@ mod tests {
             let evt = rx.recv().await.unwrap();
             match &evt {
                 AiEvent::RoundUpdate { .. } => continue,
-                AiEvent::TextResponse(t) if t.starts_with("[AI:") => continue,
+                AiEvent::TextResponse { text, .. } if text.starts_with("[AI:") => continue,
                 _ => return evt,
             }
         }
@@ -1133,11 +1151,11 @@ mod tests {
 
         // Should get TextResponse then SessionComplete
         match recv_filtered(&mut event_rx).await {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Hello!"),
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Hello!"),
             other => panic!("expected TextResponse, got {:?}", other),
         }
         match recv_filtered(&mut event_rx).await {
-            AiEvent::SessionComplete(t) => assert_eq!(t, "Hello!"),
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "Hello!"),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
 
@@ -1181,7 +1199,7 @@ mod tests {
 
         // TextResponse from first response
         match recv_filtered(&mut event_rx).await {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Let me check."),
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Let me check."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
@@ -1202,13 +1220,13 @@ mod tests {
 
         // TextResponse from second response
         match recv_filtered(&mut event_rx).await {
-            AiEvent::TextResponse(t) => assert_eq!(t, "You're on line 1."),
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "You're on line 1."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
         // SessionComplete
         match recv_filtered(&mut event_rx).await {
-            AiEvent::SessionComplete(t) => assert_eq!(t, "You're on line 1."),
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "You're on line 1."),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
 
@@ -1373,11 +1391,11 @@ mod tests {
         // Should NOT get a ToolCallRequest — shell_exec is handled locally.
         // We should get TextResponse then SessionComplete.
         match recv_filtered(&mut event_rx).await {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Done."),
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Done."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
         match recv_filtered(&mut event_rx).await {
-            AiEvent::SessionComplete(t) => assert_eq!(t, "Done."),
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "Done."),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
 
@@ -1523,15 +1541,15 @@ mod tests {
         let mut got_response = false;
         for _ in 0..10 {
             match tokio::time::timeout(std::time::Duration::from_secs(10), event_rx.recv()).await {
-                Ok(Some(AiEvent::TextResponse(t))) => {
-                    if t.starts_with("[AI:") {
+                Ok(Some(AiEvent::TextResponse { text, .. })) => {
+                    if text.starts_with("[AI:") {
                         continue; // skip init message
                     }
-                    assert_eq!(t, "recovered!");
+                    assert_eq!(text, "recovered!");
                     got_response = true;
                     break;
                 }
-                Ok(Some(AiEvent::SessionComplete(_))) => {
+                Ok(Some(AiEvent::SessionComplete { .. })) => {
                     got_response = true;
                     break;
                 }
@@ -1566,8 +1584,8 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 10,
-                completion_tokens: 5,
+                prompt_tokens: 1000,
+                completion_tokens: 500,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
             }),
@@ -1609,8 +1627,8 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 10,
-                completion_tokens: 5,
+                prompt_tokens: 1000,
+                completion_tokens: 500,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
             }),
@@ -1648,8 +1666,8 @@ mod tests {
                 }],
                 stop_reason: StopReason::ToolUse,
                 usage: Some(Usage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
+                    prompt_tokens: 10000,
+                    completion_tokens: 5000,
                     cache_read_tokens: 0,
                     cache_creation_tokens: 0,
                 }),
@@ -1659,8 +1677,8 @@ mod tests {
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
                 usage: Some(Usage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
+                    prompt_tokens: 10000,
+                    completion_tokens: 5000,
                     cache_read_tokens: 0,
                     cache_creation_tokens: 0,
                 }),
@@ -1715,8 +1733,8 @@ mod tests {
                     }],
                     stop_reason: StopReason::ToolUse,
                     usage: Some(Usage {
-                        prompt_tokens: 10,
-                        completion_tokens: 5,
+                        prompt_tokens: 10000,
+                        completion_tokens: 5000,
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
                     }),

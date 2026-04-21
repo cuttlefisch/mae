@@ -45,7 +45,8 @@ pub use kb::{
 };
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{
-    execute_project_files, execute_project_info, execute_project_search, execute_switch_project,
+    execute_create_plan, execute_project_files, execute_project_info, execute_project_search,
+    execute_save_memory, execute_switch_project, execute_update_plan,
 };
 pub use shell::{execute_shell_list, execute_shell_read_output, execute_shell_send_input};
 pub use syntax::execute_syntax_tree;

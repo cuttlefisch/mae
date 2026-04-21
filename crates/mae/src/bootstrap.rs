@@ -305,6 +305,7 @@ pub fn setup_ai(
     editor: &Editor,
 ) -> (
     tokio::sync::mpsc::Receiver<AiEvent>,
+    tokio::sync::mpsc::Sender<AiEvent>,
     Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
     // Ensure PATH is populated from the user's shell environment so we can
@@ -337,18 +338,22 @@ pub fn setup_ai(
             provider,
             tools,
             build_system_prompt("pair-programmer"),
-            event_tx,
+            event_tx.clone(),
             cmd_rx,
         )
         .with_budget(model, budget);
 
-        tokio::spawn(session.run());
+        spawn_ai_session(session);
 
-        (event_rx, Some(cmd_tx))
+        (event_rx, event_tx, Some(cmd_tx))
     } else {
         // No AI configured — event channel exists but nothing sends to it
-        (event_rx, None)
+        (event_rx, event_tx, None)
     }
+}
+
+pub fn spawn_ai_session(session: AgentSession) {
+    tokio::spawn(session.run());
 }
 
 /// Load the AI provider configuration by layering:
@@ -360,7 +365,7 @@ pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
-fn build_system_prompt(profile: &str) -> String {
+pub fn build_system_prompt(profile: &str) -> String {
     let mut prompt = String::new();
 
     // 1. Load the profile-specific base from prioritized locations:
