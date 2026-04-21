@@ -253,7 +253,8 @@ pub fn handle_ai_event(
             let target_buf_name = format!("*AI-{}-{}*", profile, session_id);
             info!(%profile, %target_buf_name, "AI delegating to sub-agent");
 
-            // 1. Create a dedicated buffer for the sub-agent
+            // Create a dedicated conversation buffer for the sub-agent.
+            // Users can switch to this buffer to monitor progress in real-time.
             let mut sub_buf = mae_core::Buffer::new();
             sub_buf.name = target_buf_name.clone();
             sub_buf.conversation = Some(mae_core::conversation::Conversation::new());
@@ -262,7 +263,7 @@ pub fn handle_ai_event(
                 conv.push_system(format!("Objective: {}", objective));
             }
 
-            // 2. Load config and construct session
+            // Initialize the sub-agent session using the parent's configuration.
             let config = match load_ai_config(editor) {
                 Some(c) => c,
                 None => {
@@ -301,10 +302,11 @@ pub fn handle_ai_event(
             .with_budget(config.model, config.budget)
             .with_target_buffer(target_buf_name.clone());
 
-            // 3. Spawn the session
+            // Spawn the sub-agent session.
             spawn_ai_session(sub_session);
 
-            // 4. Spawn proxy task to catch completion
+            // Proxy task: monitor the sub-agent and relay events back to the main thread.
+            // Captures the final SessionComplete or Error to resolve the `delegate` tool call.
             tokio::spawn(async move {
                 let _ = sub_cmd_tx.send(AiCommand::Prompt(objective)).await;
 
@@ -329,6 +331,7 @@ pub fn handle_ai_event(
                             break;
                         }
                         _ => {
+                            // Relay streaming chunks and tool calls to the main event loop
                             if main_event_tx.send(evt).await.is_err() {
                                 break;
                             }

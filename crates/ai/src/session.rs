@@ -324,7 +324,9 @@ impl AgentSession {
     /// Trim message history to stay within token budget AND hard message cap.
     /// Keeps the first message (initial user context) and the most recent messages.
     fn trim_messages(&mut self) {
-        // Hard cap on message count (secondary safeguard)
+        let original_len = self.messages.len();
+
+        // 1. Hard cap on message count (secondary safeguard)
         if self.messages.len() > self.max_messages && self.messages.len() > 1 {
             let excess = self.messages.len() - self.max_messages;
             let trim_count = excess.min(self.messages.len() - 1);
@@ -336,18 +338,42 @@ impl AgentSession {
             );
         }
 
-        // Token-aware pruning: drop oldest non-first messages until within budget
+        // 2. Token-aware pruning: drop oldest non-first messages until within budget
         let budget = self.available_message_budget();
-        loop {
+        while self.messages.len() > 1 {
             let total = token_estimate::estimate_messages_tokens(&self.messages);
-            if total <= budget || self.messages.len() <= 1 {
+            if total <= budget {
                 break;
             }
             // Remove the oldest message after the first
             self.messages.remove(1);
         }
 
-        if self.messages.len() > 1 {
+        // 3. Enforce API schema: No orphaned Tool messages at the prune boundary.
+        // If the prune cut off an Assistant message, or left an Assistant message
+        // with tool_calls but dropped some of its corresponding Tool messages,
+        // we must drop the orphaned messages to maintain a valid sequence.
+        while self.messages.len() > 1 {
+            let msg = &self.messages[1];
+            if msg.role == Role::Tool {
+                self.messages.remove(1);
+            } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
+                msg.content
+            {
+                // Drop any Assistant message with tool calls at the boundary,
+                // as its matching ToolResults might have been pruned or partially pruned.
+                self.messages.remove(1);
+            } else {
+                break;
+            }
+        }
+
+        if self.messages.len() < original_len {
+            let removed = original_len - self.messages.len();
+            if let Some(idx) = self.transaction_start_idx {
+                self.transaction_start_idx = Some(idx.saturating_sub(removed).max(1));
+            }
+
             let total = token_estimate::estimate_messages_tokens(&self.messages);
             debug!(
                 messages = self.messages.len(),
@@ -493,7 +519,11 @@ impl AgentSession {
                         "Context window nearly full — stopping tool calls".into(),
                     ))
                     .await;
-                break;
+                if let Some(start_idx) = self.transaction_start_idx {
+                    self.collapse_transaction(start_idx);
+                }
+                self.transaction_start_idx = None;
+                return;
             }
 
             // Cost circuit breaker: refuse the send if the session is
@@ -1002,19 +1032,34 @@ impl AgentSession {
     /// Preserves: System prompt, User prompt, Final response text.
     /// Condenses: Tool calls, tool results, intermediate reasoning text.
     fn collapse_transaction(&mut self, start_idx: usize) {
-        if self.messages.len() <= start_idx + 2 {
-            // Not enough messages to collapse (e.g. just user prompt + 1 response)
+        if self.messages.len() <= start_idx + 1 {
             return;
         }
 
-        let mut reasoning = Vec::new();
-        let final_response = self.messages.pop(); // The very last message is usually the final text
+        // Only treat the last message as the final response if it's an Assistant text message.
+        // If the loop was aborted (context full, error, etc), the last message might be
+        // a Tool result or an Assistant message with tool calls — those must be collapsed.
+        let mut final_response = None;
+        if let Some(last) = self.messages.last() {
+            if last.role == Role::Assistant {
+                if let MessageContent::Text(_) = last.content {
+                    final_response = self.messages.pop();
+                }
+            }
+        }
 
-        // Drain everything between start_idx+1 (after User prompt) and the final response
-        let to_drain = self.messages.len() - (start_idx + 1);
+        let to_drain = self.messages.len().saturating_sub(start_idx + 1);
+        if to_drain == 0 {
+            if let Some(resp) = final_response {
+                self.messages.push(resp);
+            }
+            return;
+        }
+
         let drained: Vec<Message> = self.messages.drain(start_idx + 1..).collect();
 
         let mut tool_count = 0;
+        let mut reasoning = Vec::new();
         for msg in drained {
             match &msg.content {
                 MessageContent::Text(t) => {
@@ -1029,14 +1074,11 @@ impl AgentSession {
                 MessageContent::ToolCalls(calls) => {
                     tool_count += calls.len();
                 }
-                MessageContent::ToolResult(_) => {
-                    // results are discarded but implicitly summarized by the fact
-                    // the model reached its final response.
-                }
+                MessageContent::ToolResult(_) => {}
             }
         }
 
-        // If we have reasoning text, insert a single compressed reasoning message
+        // If we have reasoning text or tool operations, insert a single compressed reasoning message
         if !reasoning.is_empty() || tool_count > 0 {
             let mut summary = String::new();
             if !reasoning.is_empty() {
@@ -1796,5 +1838,70 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), 1);
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
+    #[test]
+    fn test_trim_preserves_tool_call_pairs() {
+        let (event_tx, _) = mpsc::channel(32);
+        let (_, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // Setup messages:
+        // 0: User (kept)
+        // 1: Assistant (Text) - should be pruned
+        // 2: Assistant (ToolCalls) - should NOT be orphaned from 3
+        // 3: Tool (Result)
+        // 4: Assistant (Final)
+        session.messages = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("init".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("unrelated".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::ToolCalls(vec![ToolCall {
+                    id: "c1".into(),
+                    name: "t1".into(),
+                    arguments: serde_json::json!({}),
+                }]),
+            },
+            Message {
+                role: Role::Tool,
+                content: MessageContent::ToolResult(ToolResult {
+                    tool_call_id: "c1".into(),
+                    success: true,
+                    output: "ok".into(),
+                }),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("final".into()),
+            },
+        ];
+
+        // Set context window to allow some pruning but keep some history
+        session.context_window = 10000;
+        session.max_messages = 3;
+
+        session.trim_messages();
+
+        // Verify: messages.len() should be 3 (User + Assistant summary + Final)
+        // No, with max_messages = 3 it should keep index 0 and then indices [3, 4]
+        // Wait, drain(1..1+2) removes 1 and 2.
+        // Leaves: 0, 3, 4.
+        // Then schema loop: messages[1] is 3 (Tool). Removed.
+        // Leaves: 0, 4.
+        // 4 is Assistant(Text). Loop ends.
+        assert!(session.messages.len() > 1);
+        assert_ne!(
+            session.messages[1].role,
+            Role::Tool,
+            "Tool message was orphaned at boundary"
+        );
     }
 }
