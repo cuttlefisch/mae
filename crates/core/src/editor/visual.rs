@@ -117,8 +117,12 @@ impl Editor {
             _ => {
                 // Charwise selection
                 let mut result = String::new();
-                for row in min_row..=max_row.min(lines.len().saturating_sub(1)) {
-                    let line = lines[row];
+                for (row, line) in lines
+                    .iter()
+                    .enumerate()
+                    .take(max_row.min(lines.len().saturating_sub(1)) + 1)
+                    .skip(min_row)
+                {
                     if row == min_row && row == max_row {
                         let start_col = self.visual_anchor_col.min(win.cursor_col);
                         let end_col =

@@ -579,13 +579,13 @@ async fn run_terminal_loop(
             editor.fire_hook("app-exit");
 
             // Persist history
-            if let Err(e) = save_history(&editor) {
+            if let Err(e) = save_history(editor) {
                 error!(error = %e, "failed to save history");
             }
 
             // If debug mode is enabled, save a tombstone dump.
             if editor.debug_mode {
-                debug_dump(&editor);
+                debug_dump(editor);
             }
 
             // AI session persistence
@@ -728,11 +728,16 @@ async fn run_terminal_loop(
             }
             Some(ai_event) = ai_event_rx.recv() => {
                 tui_dirty = true;
-                ai_event_handler::handle_ai_event(
-                    editor, ai_event, all_tools, permission_policy,
-                    &mut deferred_ai_reply, &mut pending_interactive_event, lsp_command_tx,
-                    ai_event_tx, ai_command_tx,
-                );
+                let ctx = ai_event_handler::AiEventContext {
+                    all_tools,
+                    permission_policy,
+                    deferred_ai_reply: &mut deferred_ai_reply,
+                    pending_interactive_event: &mut pending_interactive_event,
+                    lsp_command_tx,
+                    ai_event_tx,
+                    ai_command_tx,
+                };
+                ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 tui_dirty = true;
@@ -2068,17 +2073,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         match event {
             MaeEvent::AiEvent(ai_event) => {
-                ai_event_handler::handle_ai_event(
-                    &mut self.editor,
-                    ai_event,
-                    &self.all_tools,
-                    &self.permission_policy,
-                    &mut self.deferred_ai_reply,
-                    &mut self.pending_interactive_event,
-                    &self.lsp_command_tx,
-                    &self.ai_event_tx,
-                    &self.ai_command_tx,
-                );
+                let ctx = ai_event_handler::AiEventContext {
+                    all_tools: &self.all_tools,
+                    permission_policy: &self.permission_policy,
+                    deferred_ai_reply: &mut self.deferred_ai_reply,
+                    pending_interactive_event: &mut self.pending_interactive_event,
+                    lsp_command_tx: &self.lsp_command_tx,
+                    ai_event_tx: &self.ai_event_tx,
+                    ai_command_tx: &self.ai_command_tx,
+                };
+                ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
             }
             MaeEvent::LspEvent(lsp_event) => {

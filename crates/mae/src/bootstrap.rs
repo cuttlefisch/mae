@@ -447,7 +447,7 @@ pub fn build_system_prompt(profile: &str) -> String {
             if let Ok(entries) = std::fs::read_dir(plan_dir) {
                 prompt.push_str("\n## Active Plans\n");
                 for entry in entries.flatten() {
-                    if entry.path().extension().map_or(false, |e| e == "md") {
+                    if entry.path().extension().is_some_and(|e| e == "md") {
                         if let Ok(content) = std::fs::read_to_string(entry.path()) {
                             prompt.push_str(&format!(
                                 "### Plan: {}\n```markdown\n{}\n```\n",

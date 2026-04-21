@@ -180,15 +180,19 @@ mod tests {
 
     #[test]
     fn cursor_shape_insert_is_bar() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Insert;
+        let editor = Editor {
+            mode: Mode::Insert,
+            ..Default::default()
+        };
         assert_eq!(cursor_shape(&editor), CursorShape::Bar);
     }
 
     #[test]
     fn cursor_shape_visual_is_block() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Visual(mae_core::VisualType::Char);
+        let editor = Editor {
+            mode: Mode::Visual(mae_core::VisualType::Char),
+            ..Default::default()
+        };
         assert_eq!(cursor_shape(&editor), CursorShape::Block);
     }
 
@@ -205,10 +209,12 @@ mod tests {
 
     #[test]
     fn compute_cursor_command_mode() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Command;
-        editor.command_line = "w".to_string();
-        editor.command_cursor = 1;
+        let editor = Editor {
+            mode: Mode::Command,
+            command_line: "w".to_string(),
+            command_cursor: 1,
+            ..Default::default()
+        };
         let inner = CellRect::new(1, 1, 78, 22);
         let pos = compute_cursor_position(&editor, inner, 3);
         assert!(pos.is_some());

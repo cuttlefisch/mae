@@ -109,8 +109,8 @@ impl Editor {
         let mut untracked = Vec::new();
 
         for line in stdout.lines() {
-            if line.starts_with("# branch.head ") {
-                branch = line["# branch.head ".len()..].to_string();
+            if let Some(stripped) = line.strip_prefix("# branch.head ") {
+                branch = stripped.to_string();
             } else if line.starts_with("1 ") || line.starts_with("2 ") {
                 // Changed tracked files
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -127,9 +127,9 @@ impl Editor {
                         unstaged.push(path);
                     }
                 }
-            } else if line.starts_with("? ") {
+            } else if let Some(stripped) = line.strip_prefix("? ") {
                 // Untracked
-                untracked.push(line[2..].to_string());
+                untracked.push(stripped.to_string());
             }
         }
 

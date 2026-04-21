@@ -16,7 +16,7 @@ pub fn estimate_tokens(text: &str) -> u64 {
         return 0;
     }
     let chars = text.len() as u64; // byte len is close enough for ASCII-heavy content
-    (chars + 3) / 4 // ceiling division
+    chars.div_ceil(4)
 }
 
 /// Overhead tokens per message (role marker, formatting).

@@ -50,18 +50,20 @@ pub enum PendingInteractiveEvent {
     ProposeChanges(tokio::sync::oneshot::Sender<bool>),
 }
 
+/// Context required for AI event dispatching.
+pub struct AiEventContext<'a> {
+    pub all_tools: &'a [mae_ai::ToolDefinition],
+    pub permission_policy: &'a mae_ai::PermissionPolicy,
+    pub deferred_ai_reply: &'a mut DeferredAiReply,
+    pub pending_interactive_event: &'a mut Option<PendingInteractiveEvent>,
+    pub lsp_command_tx: &'a tokio::sync::mpsc::Sender<LspCommand>,
+    pub ai_event_tx: &'a tokio::sync::mpsc::Sender<AiEvent>,
+    #[allow(dead_code)]
+    pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
+}
+
 /// Handle a single AI event. Shared between terminal and GUI loops.
-pub fn handle_ai_event(
-    editor: &mut Editor,
-    ai_event: AiEvent,
-    all_tools: &[mae_ai::ToolDefinition],
-    permission_policy: &mae_ai::PermissionPolicy,
-    deferred_ai_reply: &mut DeferredAiReply,
-    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
-    lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
-    ai_event_tx: &tokio::sync::mpsc::Sender<AiEvent>,
-    _ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
-) {
+pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventContext) {
     match ai_event {
         AiEvent::ToolCallRequest { call, reply } => {
             editor.ai_streaming = true;
@@ -70,7 +72,7 @@ pub fn handle_ai_event(
                 conv.push_tool_call(&call.name);
             }
             let tool_start = std::time::Instant::now();
-            let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
+            let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
             match exec_result {
                 ExecuteResult::Immediate(result) => {
                     info!(
@@ -88,8 +90,8 @@ pub fn handle_ai_event(
                 }
                 ExecuteResult::Deferred { kind, .. } => {
                     info!(?kind, "deferred AI tool — awaiting LSP response");
-                    crate::drain_lsp_intents(editor, lsp_command_tx);
-                    *deferred_ai_reply =
+                    crate::drain_lsp_intents(editor, ctx.lsp_command_tx);
+                    *ctx.deferred_ai_reply =
                         Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
                 }
             }
@@ -192,7 +194,7 @@ pub fn handle_ai_event(
             editor.set_status(format!("AI: {}", question));
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
-            *pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
+            *ctx.pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
         }
         AiEvent::ProposeChanges { changes, reply } => {
             let count = if let Some(arr) = changes.as_array() {
@@ -239,7 +241,7 @@ pub fn handle_ai_event(
             editor.set_status(format!("AI: Proposing changes to {} file(s)", count));
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
-            *pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
+            *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
         }
         AiEvent::Delegate {
             profile,
@@ -278,7 +280,7 @@ pub fn handle_ai_event(
 
             let (sub_cmd_tx, sub_cmd_rx) = tokio::sync::mpsc::channel::<AiCommand>(8);
             let (proxy_tx, mut proxy_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
-            let main_event_tx = ai_event_tx.clone();
+            let main_event_tx = ctx.ai_event_tx.clone();
 
             let provider: Box<dyn mae_ai::AgentProvider> = match config.provider_type.as_str() {
                 "openai" => Box::new(mae_ai::OpenAiProvider::new(config.clone())),
