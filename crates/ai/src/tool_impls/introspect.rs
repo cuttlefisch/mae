@@ -140,6 +140,8 @@ fn build_shell_section(editor: &Editor) -> serde_json::Value {
 fn build_ai_section(editor: &Editor) -> serde_json::Value {
     let conv_entries = editor.conversation().map(|c| c.entries.len()).unwrap_or(0);
     json!({
+        "mode": editor.ai_mode,
+        "profile": editor.ai_profile,
         "streaming": editor.ai_streaming,
         "input_lock": format!("{:?}", editor.input_lock),
         "conversation_entries": conv_entries,

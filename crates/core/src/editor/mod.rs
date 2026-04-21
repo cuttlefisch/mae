@@ -348,7 +348,9 @@ pub struct Editor {
     /// Set to true when the user requests AI cancellation (e.g. via `ai-cancel` command).
     /// The event loop will read and reset this flag, sending the actual cancel command to the AI thread.
     pub ai_cancel_requested: bool,
-    /// AI operating mode (standard, plan, auto-accept).
+    /// Last time the Escape key was pressed (for double-esc detection).
+    pub last_esc_time: Option<std::time::Instant>,
+    /// AI operating mode (manual, auto-accept, plan).
     pub ai_mode: String,
     /// Active prompt profile name.
     pub ai_profile: String,
@@ -520,7 +522,8 @@ impl Editor {
             input_lock: InputLock::None,
             ai_streaming: false,
             ai_cancel_requested: false,
-            ai_mode: "standard".to_string(),
+            last_esc_time: None,
+            ai_mode: "manual".to_string(),
             ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,
             ai_transaction_start_idx: None,
@@ -663,7 +666,8 @@ impl Editor {
             input_lock: InputLock::None,
             ai_streaming: false,
             ai_cancel_requested: false,
-            ai_mode: "standard".to_string(),
+            last_esc_time: None,
+            ai_mode: "manual".to_string(),
             ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,
             ai_transaction_start_idx: None,

@@ -201,7 +201,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell_exec".into(),
-            description: "Execute a shell command and return stdout/stderr.".into(),
+            description: "Execute a shell command and return stdout/stderr. Anti-Looping: If a command fails, do not blindly retry the exact same command. Analyze the error, use diagnostics, or try a different approach.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([

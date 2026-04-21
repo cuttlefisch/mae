@@ -500,6 +500,47 @@ impl AgentSession {
         self.trim_messages();
 
         for round in 0..self.max_rounds {
+            // Check for cancellation (e.g. double-esc from user)
+            if let Ok(cmd) = self.command_rx.try_recv() {
+                match cmd {
+                    AiCommand::Cancel => {
+                        info!("AI cancel received during tool loop — interrupting");
+                        self.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text("[Interrupted by user]".into()),
+                        });
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::TextResponse {
+                                text: "[Interrupted by user]".into(),
+                                target_buffer: self.target_buffer.clone(),
+                            })
+                            .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
+                        return;
+                    }
+                    AiCommand::Shutdown => {
+                        info!("AI shutdown received during tool loop");
+                        return;
+                    }
+                    AiCommand::Prompt(p) => {
+                        // If we get a new prompt while busy, we'll assume it's
+                        // an follow-up and append it to the context.
+                        info!(
+                            prompt_len = p.len(),
+                            "received AI follow-up prompt during tool loop"
+                        );
+                        self.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(p),
+                        });
+                    }
+                }
+            }
+
             self.current_round = round;
             let _ = self
                 .event_tx

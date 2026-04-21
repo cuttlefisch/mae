@@ -123,6 +123,22 @@ pub fn handle_key(
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
+    // Double Esc to cancel AI
+    if key.code == KeyCode::Esc && editor.ai_streaming {
+        let now = std::time::Instant::now();
+        if let Some(last) = editor.last_esc_time {
+            if now.duration_since(last).as_millis() < 500 {
+                editor.ai_cancel_requested = true;
+                editor.set_status("AI interrupted (double-esc)");
+                editor.last_esc_time = None;
+                return;
+            }
+        }
+        editor.last_esc_time = Some(now);
+    } else if key.code != KeyCode::Esc {
+        editor.last_esc_time = None;
+    }
+
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
     // input_lock is guaranteed None (or the mode is ShellInsert, which
@@ -1655,6 +1671,16 @@ fn handle_conversation_input(
             if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
                 conv.scroll_down(10);
             }
+        }
+
+        // --- Cycle AI Mode ---
+        KeyCode::BackTab => {
+            editor.ai_mode = match editor.ai_mode.as_str() {
+                "manual" => "auto-accept".into(),
+                "auto-accept" => "plan".into(),
+                _ => "manual".into(),
+            };
+            editor.set_status(format!("[AI] Mode: {}", editor.ai_mode));
         }
 
         // --- Regular character insertion ---

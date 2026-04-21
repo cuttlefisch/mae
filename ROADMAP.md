@@ -1,14 +1,22 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.3.5 (1,324 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
-Terminal editor with vi-like modal editing, Scheme runtime, Gemini/Claude/OpenAI
-integration, search, visual mode, text objects, change/repeat/replace, scroll,
-indent/dedent, case change, line join, fuzzy file picker, command history, shell
-escape, horizontal scroll, multi-file AI tools, transactional tool callstack,
-embedded terminal emulator (alacritty_terminal), Scheme hooks, and `set-option!`
-all working.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.0 (1,324+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
 
-Self-hosting goal: use MAE + AI (Claude/Gemini/DeepSeek) to develop MAE itself.
+---
+
+## AI Parity & Tooling Gaps (v0.4.0 Review)
+
+Identified gaps in MAE's AI peer capabilities compared to industry standards (Claude Code, Gemini, Cursor).
+
+- [ ] **Memory Synthesis**: Sub-agent pattern to read and synthesize persistent memory into concise context.
+- [ ] **Context Compaction**: Automated summarization of conversation history to preserve token budget.
+- [ ] **Dynamic Tool Discovery (MCP Search)**: Enhanced `request_tools` with fuzzy search across all registered MCP servers.
+- [ ] **Semantic Code Search**: Integration with vector embeddings for "meaning-based" codebase navigation.
+- [ ] **Web Fetch**: Tool for reading raw code/docs from URLs (GitHub, documentation sites).
+- [ ] **Verification Specialist**: Dedicated sub-agent/tool for isolated test execution and PASS/FAIL verdicts.
+- [x] **Tool-Level Defenses**: Explicit anti-looping and boundary guardrails in tool descriptions (v0.4.0).
+- [x] **UX Mode Cycling**: Shift-Tab to cycle between `manual`, `auto-accept`, and `plan` modes (v0.4.0).
+- [x] **Stateful Interruption**: Double-Esc to cancel AI while preserving context for resumption (v0.4.0).
 
 ---
 
