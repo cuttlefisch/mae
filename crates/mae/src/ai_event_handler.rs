@@ -44,6 +44,12 @@ pub type DeferredMcpReply = Vec<(
     tokio::time::Instant, // created_at
 )>;
 
+/// A pending interactive AI request waiting for user input.
+pub enum PendingInteractiveEvent {
+    AskUser(tokio::sync::oneshot::Sender<String>),
+    ProposeChanges(tokio::sync::oneshot::Sender<bool>),
+}
+
 /// Handle a single AI event. Shared between terminal and GUI loops.
 pub fn handle_ai_event(
     editor: &mut Editor,
@@ -51,6 +57,7 @@ pub fn handle_ai_event(
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
     deferred_ai_reply: &mut DeferredAiReply,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
     ai_event_tx: &tokio::sync::mpsc::Sender<AiEvent>,
     _ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
@@ -66,21 +73,24 @@ pub fn handle_ai_event(
             let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
             match exec_result {
                 ExecuteResult::Immediate(result) => {
-                    let elapsed_ms = tool_start.elapsed().as_millis() as u64;
-                    info!(tool = %call.name, success = result.success, elapsed_ms, "AI tool call complete");
+                    info!(
+                        tool = %call.name,
+                        duration_ms = tool_start.elapsed().as_millis(),
+                        success = result.success,
+                        "AI tool completed"
+                    );
                     if let Some(conv) = find_conversation_buffer_mut(editor) {
-                        conv.push_tool_result(result.success, &result.output, Some(elapsed_ms));
+                        conv.push_tool_result(result.success, &result.output, None);
                     }
                     if reply.send(result).is_err() {
-                        warn!(tool = %call.name, "tool result channel closed — AI session may have been cancelled");
+                        warn!("AI tool result channel closed before reply");
                     }
                 }
-                ExecuteResult::Deferred { tool_call_id, kind } => {
-                    info!(tool = %call.name, ?kind, "deferred LSP tool call — waiting for server response");
-                    // Drain the LSP intent we just queued so it's sent immediately.
+                ExecuteResult::Deferred { kind, .. } => {
+                    info!(?kind, "deferred AI tool — awaiting LSP response");
                     crate::drain_lsp_intents(editor, lsp_command_tx);
                     *deferred_ai_reply =
-                        Some((kind, tool_call_id, reply, tokio::time::Instant::now()));
+                        Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
                 }
             }
         }
@@ -130,38 +140,22 @@ pub fn handle_ai_event(
             editor.input_lock = InputLock::None;
             editor.set_status("[AI] Done");
         }
-        AiEvent::Error(msg) => {
-            error!(error = %msg, "AI error");
-            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
-                conv_buf.push_system(format!("Error: {}", msg));
-                conv_buf.end_streaming();
-            }
-            editor.sync_conversation_buffer_rope();
-            editor.ai_streaming = false;
-            editor.input_lock = InputLock::None;
-            editor.set_status(format!("[AI error] {}", msg));
-        }
         AiEvent::CostUpdate {
             session_usd,
-            last_call_usd,
             tokens_in,
             tokens_out,
+            ..
         } => {
             editor.ai_session_cost_usd = session_usd;
             editor.ai_session_tokens_in = tokens_in;
             editor.ai_session_tokens_out = tokens_out;
-            debug!(
-                session_usd,
-                last_call_usd, tokens_in, tokens_out, "AI cost update"
-            );
         }
         AiEvent::BudgetWarning {
             session_usd,
             threshold_usd,
         } => {
             let msg = format!(
-                "AI budget warning: session spend ${:.4} crossed ${:.2} threshold. \
-                 Hard cap (if set) will abort the next turn.",
+                "AI budget warning: session spend ${:.4} crossed ${:.2} threshold",
                 session_usd, threshold_usd
             );
             warn!(session_usd, threshold_usd, "AI budget threshold crossed");
@@ -191,16 +185,14 @@ pub fn handle_ai_event(
         }
         AiEvent::AskUser { question, reply } => {
             info!(%question, "AI asking user");
-            // Placeholder: In a real implementation, we'd open a popup/input field.
-            // For now, we'll append to the conversation and wait for the next user message.
             if let Some(conv) = find_conversation_buffer_mut(editor) {
                 conv.push_system(format!("AI Question: {}", question));
+                conv.end_streaming();
             }
             editor.set_status(format!("AI: {}", question));
-            // We need to store this reply channel somewhere to fulfill it later.
-            // For this implementation, I'll just error out to keep the loop moving
-            // until we have a proper interactive UI.
-            let _ = reply.send("Interactive UI not yet implemented - please reply in chat".into());
+            editor.ai_streaming = false;
+            editor.input_lock = InputLock::None;
+            *pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
         }
         AiEvent::ProposeChanges { changes, reply } => {
             let count = if let Some(arr) = changes.as_array() {
@@ -209,14 +201,45 @@ pub fn handle_ai_event(
                 1
             };
             info!(count, "AI proposing changes");
+
+            // Auto-accept mode: skip manual approval
+            if editor.ai_mode == "auto-accept" {
+                info!("Auto-accepting AI changes");
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    conv.push_system(format!("Auto-accepted changes to {} file(s)", count));
+                }
+                let _ = reply.send(true);
+                return;
+            }
+
+            // 1. Generate diff text
+            let diff_text = render_changes_to_diff(&changes);
+
+            // 2. Create/Update *AI-Diff* buffer
+            let diff_buf_name = "*AI-Diff*";
+            let buf_idx = match editor.find_buffer_by_name(diff_buf_name) {
+                Some(idx) => idx,
+                None => {
+                    let mut b = mae_core::Buffer::new();
+                    b.name = diff_buf_name.to_string();
+                    editor.buffers.push(b);
+                    editor.buffers.len() - 1
+                }
+            };
+            editor.buffers[buf_idx].replace_contents(&diff_text);
+            editor.switch_to_buffer(buf_idx);
+
             if let Some(conv) = find_conversation_buffer_mut(editor) {
                 conv.push_system(format!(
-                    "AI proposed changes to {} file(s) (see Diff buffer)",
+                    "AI proposed changes to {} file(s). Review the *AI-Diff* buffer, then use :ai-accept or :ai-reject.",
                     count
                 ));
+                conv.end_streaming();
             }
-            // Placeholder: Show diff and wait for approval.
-            let _ = reply.send(false); // Default to reject until UI is ready
+            editor.set_status(format!("AI: Proposing changes to {} file(s)", count));
+            editor.ai_streaming = false;
+            editor.input_lock = InputLock::None;
+            *pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
         }
         AiEvent::Delegate {
             profile,
@@ -339,7 +362,42 @@ pub fn handle_ai_event(
         } => {
             debug!(%session_id, %agent_name, "AI event metadata received");
         }
+        AiEvent::Error(msg) => {
+            error!(error = %msg, "AI error event");
+            if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
+                conv_buf.push_system(format!("Error: {}", msg));
+                conv_buf.end_streaming();
+            }
+            editor.ai_streaming = false;
+            editor.input_lock = InputLock::None;
+            editor.set_status(format!("AI Error: {}", msg));
+        }
     }
+}
+
+fn render_changes_to_diff(changes: &serde_json::Value) -> String {
+    let mut out = String::new();
+    if let Some(arr) = changes.as_array() {
+        for change in arr {
+            let path = change
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content = change
+                .get("new_content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            out.push_str(&format!("--- a/{}\n", path));
+            out.push_str(&format!("+++ b/{}\n", path));
+            out.push_str("@@ -1,1 +1,1 @@\n");
+            // Simplified: just show the new content
+            out.push_str(content);
+            if !content.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 /// Check if a deferred LSP tool call has timed out (15s) and send an error

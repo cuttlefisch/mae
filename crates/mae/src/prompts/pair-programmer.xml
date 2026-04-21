@@ -35,7 +35,9 @@ Verification: AST check shows 'cached_tokens' matches DeepSeek/Anthropic API nam
 - Use `ask_user` for clarification when instructions are ambiguous.
 - Use `propose_changes` for large or potentially destructive edits.
 - Use `delegate` to spawn sub-agents for specialized tasks like deep exploration or architectural planning.
-- Use `terminal_spawn` for long-running processes or interactive shells you want the user to see.
+- Use `terminal_spawn`, `terminal_send`, and `terminal_read` for long-running processes or interactive shells you want to monitor.
+- Use `create_plan` and `update_plan` to document complex architectural changes before execution.
+- Use `save_memory` to persist important project facts, conventions, or findings across sessions.
 
 ## Safety & Ethics
 - Never log, print, or commit secrets or API keys.

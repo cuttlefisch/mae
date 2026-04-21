@@ -467,6 +467,7 @@ async fn run_terminal_loop(
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
+    let mut pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent> = None;
     let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
@@ -711,7 +712,7 @@ async fn run_terminal_loop(
                             handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
-                            handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx);
+                            handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
                         }
                     }
                     Some(Ok(Event::Resize(_w, _h))) => {
@@ -729,7 +730,7 @@ async fn run_terminal_loop(
                 tui_dirty = true;
                 ai_event_handler::handle_ai_event(
                     editor, ai_event, all_tools, permission_policy,
-                    &mut deferred_ai_reply, lsp_command_tx,
+                    &mut deferred_ai_reply, &mut pending_interactive_event, lsp_command_tx,
                     ai_event_tx, ai_command_tx,
                 );
             }
@@ -1803,6 +1804,7 @@ fn run_gui(
         ai_event_tx,
         ai_command_tx,
         deferred_ai_reply: None,
+        pending_interactive_event: None,
         deferred_mcp_reply: Vec::new(),
         last_mcp_activity: None,
         all_tools,
@@ -1925,6 +1927,7 @@ struct GuiApp {
     ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     deferred_ai_reply: ai_event_handler::DeferredAiReply,
+    pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent>,
     deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
     last_mcp_activity: Option<tokio::time::Instant>,
     all_tools: Vec<mae_ai::ToolDefinition>,
@@ -2071,6 +2074,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     &self.all_tools,
                     &self.permission_policy,
                     &mut self.deferred_ai_reply,
+                    &mut self.pending_interactive_event,
                     &self.lsp_command_tx,
                     &self.ai_event_tx,
                     &self.ai_command_tx,
@@ -2215,6 +2219,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             kp,
                             &mut self.pending_keys,
                             &self.ai_command_tx,
+                            &mut self.pending_interactive_event,
                         );
                     }
 

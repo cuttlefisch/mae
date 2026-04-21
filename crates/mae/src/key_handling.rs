@@ -63,9 +63,17 @@ pub fn handle_key_from_keypress(
     kp: KeyPress,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     let key_event = keypress_to_crossterm(&kp);
-    handle_key(editor, scheme, key_event, pending_keys, ai_tx);
+    handle_key(
+        editor,
+        scheme,
+        key_event,
+        pending_keys,
+        ai_tx,
+        pending_interactive_event,
+    );
 }
 
 /// Convert a crossterm KeyEvent into a mae_core KeyPress.
@@ -105,12 +113,15 @@ fn is_splash_visible(editor: &Editor) -> bool {
     editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
+use crate::ai_event_handler::PendingInteractiveEvent;
+
 pub fn handle_key(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
@@ -181,9 +192,18 @@ pub fn handle_key(
         Mode::Normal => handle_normal_mode(editor, scheme, key, pending_keys),
         Mode::Insert => handle_insert_mode(editor, scheme, key, pending_keys),
         Mode::Visual(_) => handle_visual_mode(editor, scheme, key, pending_keys),
-        Mode::Command => handle_command_mode(editor, scheme, key, pending_keys, ai_tx),
+        Mode::Command => {
+            handle_command_mode(
+                editor,
+                scheme,
+                key,
+                pending_keys,
+                ai_tx,
+                pending_interactive_event,
+            );
+        }
         Mode::ConversationInput => {
-            handle_conversation_input(editor, key, ai_tx);
+            handle_conversation_input(editor, key, ai_tx, pending_interactive_event);
         }
         Mode::Search => handle_search_mode(editor, key),
         Mode::FilePicker => handle_file_picker_mode(editor, key),
@@ -1414,7 +1434,11 @@ fn handle_insert_mode(
     handle_keymap_mode(editor, scheme, key, pending_keys);
 }
 
-fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>) {
+fn submit_conversation_prompt(
+    editor: &mut Editor,
+    ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
+) {
     let buf_idx = editor.active_buffer_idx();
 
     // Reject submissions while the previous turn is still streaming.
@@ -1445,13 +1469,37 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
             conv.input_line.clear();
             conv.input_cursor = 0;
             conv.scroll_to_bottom();
-            conv.streaming = true;
-            conv.streaming_start = Some(std::time::Instant::now());
+
+            // Only set streaming true if we are starting a NEW prompt turn,
+            // not when fulfilling an interactive request.
+            if pending_interactive_event.is_none() {
+                conv.streaming = true;
+                conv.streaming_start = Some(std::time::Instant::now());
+            }
             input
         })
         .unwrap_or_default();
 
     editor.sync_conversation_buffer_rope();
+
+    // If we have a pending interactive event, fulfill it instead of sending a prompt
+    if let Some(event) = pending_interactive_event.take() {
+        match event {
+            PendingInteractiveEvent::AskUser(reply) => {
+                let _ = reply.send(input);
+                editor.set_status("[AI] User reply sent");
+            }
+            PendingInteractiveEvent::ProposeChanges(reply) => {
+                // If the user types something while changes are proposed,
+                // we'll assume they are rejecting or ignored for now.
+                // In Phase 4, we'll add :ai-accept / :ai-reject commands.
+                let _ = reply.send(false);
+                editor.set_status("[AI] Changes rejected via chat");
+            }
+        }
+        editor.set_mode(Mode::Normal);
+        return;
+    }
 
     if let Some(tx) = ai_tx {
         if tx.try_send(AiCommand::Prompt(input)).is_err() {
@@ -1472,16 +1520,13 @@ fn handle_conversation_input(
     editor: &mut Editor,
     key: KeyEvent,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     match key.code {
-        // --- Mode transitions ---
-        KeyCode::Esc => {
-            editor.set_mode(Mode::Normal);
-        }
         KeyCode::Enter => {
-            conv_submit(editor, ai_tx);
+            submit_conversation_prompt(editor, ai_tx, pending_interactive_event);
         }
 
         // --- Cancel / quit ---
@@ -1647,6 +1692,7 @@ pub fn handle_command_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     pending_keys.clear();
     match key.code {
@@ -1663,6 +1709,44 @@ pub fn handle_command_mode(
 
             // Record in command history before executing
             editor.push_command_history(&cmd);
+
+            // :ai-accept — approve proposed changes
+            if cmd == "ai-accept" {
+                if let Some(event) = pending_interactive_event.take() {
+                    match event {
+                        PendingInteractiveEvent::ProposeChanges(reply) => {
+                            let _ = reply.send(true);
+                            editor.set_status("[AI] Changes accepted");
+                        }
+                        PendingInteractiveEvent::AskUser(reply) => {
+                            let _ = reply.send("User accepted without typing".into());
+                            editor.set_status("[AI] User accepted");
+                        }
+                    }
+                } else {
+                    editor.set_status("No pending AI interaction to accept");
+                }
+                return;
+            }
+
+            // :ai-reject — reject proposed changes
+            if cmd == "ai-reject" {
+                if let Some(event) = pending_interactive_event.take() {
+                    match event {
+                        PendingInteractiveEvent::ProposeChanges(reply) => {
+                            let _ = reply.send(false);
+                            editor.set_status("[AI] Changes rejected");
+                        }
+                        PendingInteractiveEvent::AskUser(reply) => {
+                            let _ = reply.send("User rejected/cancelled".into());
+                            editor.set_status("[AI] User rejected");
+                        }
+                    }
+                } else {
+                    editor.set_status("No pending AI interaction to reject");
+                }
+                return;
+            }
 
             // :ai-status — show AI configuration
             if cmd == "ai-status" {

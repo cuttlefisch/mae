@@ -308,6 +308,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
         PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
         PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
+        PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
+        PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
     };
     draw_border_titled(
         canvas,

@@ -342,6 +342,8 @@ impl CommandRegistry {
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
+        reg.register_builtin("ai-accept", "Accept proposed AI changes");
+        reg.register_builtin("ai-reject", "Reject proposed AI changes");
         reg.register_builtin(
             "ai-set-mode",
             "Switch the AI operating mode (standard, plan, auto-accept)",
