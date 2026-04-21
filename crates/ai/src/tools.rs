@@ -2495,11 +2495,10 @@ mod tests {
         let undo = tools.iter().find(|t| t.name == "command_undo").unwrap();
         assert!(!undo.description.is_empty());
     }
-
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 96);
+        assert_eq!(tools.len(), 97);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));

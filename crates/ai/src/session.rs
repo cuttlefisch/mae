@@ -2258,4 +2258,151 @@ mod tests {
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
         let _ = session_task.await;
     }
+
+    #[tokio::test]
+    async fn test_mid_flight_compaction() {
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Provider returns many tool calls to trigger compaction
+        let mut responses = Vec::new();
+        for i in 0..25 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: format!("id{}", i),
+                    name: "log_activity".into(),
+                    arguments: serde_json::json!({"activity": format!("step {}", i)}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+        responses.push(ProviderResponse {
+            text: Some("Done".into()),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+
+        let provider = Box::new(MockProvider::new(responses));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.context_window = 10000;
+
+        tokio::spawn(session.run());
+        cmd_tx
+            .send(AiCommand::Prompt("start".to_string()))
+            .await
+            .unwrap();
+
+        // We expect many RoundUpdates and eventually a SessionComplete
+        let mut max_round = 0;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::RoundUpdate { round, .. } => {
+                    max_round = max_round.max(round);
+                }
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(max_round >= 20, "Should have run many rounds");
+        // Internal check: messages should have been compacted.
+        // In the test we can't easily check internal state of the spawned task,
+        // but we can verify the session didn't crash and finished.
+    }
+
+    #[tokio::test]
+    async fn test_ui_events_for_internal_tools() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        let provider = Box::new(MockProvider::new(vec![
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    name: "shell_exec".into(),
+                    arguments: serde_json::json!({"command": "echo ui-test"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Ok".into()),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]));
+
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        tokio::spawn(session.run());
+
+        cmd_tx
+            .send(AiCommand::Prompt("run".to_string()))
+            .await
+            .unwrap();
+
+        let mut started = false;
+        let mut finished = false;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::ToolCallStarted { name } if name == "shell_exec" => started = true,
+                AiEvent::ToolCallFinished { .. } => finished = true,
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(started, "Missing ToolCallStarted for shell_exec");
+        assert!(finished, "Missing ToolCallFinished for shell_exec");
+    }
+
+    #[tokio::test]
+    async fn test_log_activity_tool() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        let provider = Box::new(MockProvider::new(vec![
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    name: "log_activity".into(),
+                    arguments: serde_json::json!({"activity": "I am thinking"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Done".into()),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]));
+
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        tokio::spawn(session.run());
+
+        cmd_tx
+            .send(AiCommand::Prompt("think".to_string()))
+            .await
+            .unwrap();
+
+        let mut activity_logged = false;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::ToolCallFinished { output, .. } if output == "I am thinking" => {
+                    activity_logged = true
+                }
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(activity_logged, "Activity was not logged to UI");
+    }
 }

@@ -701,6 +701,12 @@ mod tests {
         assert!(lines.iter().any(|l| l.text == "[AI]"));
         assert!(lines.iter().any(|l| l.text == "hello"));
         assert!(lines.iter().any(|l| l.text == "hi"));
+
+        // Verify entry_index is populated
+        assert_eq!(lines[0].entry_index, Some(0)); // [You]
+        assert_eq!(lines[1].entry_index, Some(0)); // hello
+        assert_eq!(lines[2].entry_index, None); // separator
+        assert_eq!(lines[3].entry_index, Some(1)); // [AI]
     }
 
     #[test]
