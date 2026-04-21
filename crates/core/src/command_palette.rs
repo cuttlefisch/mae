@@ -33,6 +33,8 @@ pub enum PalettePurpose {
     SetSplashArt,
     RecentFile,
     SwitchProject,
+    AiMode,
+    AiProfile,
 }
 
 /// State for the command palette overlay.
@@ -103,6 +105,16 @@ impl CommandPalette {
     /// Project switch palette. Used by `SPC p p` / `project-switch`.
     pub fn for_project_switch(roots: &[&str]) -> Self {
         Self::with_name_list(roots, PalettePurpose::SwitchProject)
+    }
+
+    /// AI mode picker palette. Used by `:ai-set-mode`.
+    pub fn for_ai_mode(modes: &[&str]) -> Self {
+        Self::with_name_list(modes, PalettePurpose::AiMode)
+    }
+
+    /// AI profile picker palette. Used by `:ai-set-profile`.
+    pub fn for_ai_profile(profiles: &[&str]) -> Self {
+        Self::with_name_list(profiles, PalettePurpose::AiProfile)
     }
 
     /// Splash art picker palette. More art variants will be added in a

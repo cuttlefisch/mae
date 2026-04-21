@@ -342,6 +342,14 @@ impl CommandRegistry {
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
+        reg.register_builtin(
+            "ai-set-mode",
+            "Switch the AI operating mode (standard, plan, auto-accept)",
+        );
+        reg.register_builtin(
+            "ai-set-profile",
+            "Switch the active AI prompt profile (pair-programmer, explorer, planner, reviewer)",
+        );
         reg.register_builtin("describe-key", "Show what a key does");
         reg.register_builtin("describe-command", "Show command documentation");
         reg.register_builtin("show-registers", "Show named registers");

@@ -1167,6 +1167,16 @@ impl Editor {
             "ai-prompt" => {
                 self.open_conversation_buffer();
             }
+            "ai-set-mode" => {
+                let modes = vec!["standard", "plan", "auto-accept"];
+                self.command_palette = Some(CommandPalette::for_ai_mode(&modes));
+                self.set_mode(Mode::CommandPalette);
+            }
+            "ai-set-profile" => {
+                let profiles = vec!["pair-programmer", "explorer", "planner", "reviewer"];
+                self.command_palette = Some(CommandPalette::for_ai_profile(&profiles));
+                self.set_mode(Mode::CommandPalette);
+            }
             "ai-cancel" => {
                 // Mark streaming as stopped in conversation buffer.
                 // Actual channel cancel is handled by the binary (AiCommand::Cancel).

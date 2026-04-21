@@ -170,9 +170,17 @@ pub fn handle_ai_event(
             let _ = reply.send("Interactive UI not yet implemented - please reply in chat".into());
         }
         AiEvent::ProposeChanges { changes, reply } => {
-            info!("AI proposing changes");
+            let count = if let Some(arr) = changes.as_array() {
+                arr.len()
+            } else {
+                1
+            };
+            info!(count, "AI proposing changes");
             if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_system("AI proposed changes (see Diff buffer)");
+                conv.push_system(format!(
+                    "AI proposed changes to {} file(s) (see Diff buffer)",
+                    count
+                ));
             }
             // Placeholder: Show diff and wait for approval.
             let _ = reply.send(false); // Default to reject until UI is ready
@@ -189,6 +197,18 @@ pub fn handle_ai_event(
                 success: false,
                 output: "Sub-agent delegation not yet implemented".into(),
             });
+        }
+        AiEvent::UpdateMode(mode) => {
+            info!(%mode, "AI requested mode update");
+            let _ = editor.set_option("ai-mode", &mode);
+            crate::config::persist_editor_preference("ai.mode", &mode);
+        }
+        AiEvent::UpdateProfile(profile) => {
+            info!(%profile, "AI requested profile update");
+            let _ = editor.set_option("ai-profile", &profile);
+            crate::config::persist_editor_preference("ai.profile", &profile);
+            // Profile changes require session rebuild to reload prompt.
+            // This is handled by the main thread noticing the change.
         }
         AiEvent::RoundUpdate {
             round,

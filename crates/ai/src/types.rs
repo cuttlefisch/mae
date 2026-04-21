@@ -160,6 +160,10 @@ pub enum AiEvent {
         round: usize,
         transaction_start_idx: Option<usize>,
     },
+    /// AI session wants to change the editor's AI operating mode.
+    UpdateMode(String),
+    /// AI session wants to change the active prompt profile.
+    UpdateProfile(String),
 }
 
 /// Commands sent from the main thread to the AI task.

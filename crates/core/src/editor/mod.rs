@@ -345,6 +345,10 @@ pub struct Editor {
     /// True while the AI session is actively streaming (text chunks or tool
     /// calls). Used to distinguish "AI thinking" from "idle but locked".
     pub ai_streaming: bool,
+    /// AI operating mode (standard, plan, auto-accept).
+    pub ai_mode: String,
+    /// Active prompt profile name.
+    pub ai_profile: String,
     /// Current round in the AI tool loop.
     pub ai_current_round: usize,
     /// Current transaction start index in history.
@@ -512,6 +516,8 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_mode: "standard".to_string(),
+            ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
@@ -652,6 +658,8 @@ impl Editor {
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_mode: "standard".to_string(),
+            ai_profile: "pair-programmer".to_string(),
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
@@ -740,6 +748,8 @@ impl Editor {
             "ai_model" => self.ai_model.clone(),
             "ai_api_key_command" => self.ai_api_key_command.clone(),
             "ai_base_url" => self.ai_base_url.clone(),
+            "ai_mode" => self.ai_mode.clone(),
+            "ai_profile" => self.ai_profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             _ => return None,
         };
@@ -838,6 +848,19 @@ impl Editor {
             }
             "ai_base_url" => {
                 self.ai_base_url = value.to_string();
+            }
+            "ai_mode" => {
+                let valid = ["standard", "plan", "auto-accept"];
+                if !valid.contains(&value) {
+                    return Err(format!(
+                        "Invalid AI mode: '{}' (expected: standard, plan, auto-accept)",
+                        value
+                    ));
+                }
+                self.ai_mode = value.to_string();
+            }
+            "ai_profile" => {
+                self.ai_profile = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;

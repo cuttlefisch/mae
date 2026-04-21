@@ -647,6 +647,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                     editor.set_status(format!("Splash art set to: {}", art));
                     crate::config::persist_editor_preference("splash_art", &art);
                 }
+                (Some(mode), PalettePurpose::AiMode) => {
+                    let _ = editor.set_option("ai-mode", &mode);
+                    crate::config::persist_editor_preference("ai.mode", &mode);
+                }
+                (Some(profile), PalettePurpose::AiProfile) => {
+                    let _ = editor.set_option("ai-profile", &profile);
+                    crate::config::persist_editor_preference("ai.profile", &profile);
+                }
                 (Some(root_str), PalettePurpose::SwitchProject) => {
                     editor.add_project(&root_str);
                 }

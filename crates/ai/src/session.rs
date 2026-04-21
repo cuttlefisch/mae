@@ -728,6 +728,47 @@ impl AgentSession {
                     continue;
                 }
 
+                // ai_set_mode requests the editor to switch operating modes
+                if call.name == "ai_set_mode" {
+                    let mode = call.arguments["mode"]
+                        .as_str()
+                        .unwrap_or("standard")
+                        .to_string();
+                    let _ = self.event_tx.send(AiEvent::UpdateMode(mode.clone())).await;
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        success: true,
+                        output: format!("AI mode change requested: {}", mode),
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // ai_set_profile requests the editor to switch prompt personas
+                if call.name == "ai_set_profile" {
+                    let profile = call.arguments["profile"]
+                        .as_str()
+                        .unwrap_or("pair-programmer")
+                        .to_string();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::UpdateProfile(profile.clone()))
+                        .await;
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        success: true,
+                        output: format!("AI profile change requested: {}", profile),
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
                 // ai_set_budget updates session state directly
                 if call.name == "ai_set_budget" {
                     if let Some(warn) = call.arguments.get("warn").and_then(|v| v.as_f64()) {

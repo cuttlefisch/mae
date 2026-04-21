@@ -46,6 +46,45 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     };
     vec![
         ToolDefinition {
+            name: "ai_set_mode".into(),
+            description: "Switch the AI operating mode. 'standard' requires manual approval for edits, 'plan' focuses on drafting architectural changes without touching code, 'auto-accept' enables hands-free execution for small tasks.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "mode".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New AI mode: 'standard', 'plan', 'auto-accept'".into(),
+                        enum_values: Some(vec!["standard".into(), "plan".into(), "auto-accept".into()]),
+                    },
+                )]),
+                required: vec!["mode".into()],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
+            name: "ai_set_profile".into(),
+            description: "Switch the active AI prompt profile. Each profile has a different persona and specialized tool instructions.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "profile".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New AI profile: 'pair-programmer', 'explorer', 'planner', 'reviewer'".into(),
+                        enum_values: Some(vec![
+                            "pair-programmer".into(),
+                            "explorer".into(),
+                            "planner".into(),
+                            "reviewer".into(),
+                        ]),
+                    },
+                )]),
+                required: vec!["profile".into()],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
             name: "ai_set_budget".into(),
             description: "Set the session budget guardrails (USD). 'warn' emits a one-shot warning, 'cap' terminates the session turn once reached. Set to 0 to disable a guardrail.".into(),
             parameters: ToolParameters {
@@ -2352,8 +2391,10 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 90);
+        assert_eq!(tools.len(), 92);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ai_set_mode"));
+        assert!(names.contains(&"ai_set_profile"));
         assert!(names.contains(&"ask_user"));
         assert!(names.contains(&"propose_changes"));
         assert!(names.contains(&"delegate"));

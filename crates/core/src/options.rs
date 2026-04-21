@@ -224,6 +224,22 @@ impl OptionRegistry {
                     config_key: Some("ai.base_url"),
                 },
                 OptionDef {
+                    name: "ai_mode",
+                    aliases: &["ai-mode"],
+                    doc: "AI operating mode: \"standard\" (manual approval), \"plan\" (drafting only), \"auto-accept\" (hands-free execution for small tasks)",
+                    kind: OptionKind::String,
+                    default_value: "standard",
+                    config_key: Some("ai.mode"),
+                },
+                OptionDef {
+                    name: "ai_profile",
+                    aliases: &["ai-profile"],
+                    doc: "Active AI prompt profile: \"pair-programmer\", \"explorer\", \"planner\", \"reviewer\"",
+                    kind: OptionKind::String,
+                    default_value: "pair-programmer",
+                    config_key: Some("ai.profile"),
+                },
+                OptionDef {
                     name: "restore_session",
                     aliases: &["restore-session"],
                     doc: "Automatically restore the previous session on startup (per-project)",
