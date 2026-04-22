@@ -428,6 +428,33 @@ impl Editor {
                 self.dispatch_path_op(args, "ai-load", |ed, p| ed.ai_load(p), "Loaded", "from");
                 true
             }
+            "ai-set-mode" => {
+                if let Some(mode) = args {
+                    match self.set_option("ai-mode", mode) {
+                        Ok(msg) => self.set_status(msg),
+                        Err(e) => self.set_status(e),
+                    }
+                } else {
+                    self.dispatch_builtin("ai-set-mode");
+                }
+                true
+            }
+            "ai-set-profile" => {
+                if let Some(profile) = args {
+                    match self.set_option("ai-profile", profile) {
+                        Ok(msg) => self.set_status(msg),
+                        Err(e) => self.set_status(e),
+                    }
+                } else {
+                    self.dispatch_builtin("ai-set-profile");
+                }
+                true
+            }
+            "ai-reset" => {
+                self.reset_ai_session();
+                self.set_status("AI session reset");
+                true
+            }
             "debug-start" => {
                 let arg_str = args.unwrap_or("");
                 let mut parts = arg_str.split_whitespace();

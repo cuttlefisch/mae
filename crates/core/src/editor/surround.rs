@@ -115,13 +115,13 @@ impl Editor {
         let (open, close) = Self::surround_pair(ch);
         let (start, end) = self.visual_selection_range();
         if start >= end {
-            self.mode = Mode::Normal;
+            self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
         self.buffers[idx].insert_text_at(end, &close.to_string());
         self.buffers[idx].insert_text_at(start, &open.to_string());
-        self.mode = Mode::Normal;
+        self.set_mode(Mode::Normal);
         self.record_edit("surround-visual");
     }
 

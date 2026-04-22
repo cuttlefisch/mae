@@ -538,8 +538,18 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         if let Some(m) = cap.get(1) {
             spans.push(HighlightSpan {
                 byte_start: m.start() - 1,
-                byte_end: m.end() + 1,
+                byte_end: m.start(),
+                theme_key: "markup.bold.marker",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
                 theme_key: "markup.bold",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.end(),
+                byte_end: m.end() + 1,
+                theme_key: "markup.bold.marker",
             });
         }
     }
@@ -547,8 +557,18 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         if let Some(m) = cap.get(1) {
             spans.push(HighlightSpan {
                 byte_start: m.start() - 1,
-                byte_end: m.end() + 1,
+                byte_end: m.start(),
+                theme_key: "markup.italic.marker",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
                 theme_key: "markup.italic",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.end(),
+                byte_end: m.end() + 1,
+                theme_key: "markup.italic.marker",
             });
         }
     }

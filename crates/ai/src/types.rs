@@ -60,6 +60,7 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_call_id: String,
+    pub tool_name: String,
     pub success: bool,
     pub output: String,
 }
@@ -86,6 +87,13 @@ pub enum Role {
 pub enum MessageContent {
     Text(String),
     ToolCalls(Vec<ToolCall>),
+    /// Assistant returned both reasoning text and tool calls in the same turn.
+    /// Reasoning models (DeepSeek, etc.) commonly do this — the text must be
+    /// preserved in message history so the model can track its own progress.
+    TextWithToolCalls {
+        text: String,
+        tool_calls: Vec<ToolCall>,
+    },
     ToolResult(ToolResult),
 }
 
@@ -98,13 +106,49 @@ pub enum AiEvent {
         reply: tokio::sync::oneshot::Sender<ToolResult>,
     },
     /// AI produced a text response.
-    TextResponse(String),
-    /// Partial streaming token for real-time display in conversation buffer.
-    StreamChunk(String),
+    TextResponse {
+        text: String,
+        target_buffer: Option<String>,
+    },
+    /// UI Notification: AI has started executing a tool.
+    ToolCallStarted { name: String },
+    /// UI Notification: AI has finished executing a tool.
+    ToolCallFinished { success: bool, output: String },
+    /// Partial streaming token for real-time display.
+    StreamChunk {
+        text: String,
+        target_buffer: Option<String>,
+    },
     /// AI session completed (final response).
-    SessionComplete(String),
+    SessionComplete {
+        text: String,
+        target_buffer: Option<String>,
+        transcript_path: Option<String>,
+    },
+    /// AI wants to ask the user a clarifying question.
+    AskUser {
+        question: String,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+    /// AI proposed file changes for approval.
+    ProposeChanges {
+        /// Array of {file_path, new_content}
+        changes: serde_json::Value,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    /// AI wants to spawn a sub-agent.
+    Delegate {
+        profile: String,
+        objective: String,
+        reply: tokio::sync::oneshot::Sender<ToolResult>,
+    },
+    /// Metadata about the session/event (e.g. session_id, agent_name).
+    EventMeta {
+        session_id: String,
+        agent_name: String,
+    },
     /// An error occurred in the AI transport.
-    Error(String),
+    Error(String, Option<String>),
     /// Incremental cost tally after a successful provider round. The
     /// main thread uses this to keep the status-line spend counter
     /// fresh without having to inspect the provider response itself.
@@ -131,6 +175,15 @@ pub enum AiEvent {
     /// distinctly from transport/API errors (e.g. for telemetry or
     /// retry policies).
     BudgetExceeded { session_usd: f64, cap_usd: f64 },
+    /// Update on the current round and transaction status.
+    RoundUpdate {
+        round: usize,
+        transaction_start_idx: Option<usize>,
+    },
+    /// AI session wants to change the editor's AI operating mode.
+    UpdateMode(String),
+    /// AI session wants to change the active prompt profile.
+    UpdateProfile(String),
 }
 
 /// Commands sent from the main thread to the AI task.
@@ -197,12 +250,14 @@ mod tests {
     fn tool_result_serde_round_trip() {
         let result = ToolResult {
             tool_call_id: "call_123".into(),
+            tool_name: "buffer_read".into(),
             success: true,
             output: "Hello world".into(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.tool_call_id, "call_123");
+        assert_eq!(parsed.tool_name, "buffer_read");
         assert!(parsed.success);
     }
 

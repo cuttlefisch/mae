@@ -46,6 +46,72 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     };
     vec![
         ToolDefinition {
+            name: "ai_set_mode".into(),
+            description: "Switch the AI operating mode. 'standard' requires manual approval for edits, 'plan' focuses on drafting architectural changes without touching code, 'auto-accept' enables hands-free execution for small tasks. Workflow Hint: Switch to 'plan' mode when drafting complex architectural changes to ensure safety. Switch to 'standard' once the plan is approved.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "mode".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New AI mode: 'standard', 'plan', 'auto-accept'".into(),
+                        enum_values: Some(vec!["standard".into(), "plan".into(), "auto-accept".into()]),
+                    },
+                )]),
+                required: vec!["mode".into()],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
+            name: "ai_set_profile".into(),
+            description: "Switch the active AI prompt profile. Each profile has a different persona and specialized tool instructions.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "profile".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "New AI profile: 'pair-programmer', 'explorer', 'planner', 'reviewer'".into(),
+                        enum_values: Some(vec![
+                            "pair-programmer".into(),
+                            "explorer".into(),
+                            "planner".into(),
+                            "reviewer".into(),
+                        ]),
+                    },
+                )]),
+                required: vec!["profile".into()],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
+            name: "ai_set_budget".into(),
+            description: "Set the session budget guardrails (USD). 'warn' emits a one-shot warning, 'cap' terminates the session turn once reached. Set to 0 to disable a guardrail.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "warn".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "New session warning threshold in USD".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "cap".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "New session hard cap in USD".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Privileged),
+        },
+        ToolDefinition {
             name: "buffer_read".into(),
             description: "Read buffer contents. Returns text with line numbers.".into(),
             parameters: ToolParameters {
@@ -135,7 +201,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell_exec".into(),
-            description: "Execute a shell command and return stdout/stderr.".into(),
+            description: "Execute a shell command and return stdout/stderr. Anti-Looping: If a command fails, do not blindly retry the exact same command. Analyze the error, use diagnostics, or try a different approach. Workflow Hint: Use this for `git status`, running tests, or building the project. Always use this to verify bug fixes before reporting success. For PR status, follow up with `github_pr_status`.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -449,7 +515,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "lsp_diagnostics".into(),
-            description: "Read diagnostics (errors, warnings, hints) reported by language servers. Returns JSON with per-file diagnostics plus global severity counts. Use scope='all' to include every file, scope='buffer' (default) for just the active buffer. Positions are 1-indexed.".into(),
+            description: "Read diagnostics (errors, warnings, hints) reported by language servers. Returns JSON with per-file diagnostics plus global severity counts. Use scope='all' to include every file, scope='buffer' (default) for just the active buffer. Positions are 1-indexed. Workflow Hint: Always check this after a `buffer_write` to ensure your edit didn't introduce new syntax or type errors.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -631,9 +697,9 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                 ]),
                 required: vec!["adapter".into()],
             },
-            // Privileged because launching arbitrary programs under a
+            // Shell tier because launching programs under a
             // debug adapter is roughly equivalent to shell exec.
-            permission: Some(PermissionTier::Privileged),
+            permission: Some(PermissionTier::Shell),
         },
         ToolDefinition {
             name: "dap_set_breakpoint".into(),
@@ -906,7 +972,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // are queryable here — the agent is a peer reader.
         ToolDefinition {
             name: "kb_get".into(),
-            description: "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'.".into(),
+            description: "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'. WARNING: Linkage is high; pull atomic info and avoid walking the entire graph.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -1161,6 +1227,231 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Shell),
         },
+        // --- Agent terminal tools ---
+        ToolDefinition {
+            name: "terminal_spawn".into(),
+            description: "Spawn a new interactive shell terminal buffer. Returns the buffer index. The terminal is visible to the user and supports long-running processes (compilers, servers).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional name for the terminal buffer (e.g. '*build*')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "command".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Initial command to run in the terminal (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "terminal_send".into(),
+            description: "Send input to a terminal spawned via terminal_spawn. Use for interactive prompts.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "input".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text to send (e.g. 'y\\n', 'Ctrl-C' via \\x03)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into(), "input".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "terminal_read".into(),
+            description: "Read the current screen content of a terminal. Returns the visible text (typically 24-80 lines).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Buffer index of the terminal".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["buffer_index".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Agent UX tools ---
+        ToolDefinition {
+            name: "ask_user".into(),
+            description: "Ask the user a clarifying question when the current instructions are ambiguous or more context is needed. The AI session will pause until the user replies.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "question".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The question to ask the user.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["question".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "log_activity".into(),
+            description: "Log a visible status update or reasoning step to the user's AI buffer. Use this during long operations to keep the user informed of your progress and current focus.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "activity".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Description of the current activity or reasoning step.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["activity".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "propose_changes".into(),
+            description: "Propose a set of file changes for user approval. Displays a diff and waits for user to accept or reject. Use this for potentially destructive or large changes to ensure safety.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "changes".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of changes, each with file_path and new_content.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["changes".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Agent Orchestration & Memory ---
+        ToolDefinition {
+            name: "delegate".into(),
+            description: "Spawn a specialized sub-agent for a specific sub-task (e.g. 'explorer' for code mapping, 'planner' for drafting changes). The sub-agent has a separate context but shares the session budget. Workflow Hint: Use this aggressively to offload high-volume codebase exploration or repetitive batch tasks, keeping the main context lean.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "profile".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The prompt profile for the sub-agent (e.g. 'explorer', 'planner', 'reviewer').".into(),
+                            enum_values: Some(vec!["explorer".into(), "planner".into(), "reviewer".into()]),
+                        },
+                    ),
+                    (
+                        "objective".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The specific goal for the sub-agent.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["profile".into(), "objective".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "save_memory".into(),
+            description: "Persist a fact, project convention, or finding to the project's long-term memory. This information will be available to future sessions and sub-agents.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "fact".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The concise fact to remember.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["fact".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "create_plan".into(),
+            description: "Create a new implementation plan in the project's plans directory. Plans should be markdown files documenting complex tasks. Workflow Hint: Use this after exploring the codebase for a complex task, but BEFORE making any file edits. Present the plan to the user for approval.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The name of the plan (e.g. 'feature-x')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "content".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The initial markdown content of the plan.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into(), "content".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "update_plan".into(),
+            description: "Update an existing implementation plan. Use this to refine steps as the task progresses.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The name of the plan to update.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "content".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The updated markdown content of the plan.".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into(), "content".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Permission introspection ---
         ToolDefinition {
             name: "ai_permissions".into(),
@@ -1175,25 +1466,34 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // --- Self-test suite ---
         ToolDefinition {
             name: "self_test_suite".into(),
-            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. Use this to validate that all editor tools work end-to-end. No arguments needed.".into(),
+            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. IMPORTANT: This tool only returns the plan; it does NOT execute the tests. The agent must parse the plan and call the individual tools sequentially to perform the validation. Use 'categories' argument for targeted testing if the full plan is too large.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
                     "categories".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, performance".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance".into(),
                         enum_values: None,
-                    },
-                )]),
+                    },                )]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
         },
-        // --- Input lock ---
+        // --- Transcript Access ---
+        ToolDefinition {
+            name: "read_transcript".into(),
+            description: "Read the full JSON transcript of the current AI session. This contains the raw provider responses, full tool outputs, and reasoning steps. Use this if you get stuck or need to review your own previous thoughts in detail. No arguments needed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         ToolDefinition {
             name: "input_lock".into(),
-            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state, and unlock when done.".into(),
+            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state. Check current lock status via 'introspect' to avoid redundant calls.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -1205,6 +1505,296 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                     },
                 )]),
                 required: vec!["locked".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "trigger_hook".into(),
+            description: "Manually fire a lifecycle hook by name. This triggers all Scheme functions registered for that hook point.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "hook_name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name of the hook to fire (e.g. 'app-start', 'buffer-open')".into(),
+                        enum_values: Some(
+                            mae_core::hooks::HOOK_NAMES
+                                .iter()
+                                .map(|s: &&str| s.to_string())
+                                .collect(),
+                        ),
+                    },
+                )]),
+                required: vec!["hook_name".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "org_cycle".into(),
+            description: "Toggle visibility (folding) of the Org heading at the cursor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "org_todo_cycle".into(),
+            description: "Cycle the TODO state of the Org heading at the cursor.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "forward".into(),
+                    ToolProperty {
+                        prop_type: "boolean".into(),
+                        description: "true to cycle forward (TODO->DONE), false for backward".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "org_open_link".into(),
+            description: "Open the Org link under the cursor (internal jump or external URL).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Visual Debugger ---
+        ToolDefinition {
+            name: "visual_buffer_add_rect".into(),
+            description: "Add a rectangle to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "X coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Y coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "w".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Width".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "h".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Height".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "fill".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Fill hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "stroke".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x".into(), "y".into(), "w".into(), "h".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_line".into(),
+            description: "Add a line to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x1".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Start X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y1".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Start Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "x2".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "End X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y2".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "End Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "color".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "thickness".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Line thickness (default: 1.0)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x1".into(), "y1".into(), "x2".into(), "y2".into(), "color".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_circle".into(),
+            description: "Add a circle to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "cx".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Center X".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "cy".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Center Y".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "r".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Radius".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "fill".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Fill hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "stroke".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Stroke hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["cx".into(), "cy".into(), "r".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_add_text".into(),
+            description: "Add text to the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "x".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "X coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Y coordinate".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "text".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text to display".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "font_size".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Font size".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "color".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Text hex color".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["x".into(), "y".into(), "text".into(), "font_size".into(), "color".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "visual_buffer_clear".into(),
+            description: "Clear all elements from the active visual buffer.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
             },
             permission: Some(PermissionTier::Write),
         },
@@ -1496,7 +2086,332 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "git_status".into(),
+            description: "Get structured git status: branch name, staged, unstaged, and untracked files. Does NOT provide PR (Pull Request) or CI information.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_diff".into(),
+            description: "Get git diff for the project or a specific path. Use staged=true to see staged changes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional file path to diff".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "staged".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Show staged changes (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_log".into(),
+            description: "Get git commit log. Returns oneline format.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Optional file path to show log for".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Maximum number of commits to show (default: 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_stage".into(),
+            description: "Stage files for commit (git add).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "paths".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of file paths to stage".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["paths".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_unstage".into(),
+            description: "Unstage files (git reset).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "paths".into(),
+                    ToolProperty {
+                        prop_type: "array".into(),
+                        description: "List of file paths to unstage".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["paths".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_commit".into(),
+            description: "Commit staged changes with a message.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "message".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Commit message".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["message".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_push".into(),
+            description: "Push commits to a remote repository.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "remote".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Remote name (default: 'origin')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name (default: current branch)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "git_pull".into(),
+            description: "Pull changes from a remote repository.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "remote".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Remote name (default: 'origin')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name (default: current branch)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "git_checkout".into(),
+            description: "Switch branches or create new ones.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name to checkout".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "create".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Create the branch if it doesn't exist (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["branch".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "github_pr_status".into(),
+            description: "Check the status of the current PR and its CI checks using the 'gh' CLI. Workflow Hint: Use this *after* confirming the local branch via `git status`. It fetches the remote PR link, review status, and CI checks.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "github_pr_create".into(),
+            description: "Create a new GitHub pull request using the 'gh' CLI.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "title".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The PR title".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "body".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The PR body content".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["title".into(), "body".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
+}
+
+/// Tool tiers for payload optimization — only core tools are sent by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolTier {
+    /// Always sent (~15 tools). Essential for basic editing workflows.
+    Core,
+    /// Sent on request via `request_tools` meta-tool.
+    Extended,
+}
+
+/// Tool categories for the `request_tools` meta-tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolCategory {
+    Lsp,
+    Dap,
+    Knowledge,
+    ShellMgmt,
+    Commands,
+    Git,
+}
+
+/// Classify a tool into Core or Extended tier.
+pub fn classify_tool_tier(name: &str) -> ToolTier {
+    match name {
+        // Core tools — always sent
+        "buffer_read" | "buffer_write" | "cursor_info" | "open_file" | "switch_buffer"
+        | "create_file" | "close_buffer" | "list_buffers" | "editor_state" | "project_search"
+        | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
+        | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
+        | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" | "git_status"
+        | "git_diff" | "git_log" | "org_cycle" | "org_todo_cycle" | "org_open_link" => {
+            ToolTier::Core
+        }
+        // Everything else is extended
+        _ => ToolTier::Extended,
+    }
+}
+
+/// Classify a tool into its category for request_tools.
+pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
+    if name.starts_with("lsp_") || name == "syntax_tree" {
+        Some(ToolCategory::Lsp)
+    } else if name.starts_with("dap_") || name == "debug_state" {
+        Some(ToolCategory::Dap)
+    } else if name.starts_with("kb_") || name == "help_open" || name.starts_with("org_") {
+        Some(ToolCategory::Knowledge)
+    } else if name.starts_with("shell_") && name != "shell_exec" {
+        Some(ToolCategory::ShellMgmt)
+    } else if name.starts_with("command_") {
+        Some(ToolCategory::Commands)
+    } else if name.starts_with("git_") {
+        Some(ToolCategory::Git)
+    } else {
+        None
+    }
+}
+
+/// Parse category names from a comma-separated string.
+pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
+    input
+        .split(',')
+        .filter_map(|s| match s.trim().to_ascii_lowercase().as_str() {
+            "lsp" => Some(ToolCategory::Lsp),
+            "dap" => Some(ToolCategory::Dap),
+            "knowledge" | "kb" => Some(ToolCategory::Knowledge),
+            "shell" | "shell_mgmt" => Some(ToolCategory::ShellMgmt),
+            "commands" | "command" => Some(ToolCategory::Commands),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Build the `request_tools` meta-tool definition.
+pub fn request_tools_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "request_tools".into(),
+        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands. Returns tool names added.".into(),
+        parameters: ToolParameters {
+            schema_type: "object".into(),
+            properties: HashMap::from([(
+                "categories".into(),
+                ToolProperty {
+                    prop_type: "string".into(),
+                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands".into(),
+                    enum_values: None,
+                },
+            )]),
+            required: vec!["categories".into()],
+        },
+        permission: Some(PermissionTier::ReadOnly),
+    }
 }
 
 /// Classify a command's permission tier based on its name.
@@ -1589,57 +2504,32 @@ mod tests {
         let undo = tools.iter().find(|t| t.name == "command_undo").unwrap();
         assert!(!undo.description.is_empty());
     }
-
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 64);
+        assert_eq!(tools.len(), 98);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"ai_set_mode"));
+        assert!(names.contains(&"ai_set_profile"));
+        assert!(names.contains(&"ask_user"));
+        assert!(names.contains(&"propose_changes"));
+        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"save_memory"));
+        assert!(names.contains(&"create_plan"));
+        assert!(names.contains(&"update_plan"));
+        assert!(names.contains(&"github_pr_status"));
+        assert!(names.contains(&"read_transcript"));
+        assert!(names.contains(&"github_pr_create"));
+        assert!(names.contains(&"terminal_spawn"));
+        assert!(names.contains(&"terminal_send"));
+        assert!(names.contains(&"terminal_read"));
+        assert!(names.contains(&"ai_set_budget"));
         assert!(names.contains(&"buffer_read"));
-        assert!(names.contains(&"buffer_write"));
-        assert!(names.contains(&"get_option"));
-        assert!(names.contains(&"set_option"));
-        assert!(names.contains(&"cursor_info"));
-        assert!(names.contains(&"shell_exec"));
-        assert!(names.contains(&"file_read"));
-        assert!(names.contains(&"list_buffers"));
-        assert!(names.contains(&"editor_state"));
-        assert!(names.contains(&"window_layout"));
-        assert!(names.contains(&"command_list"));
-        assert!(names.contains(&"debug_state"));
-        assert!(names.contains(&"open_file"));
-        assert!(names.contains(&"switch_buffer"));
-        assert!(names.contains(&"close_buffer"));
-        assert!(names.contains(&"create_file"));
-        assert!(names.contains(&"project_files"));
-        assert!(names.contains(&"project_info"));
-        assert!(names.contains(&"project_search"));
-        assert!(names.contains(&"lsp_definition"));
-        assert!(names.contains(&"lsp_references"));
-        assert!(names.contains(&"lsp_hover"));
-        assert!(names.contains(&"lsp_diagnostics"));
-        assert!(names.contains(&"syntax_tree"));
-        assert!(names.contains(&"dap_start"));
-        assert!(names.contains(&"dap_set_breakpoint"));
-        assert!(names.contains(&"dap_continue"));
-        assert!(names.contains(&"dap_step"));
-        assert!(names.contains(&"dap_inspect_variable"));
-        assert!(names.contains(&"dap_remove_breakpoint"));
-        assert!(names.contains(&"dap_list_variables"));
-        assert!(names.contains(&"dap_expand_variable"));
-        assert!(names.contains(&"dap_select_frame"));
-        assert!(names.contains(&"dap_select_thread"));
-        assert!(names.contains(&"dap_output"));
-        assert!(names.contains(&"dap_evaluate"));
-        assert!(names.contains(&"dap_disconnect"));
-        assert!(names.contains(&"kb_get"));
-        assert!(names.contains(&"kb_search"));
-        assert!(names.contains(&"kb_list"));
-        assert!(names.contains(&"kb_links_from"));
-        assert!(names.contains(&"kb_links_to"));
-        assert!(names.contains(&"kb_graph"));
-        assert!(names.contains(&"help_open"));
-        assert!(names.contains(&"switch_project"));
+        assert!(names.contains(&"git_status"));
+        assert!(names.contains(&"git_commit"));
+        assert!(names.contains(&"org_cycle"));
+        assert!(names.contains(&"org_todo_cycle"));
+        assert!(names.contains(&"org_open_link"));
     }
 
     #[test]
@@ -1701,6 +2591,104 @@ mod tests {
                 opt.name
             );
         }
+    }
+
+    #[test]
+    fn core_tools_under_40() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        let core_count = tools
+            .iter()
+            .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
+            .count();
+        assert!(
+            core_count < 40,
+            "core tools should be < 40, got {}",
+            core_count
+        );
+        assert!(
+            core_count >= 15,
+            "core tools should be >= 15, got {}",
+            core_count
+        );
+    }
+
+    #[test]
+    fn extended_tools_over_35() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        let extended_count = tools
+            .iter()
+            .filter(|t| classify_tool_tier(&t.name) == ToolTier::Extended)
+            .count();
+        assert!(
+            extended_count >= 35,
+            "extended tools should be >= 35, got {}",
+            extended_count
+        );
+    }
+
+    #[test]
+    fn request_tools_meta_tool_has_categories_param() {
+        let def = request_tools_definition();
+        assert_eq!(def.name, "request_tools");
+        assert!(def.parameters.properties.contains_key("categories"));
+        assert!(def.parameters.required.contains(&"categories".into()));
+    }
+
+    #[test]
+    fn parse_categories_works() {
+        let cats = parse_categories("lsp, dap, knowledge");
+        assert_eq!(cats.len(), 3);
+        assert!(cats.contains(&ToolCategory::Lsp));
+        assert!(cats.contains(&ToolCategory::Dap));
+        assert!(cats.contains(&ToolCategory::Knowledge));
+    }
+
+    #[test]
+    fn parse_categories_unknown_ignored() {
+        let cats = parse_categories("lsp, bogus, dap");
+        assert_eq!(cats.len(), 2);
+    }
+
+    #[test]
+    fn classify_lsp_tools() {
+        assert_eq!(
+            classify_tool_category("lsp_definition"),
+            Some(ToolCategory::Lsp)
+        );
+        assert_eq!(
+            classify_tool_category("lsp_references"),
+            Some(ToolCategory::Lsp)
+        );
+        assert_eq!(
+            classify_tool_category("syntax_tree"),
+            Some(ToolCategory::Lsp)
+        );
+    }
+
+    #[test]
+    fn classify_dap_tools() {
+        assert_eq!(classify_tool_category("dap_start"), Some(ToolCategory::Dap));
+        assert_eq!(
+            classify_tool_category("debug_state"),
+            Some(ToolCategory::Dap)
+        );
+    }
+
+    #[test]
+    fn classify_kb_tools() {
+        assert_eq!(
+            classify_tool_category("kb_search"),
+            Some(ToolCategory::Knowledge)
+        );
+    }
+
+    #[test]
+    fn shell_exec_is_not_shell_mgmt() {
+        assert_eq!(classify_tool_category("shell_exec"), None);
+        assert_eq!(
+            classify_tool_category("shell_list"),
+            Some(ToolCategory::ShellMgmt)
+        );
     }
 
     #[test]

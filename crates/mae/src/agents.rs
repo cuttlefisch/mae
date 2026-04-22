@@ -73,6 +73,8 @@ pub struct AgentDef {
 pub enum BootstrapStrategy {
     /// Write an entry into `.mcp.json` in the project root.
     McpJson { server_name: &'static str },
+    /// Write an entry into `.gemini/settings.json` in the project root.
+    GeminiConfig { server_name: &'static str },
 }
 
 /// Return the list of agents MAE knows how to bootstrap.
@@ -81,18 +83,29 @@ pub enum BootstrapStrategy {
 /// - **Claude Code** — fully tested, ships with settings writer
 /// - **Cline** — reads `.mcp.json` (McpJson strategy works as-is)
 /// - **Aider** — reads `.mcp.json` (McpJson strategy works as-is)
+/// - **Gemini CLI** — ships with settings writer
 ///
 /// To add a new agent, push an `AgentDef` here and (if needed) add a
 /// settings writer in `write_agent_settings()`. See module-level docs.
 pub fn builtin_agents() -> Vec<AgentDef> {
-    vec![AgentDef {
-        name: "claude-code",
-        binary: "claude",
-        description: "Anthropic Claude Code CLI",
-        strategy: BootstrapStrategy::McpJson {
-            server_name: "mae-editor",
+    vec![
+        AgentDef {
+            name: "claude-code",
+            binary: "claude",
+            description: "Anthropic Claude Code CLI",
+            strategy: BootstrapStrategy::McpJson {
+                server_name: "mae-editor",
+            },
         },
-    }]
+        AgentDef {
+            name: "gemini-cli",
+            binary: "gemini",
+            description: "Google Gemini CLI",
+            strategy: BootstrapStrategy::GeminiConfig {
+                server_name: "mae-editor",
+            },
+        },
+    ]
 }
 
 /// Find `mae-mcp-shim` by looking next to the current executable first,
@@ -230,6 +243,68 @@ pub fn write_claude_settings(project_root: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Write Gemini CLI's `.gemini/settings.json` to auto-approve MAE tools.
+///
+/// Sets `trust: true` for the `mae-editor` MCP server.
+/// Read-merge-write: preserves existing entries.
+pub fn write_gemini_settings(project_root: &Path, shim_path: &Path) -> io::Result<()> {
+    let gemini_dir = project_root.join(".gemini");
+    std::fs::create_dir_all(&gemini_dir)?;
+    let settings_path = gemini_dir.join("settings.json");
+
+    let mut root = if settings_path.exists() {
+        let contents = std::fs::read_to_string(&settings_path)?;
+        serde_json::from_str::<serde_json::Value>(&contents).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    ".gemini/settings.json contains invalid JSON, not overwriting: {}",
+                    e
+                ),
+            )
+        })?
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = root.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            ".gemini/settings.json root is not a JSON object",
+        )
+    })?;
+
+    // Ensure mcpServers object exists.
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    let servers_obj = servers.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            ".gemini/settings.json mcpServers is not a JSON object",
+        )
+    })?;
+
+    // Build our entry.
+    let our_entry = serde_json::json!({
+        "command": shim_path.to_string_lossy(),
+        "trust": true,
+    });
+
+    // Check if identical — skip write to avoid mtime churn.
+    if let Some(existing) = servers_obj.get("mae-editor") {
+        if *existing == our_entry {
+            return Ok(());
+        }
+    }
+
+    servers_obj.insert("mae-editor".to_string(), our_entry);
+
+    let new_contents = serde_json::to_string_pretty(&root).map_err(io::Error::other)?;
+    std::fs::write(&settings_path, new_contents)?;
+    Ok(())
+}
+
 /// Write agent-specific settings files for all known agents.
 ///
 /// Called alongside `write_mcp_json()` on shell spawn when
@@ -241,10 +316,13 @@ pub fn write_claude_settings(project_root: &Path) -> io::Result<()> {
 /// `write_settings(&self, project_root: &Path) -> io::Result<()>` method
 /// and store it on `AgentDef`.
 pub fn write_agent_settings(project_root: &Path) -> io::Result<()> {
+    let shim = resolve_shim_path();
     for agent in builtin_agents() {
         // Future agents: add their settings writer as new branches here.
         if agent.name == "claude-code" {
             write_claude_settings(project_root)?;
+        } else if agent.name == "gemini-cli" {
+            write_gemini_settings(project_root, &shim)?;
         }
     }
     Ok(())
@@ -282,6 +360,15 @@ pub fn setup_agent(name: &str, project_root: &Path) -> Result<String, String> {
                 shim.display()
             ))
         }
+        BootstrapStrategy::GeminiConfig { server_name } => {
+            write_gemini_settings(project_root, &shim)
+                .map_err(|e| format!("Failed to write .gemini/settings.json: {}", e))?;
+            Ok(format!(
+                "Wrote .gemini/settings.json with '{}' server (shim: {})",
+                server_name,
+                shim.display()
+            ))
+        }
     }
 }
 
@@ -301,12 +388,91 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_builtin_agents_has_claude_code() {
+    fn test_builtin_agents_has_claude_and_gemini() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 1);
+        assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].name, "claude-code");
-        assert_eq!(agents[0].binary, "claude");
-        matches!(&agents[0].strategy, BootstrapStrategy::McpJson { server_name } if *server_name == "mae-editor");
+        assert_eq!(agents[1].name, "gemini-cli");
+        assert_eq!(agents[1].binary, "gemini");
+        matches!(&agents[1].strategy, BootstrapStrategy::GeminiConfig { server_name } if *server_name == "mae-editor");
+    }
+
+    #[test]
+    fn test_setup_agent_gemini_cli() {
+        let dir = TempDir::new().unwrap();
+        let result = setup_agent("gemini-cli", dir.path());
+        assert!(result.is_ok());
+        assert!(dir.path().join(".gemini/settings.json").exists());
+    }
+
+    #[test]
+    fn test_write_gemini_settings_creates_new() {
+        let dir = TempDir::new().unwrap();
+        let shim = PathBuf::from("/usr/local/bin/mae-mcp-shim");
+        write_gemini_settings(dir.path(), &shim).unwrap();
+
+        let path = dir.path().join(".gemini/settings.json");
+        assert!(path.exists());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(
+            val["mcpServers"]["mae-editor"]["command"],
+            "/usr/local/bin/mae-mcp-shim"
+        );
+        assert_eq!(val["mcpServers"]["mae-editor"]["trust"], true);
+    }
+
+    #[test]
+    fn test_write_gemini_settings_merges_existing() {
+        let dir = TempDir::new().unwrap();
+        let gemini_dir = dir.path().join(".gemini");
+        std::fs::create_dir_all(&gemini_dir).unwrap();
+        let existing = serde_json::json!({
+            "mcpServers": {
+                "other-tool": { "command": "other-shim" }
+            },
+            "otherSetting": true
+        });
+        std::fs::write(
+            gemini_dir.join("settings.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        let shim = PathBuf::from("/usr/local/bin/mae-mcp-shim");
+        write_gemini_settings(dir.path(), &shim).unwrap();
+
+        let contents = std::fs::read_to_string(gemini_dir.join("settings.json")).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        // Our entry added.
+        assert_eq!(
+            val["mcpServers"]["mae-editor"]["command"],
+            "/usr/local/bin/mae-mcp-shim"
+        );
+        // Other entry preserved.
+        assert_eq!(val["mcpServers"]["other-tool"]["command"], "other-shim");
+        // Other settings preserved.
+        assert_eq!(val["otherSetting"], true);
+    }
+
+    #[test]
+    fn test_write_gemini_settings_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let shim = PathBuf::from("/usr/local/bin/mae-mcp-shim");
+
+        write_gemini_settings(dir.path(), &shim).unwrap();
+        let path = dir.path().join(".gemini/settings.json");
+        let mtime1 = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        write_gemini_settings(dir.path(), &shim).unwrap();
+        let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        assert_eq!(
+            mtime1, mtime2,
+            "file should not be rewritten when content is unchanged"
+        );
     }
 
     #[test]

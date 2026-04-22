@@ -34,11 +34,15 @@ pub struct Config {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiSection {
-    /// "claude" | "openai" | "ollama"
+    /// "claude" | "openai" | "gemini" | "ollama" | "deepseek"
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    /// Shell command whose stdout is used as the API key.
+    /// Runs once at startup. Example: `"pass show deepseek/api-key"`
+    /// Takes precedence over `api_key` but not over env vars.
+    pub api_key_command: Option<String>,
     pub timeout_secs: Option<u64>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
@@ -66,7 +70,9 @@ pub struct EditorSection {
     pub theme: Option<String>,
     pub splash_art: Option<String>,
     pub font_family: Option<String>,
+    pub icon_font_family: Option<String>,
     pub font_size: Option<f32>,
+    pub org_hide_emphasis_markers: Option<bool>,
     /// Restore previous session on startup (per-project).
     pub restore_session: Option<bool>,
 }
@@ -189,43 +195,128 @@ pub fn write_template_config(force: bool) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Resolve final AI `ProviderConfig` with precedence: env > file > defaults.
+/// Run `api_key_command` and return its trimmed stdout, or None on failure.
+fn run_key_command(cmd: &Option<String>) -> Option<String> {
+    let cmd = cmd.as_deref()?;
+    if cmd.is_empty() {
+        return None;
+    }
+    debug!(command = cmd, "running api_key_command");
+    match std::process::Command::new("sh").args(["-c", cmd]).output() {
+        Ok(output) if output.status.success() => {
+            let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if key.is_empty() {
+                warn!(command = cmd, "api_key_command produced empty output");
+                None
+            } else {
+                Some(key)
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                command = cmd,
+                status = %output.status,
+                stderr = %stderr.trim(),
+                "api_key_command failed — check the command in config.toml"
+            );
+            None
+        }
+        Err(e) => {
+            warn!(command = cmd, error = %e, "api_key_command could not be executed");
+            None
+        }
+    }
+}
+
+/// Overrides from Scheme init.scm (via `set-option!`).
+/// Non-empty strings take precedence over TOML file values but not env vars.
+pub struct SchemeAiOverrides {
+    pub provider: String,
+    pub model: String,
+    pub api_key_command: String,
+    pub base_url: String,
+}
+
+impl SchemeAiOverrides {
+    /// Build from editor state. Empty strings mean "not set".
+    pub fn from_editor(editor: &mae_core::Editor) -> Self {
+        Self {
+            provider: editor.ai_provider.clone(),
+            model: editor.ai_model.clone(),
+            api_key_command: editor.ai_api_key_command.clone(),
+            base_url: editor.ai_base_url.clone(),
+        }
+    }
+
+    fn opt(&self, field: &str) -> Option<String> {
+        let val = match field {
+            "provider" => &self.provider,
+            "model" => &self.model,
+            "api_key_command" => &self.api_key_command,
+            "base_url" => &self.base_url,
+            _ => return None,
+        };
+        if val.is_empty() {
+            None
+        } else {
+            Some(val.clone())
+        }
+    }
+}
+
+/// Resolve final AI `ProviderConfig` with precedence:
+///   env > Scheme (init.scm) > TOML (config.toml) > defaults.
 ///
 /// Returns `None` when no credentials or local endpoint are configured
 /// anywhere — the AI is simply disabled in that case, not an error.
-pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
+pub fn resolve_ai_config_with_scheme(
+    file_config: &Config,
+    scheme: &SchemeAiOverrides,
+) -> Option<ProviderConfig> {
     let file = &file_config.ai;
 
-    // Provider: env > file > "claude"
+    // Provider: env > scheme > file > "claude"
     let raw_provider = std::env::var("MAE_AI_PROVIDER")
         .ok()
+        .or_else(|| scheme.opt("provider"))
         .or_else(|| file.provider.clone())
         .unwrap_or_else(|| "claude".into());
 
-    // "ollama" is syntactic sugar for openai-compatible + local URL.
-    let (provider_type, ollama_default_url) = match raw_provider.as_str() {
+    // "ollama" and "deepseek" are syntactic sugar for openai-compatible endpoints.
+    let (provider_type, sugar_default_url) = match raw_provider.as_str() {
         "ollama" => (
             "openai".to_string(),
             Some("http://localhost:11434/v1".to_string()),
         ),
+        "deepseek" => (
+            "openai".to_string(),
+            Some("https://api.deepseek.com/v1".to_string()),
+        ),
         other => (other.to_string(), None),
     };
 
-    // API key: env (provider-specific) > file
-    let api_key = match provider_type.as_str() {
-        "openai" => std::env::var("OPENAI_API_KEY")
-            .ok()
-            .or_else(|| file.api_key.clone()),
-        _ => std::env::var("ANTHROPIC_API_KEY")
-            .ok()
-            .or_else(|| file.api_key.clone()),
+    // API key: env > scheme api_key_command > file api_key_command > file api_key
+    // Check env var by raw_provider first (before sugar mapping).
+    let effective_key_cmd = scheme
+        .opt("api_key_command")
+        .or_else(|| file.api_key_command.clone());
+    let file_key = || run_key_command(&effective_key_cmd).or_else(|| file.api_key.clone());
+    let api_key = match raw_provider.as_str() {
+        "deepseek" => std::env::var("DEEPSEEK_API_KEY").ok().or_else(file_key),
+        _ => match provider_type.as_str() {
+            "openai" => std::env::var("OPENAI_API_KEY").ok().or_else(file_key),
+            "gemini" => std::env::var("GEMINI_API_KEY").ok().or_else(file_key),
+            _ => std::env::var("ANTHROPIC_API_KEY").ok().or_else(file_key),
+        },
     };
 
-    // Base URL: env > file > ollama-default
+    // Base URL: env > scheme > file > sugar-default
     let base_url = std::env::var("MAE_AI_BASE_URL")
         .ok()
+        .or_else(|| scheme.opt("base_url"))
         .or_else(|| file.base_url.clone())
-        .or(ollama_default_url);
+        .or(sugar_default_url);
 
     // If no auth path at all (no key, no local URL), AI is disabled.
     if api_key.is_none() && base_url.is_none() {
@@ -240,13 +331,18 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         provider_type
     };
 
-    // Model: env > file > per-provider default
+    // Model: env > scheme > file > per-provider default
     let model = std::env::var("MAE_AI_MODEL")
         .ok()
+        .or_else(|| scheme.opt("model"))
         .or_else(|| file.model.clone())
-        .unwrap_or_else(|| match provider_type.as_str() {
-            "openai" => "gpt-4o".to_string(),
-            _ => "claude-sonnet-4-5".to_string(),
+        .unwrap_or_else(|| match raw_provider.as_str() {
+            "deepseek" => "deepseek-chat".to_string(),
+            _ => match provider_type.as_str() {
+                "openai" => "gpt-4o".to_string(),
+                "gemini" => "gemini-2.5-flash".to_string(),
+                _ => "claude-sonnet-4-5".to_string(),
+            },
         });
 
     let timeout_secs = std::env::var("MAE_AI_TIMEOUT_SECS")
@@ -267,6 +363,19 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         timeout_secs,
         budget: file.budget.clone(),
     })
+}
+
+/// Backward-compatible wrapper: resolve without Scheme overrides.
+/// Used by tests and `--check-config`.
+#[cfg(test)]
+pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
+    let empty = SchemeAiOverrides {
+        provider: String::new(),
+        model: String::new(),
+        api_key_command: String::new(),
+        base_url: String::new(),
+    };
+    resolve_ai_config_with_scheme(file_config, &empty)
 }
 
 /// Resolve AI permission policy with precedence: env > file > default (trusted).
@@ -298,6 +407,10 @@ pub fn persist_editor_preference(key: &str, value: &str) {
         "theme" => cfg.editor.theme = Some(value.to_string()),
         "splash_art" => cfg.editor.splash_art = Some(value.to_string()),
         "ai_editor" => cfg.ai.editor = Some(value.to_string()),
+        "font_family" => cfg.editor.font_family = Some(value.to_string()),
+        "icon_font_family" => cfg.editor.icon_font_family = Some(value.to_string()),
+        "font_size" => cfg.editor.font_size = value.parse().ok(),
+        "org_hide_emphasis_markers" => cfg.editor.org_hide_emphasis_markers = Some(value == "true"),
         "restore_session" => cfg.editor.restore_session = Some(value == "true"),
         _ => {
             warn!(key, value, "unknown editor preference key");
@@ -331,6 +444,8 @@ pub fn maybe_run_first_run_wizard() -> io::Result<bool> {
     // their own setup and we shouldn't interrupt them on every launch.
     if std::env::var("ANTHROPIC_API_KEY").is_ok()
         || std::env::var("OPENAI_API_KEY").is_ok()
+        || std::env::var("GEMINI_API_KEY").is_ok()
+        || std::env::var("DEEPSEEK_API_KEY").is_ok()
         || std::env::var("MAE_AI_BASE_URL").is_ok()
     {
         return Ok(false);
@@ -368,17 +483,27 @@ pub fn run_wizard() -> io::Result<()> {
     writeln!(out, "    2. openai  — OpenAI API (requires OPENAI_API_KEY)")?;
     writeln!(
         out,
-        "    3. ollama  — Local Ollama (no key, uses http://localhost:11434)"
+        "    3. gemini  — Google Gemini (requires GEMINI_API_KEY)"
     )?;
-    writeln!(out, "    4. skip    — Don't configure AI now")?;
-    let choice = prompt(&mut out, "Choice [1-4, default=4]", "4")?;
+    writeln!(
+        out,
+        "    4. ollama  — Local Ollama (no key, uses http://localhost:11434)"
+    )?;
+    writeln!(
+        out,
+        "    5. deepseek — DeepSeek API (requires DEEPSEEK_API_KEY)"
+    )?;
+    writeln!(out, "    6. skip    — Don't configure AI now")?;
+    let choice = prompt(&mut out, "Choice [1-6, default=6]", "6")?;
 
     let mut cfg = Config::default();
 
     let (provider, ask_key, default_model, default_base) = match choice.as_str() {
         "1" | "claude" => ("claude", true, "claude-sonnet-4-5", None),
         "2" | "openai" => ("openai", true, "gpt-4o", None),
-        "3" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
+        "3" | "gemini" => ("gemini", true, "gemini-2.5-flash", None),
+        "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
+        "5" | "deepseek" => ("deepseek", true, "deepseek-chat", None),
         _ => {
             writeln!(
                 out,
@@ -414,10 +539,11 @@ pub fn run_wizard() -> io::Result<()> {
         writeln!(
             out,
             "  API key: leave blank to keep reading ${}_API_KEY from the environment.",
-            if provider == "openai" {
-                "OPENAI"
-            } else {
-                "ANTHROPIC"
+            match provider {
+                "openai" => "OPENAI",
+                "gemini" => "GEMINI",
+                "deepseek" => "DEEPSEEK",
+                _ => "ANTHROPIC",
             }
         )?;
         let key = prompt(&mut out, "API key (blank = env var)", "")?;
@@ -476,22 +602,27 @@ pub fn default_config_template() -> String {
 # Env vars always take precedence over values set here.\n\
 \n\
 [ai]\n\
-# Provider: \"claude\" | \"openai\" | \"ollama\"\n\
-# (\"ollama\" is a shortcut for openai-compatible + http://localhost:11434/v1)\n\
+# Provider: \"claude\" | \"openai\" | \"gemini\" | \"ollama\" | \"deepseek\"\n\
+# (\"ollama\" and \"deepseek\" are shortcuts for openai-compatible + provider URL)\n\
 # provider = \"claude\"\n\
 \n\
 # Model identifier. Leave unset for the provider default.\n\
 # Claude defaults:  claude-sonnet-4-5  (also: claude-opus-4-6, claude-haiku-4-5-20251001)\n\
 # OpenAI defaults:  gpt-4o\n\
+# Gemini defaults:  gemini-2.5-flash (also: gemini-3.1-pro, gemini-3.1-flash-lite)\n\
 # Ollama examples:  llama3, codellama, qwen2.5-coder\n\
 # model = \"claude-sonnet-4-5\"\n\
 \n\
 # Base URL for the API. Leave unset for provider defaults.\n\
 # base_url = \"http://localhost:11434/v1\"\n\
 \n\
-# API key. If unset, ANTHROPIC_API_KEY / OPENAI_API_KEY env vars are read.\n\
+# API key. If unset, ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY env vars are read.\n\
 # Ollama doesn't need a key.\n\
 # api_key = \"...\"\n\
+\n\
+# Shell command to retrieve API key (e.g. from pass, 1Password, etc.).\n\
+# Stdout is trimmed and used as the key. Takes precedence over api_key but not env vars.\n\
+# api_key_command = \"pass show deepseek/api-key\"\n\
 \n\
 # Permission tier for AI/MCP tool execution.\n\
 # Tiers: \"readonly\", \"standard\", \"trusted\" (default), \"full\"\n\
@@ -611,6 +742,90 @@ mod tests {
         assert_eq!(resolved.provider_type, "openai");
         assert_eq!(resolved.model, "llama3");
         assert!(resolved.base_url.as_deref().unwrap().contains("localhost"));
+    }
+
+    #[test]
+    fn resolve_gemini_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("GEMINI_API_KEY", "gemini-key");
+        std::env::remove_var("MAE_AI_PROVIDER");
+        let cfg = Config {
+            ai: AiSection {
+                provider: Some("gemini".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolve_ai_config(&cfg).unwrap();
+        assert_eq!(resolved.provider_type, "gemini");
+        assert_eq!(resolved.api_key.as_deref(), Some("gemini-key"));
+        assert_eq!(resolved.model, "gemini-2.5-flash"); // default
+        std::env::remove_var("GEMINI_API_KEY");
+    }
+
+    #[test]
+    fn resolve_deepseek_config() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("DEEPSEEK_API_KEY", "ds-key");
+        std::env::remove_var("MAE_AI_PROVIDER");
+        std::env::remove_var("MAE_AI_BASE_URL");
+        std::env::remove_var("MAE_AI_MODEL");
+        let cfg = Config {
+            ai: AiSection {
+                provider: Some("deepseek".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolve_ai_config(&cfg).unwrap();
+        assert_eq!(resolved.provider_type, "openai"); // sugar maps to openai
+        assert_eq!(resolved.api_key.as_deref(), Some("ds-key"));
+        assert_eq!(resolved.model, "deepseek-chat"); // default model
+        assert!(resolved
+            .base_url
+            .as_deref()
+            .unwrap()
+            .contains("deepseek.com"));
+        std::env::remove_var("DEEPSEEK_API_KEY");
+    }
+
+    #[test]
+    fn resolve_api_key_command() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("MAE_AI_PROVIDER");
+        std::env::remove_var("MAE_AI_BASE_URL");
+        std::env::remove_var("MAE_AI_MODEL");
+        let cfg = Config {
+            ai: AiSection {
+                provider: Some("claude".into()),
+                api_key_command: Some("echo secret-from-command".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolve_ai_config(&cfg).unwrap();
+        assert_eq!(resolved.api_key.as_deref(), Some("secret-from-command"));
+    }
+
+    #[test]
+    fn resolve_env_overrides_api_key_command() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ANTHROPIC_API_KEY", "env-key");
+        std::env::remove_var("MAE_AI_PROVIDER");
+        std::env::remove_var("MAE_AI_BASE_URL");
+        std::env::remove_var("MAE_AI_MODEL");
+        let cfg = Config {
+            ai: AiSection {
+                provider: Some("claude".into()),
+                api_key_command: Some("echo command-key".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolve_ai_config(&cfg).unwrap();
+        assert_eq!(resolved.api_key.as_deref(), Some("env-key"));
+        std::env::remove_var("ANTHROPIC_API_KEY");
     }
 
     #[test]

@@ -51,6 +51,8 @@ pub enum LineStyle {
 pub struct RenderedLine {
     pub text: String,
     pub style: LineStyle,
+    /// The index of the ConversationEntry this line belongs to, if any.
+    pub entry_index: Option<usize>,
 }
 
 /// Conversation state for an AI interaction pane.
@@ -59,7 +61,8 @@ pub struct Conversation {
     pub input_line: String,
     /// Byte offset of the editing cursor within `input_line`.
     pub input_cursor: usize,
-    /// Lines scrolled upward from the bottom (0 = auto-scroll to newest content).
+    /// DEPRECATED: Conversation-specific scroll state.
+    /// Use window.scroll_offset instead for parity with text buffers.
     pub scroll: usize,
     pub streaming: bool,
     /// When streaming started, used to display elapsed time in the UI.
@@ -229,23 +232,26 @@ impl Conversation {
     pub fn rendered_lines(&self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
 
-        for entry in &self.entries {
+        for (i, entry) in self.entries.iter().enumerate() {
             match &entry.role {
                 ConversationRole::User => {
                     lines.push(RenderedLine {
                         text: "[You]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::UserText,
+                            entry_index: Some(i),
                         });
                     }
                     if entry.content.is_empty() {
                         lines.push(RenderedLine {
                             text: String::new(),
                             style: LineStyle::UserText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -253,17 +259,20 @@ impl Conversation {
                     lines.push(RenderedLine {
                         text: "[AI]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::AssistantText,
+                            entry_index: Some(i),
                         });
                     }
                     if entry.content.is_empty() {
                         lines.push(RenderedLine {
                             text: String::new(),
                             style: LineStyle::AssistantText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -272,16 +281,19 @@ impl Conversation {
                         lines.push(RenderedLine {
                             text: format!("▸ [Tool: {}]", name),
                             style: LineStyle::ToolCallHeader,
+                            entry_index: Some(i),
                         });
                     } else {
                         lines.push(RenderedLine {
                             text: format!("▾ [Tool: {}]", name),
                             style: LineStyle::ToolCallHeader,
+                            entry_index: Some(i),
                         });
                         for line in entry.content.lines() {
                             lines.push(RenderedLine {
                                 text: format!("  {}", line),
                                 style: LineStyle::ToolResultText,
+                                entry_index: Some(i),
                             });
                         }
                     }
@@ -299,16 +311,19 @@ impl Conversation {
                         lines.push(RenderedLine {
                             text: header,
                             style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
                         });
                     } else {
                         lines.push(RenderedLine {
                             text: header,
                             style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
                         });
                         for line in entry.content.lines() {
                             lines.push(RenderedLine {
                                 text: format!("  {}", line),
                                 style: LineStyle::ToolResultText,
+                                entry_index: Some(i),
                             });
                         }
                     }
@@ -317,11 +332,13 @@ impl Conversation {
                     lines.push(RenderedLine {
                         text: "[System]".into(),
                         style: LineStyle::RoleMarker,
+                        entry_index: Some(i),
                     });
                     for line in entry.content.lines() {
                         lines.push(RenderedLine {
                             text: line.to_string(),
                             style: LineStyle::SystemText,
+                            entry_index: Some(i),
                         });
                     }
                 }
@@ -331,6 +348,7 @@ impl Conversation {
             lines.push(RenderedLine {
                 text: String::new(),
                 style: LineStyle::Separator,
+                entry_index: None,
             });
         }
 
@@ -338,9 +356,20 @@ impl Conversation {
         lines.push(RenderedLine {
             text: format!("> {}", self.input_line),
             style: LineStyle::InputPrompt,
+            entry_index: None,
         });
 
         lines
+    }
+
+    /// Flatten all rendered lines into a single string for visual mode operations.
+    /// This is the text that visual mode selection coordinates map to.
+    pub fn flat_text(&self) -> String {
+        self.rendered_lines()
+            .iter()
+            .map(|rl| rl.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Total rendered line count (for scroll calculations).
@@ -641,6 +670,28 @@ mod tests {
     }
 
     #[test]
+    fn flat_text_joins_rendered_lines() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let flat = conv.flat_text();
+        assert!(flat.contains("[You]"));
+        assert!(flat.contains("hello"));
+        assert!(flat.contains("[AI]"));
+        assert!(flat.contains("world"));
+        // Lines are joined with newlines
+        assert!(flat.contains('\n'));
+    }
+
+    #[test]
+    fn flat_text_empty_conversation() {
+        let conv = Conversation::new();
+        let flat = conv.flat_text();
+        // Should just be the input prompt
+        assert!(flat.contains("> "));
+    }
+
+    #[test]
     fn rendered_lines_contain_role_markers() {
         let mut conv = Conversation::new();
         conv.push_user("hello");
@@ -651,6 +702,12 @@ mod tests {
         assert!(lines.iter().any(|l| l.text == "[AI]"));
         assert!(lines.iter().any(|l| l.text == "hello"));
         assert!(lines.iter().any(|l| l.text == "hi"));
+
+        // Verify entry_index is populated
+        assert_eq!(lines[0].entry_index, Some(0)); // [You]
+        assert_eq!(lines[1].entry_index, Some(0)); // hello
+        assert_eq!(lines[2].entry_index, None); // separator
+        assert_eq!(lines[3].entry_index, Some(1)); // [AI]
     }
 
     #[test]

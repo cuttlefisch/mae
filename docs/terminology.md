@@ -47,19 +47,19 @@ There are three kinds of buffer:
 | Kind | Backing store | Purpose |
 |------|--------------|---------|
 | `Text` | `ropey::Rope` | Normal file editing |
-| `Conversation` | `Conversation` struct | AI interaction history + input |
+| `Conversation` | `Conversation` struct + `ropey::Rope` | AI interaction history + search/selection |
 | `Messages` | `MessageLog` | Live log of editor/tracing output, read-only |
 
 `Text` buffers are backed by a rope data structure — a balanced tree that gives
 O(log n) insert and delete at any position. This is the same choice as Helix,
-Lapce, and other modern editors, and is the direct alternative to the gap buffer
-used by Emacs (which has O(n) worst-case for edits far from the gap).
+Lapce, and other modern editors.
 
-`Conversation` buffers do **not** use a rope. The AI conversation is structured
-data (roles, entries, tool calls, results) and is rendered directly from the
-`Conversation` struct. This avoids the sync problem of keeping a flat-text copy
-consistent with the structured model — an Emacs lesson: don't shoehorn structured
-data into a flat buffer.
+`Conversation` buffers use a hybrid model. The structured interaction history
+lives in a `Conversation` struct, but it is **synced to a rope** whenever it
+changes. This enables full peer interactivity: the human can use standard vi
+motions, visual selection, and search on the AI's thoughts, while the AI
+maintains its structured transactional context.
+
 
 #### Difference from Emacs
 

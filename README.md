@@ -2,13 +2,16 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C508%20passing-brightgreen.svg)](#)
-[![Built with Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/claude-code)
-[![Lines of Code](https://img.shields.io/badge/lines-~25k-informational.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C324%20passing-brightgreen.svg)](#)
+[![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
+[![Lines of Code](https://img.shields.io/badge/lines-~26k-informational.svg)](#)
+
+> [!CAUTION]
+> **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,508 tests. GPL-3.0-or-later.
+runtime. 1,324 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 
@@ -77,16 +80,21 @@ both the user's keybinding and the AI's tool palette.
 
 ### AI as Peer Actor
 
-Not a copilot sidebar. The AI calls the same 280+ commands you do. It reads
+Not a copilot sidebar. The AI calls the same 300+ commands you do. It reads
 LSP types, DAP debug state, tree-sitter parse trees, and the knowledge base —
 structured data, not just syntax. Every editor command is an AI tool; the AI's
-specialized tools (buffer I/O, LSP queries, DAP inspection) are thin wrappers
-around the same core API. Permission tiers (ReadOnly, Write, Shell, Privileged)
-let you control how far the agent can act autonomously.
+specialized tools (buffer I/O, LSP queries, DAP inspection, Git) are thin wrappers
+around the same core API.
+
+**Key Architecture:**
+- **Transactional Callstack**: Ephemeral tool history prevents context overflow during long-running tasks.
+- **Self-Healing**: AI sessions automatically scale context windows and prune history to recover from provider limits.
+- **Provider Choice**: First-class support for **Gemini (Flash/Pro)**, Claude, and OpenAI.
+- **Permission Tiers**: (ReadOnly, Write, Shell, Privileged) let you control how far the agent can act autonomously.
 
 ### Built-in Documentation & Knowledge Base
 
-`:help` opens a hyperlinked knowledge base with 185+ nodes — the same docs the
+`:help` opens a hyperlinked knowledge base with 200+ nodes — the same docs the
 AI reads. Tab cycles links, Enter follows, C-o / C-i for history (browser-like).
 Every command is auto-documented at startup. The KB is backed by SQLite with
 FTS5 full-text search, bidirectional links, org-mode parser for importing
@@ -113,10 +121,11 @@ just syntax, but types, references, and diagnostics.
 
 ### Runtime Redefinability (Scheme)
 
-Embedded R7RS Scheme (Steel) — redefine any function while running. 7 hook
-points (`before-save`, `after-save`, `buffer-open`, `buffer-close`,
-`mode-change`) for event-driven config. `(set-option! ...)` for programmatic
-configuration. `init.scm` is a real program, not a settings file.
+Embedded R7RS Scheme (Steel) — redefine any function while running. 12 hook
+points (`app-start`, `app-exit`, `before-save`, `after-save`, `buffer-open`,
+`buffer-close`, `mode-change`, `focus-in`, `focus-out`, etc.) for event-driven
+config. `(set-option! ...)` for programmatic configuration. `init.scm` is a real
+program, not a settings file.
 
 ### Tree-sitter Syntax Highlighting
 
@@ -173,7 +182,7 @@ mae (binary)
  ├── mae-core       Buffer (rope), editor state, commands, keymap, search, themes, syntax
  ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
  ├── mae-scheme      Steel Scheme runtime, init.scm loading, hook dispatch
- ├── mae-ai          Claude + OpenAI providers, tool execution, conversation
+ ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
@@ -284,7 +293,7 @@ crates/
   core/         Buffer (rope), editor state, commands, keymap, search, themes, syntax
   renderer/     Terminal rendering (ratatui), status bar, popups, shell viewport
   scheme/       Steel Scheme runtime, init.scm loading, hook dispatch
-  ai/           Claude + OpenAI providers, tool execution, conversation
+  ai/           Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
   lsp/          LSP client — connection, navigation, diagnostics, completion
   dap/          DAP client — protocol types, transport, breakpoints, stepping
   kb/           Knowledge base — SQLite graph store, org-mode parser, FTS5 search
@@ -293,7 +302,7 @@ crates/
 
 ## Self-Hosting Goal
 
-The near-term goal is to use MAE + Claude to develop MAE itself. All Tier 1
+The near-term goal is to use MAE + AI (Claude/Gemini/DeepSeek) to develop MAE itself. All Tier 1
 blockers are complete: multi-file AI editing, LSP semantic understanding,
 tree-sitter syntax highlighting, DAP debugging, and the embedded terminal.
 MAE is now used as a terminal/GUI editor for its own development alongside Emacs.

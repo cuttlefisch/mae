@@ -30,7 +30,8 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, trace, warn};
 
 use bootstrap::{
-    find_conversation_buffer_mut, init_logging, load_init_file, setup_ai, setup_dap, setup_lsp,
+    debug_dump, find_conversation_buffer_mut, init_logging, load_history, load_init_file,
+    save_history, setup_ai, setup_dap, setup_lsp,
 };
 use key_handling::handle_key;
 
@@ -53,6 +54,10 @@ fn main() -> io::Result<()> {
 
     info!(version = env!("CARGO_PKG_VERSION"), "mae starting");
 
+    // Sync PATH from user's shell (login/interactive) so we can find binaries
+    // even when launched from a desktop environment with a minimal PATH.
+    mae_shell::path::sync_path_from_shell();
+
     // Set up panic hook to restore terminal on crash
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -62,9 +67,7 @@ fn main() -> io::Result<()> {
         default_hook(info);
     }));
 
-    let args: Vec<String> = std::env::args().collect();
-
-    // Handle --version / --help / --init-config before the terminal UI starts.
+    let args: Vec<String> = std::env::args().collect(); // Handle --version / --help / --init-config before the terminal UI starts.
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("mae {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -83,7 +86,7 @@ fn main() -> io::Result<()> {
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --gui                   Launch with GUI backend (winit + skia)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
-        println!("  --setup-agents [DIR]    Write .mcp.json for agent auto-discovery");
+        println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
@@ -91,12 +94,14 @@ fn main() -> io::Result<()> {
         println!("  {}", config::config_path().display());
         println!();
         println!("ENVIRONMENT:");
-        println!("  MAE_AI_PROVIDER     claude | openai | ollama");
+        println!("  MAE_AI_PROVIDER     claude | openai | gemini | ollama | deepseek");
         println!("  MAE_AI_MODEL        model identifier");
         println!("  MAE_AI_BASE_URL     custom API base URL (for Ollama/vLLM/proxies)");
         println!("  MAE_AI_TIMEOUT_SECS HTTP timeout (default 300)");
         println!("  ANTHROPIC_API_KEY   Claude API key");
         println!("  OPENAI_API_KEY      OpenAI API key");
+        println!("  GEMINI_API_KEY      Gemini API key");
+        println!("  DEEPSEEK_API_KEY    DeepSeek API key");
         println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
@@ -119,17 +124,14 @@ fn main() -> io::Result<()> {
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let shim = agents::resolve_shim_path();
-        match agents::write_mcp_json(&dir, &shim) {
-            Ok(()) => {
-                println!("Wrote {}", dir.join(".mcp.json").display());
-                return Ok(());
-            }
-            Err(e) => {
-                eprintln!("Failed: {}", e);
-                std::process::exit(1);
+
+        for agent in agents::builtin_agents() {
+            match agents::setup_agent(agent.name, &dir) {
+                Ok(msg) => println!("  {}: {}", agent.name, msg),
+                Err(e) => eprintln!("  {}: Failed: {}", agent.name, e),
             }
         }
+        return Ok(());
     }
     if args.iter().any(|a| a == "--init-config") {
         let force = args.iter().any(|a| a == "--force");
@@ -238,6 +240,17 @@ fn main() -> io::Result<()> {
         editor.restore_session = restore;
     }
 
+    // Apply font settings from config early (init.scm can override).
+    if let Some(size) = app_config.editor.font_size {
+        editor.gui_font_size = size;
+    }
+    if let Some(ref family) = app_config.editor.font_family {
+        editor.gui_font_family = family.clone();
+    }
+    if let Some(ref icon_family) = app_config.editor.icon_font_family {
+        editor.gui_icon_font_family = icon_family.clone();
+    }
+
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {
@@ -250,8 +263,12 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Load init.scm if it exists
+    // Load init.scm and history.scm
     load_init_file(&mut scheme, &mut editor);
+    load_history(&mut scheme, &mut editor);
+
+    // Fire app-start hook after initialization is complete.
+    editor.fire_hook("app-start");
 
     // --debug: enable debug mode (RSS/CPU/frame time in status bar)
     if args.iter().any(|a| a == "--debug") {
@@ -277,6 +294,7 @@ fn main() -> io::Result<()> {
     // `setup_ai`/`setup_lsp`/`setup_dap` call `tokio::spawn` internally.
     let (
         mut ai_event_rx,
+        ai_event_tx,
         ai_command_tx,
         mut lsp_event_rx,
         lsp_command_tx,
@@ -287,14 +305,32 @@ fn main() -> io::Result<()> {
         all_tools,
         permission_policy,
     ) = rt.block_on(async {
-        let (ai_event_rx, ai_command_tx) = setup_ai(&editor);
+        let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
             ai_configured = ai_command_tx.is_some(),
             "AI agent setup complete"
         );
 
-        let (lsp_event_rx, lsp_command_tx) = setup_lsp();
+        let (lsp_event_rx, lsp_command_tx) = {
+            let root_uri = editor
+                .active_project_root()
+                .map(|p| format!("file://{}", p.display()));
+            setup_lsp(root_uri)
+        };
         info!("LSP task spawned");
+
+        // AI session restoration
+        if editor.restore_session {
+            if let Some(root) = editor.active_project_root() {
+                let session_path = root.join(".mae/conversation.json");
+                if session_path.exists() {
+                    match editor.ai_load(&session_path) {
+                        Ok(n) => info!(path = %session_path.display(), entries = n, "AI session restored"),
+                        Err(e) => warn!(path = %session_path.display(), error = %e, "failed to restore AI session"),
+                    }
+                }
+            }
+        }
 
         let (dap_event_rx, dap_command_tx) = setup_dap();
         info!("DAP task spawned");
@@ -326,6 +362,7 @@ fn main() -> io::Result<()> {
 
         (
             ai_event_rx,
+            ai_event_tx,
             ai_command_tx,
             lsp_event_rx,
             lsp_command_tx,
@@ -380,6 +417,7 @@ fn main() -> io::Result<()> {
                 editor,
                 scheme,
                 ai_event_rx,
+                ai_event_tx,
                 ai_command_tx,
                 lsp_event_rx,
                 lsp_command_tx,
@@ -399,6 +437,7 @@ fn main() -> io::Result<()> {
         &mut editor,
         &mut scheme,
         &mut ai_event_rx,
+        &ai_event_tx,
         &ai_command_tx,
         &mut lsp_event_rx,
         &lsp_command_tx,
@@ -422,6 +461,7 @@ async fn run_terminal_loop(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     ai_event_rx: &mut tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_event_tx: &tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
     lsp_event_rx: &mut tokio::sync::mpsc::Receiver<LspTaskEvent>,
     lsp_command_tx: &tokio::sync::mpsc::Sender<LspCommand>,
@@ -438,6 +478,7 @@ async fn run_terminal_loop(
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
+    let mut pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent> = None;
     let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
 
@@ -478,7 +519,14 @@ async fn run_terminal_loop(
 
         editor.clamp_all_cursors();
 
-        let viewport_height = renderer.viewport_height()?;
+        let (term_w, term_h) = renderer.size()?;
+        let total_window_area = mae_core::WinRect {
+            x: 0,
+            y: 0,
+            width: term_w,
+            height: term_h.saturating_sub(2),
+        };
+        let viewport_height = editor.focused_window_viewport_height(total_window_area);
         editor.viewport_height = viewport_height;
         editor
             .window_mgr
@@ -537,6 +585,41 @@ async fn run_terminal_loop(
 
         if !editor.running {
             info!("editor shutting down");
+
+            // Fire app-exit hook.
+            editor.fire_hook("app-exit");
+
+            // Persist history
+            if let Err(e) = save_history(editor) {
+                error!(error = %e, "failed to save history");
+            }
+
+            // If debug mode is enabled, save a tombstone dump.
+            if editor.debug_mode {
+                debug_dump(editor);
+            }
+
+            // AI session persistence
+            if editor.restore_session {
+                if let Some(root) = editor.active_project_root() {
+                    let session_path = root.join(".mae/conversation.json");
+                    // Ensure directory exists
+                    if let Some(parent) = session_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    match editor.ai_save(&session_path) {
+                        Ok(n) => {
+                            info!(path = %session_path.display(), entries = n, "AI session persisted")
+                        }
+                        Err(e) => {
+                            if !e.contains("No conversation buffer") {
+                                warn!(path = %session_path.display(), error = %e, "failed to persist AI session");
+                            }
+                        }
+                    }
+                }
+            }
+
             if let Some(ref tx) = ai_command_tx {
                 if tx.try_send(AiCommand::Shutdown).is_err() {
                     warn!("failed to send shutdown to AI session (channel closed)");
@@ -640,7 +723,18 @@ async fn run_terminal_loop(
                             handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
-                            handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx);
+                            handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
+
+                            // Handle cancellation requested via command (e.g. SPC a c)
+                            if editor.ai_cancel_requested {
+                                editor.ai_cancel_requested = false;
+                                if let Some(ref tx) = ai_command_tx {
+                                    let _ = tx.try_send(AiCommand::Cancel);
+                                }
+                                editor.ai_streaming = false;
+                                editor.input_lock = mae_core::InputLock::None;
+                                pending_interactive_event = None;
+                            }
                         }
                     }
                     Some(Ok(Event::Resize(_w, _h))) => {
@@ -656,10 +750,16 @@ async fn run_terminal_loop(
             }
             Some(ai_event) = ai_event_rx.recv() => {
                 tui_dirty = true;
-                ai_event_handler::handle_ai_event(
-                    editor, ai_event, all_tools, permission_policy,
-                    &mut deferred_ai_reply, lsp_command_tx,
-                );
+                let ctx = ai_event_handler::AiEventContext {
+                    all_tools,
+                    permission_policy,
+                    deferred_ai_reply: &mut deferred_ai_reply,
+                    pending_interactive_event: &mut pending_interactive_event,
+                    lsp_command_tx,
+                    ai_event_tx,
+                    ai_command_tx,
+                };
+                ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }
             Some(lsp_event) = lsp_event_rx.recv() => {
                 tui_dirty = true;
@@ -819,6 +919,14 @@ async fn run_headless_self_test(
                         drain_lsp_intents(editor, lsp_command_tx);
                         let result = ToolResult {
                             tool_call_id,
+                            tool_name: match kind {
+                                DeferredKind::LspDefinition => "lsp_definition",
+                                DeferredKind::LspReferences => "lsp_references",
+                                DeferredKind::LspHover => "lsp_hover",
+                                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+                                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+                            }
+                            .into(),
                             success: false,
                             output: format!(
                                 "Deferred tool ({:?}) not supported in headless mode",
@@ -834,25 +942,25 @@ async fn run_headless_self_test(
                     }
                 }
             }
-            Some(AiEvent::TextResponse(text)) => {
+            Some(AiEvent::TextResponse { text, .. }) => {
                 full_report.push_str(&text);
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.push_assistant(&text);
                 }
             }
-            Some(AiEvent::StreamChunk(text)) => {
+            Some(AiEvent::StreamChunk { text, .. }) => {
                 full_report.push_str(&text);
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.append_streaming_chunk(&text);
                 }
             }
-            Some(AiEvent::SessionComplete(_)) => {
+            Some(AiEvent::SessionComplete { .. }) => {
                 if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                     conv_buf.end_streaming();
                 }
                 break;
             }
-            Some(AiEvent::Error(msg)) => {
+            Some(AiEvent::Error(msg, _)) => {
                 eprintln!("mae: AI error during self-test: {}", msg);
                 return 2;
             }
@@ -971,13 +1079,13 @@ fn handle_shell_key(
             let keys_to_send = std::mem::take(shell_pending_keys);
 
             let Some(shell) = shell_terminals.get(&editor.active_buffer_idx()) else {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("Terminal exited — returned to normal mode");
                 return;
             };
 
             if shell.has_exited() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("Terminal process has exited");
                 return;
             }
@@ -1283,6 +1391,7 @@ pub(crate) fn try_complete_deferred(
             };
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_definition".into(),
                 success: true,
                 output: output.to_string(),
             })
@@ -1302,6 +1411,7 @@ pub(crate) fn try_complete_deferred(
             let count = locs.len();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_references".into(),
                 success: true,
                 output: serde_json::json!({"count": count, "references": locs}).to_string(),
             })
@@ -1314,6 +1424,7 @@ pub(crate) fn try_complete_deferred(
             };
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_hover".into(),
                 success: true,
                 output: output.to_string(),
             })
@@ -1338,6 +1449,7 @@ pub(crate) fn try_complete_deferred(
             let count = syms.len();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_workspace_symbol".into(),
                 success: true,
                 output: serde_json::json!({"count": count, "symbols": syms}).to_string(),
             })
@@ -1363,6 +1475,7 @@ pub(crate) fn try_complete_deferred(
             let syms: Vec<serde_json::Value> = symbols.iter().map(format_doc_symbol).collect();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_document_symbols".into(),
                 success: true,
                 output: serde_json::json!({"symbols": syms}).to_string(),
             })
@@ -1370,6 +1483,14 @@ pub(crate) fn try_complete_deferred(
         // Also handle LSP errors while a deferred call is pending
         (_, LspTaskEvent::Error { message }) => Some(ToolResult {
             tool_call_id: tool_call_id.to_string(),
+            tool_name: match kind {
+                DeferredKind::LspDefinition => "lsp_definition",
+                DeferredKind::LspReferences => "lsp_references",
+                DeferredKind::LspHover => "lsp_hover",
+                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+            }
+            .into(),
             success: false,
             output: format!("LSP error: {}", message),
         }),
@@ -1657,6 +1778,7 @@ fn run_gui(
     mut editor: Editor,
     scheme: SchemeRuntime,
     ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     lsp_event_rx: tokio::sync::mpsc::Receiver<LspTaskEvent>,
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
@@ -1675,10 +1797,20 @@ fn run_gui(
 
     let mut renderer = mae_gui::GuiRenderer::new();
     renderer.set_font_config(
-        app_config.editor.font_family.clone(),
-        app_config.editor.font_size,
+        if editor.gui_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_font_family.clone())
+        },
+        if editor.gui_icon_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_icon_font_family.clone())
+        },
+        Some(editor.gui_font_size),
     );
     editor.renderer_name = "gui".to_string();
+    editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
     editor.clipboard = "unnamedplus".to_string();
 
     // Create typed event loop with user events — must happen on main thread
@@ -1718,8 +1850,10 @@ fn run_gui(
         shell_pending_keys: Vec::new(),
         shell_terminals: std::collections::HashMap::new(),
         shell_last_dims: std::collections::HashMap::new(),
+        ai_event_tx,
         ai_command_tx,
         deferred_ai_reply: None,
+        pending_interactive_event: None,
         deferred_mcp_reply: Vec::new(),
         last_mcp_activity: None,
         all_tools,
@@ -1839,8 +1973,10 @@ struct GuiApp {
     shell_last_dims: std::collections::HashMap<usize, (u16, u16)>,
 
     // AI/MCP state
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     deferred_ai_reply: ai_event_handler::DeferredAiReply,
+    pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent>,
     deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
     last_mcp_activity: Option<tokio::time::Instant>,
     all_tools: Vec<mae_ai::ToolDefinition>,
@@ -1917,8 +2053,42 @@ impl GuiApp {
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
-    fn shutdown(&self) {
+    fn shutdown(&mut self) {
         info!("editor shutting down (GUI)");
+
+        // Fire app-exit hook.
+        self.editor.fire_hook("app-exit");
+
+        // Persist history
+        if let Err(e) = save_history(&self.editor) {
+            error!(error = %e, "failed to save history");
+        }
+
+        // If debug mode is enabled, save a tombstone dump.
+        if self.editor.debug_mode {
+            debug_dump(&self.editor);
+        }
+
+        // AI session persistence
+        if self.editor.restore_session {
+            if let Some(root) = self.editor.active_project_root() {
+                let session_path = root.join(".mae/conversation.json");
+                if let Some(parent) = session_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match self.editor.ai_save(&session_path) {
+                    Ok(n) => {
+                        info!(path = %session_path.display(), entries = n, "AI session persisted")
+                    }
+                    Err(e) => {
+                        if !e.contains("No conversation buffer") {
+                            warn!(path = %session_path.display(), error = %e, "failed to persist AI session");
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(ref tx) = self.ai_command_tx {
             let _ = tx.try_send(AiCommand::Shutdown);
         }
@@ -1947,14 +2117,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         match event {
             MaeEvent::AiEvent(ai_event) => {
-                ai_event_handler::handle_ai_event(
-                    &mut self.editor,
-                    ai_event,
-                    &self.all_tools,
-                    &self.permission_policy,
-                    &mut self.deferred_ai_reply,
-                    &self.lsp_command_tx,
-                );
+                let ctx = ai_event_handler::AiEventContext {
+                    all_tools: &self.all_tools,
+                    permission_policy: &self.permission_policy,
+                    deferred_ai_reply: &mut self.deferred_ai_reply,
+                    pending_interactive_event: &mut self.pending_interactive_event,
+                    lsp_command_tx: &self.lsp_command_tx,
+                    ai_event_tx: &self.ai_event_tx,
+                    ai_command_tx: &self.ai_command_tx,
+                };
+                ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
             }
             MaeEvent::LspEvent(lsp_event) => {
@@ -2095,7 +2267,18 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             kp,
                             &mut self.pending_keys,
                             &self.ai_command_tx,
+                            &mut self.pending_interactive_event,
                         );
+
+                        if self.editor.ai_cancel_requested {
+                            self.editor.ai_cancel_requested = false;
+                            if let Some(ref tx) = self.ai_command_tx {
+                                let _ = tx.try_send(AiCommand::Cancel);
+                            }
+                            self.editor.ai_streaming = false;
+                            self.editor.input_lock = mae_core::InputLock::None;
+                            self.pending_interactive_event = None;
+                        }
                     }
 
                     // Check for editor shutdown after key handling.
@@ -2216,7 +2399,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
-        if let Ok(vh) = self.renderer.viewport_height() {
+        if let Ok((w, h)) = self.renderer.size() {
+            let total_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h.saturating_sub(2),
+            };
+            let vh = self.editor.focused_window_viewport_height(total_area);
             self.editor.viewport_height = vh;
             self.editor
                 .window_mgr

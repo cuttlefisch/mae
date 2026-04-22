@@ -14,6 +14,7 @@
 use crate::{Mode, VisualType};
 
 use super::Editor;
+use tracing::info;
 
 impl Editor {
     /// Enter charwise Visual mode selecting the tree-sitter node at the cursor.
@@ -147,7 +148,7 @@ impl Editor {
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;
-        self.mode = Mode::Visual(VisualType::Char);
+        self.set_mode(Mode::Visual(VisualType::Char));
     }
 
     /// Return the full S-expression of the buffer's parsed tree.
@@ -175,5 +176,190 @@ impl Editor {
                     .named_descendant_for_byte_range(cursor_byte, cursor_byte)
             })
             .map(|n| n.kind().to_string())
+    }
+
+    /// Toggle folding for the Org heading at the cursor.
+    pub fn org_cycle(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let lang = self.syntax.language_of(buf_idx);
+        if lang != Some(crate::syntax::Language::Org) {
+            return;
+        }
+
+        info!(buf_idx, "org cycling at cursor");
+
+        let win = self.window_mgr.focused_window();
+        let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
+
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let Some(tree) = self.syntax.tree_for(buf_idx, &source) else {
+            return;
+        };
+
+        // Find the heading node at or above the cursor
+        let mut node = tree
+            .root_node()
+            .descendant_for_byte_range(cursor_byte, cursor_byte);
+
+        while let Some(n) = node {
+            if n.kind() == "headline" {
+                break;
+            }
+            node = n.parent();
+        }
+
+        let Some(headline) = node else {
+            return;
+        };
+
+        let start_row = self.buffers[buf_idx]
+            .rope()
+            .byte_to_line(headline.start_byte());
+        let end_row = self.buffers[buf_idx]
+            .rope()
+            .byte_to_line(headline.end_byte());
+
+        if start_row >= end_row {
+            return;
+        }
+
+        // Cycle logic: Unfolded -> Children -> Folded -> Unfolded
+        // For now, just implement simple Fold/Unfold toggle
+        let is_folded = self.buffers[buf_idx]
+            .folded_ranges
+            .iter()
+            .any(|(s, _)| *s == start_row);
+
+        if is_folded {
+            self.buffers[buf_idx]
+                .folded_ranges
+                .retain(|(s, _)| *s != start_row);
+            self.set_status("Unfolded");
+        } else {
+            self.buffers[buf_idx]
+                .folded_ranges
+                .push((start_row, end_row));
+            self.set_status("Folded");
+        }
+    }
+
+    /// Cycle TODO state for the Org heading at the cursor.
+    pub fn org_todo_cycle(&mut self, forward: bool) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return;
+        }
+
+        info!(buf_idx, forward, "org todo cycle");
+        // Trivial string replacement logic for now
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line = self.buffers[buf_idx].rope().line(row);
+        let line_str: String = line.chars().collect();
+
+        let (new_line, status) = if line_str.contains("TODO ") {
+            if forward {
+                (line_str.replace("TODO ", "DONE "), "DONE")
+            } else {
+                (line_str.replace("TODO ", ""), "None")
+            }
+        } else if line_str.contains("DONE ") {
+            if forward {
+                (line_str.replace("DONE ", ""), "None")
+            } else {
+                (line_str.replace("DONE ", "TODO "), "TODO")
+            }
+        } else {
+            // Find the start of the heading text (after stars)
+            let mut stars_found = false;
+            let mut stars_end = 0;
+            for (i, ch) in line_str.chars().enumerate() {
+                if ch == '*' {
+                    stars_found = true;
+                } else if stars_found && ch == ' ' {
+                    stars_end = i + 1;
+                    break;
+                } else if stars_found {
+                    // unexpected char after stars
+                    break;
+                } else {
+                    break;
+                }
+            }
+
+            if stars_found && stars_end > 0 {
+                let mut next = line_str.clone();
+                if forward {
+                    next.insert_str(stars_end, "TODO ");
+                    (next, "TODO")
+                } else {
+                    next.insert_str(stars_end, "DONE ");
+                    (next, "DONE")
+                }
+            } else {
+                (line_str.clone(), "Not a heading")
+            }
+        };
+
+        if new_line != line_str {
+            let start = self.buffers[buf_idx].rope().line_to_char(row);
+            let end = start + line.len_chars();
+            self.buffers[buf_idx].delete_range(start, end);
+            self.buffers[buf_idx].insert_text_at(start, &new_line);
+            self.set_status(status);
+        }
+    }
+
+    /// Open the Org link at the cursor.
+    pub fn org_open_link(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return;
+        }
+
+        info!(buf_idx, "org open link at cursor");
+
+        let win = self.window_mgr.focused_window();
+        let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
+
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let Some(tree) = self.syntax.tree_for(buf_idx, &source) else {
+            return;
+        };
+
+        let mut node = tree
+            .root_node()
+            .descendant_for_byte_range(cursor_byte, cursor_byte);
+
+        // Org links often have nested nodes, walk up to find the link node.
+        while let Some(n) = node {
+            if n.kind() == "link" {
+                break;
+            }
+            node = n.parent();
+        }
+
+        let Some(link) = node else {
+            return;
+        };
+
+        // Extract target from [[target][label]] or [[target]]
+        let link_text = &source[link.start_byte()..link.end_byte()];
+        if let Some(target) = link_text
+            .strip_prefix("[[")
+            .and_then(|s| s.split(']').next())
+        {
+            let target = target.split('|').next().unwrap_or(target).trim();
+            if target.starts_with("http") {
+                // Open external link
+                let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+                self.set_status(format!("Opening {}", target));
+            } else {
+                // Jump to internal heading
+                self.set_status(format!("Jumping to heading: {}", target));
+                // TODO: implement actual search/jump logic
+            }
+        }
     }
 }

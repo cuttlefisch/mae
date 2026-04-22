@@ -39,6 +39,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
             Mode::FileBrowser => " BROWSE ",
             Mode::CommandPalette => " COMMAND PALETTE ",
             Mode::ShellInsert => " TERMINAL ",
+            Mode::GitStatus => " GIT STATUS ",
         }
     };
     let mode_style = if editor.input_lock != mae_core::InputLock::None {
@@ -56,6 +57,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
             Mode::Command => ts(editor, "ui.statusline.mode.command"),
             Mode::ConversationInput => ts(editor, "ui.statusline.mode.conversation"),
             Mode::ShellInsert => ts(editor, "ui.statusline.mode.insert"),
+            Mode::GitStatus => ts(editor, "ui.statusline.mode.command"),
             Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
                 ts(editor, "ui.statusline.mode.command")
             }

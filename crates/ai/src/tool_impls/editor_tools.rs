@@ -392,3 +392,259 @@ pub fn execute_render_inspect(editor: &Editor, args: &serde_json::Value) -> Resu
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
+
+pub fn execute_trigger_hook(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let hook_name = args
+        .get("hook_name")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'hook_name' parameter")?;
+
+    if !mae_core::hooks::HOOK_NAMES.contains(&hook_name) {
+        return Err(format!("Invalid hook name: '{}'", hook_name));
+    }
+
+    editor.fire_hook(hook_name);
+    Ok(format!("Hook '{}' triggered", hook_name))
+}
+
+pub fn execute_org_cycle(editor: &mut Editor) -> Result<String, String> {
+    editor.org_cycle();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_org_todo_cycle(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let forward = args
+        .get("forward")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    editor.org_todo_cycle(forward);
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_org_open_link(editor: &mut Editor) -> Result<String, String> {
+    editor.org_open_link();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_visual_buffer_add_rect(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    use mae_core::visual_buffer::VisualElement;
+
+    let x = args
+        .get("x")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'x'")? as f32;
+    let y = args
+        .get("y")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'y'")? as f32;
+    let w = args
+        .get("w")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'w'")? as f32;
+    let h = args
+        .get("h")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'h'")? as f32;
+    let fill = args
+        .get("fill")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let stroke = args
+        .get("stroke")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let buf_idx = editor.active_buffer_idx();
+    ensure_visual_buffer(editor, buf_idx)?;
+
+    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+        vb.add(VisualElement::Rect {
+            x,
+            y,
+            w,
+            h,
+            fill,
+            stroke,
+        });
+        Ok(format!("Added rectangle at ({}, {})", x, y))
+    } else {
+        Err("Visual state missing".into())
+    }
+}
+
+pub fn execute_visual_buffer_add_line(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    use mae_core::visual_buffer::VisualElement;
+
+    let x1 = args
+        .get("x1")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'x1'")? as f32;
+    let y1 = args
+        .get("y1")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'y1'")? as f32;
+    let x2 = args
+        .get("x2")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'x2'")? as f32;
+    let y2 = args
+        .get("y2")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'y2'")? as f32;
+    let color = args
+        .get("color")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'color'")?
+        .to_string();
+    let thickness = args
+        .get("thickness")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
+
+    let buf_idx = editor.active_buffer_idx();
+    ensure_visual_buffer(editor, buf_idx)?;
+
+    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+        vb.add(VisualElement::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            color,
+            thickness,
+        });
+        Ok(format!(
+            "Added line from ({}, {}) to ({}, {})",
+            x1, y1, x2, y2
+        ))
+    } else {
+        Err("Visual state missing".into())
+    }
+}
+
+pub fn execute_visual_buffer_add_circle(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    use mae_core::visual_buffer::VisualElement;
+
+    let cx = args
+        .get("cx")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'cx'")? as f32;
+    let cy = args
+        .get("cy")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'cy'")? as f32;
+    let r = args
+        .get("r")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'r'")? as f32;
+    let fill = args
+        .get("fill")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let stroke = args
+        .get("stroke")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let buf_idx = editor.active_buffer_idx();
+    ensure_visual_buffer(editor, buf_idx)?;
+
+    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+        vb.add(VisualElement::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+        });
+        Ok(format!("Added circle at ({}, {})", cx, cy))
+    } else {
+        Err("Visual state missing".into())
+    }
+}
+
+pub fn execute_visual_buffer_add_text(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    use mae_core::visual_buffer::VisualElement;
+
+    let x = args
+        .get("x")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'x'")? as f32;
+    let y = args
+        .get("y")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'y'")? as f32;
+    let text = args
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'text'")?
+        .to_string();
+    let font_size = args
+        .get("font_size")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'font_size'")? as f32;
+    let color = args
+        .get("color")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'color'")?
+        .to_string();
+
+    let buf_idx = editor.active_buffer_idx();
+    ensure_visual_buffer(editor, buf_idx)?;
+
+    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+        vb.add(VisualElement::Text {
+            x,
+            y,
+            text,
+            font_size,
+            color,
+        });
+        Ok(format!("Added text at ({}, {})", x, y))
+    } else {
+        Err("Visual state missing".into())
+    }
+}
+
+fn ensure_visual_buffer(editor: &mut Editor, buf_idx: usize) -> Result<(), String> {
+    if editor.buffers[buf_idx].kind != mae_core::BufferKind::Visual {
+        // Auto-convert current buffer to visual if it's a scratch buffer
+        if (editor.buffers[buf_idx].name == "[scratch]" || editor.buffers[buf_idx].name == "*AI*")
+            && !editor.buffers[buf_idx].modified
+        {
+            editor.buffers[buf_idx].kind = mae_core::BufferKind::Visual;
+            editor.buffers[buf_idx].visual = Some(mae_core::visual_buffer::VisualBuffer::new());
+        } else {
+            return Err("Active buffer is not a visual buffer".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn execute_visual_buffer_clear(editor: &mut Editor) -> Result<String, String> {
+    let buf_idx = editor.active_buffer_idx();
+    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+        vb.clear();
+        Ok("Visual buffer cleared".into())
+    } else {
+        Err("Active buffer is not a visual buffer".into())
+    }
+}

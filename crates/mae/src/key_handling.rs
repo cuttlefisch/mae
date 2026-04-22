@@ -63,9 +63,17 @@ pub fn handle_key_from_keypress(
     kp: KeyPress,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     let key_event = keypress_to_crossterm(&kp);
-    handle_key(editor, scheme, key_event, pending_keys, ai_tx);
+    handle_key(
+        editor,
+        scheme,
+        key_event,
+        pending_keys,
+        ai_tx,
+        pending_interactive_event,
+    );
 }
 
 /// Convert a crossterm KeyEvent into a mae_core KeyPress.
@@ -105,13 +113,53 @@ fn is_splash_visible(editor: &Editor) -> bool {
     editor.active_buffer().kind == mae_core::BufferKind::Dashboard
 }
 
+use crate::ai_event_handler::PendingInteractiveEvent;
+
 pub fn handle_key(
     editor: &mut Editor,
     scheme: &mut SchemeRuntime,
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
+    // Double Esc to cancel AI
+    if key.code == KeyCode::Esc && editor.ai_streaming {
+        let now = std::time::Instant::now();
+        if let Some(last) = editor.last_esc_time {
+            if now.duration_since(last).as_millis() < 500 {
+                editor.ai_cancel_requested = true;
+                editor.set_status("AI interrupted (double-esc)");
+                editor.last_esc_time = None;
+                return;
+            }
+        }
+        editor.last_esc_time = Some(now);
+    } else if key.code != KeyCode::Esc {
+        editor.last_esc_time = None;
+    }
+
+    // Toggle collapse in conversation buffers (Normal mode)
+    if editor.mode == Mode::Normal {
+        let idx = editor.active_buffer_idx();
+        if editor.buffers[idx].conversation.is_some()
+            && (key.code == KeyCode::Enter || key.code == KeyCode::Tab)
+        {
+            let win = editor.window_mgr.focused_window();
+            let row = win.cursor_row;
+            if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                let lines = conv.rendered_lines();
+                if let Some(line) = lines.get(row) {
+                    if let Some(entry_idx) = line.entry_index {
+                        conv.toggle_collapsed(entry_idx);
+                        editor.sync_conversation_buffer_rope();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // Input lock is now checked at the event loop level (main.rs) so it
     // covers all modes including ShellInsert. By the time we get here,
     // input_lock is guaranteed None (or the mode is ShellInsert, which
@@ -181,14 +229,24 @@ pub fn handle_key(
         Mode::Normal => handle_normal_mode(editor, scheme, key, pending_keys),
         Mode::Insert => handle_insert_mode(editor, scheme, key, pending_keys),
         Mode::Visual(_) => handle_visual_mode(editor, scheme, key, pending_keys),
-        Mode::Command => handle_command_mode(editor, scheme, key, pending_keys, ai_tx),
+        Mode::Command => {
+            handle_command_mode(
+                editor,
+                scheme,
+                key,
+                pending_keys,
+                ai_tx,
+                pending_interactive_event,
+            );
+        }
         Mode::ConversationInput => {
-            handle_conversation_input(editor, key, ai_tx);
+            handle_conversation_input(editor, scheme, key, ai_tx, pending_interactive_event);
         }
         Mode::Search => handle_search_mode(editor, key),
         Mode::FilePicker => handle_file_picker_mode(editor, key),
         Mode::FileBrowser => handle_file_browser_mode(editor, key),
         Mode::CommandPalette => handle_command_palette_mode(editor, scheme, key),
+        Mode::GitStatus => handle_git_status_mode(editor, key),
         Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
     }
 
@@ -292,17 +350,17 @@ fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str)
 fn handle_search_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.search_input.clear();
             editor.search_state.highlight_active = false;
         }
         KeyCode::Enter => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.execute_search();
         }
         KeyCode::Backspace => {
             if editor.search_input.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.search_input.pop();
             }
@@ -318,7 +376,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
     let picker = match editor.file_picker.as_mut() {
         Some(p) => p,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -326,13 +384,13 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             editor.file_picker = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
             if let Some(path) = picker.selected_path() {
                 let creating = picker.query_selected && !path.exists();
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 if creating {
                     // Create parent directories and an empty file, then open it.
                     if let Some(parent) = path.parent() {
@@ -348,7 +406,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
                 }
             } else {
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.set_status("No file selected");
             }
         }
@@ -377,7 +435,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Backspace => {
             if picker.query.is_empty() {
                 editor.file_picker = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 picker.query.pop();
                 picker.update_filter();
@@ -404,7 +462,7 @@ fn handle_file_picker_mode(editor: &mut Editor, key: KeyEvent) {
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             editor.file_picker = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char(ch) => {
             picker.query.push(ch);
@@ -433,7 +491,7 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
     let browser = match editor.file_browser.as_mut() {
         Some(b) => b,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -443,7 +501,7 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
         match key.code {
             KeyCode::Char('c') => {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 return;
             }
             KeyCode::Char('j') => {
@@ -466,16 +524,16 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             editor.file_browser = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char('q') if browser.query.is_empty() => {
             editor.file_browser = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter | KeyCode::Char('l') if browser.query.is_empty() => {
             if let Activation::OpenFile(path) = browser.activate() {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.open_file(&path);
             }
             // Descended / Nothing: stay in browser mode with refreshed listing.
@@ -499,12 +557,12 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
                     browser.refresh();
                 } else if let Activation::OpenFile(path) = browser.activate() {
                     editor.file_browser = None;
-                    editor.mode = Mode::Normal;
+                    editor.set_mode(Mode::Normal);
                     editor.open_file(&path);
                 }
             } else if let Activation::OpenFile(path) = browser.activate() {
                 editor.file_browser = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
                 editor.open_file(&path);
             }
         }
@@ -533,6 +591,70 @@ fn handle_file_browser_mode(editor: &mut Editor, key: KeyEvent) {
     }
 }
 
+fn handle_git_status_mode(editor: &mut Editor, key: KeyEvent) {
+    let buf_idx = editor.active_buffer_idx();
+    // Ensure we are actually in a GitStatus buffer
+    if editor.buffers[buf_idx].kind != mae_core::BufferKind::GitStatus {
+        editor.set_mode(Mode::Normal);
+        return;
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            editor.set_mode(Mode::Normal);
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            editor.dispatch_builtin("move-down");
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            editor.dispatch_builtin("move-up");
+        }
+        KeyCode::Char('s') => {
+            let win = editor.window_mgr.focused_window();
+            let path = editor.buffers[buf_idx]
+                .git_status
+                .as_ref()
+                .and_then(|view| view.lines.get(win.cursor_row))
+                .and_then(|line| line.file_path.clone());
+
+            if let Some(p) = path {
+                editor.git_stage_file(&p);
+            }
+        }
+        KeyCode::Char('u') => {
+            let win = editor.window_mgr.focused_window();
+            let path = editor.buffers[buf_idx]
+                .git_status
+                .as_ref()
+                .and_then(|view| view.lines.get(win.cursor_row))
+                .and_then(|line| line.file_path.clone());
+
+            if let Some(p) = path {
+                editor.git_unstage_file(&p);
+            }
+        }
+        KeyCode::Char('g') => {
+            editor.git_status();
+        }
+        KeyCode::Enter => {
+            let win = editor.window_mgr.focused_window();
+            let target = editor.buffers[buf_idx]
+                .git_status
+                .as_ref()
+                .and_then(|view| {
+                    view.lines
+                        .get(win.cursor_row)
+                        .and_then(|line| line.file_path.as_ref().map(|p| view.repo_root.join(p)))
+                });
+
+            if let Some(full_path) = target {
+                editor.open_file(full_path);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, key: KeyEvent) {
     // Pull the selected command name out *before* doing anything that
     // might need a mutable borrow on `editor` (like closing the palette
@@ -540,7 +662,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
     let palette = match editor.command_palette.as_mut() {
         Some(p) => p,
         None => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             return;
         }
     };
@@ -548,14 +670,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
     match key.code {
         KeyCode::Esc => {
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
             let name = palette.selected_name().map(|s| s.to_string());
             let purpose = palette.purpose;
             let query = palette.query.clone();
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             match (name, purpose) {
                 (Some(cmd), PalettePurpose::Execute) => dispatch_command(editor, scheme, &cmd),
                 (Some(cmd), PalettePurpose::Describe) => {
@@ -582,6 +704,14 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                     editor.set_status(format!("Splash art set to: {}", art));
                     crate::config::persist_editor_preference("splash_art", &art);
                 }
+                (Some(mode), PalettePurpose::AiMode) => {
+                    let _ = editor.set_option("ai-mode", &mode);
+                    crate::config::persist_editor_preference("ai.mode", &mode);
+                }
+                (Some(profile), PalettePurpose::AiProfile) => {
+                    let _ = editor.set_option("ai-profile", &profile);
+                    crate::config::persist_editor_preference("ai.profile", &profile);
+                }
                 (Some(root_str), PalettePurpose::SwitchProject) => {
                     editor.add_project(&root_str);
                 }
@@ -605,7 +735,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         KeyCode::Backspace => {
             if palette.query.is_empty() {
                 editor.command_palette = None;
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 palette.query.pop();
                 palette.update_filter();
@@ -619,7 +749,7 @@ fn handle_command_palette_mode(editor: &mut Editor, scheme: &mut SchemeRuntime, 
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             editor.command_palette = None;
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
         }
         KeyCode::Char(ch) => {
             palette.query.push(ch);
@@ -656,6 +786,7 @@ fn handle_keymap_mode(
         | Mode::FilePicker
         | Mode::FileBrowser
         | Mode::CommandPalette => "command",
+        Mode::GitStatus => "git-status",
         Mode::ShellInsert => return, // Handled by main.rs handle_shell_key
     };
 
@@ -1108,7 +1239,7 @@ fn handle_normal_mode(
                 return;
             }
             KeyCode::Char('i') | KeyCode::Char('a') if !ctrl => {
-                editor.mode = Mode::ConversationInput;
+                editor.set_mode(Mode::ConversationInput);
                 editor.count_prefix = None;
                 return;
             }
@@ -1340,7 +1471,11 @@ fn handle_insert_mode(
     handle_keymap_mode(editor, scheme, key, pending_keys);
 }
 
-fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>) {
+fn submit_conversation_prompt(
+    editor: &mut Editor,
+    ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
+) {
     let buf_idx = editor.active_buffer_idx();
 
     // Reject submissions while the previous turn is still streaming.
@@ -1354,7 +1489,7 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
         None => (false, false),
     };
     if !has_input {
-        editor.mode = Mode::Normal;
+        editor.set_mode(Mode::Normal);
         return;
     }
     if already_streaming {
@@ -1371,11 +1506,37 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
             conv.input_line.clear();
             conv.input_cursor = 0;
             conv.scroll_to_bottom();
-            conv.streaming = true;
-            conv.streaming_start = Some(std::time::Instant::now());
+
+            // Only set streaming true if we are starting a NEW prompt turn,
+            // not when fulfilling an interactive request.
+            if pending_interactive_event.is_none() {
+                conv.streaming = true;
+                conv.streaming_start = Some(std::time::Instant::now());
+            }
             input
         })
         .unwrap_or_default();
+
+    editor.sync_conversation_buffer_rope();
+
+    // If we have a pending interactive event, fulfill it instead of sending a prompt
+    if let Some(event) = pending_interactive_event.take() {
+        match event {
+            PendingInteractiveEvent::AskUser(reply) => {
+                let _ = reply.send(input);
+                editor.set_status("[AI] User reply sent");
+            }
+            PendingInteractiveEvent::ProposeChanges(reply) => {
+                // If the user types something while changes are proposed,
+                // we'll assume they are rejecting or ignored for now.
+                // In Phase 4, we'll add :ai-accept / :ai-reject commands.
+                let _ = reply.send(false);
+                editor.set_status("[AI] Changes rejected via chat");
+            }
+        }
+        editor.set_mode(Mode::Normal);
+        return;
+    }
 
     if let Some(tx) = ai_tx {
         if tx.try_send(AiCommand::Prompt(input)).is_err() {
@@ -1389,23 +1550,21 @@ fn conv_submit(editor: &mut Editor, ai_tx: &Option<tokio::sync::mpsc::Sender<AiC
             conv.end_streaming();
         }
     }
-    editor.mode = Mode::Normal;
+    editor.set_mode(Mode::Normal);
 }
 
 fn handle_conversation_input(
     editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
     key: KeyEvent,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     match key.code {
-        // --- Mode transitions ---
-        KeyCode::Esc => {
-            editor.mode = Mode::Normal;
-        }
         KeyCode::Enter => {
-            conv_submit(editor, ai_tx);
+            submit_conversation_prompt(editor, ai_tx, pending_interactive_event);
         }
 
         // --- Cancel / quit ---
@@ -1536,7 +1695,16 @@ fn handle_conversation_input(
             }
         }
 
-        // --- Regular character insertion ---
+        // --- Cycle AI Mode ---
+        KeyCode::BackTab => {
+            editor.ai_mode = match editor.ai_mode.as_str() {
+                "manual" => "auto-accept".into(),
+                "auto-accept" => "plan".into(),
+                _ => "manual".into(),
+            };
+            editor.set_status(format!("[AI] Mode: {}", editor.ai_mode));
+        }
+
         KeyCode::Char(ch) if !ctrl => {
             let buf_idx = editor.active_buffer_idx();
             if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
@@ -1546,7 +1714,15 @@ fn handle_conversation_input(
             }
         }
 
-        _ => {}
+        KeyCode::Esc => {
+            editor.set_mode(Mode::Normal);
+        }
+
+        _ => {
+            // Fall through to standard keymap handling (Command keymap)
+            // for unhandled keys, allowing custom bindings (like F1) in the AI prompt.
+            handle_keymap_mode(editor, scheme, key, &mut Vec::new());
+        }
     }
 }
 
@@ -1571,26 +1747,65 @@ pub fn handle_command_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pending_interactive_event: &mut Option<PendingInteractiveEvent>,
 ) {
     pending_keys.clear();
     match key.code {
         KeyCode::Esc => {
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
         }
         KeyCode::Enter => {
             let cmd = editor.command_line.clone();
-            editor.mode = Mode::Normal;
+            editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
 
             // Record in command history before executing
             editor.push_command_history(&cmd);
 
+            // :ai-accept — approve proposed changes
+            if cmd == "ai-accept" {
+                if let Some(event) = pending_interactive_event.take() {
+                    match event {
+                        PendingInteractiveEvent::ProposeChanges(reply) => {
+                            let _ = reply.send(true);
+                            editor.set_status("[AI] Changes accepted");
+                        }
+                        PendingInteractiveEvent::AskUser(reply) => {
+                            let _ = reply.send("User accepted without typing".into());
+                            editor.set_status("[AI] User accepted");
+                        }
+                    }
+                } else {
+                    editor.set_status("No pending AI interaction to accept");
+                }
+                return;
+            }
+
+            // :ai-reject — reject proposed changes
+            if cmd == "ai-reject" {
+                if let Some(event) = pending_interactive_event.take() {
+                    match event {
+                        PendingInteractiveEvent::ProposeChanges(reply) => {
+                            let _ = reply.send(false);
+                            editor.set_status("[AI] Changes rejected");
+                        }
+                        PendingInteractiveEvent::AskUser(reply) => {
+                            let _ = reply.send("User rejected/cancelled".into());
+                            editor.set_status("[AI] User rejected");
+                        }
+                    }
+                } else {
+                    editor.set_status("No pending AI interaction to reject");
+                }
+                return;
+            }
+
             // :ai-status — show AI configuration
             if cmd == "ai-status" {
-                let config = load_ai_config();
+                let config = load_ai_config(editor);
                 if let Some(ref cfg) = config {
                     editor.set_status(format!(
                         "AI: provider={}, model={}, connected={}",
@@ -1768,21 +1983,21 @@ pub fn handle_command_mode(
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if editor.command_line.is_empty() {
                 // C-d on empty line = abort (like in shells)
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_delete_forward();
             }
         }
         KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if editor.command_line.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
             }
         }
         KeyCode::Backspace => {
             if editor.command_line.is_empty() {
-                editor.mode = Mode::Normal;
+                editor.set_mode(Mode::Normal);
             } else {
                 editor.cmdline_backspace();
             }

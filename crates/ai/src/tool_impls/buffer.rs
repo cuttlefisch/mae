@@ -87,12 +87,25 @@ pub fn execute_buffer_write(
 }
 
 pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
-    let buf = editor.active_buffer();
-    let win = editor.window_mgr.focused_window();
+    let buf_idx = editor
+        .ai_target_buffer_idx
+        .unwrap_or_else(|| editor.active_buffer_idx());
+    let buf = &editor.buffers[buf_idx];
+
+    // Find a window showing this buffer to get a cursor position.
+    // If multiple windows show it, we use the first one.
+    // If no window shows it (unlikely for active/target), we default to (0,0).
+    let (row, col) = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.buffer_idx == buf_idx)
+        .map(|w| (w.cursor_row, w.cursor_col))
+        .unwrap_or((0, 0));
+
     let info = serde_json::json!({
         "buffer_name": buf.name,
-        "cursor_row": win.cursor_row + 1,
-        "cursor_col": win.cursor_col + 1,
+        "cursor_row": row + 1,
+        "cursor_col": col + 1,
         "line_count": buf.line_count(),
         "modified": buf.modified,
         "mode": format!("{:?}", editor.mode),

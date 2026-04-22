@@ -48,6 +48,7 @@ use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
 use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
 use crate::search::SearchState;
+use crate::syntax::Language;
 use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowManager};
 use crate::Mode;
@@ -330,6 +331,8 @@ pub struct Editor {
     pub break_indent: bool,
     /// String prefix for continuation lines (neovim showbreak). Default "↪ ".
     pub show_break: String,
+    /// Toggle: hide *bold* and /italic/ markers in Org-mode.
+    pub org_hide_emphasis_markers: bool,
     /// Pending agent setup request from `:agent-setup <name>` or `:agent-list`.
     /// The binary drains this and calls `agents::setup_agent()`.
     /// `Some("__list__")` is the sentinel for `:agent-list`.
@@ -342,6 +345,23 @@ pub struct Editor {
     /// True while the AI session is actively streaming (text chunks or tool
     /// calls). Used to distinguish "AI thinking" from "idle but locked".
     pub ai_streaming: bool,
+    /// Set to true when the user requests AI cancellation (e.g. via `ai-cancel` command).
+    /// The event loop will read and reset this flag, sending the actual cancel command to the AI thread.
+    pub ai_cancel_requested: bool,
+    /// Last time the Escape key was pressed (for double-esc detection).
+    pub last_esc_time: Option<std::time::Instant>,
+    /// AI operating mode (manual, auto-accept, plan).
+    pub ai_mode: String,
+    /// Active prompt profile name.
+    pub ai_profile: String,
+    /// Current round in the AI tool loop.
+    pub ai_current_round: usize,
+    /// Current transaction start index in history.
+    pub ai_transaction_start_idx: Option<usize>,
+    /// AI's target buffer context. When set, buffer/LSP tools operate here
+    /// instead of the human-focused active buffer. This allows the AI to
+    /// edit files while the human watches the *AI* conversation.
+    pub ai_target_buffer_idx: Option<usize>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -350,6 +370,10 @@ pub struct Editor {
     pub renderer_name: String,
     /// GUI font size in points. Default 14.0. Set via config.toml `[editor] font_size`.
     pub gui_font_size: f32,
+    /// GUI primary font family. Default "". Set via config.toml `[editor] font_family`.
+    pub gui_font_family: String,
+    /// GUI icon font family (fallback). Default "". Set via config.toml `[editor] icon_font_family`.
+    pub gui_icon_font_family: String,
     /// Registry of all configurable editor options — single source of truth
     /// for metadata, aliases, types, defaults, and config.toml paths.
     pub option_registry: OptionRegistry,
@@ -366,6 +390,15 @@ pub struct Editor {
     /// AI editor/agent command to launch in a shell (e.g. "claude", "aider").
     /// Used by `open-ai-agent` to spawn an agent shell.
     pub ai_editor: String,
+    /// AI provider name: "claude", "openai", "gemini", "ollama", "deepseek".
+    /// Set via `(set-option! "ai-provider" "deepseek")` or config.toml.
+    pub ai_provider: String,
+    /// AI model identifier. Empty = use provider default.
+    pub ai_model: String,
+    /// Shell command whose stdout is the API key (e.g. "pass show deepseek/api-key").
+    pub ai_api_key_command: String,
+    /// Base URL override for the AI API.
+    pub ai_base_url: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
     /// Shared heartbeat counter — incremented each event loop tick by the
@@ -484,13 +517,27 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_cancel_requested: false,
+            last_esc_time: None,
+            ai_mode: "manual".to_string(),
+            ai_profile: "pair-programmer".to_string(),
+            ai_current_round: 0,
+            ai_transaction_start_idx: None,
+            ai_target_buffer_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_family: String::new(),
+            gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
+            ai_provider: String::new(),
+            ai_model: String::new(),
+            ai_api_key_command: String::new(),
+            ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
@@ -614,13 +661,27 @@ impl Editor {
             word_wrap: false,
             break_indent: true,
             show_break: "↪ ".to_string(),
+            org_hide_emphasis_markers: false,
             pending_agent_setup: None,
             input_lock: InputLock::None,
             ai_streaming: false,
+            ai_cancel_requested: false,
+            last_esc_time: None,
+            ai_mode: "manual".to_string(),
+            ai_profile: "pair-programmer".to_string(),
+            ai_current_round: 0,
+            ai_transaction_start_idx: None,
+            ai_target_buffer_idx: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_family: String::new(),
+            gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
+            ai_provider: String::new(),
+            ai_model: String::new(),
+            ai_api_key_command: String::new(),
+            ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
@@ -635,8 +696,20 @@ impl Editor {
 
     /// Get the keymap for the current mode.
     pub fn current_keymap(&self) -> Option<&Keymap> {
+        let idx = self.active_buffer_idx();
+        let kind = self.buffers[idx].kind;
+        let lang = self.syntax.language_of(idx);
+
         let name = match self.mode {
-            Mode::Normal => "normal",
+            Mode::Normal => {
+                if kind == crate::buffer::BufferKind::GitStatus {
+                    "git-status"
+                } else if lang == Some(Language::Org) {
+                    "org"
+                } else {
+                    "normal"
+                }
+            }
             Mode::Insert => "insert",
             Mode::Visual(_) => "visual",
             Mode::Command
@@ -645,6 +718,7 @@ impl Editor {
             | Mode::FilePicker
             | Mode::FileBrowser
             | Mode::CommandPalette => "command",
+            Mode::GitStatus => "git-status",
             Mode::ShellInsert => return None, // Keys handled by binary shell layer
         };
         self.keymaps.get(name)
@@ -653,8 +727,8 @@ impl Editor {
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
     pub fn active_project_root(&self) -> Option<&std::path::Path> {
         let buf = self.active_buffer();
-        if let Some(ref root) = buf.project_root {
-            return Some(root);
+        if let Some(root) = &buf.project_root {
+            return Some(root.as_path());
         }
         self.project.as_ref().map(|p| p.root.as_path())
     }
@@ -668,14 +742,23 @@ impl Editor {
             "word_wrap" => self.word_wrap.to_string(),
             "break_indent" => self.break_indent.to_string(),
             "show_break" => self.show_break.clone(),
+            "org_hide_emphasis_markers" => self.org_hide_emphasis_markers.to_string(),
             "show_fps" => self.show_fps.to_string(),
             "font_size" => self.gui_font_size.to_string(),
+            "font_family" => self.gui_font_family.clone(),
+            "icon_font_family" => self.gui_icon_font_family.clone(),
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
             "ai_tier" => self.ai_permission_tier.clone(),
             "ai_editor" => self.ai_editor.clone(),
+            "ai_provider" => self.ai_provider.clone(),
+            "ai_model" => self.ai_model.clone(),
+            "ai_api_key_command" => self.ai_api_key_command.clone(),
+            "ai_base_url" => self.ai_base_url.clone(),
+            "ai_mode" => self.ai_mode.clone(),
+            "ai_profile" => self.ai_profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             _ => return None,
         };
@@ -705,6 +788,9 @@ impl Editor {
             "show_break" => {
                 self.show_break = value.to_string();
             }
+            "org_hide_emphasis_markers" => {
+                self.org_hide_emphasis_markers = parse_option_bool(value)?;
+            }
             "show_fps" => {
                 self.show_fps = parse_option_bool(value)?;
             }
@@ -716,6 +802,12 @@ impl Editor {
                     return Err("Font size must be between 6 and 72".into());
                 }
                 self.gui_font_size = size;
+            }
+            "font_family" => {
+                self.gui_font_family = value.to_string();
+            }
+            "icon_font_family" => {
+                self.gui_icon_font_family = value.to_string();
             }
             "theme" => {
                 self.set_theme_by_name(value);
@@ -753,6 +845,31 @@ impl Editor {
             },
             "ai_editor" => {
                 self.ai_editor = value.to_string();
+            }
+            "ai_provider" => {
+                self.ai_provider = value.to_string();
+            }
+            "ai_model" => {
+                self.ai_model = value.to_string();
+            }
+            "ai_api_key_command" => {
+                self.ai_api_key_command = value.to_string();
+            }
+            "ai_base_url" => {
+                self.ai_base_url = value.to_string();
+            }
+            "ai_mode" => {
+                let valid = ["standard", "plan", "auto-accept"];
+                if !valid.contains(&value) {
+                    return Err(format!(
+                        "Invalid AI mode: '{}' (expected: standard, plan, auto-accept)",
+                        value
+                    ));
+                }
+                self.ai_mode = value.to_string();
+            }
+            "ai_profile" => {
+                self.ai_profile = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;
@@ -996,6 +1113,25 @@ impl Editor {
             .find_map(|b| b.conversation.as_mut())
     }
 
+    /// Set the editor mode and fire the `mode-change` hook.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.fire_hook("mode-change");
+        }
+    }
+
+    /// Sync the rope of the first buffer containing a conversation.
+    pub fn sync_conversation_buffer_rope(&mut self) {
+        if let Some(buf) = self
+            .buffers
+            .iter_mut()
+            .find(|b| b.kind == crate::buffer::BufferKind::Conversation)
+        {
+            buf.sync_conversation_rope();
+        }
+    }
+
     /// Index of the conversation buffer, creating `*AI*` if none exists.
     /// Used by both interactive open and programmatic load to keep the
     /// "find or create by kind" logic in one place.
@@ -1020,7 +1156,8 @@ impl Editor {
             .position(|b| b.kind == crate::buffer::BufferKind::Help)
         {
             if let Some(view) = self.buffers[idx].help_view.as_mut() {
-                view.navigate_to(node_id.to_string());
+                let v: &mut crate::help_view::HelpView = view;
+                v.navigate_to(node_id.to_string());
             }
             return idx;
         }
@@ -1066,6 +1203,76 @@ impl Editor {
         true
     }
 
+    /// Returns true if the buffer at `idx` is a Conversation buffer.
+    pub fn is_conversation_buffer(&self, idx: usize) -> bool {
+        idx < self.buffers.len() && self.buffers[idx].kind == crate::BufferKind::Conversation
+    }
+
+    /// Switch to buffer `idx` but avoid stealing focus from a conversation window.
+    ///
+    /// If the focused window shows a conversation buffer, the new buffer is
+    /// routed to another window (or a new split is created). This keeps `*AI*`
+    /// visible during AI tool calls that open/switch files.
+    pub fn switch_to_buffer_non_conversation(&mut self, idx: usize) -> bool {
+        if idx >= self.buffers.len() {
+            return false;
+        }
+
+        self.ai_target_buffer_idx = Some(idx);
+
+        // 1. Is this buffer already visible?
+        if self.window_mgr.iter_windows().any(|w| w.buffer_idx == idx) {
+            return true;
+        }
+
+        // 2. Can we put it in a non-focused window that isn't a conversation?
+        let focused_id = self.window_mgr.focused_id();
+        let other = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id != focused_id && !self.is_conversation_buffer(w.buffer_idx))
+            .map(|w| w.id);
+
+        if let Some(other_id) = other {
+            if let Some(win) = self.window_mgr.window_mut(other_id) {
+                win.buffer_idx = idx;
+                win.cursor_row = 0;
+                win.cursor_col = 0;
+            }
+            return true;
+        }
+
+        // 3. Fallback: split the focused window if it's conversation,
+        // or just some window if we can't find a better spot.
+        let area = self.default_area();
+        match self
+            .window_mgr
+            .split(crate::window::SplitDirection::Vertical, idx, area)
+        {
+            Ok(_new_id) => true,
+            Err(_) => {
+                // Too small to split — if we are in conversation, we HAVE to steal focus
+                // but we try to avoid it.
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
+                    self.switch_to_buffer(idx)
+                } else {
+                    // Not in conversation, so just keep focus where it is.
+                    true
+                }
+            }
+        }
+    }
+
+    /// Open a file without stealing focus from a conversation window.
+    ///
+    /// The file is opened "hidden" (not assigned to focused window), then
+    /// routed via `switch_to_buffer_non_conversation`.
+    pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
+        if let Some(new_idx) = self.open_file_hidden(path) {
+            self.switch_to_buffer_non_conversation(new_idx);
+        }
+    }
+
     /// Save current mode to the active buffer before switching away.
     pub fn save_mode_to_buffer(&mut self) {
         let idx = self.active_buffer_idx();
@@ -1094,7 +1301,7 @@ impl Editor {
                 _ => !matches!(saved, Mode::ShellInsert),
             };
             if valid {
-                self.mode = saved;
+                self.set_mode(saved);
                 return;
             }
         }
@@ -1102,14 +1309,33 @@ impl Editor {
         // No saved mode or invalid — use default.
         match kind {
             crate::BufferKind::Shell => {
-                self.mode = Mode::ShellInsert;
+                self.set_mode(Mode::ShellInsert);
+            }
+            crate::BufferKind::GitStatus => {
+                self.set_mode(Mode::GitStatus);
             }
             _ => {
-                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
-                    self.mode = Mode::Normal;
+                if matches!(
+                    self.mode,
+                    Mode::ShellInsert | Mode::ConversationInput | Mode::GitStatus
+                ) {
+                    self.set_mode(Mode::Normal);
                 }
             }
         }
+    }
+
+    /// Reset the AI session: request cancellation, clear state, and end streaming.
+    pub fn reset_ai_session(&mut self) {
+        self.ai_cancel_requested = true;
+        self.ai_streaming = false;
+        self.ai_current_round = 0;
+        self.ai_transaction_start_idx = None;
+        if let Some(conv) = self.conversation_mut() {
+            conv.end_streaming();
+            conv.push_system("[AI Session Reset]");
+        }
+        self.input_lock = crate::InputLock::None;
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
@@ -1137,6 +1363,19 @@ impl Editor {
     /// Consume the count prefix, returning the count (default 1).
     pub fn take_count(&mut self) -> usize {
         self.count_prefix.take().unwrap_or(1)
+    }
+
+    /// Calculate the actual inner height (text rows) for the focused window.
+    /// This accounts for the window manager layout AND window borders.
+    pub fn focused_window_viewport_height(&self, total_area: Rect) -> usize {
+        let rects = self.window_mgr.layout_rects(total_area);
+        let focused_id = self.window_mgr.focused_id();
+        if let Some((_, rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+            // Every window currently has a top and bottom border (2 rows total).
+            (rect.height as usize).saturating_sub(2)
+        } else {
+            (total_area.height as usize).saturating_sub(2)
+        }
     }
 
     /// Default area for window operations when we don't have the real terminal size.
@@ -1253,7 +1492,7 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             self.visual_anchor_row = win.cursor_row;
             self.visual_anchor_col = win.cursor_col;
-            self.mode = crate::Mode::Visual(crate::VisualType::Char);
+            self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
         }
 
         let win = self.window_mgr.focused_window_mut();
@@ -1289,12 +1528,11 @@ impl Editor {
 
         match kind {
             crate::BufferKind::Conversation => {
-                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
-                    if delta > 0 {
-                        conv.scroll_up(lines * scroll_speed);
-                    } else {
-                        conv.scroll_down(lines * scroll_speed);
-                    }
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_add(lines * scroll_speed);
+                } else {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
                 }
             }
             crate::BufferKind::Shell => {

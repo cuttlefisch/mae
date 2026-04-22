@@ -342,6 +342,16 @@ impl CommandRegistry {
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
         reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
+        reg.register_builtin("ai-accept", "Accept proposed AI changes");
+        reg.register_builtin("ai-reject", "Reject proposed AI changes");
+        reg.register_builtin(
+            "ai-set-mode",
+            "Switch the AI operating mode (standard, plan, auto-accept)",
+        );
+        reg.register_builtin(
+            "ai-set-profile",
+            "Switch the active AI prompt profile (pair-programmer, explorer, planner, reviewer)",
+        );
         reg.register_builtin("describe-key", "Show what a key does");
         reg.register_builtin("describe-command", "Show command documentation");
         reg.register_builtin("show-registers", "Show named registers");
@@ -566,6 +576,10 @@ impl CommandRegistry {
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
         reg.register_builtin("edit-config", "Open init.scm config for editing (SPC f c)");
         reg.register_builtin("edit-settings", "Open config.toml settings (SPC f C)");
+        reg.register_builtin(
+            "setup-wizard",
+            "Show how to re-run the first-run setup wizard",
+        );
         reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
         reg.register_builtin(
             "debug-mode",
@@ -710,6 +724,7 @@ impl CommandRegistry {
         reg.register_builtin("increase-font-size", "Increase GUI font size by 1pt");
         reg.register_builtin("decrease-font-size", "Decrease GUI font size by 1pt");
         reg.register_builtin("reset-font-size", "Reset GUI font size to default (14pt)");
+        reg.register_builtin("debug-path", "Show current PATH environment variable");
 
         // AI agent launcher
         reg.register_builtin("open-ai-agent", "Open AI agent in a shell terminal");

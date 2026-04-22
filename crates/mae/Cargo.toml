@@ -28,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
+dirs = "6.0.0"
 
 [features]
 gui = ["dep:mae-gui", "dep:winit"]

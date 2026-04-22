@@ -1,8 +1,21 @@
 #!/bin/sh
-# Pre-commit hook: catch formatting issues before they reach CI.
+# Pre-commit hook: catch formatting and linting issues before they reach CI.
 # Install with: make setup-hooks
 
+echo "Running pre-commit checks..."
+
+# 1. Format check
 if ! cargo fmt --check --quiet 2>/dev/null; then
-    echo "cargo fmt check failed. Run 'make fmt' to fix."
+    echo "❌ cargo fmt check failed. Run 'make fmt' to fix."
     exit 1
 fi
+
+# 2. Clippy lint check
+# Note: we run clippy on the workspace with default features.
+if ! cargo clippy --workspace --all-targets --all-features -- -D warnings >/dev/null 2>&1; then
+    echo "❌ cargo clippy check failed. Run 'make clippy' to see errors."
+    exit 1
+fi
+
+echo "✅ Pre-commit checks passed."
+exit 0

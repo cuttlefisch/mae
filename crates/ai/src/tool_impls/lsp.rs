@@ -129,17 +129,24 @@ fn resolve_lsp_context(
         language_id_from_path(path).ok_or("No language server configured for this file type")?;
     let uri = path_to_uri(path);
 
-    // Position: args override → cursor position of focused window
+    // Position: args override → cursor position of window showing the buffer
+    let (target_row, target_col) = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.buffer_idx == idx)
+        .map(|w| (w.cursor_row, w.cursor_col))
+        .unwrap_or((0, 0));
+
     let line = args
         .get("line")
         .and_then(|v| v.as_u64())
         .map(|l| l.saturating_sub(1) as u32) // AI sends 1-indexed
-        .unwrap_or_else(|| editor.window_mgr.focused_window().cursor_row as u32);
+        .unwrap_or(target_row as u32);
     let character = args
         .get("character")
         .and_then(|v| v.as_u64())
         .map(|c| c.saturating_sub(1) as u32) // AI sends 1-indexed
-        .unwrap_or_else(|| editor.window_mgr.focused_window().cursor_col as u32);
+        .unwrap_or(target_col as u32);
 
     Ok((uri, language_id, line, character))
 }

@@ -7,6 +7,33 @@ use mae_core::{Editor, NamedColor, ThemeColor, ThemeStyle};
 use skia_safe::{Color4f, Paint};
 
 /// Convert a mae_core `ThemeColor` to a Skia `Color4f`.
+pub fn parse_hex_to_skia(hex: &str) -> Option<Color4f> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some(Color4f::new(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            1.0,
+        ))
+    } else if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+        Some(Color4f::new(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            1.0,
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn theme_color_to_skia(color: &ThemeColor) -> Color4f {
     match color {
         ThemeColor::Rgb(r, g, b) => {
