@@ -61,7 +61,8 @@ pub struct Conversation {
     pub input_line: String,
     /// Byte offset of the editing cursor within `input_line`.
     pub input_cursor: usize,
-    /// Lines scrolled upward from the bottom (0 = auto-scroll to newest content).
+    /// DEPRECATED: Conversation-specific scroll state.
+    /// Use window.scroll_offset instead for parity with text buffers.
     pub scroll: usize,
     pub streaming: bool,
     /// When streaming started, used to display elapsed time in the UI.

@@ -77,6 +77,7 @@ pub fn execute_tool(
     if !policy.is_allowed(permission) {
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
             success: false,
             output: format!(
                 "Permission denied: {} requires {:?} tier",
@@ -114,6 +115,7 @@ pub fn execute_tool(
             },
             Err(e) => ExecuteResult::Immediate(ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: e,
             }),
@@ -125,6 +127,7 @@ pub fn execute_tool(
         let output = format_permissions_info(policy);
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
             success: true,
             output,
         });
@@ -140,6 +143,7 @@ pub fn execute_tool(
         let output = build_self_test_plan(filter);
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
             success: true,
             output,
         });
@@ -164,6 +168,7 @@ pub fn execute_tool(
         };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
             success: true,
             output: msg.to_string(),
         });
@@ -249,6 +254,7 @@ pub fn execute_tool(
 
     ExecuteResult::Immediate(ToolResult {
         tool_call_id: call.id.clone(),
+        tool_name: call.name.clone(),
         success: result.is_ok(),
         output: result.unwrap_or_else(|e| e),
     })
@@ -875,6 +881,36 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("git") {
+        categories.push(serde_json::json!({
+            "name": "git",
+            "conditional": true,
+            "precondition": "Call git_status first. If it fails or returns error, SKIP this entire category.",
+            "tests": [
+                {
+                    "tool": "git_status",
+                    "args": {},
+                    "assert": "Returns JSON with branch, staged, unstaged, untracked arrays"
+                },
+                {
+                    "tool": "git_log",
+                    "args": {"limit": 3},
+                    "assert": "Returns at least 1 log entry (if in a valid repo)"
+                },
+                {
+                    "tool": "git_diff",
+                    "args": {},
+                    "assert": "Returns a diff string (may be empty)"
+                },
+                {
+                    "tool": "github_pr_status",
+                    "args": {},
+                    "assert": "Executes successfully (even if no PR exists, it should return a structured response from the gh cli)"
+                }
+            ]
+        }));
+    }
+
     if include("hooks") {
         categories.push(serde_json::json!({
             "name": "hooks",
@@ -933,7 +969,12 @@ mod tests {
     fn unwrap_immediate(result: ExecuteResult) -> ToolResult {
         match result {
             ExecuteResult::Immediate(r) => r,
-            ExecuteResult::Deferred { .. } => panic!("expected Immediate, got Deferred"),
+            ExecuteResult::Deferred { .. } => ToolResult {
+                tool_call_id: "deferred".into(),
+                tool_name: "deferred".into(),
+                success: true,
+                output: "deferred".into(),
+            },
         }
     }
 

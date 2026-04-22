@@ -300,6 +300,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 None => {
                     let _ = reply.send(ToolResult {
                         tool_call_id: "delegate".into(),
+                        tool_name: "delegate".into(),
                         success: false,
                         output: "AI not configured".into(),
                     });
@@ -346,6 +347,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         AiEvent::SessionComplete { text, .. } => {
                             let _ = reply.send(ToolResult {
                                 tool_call_id: "delegate".into(),
+                                tool_name: "delegate".into(),
                                 success: true,
                                 output: text.clone(),
                             });
@@ -355,6 +357,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         AiEvent::Error(msg) => {
                             let _ = reply.send(ToolResult {
                                 tool_call_id: "delegate".into(),
+                                tool_name: "delegate".into(),
                                 success: false,
                                 output: format!("Sub-agent error: {}", msg),
                             });
@@ -443,6 +446,14 @@ pub fn timeout_deferred_reply(editor: &mut Editor, deferred_ai_reply: &mut Defer
             warn!(?kind, tool_call_id = %tid, "deferred LSP tool call timed out after 15s");
             let result = ToolResult {
                 tool_call_id: tid,
+                tool_name: match kind {
+                    DeferredKind::LspDefinition => "lsp_definition",
+                    DeferredKind::LspReferences => "lsp_references",
+                    DeferredKind::LspHover => "lsp_hover",
+                    DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+                    DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+                }
+                .into(),
                 success: false,
                 output: format!(
                     "LSP request timed out after 15 seconds ({:?}) — server may not be running",

@@ -1325,6 +1325,19 @@ impl Editor {
         }
     }
 
+    /// Reset the AI session: request cancellation, clear state, and end streaming.
+    pub fn reset_ai_session(&mut self) {
+        self.ai_cancel_requested = true;
+        self.ai_streaming = false;
+        self.ai_current_round = 0;
+        self.ai_transaction_start_idx = None;
+        if let Some(conv) = self.conversation_mut() {
+            conv.end_streaming();
+            conv.push_system("[AI Session Reset]");
+        }
+        self.input_lock = crate::InputLock::None;
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
         if !s.is_empty() {
@@ -1515,13 +1528,11 @@ impl Editor {
 
         match kind {
             crate::BufferKind::Conversation => {
-                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
-                    let c: &mut crate::conversation::Conversation = conv;
-                    if delta > 0 {
-                        c.scroll_up(lines * scroll_speed);
-                    } else {
-                        c.scroll_down(lines * scroll_speed);
-                    }
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_add(lines * scroll_speed);
+                } else {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
                 }
             }
             crate::BufferKind::Shell => {

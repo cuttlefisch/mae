@@ -1466,17 +1466,16 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // --- Self-test suite ---
         ToolDefinition {
             name: "self_test_suite".into(),
-            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. Use this to validate that all editor tools work end-to-end. No arguments needed.".into(),
+            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. IMPORTANT: This tool only returns the plan; it does NOT execute the tests. The agent must parse the plan and call the individual tools sequentially to perform the validation. Use 'categories' argument for targeted testing if the full plan is too large.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
                     "categories".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, performance".into(),
+                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance".into(),
                         enum_values: None,
-                    },
-                )]),
+                    },                )]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
@@ -1484,7 +1483,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // --- Input lock ---
         ToolDefinition {
             name: "input_lock".into(),
-            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state, and unlock when done.".into(),
+            description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state. Check current lock status via 'introspect' to avoid redundant calls.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(

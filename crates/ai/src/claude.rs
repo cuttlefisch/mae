@@ -365,6 +365,7 @@ mod tests {
             role: Role::Tool,
             content: MessageContent::ToolResult(ToolResult {
                 tool_call_id: "call_123".into(),
+                tool_name: "test_tool".into(),
                 success: true,
                 output: "result text".into(),
             }),

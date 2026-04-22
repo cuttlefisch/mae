@@ -450,6 +450,11 @@ impl Editor {
                 }
                 true
             }
+            "ai-reset" => {
+                self.reset_ai_session();
+                self.set_status("AI session reset");
+                true
+            }
             "debug-start" => {
                 let arg_str = args.unwrap_or("");
                 let mut parts = arg_str.split_whitespace();

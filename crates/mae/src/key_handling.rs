@@ -240,7 +240,7 @@ pub fn handle_key(
             );
         }
         Mode::ConversationInput => {
-            handle_conversation_input(editor, key, ai_tx, pending_interactive_event);
+            handle_conversation_input(editor, scheme, key, ai_tx, pending_interactive_event);
         }
         Mode::Search => handle_search_mode(editor, key),
         Mode::FilePicker => handle_file_picker_mode(editor, key),
@@ -1555,6 +1555,7 @@ fn submit_conversation_prompt(
 
 fn handle_conversation_input(
     editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
     key: KeyEvent,
     ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pending_interactive_event: &mut Option<PendingInteractiveEvent>,
@@ -1704,7 +1705,6 @@ fn handle_conversation_input(
             editor.set_status(format!("[AI] Mode: {}", editor.ai_mode));
         }
 
-        // --- Regular character insertion ---
         KeyCode::Char(ch) if !ctrl => {
             let buf_idx = editor.active_buffer_idx();
             if let Some(ref mut conv) = editor.buffers[buf_idx].conversation {
@@ -1714,7 +1714,15 @@ fn handle_conversation_input(
             }
         }
 
-        _ => {}
+        KeyCode::Esc => {
+            editor.set_mode(Mode::Normal);
+        }
+
+        _ => {
+            // Fall through to standard keymap handling (Command keymap)
+            // for unhandled keys, allowing custom bindings (like F1) in the AI prompt.
+            handle_keymap_mode(editor, scheme, key, &mut Vec::new());
+        }
     }
 }
 

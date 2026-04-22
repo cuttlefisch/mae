@@ -129,7 +129,7 @@ pub trait AgentProvider: Send + Sync {
 }
 
 /// Response from a provider — text, tool calls, or both.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>,
@@ -141,7 +141,7 @@ pub struct ProviderResponse {
 
 /// Raw token counts reported by the provider. Used by the session
 /// budget tracker together with the static pricing table.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -152,7 +152,7 @@ pub struct Usage {
     pub cache_creation_tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StopReason {
     /// Model finished its response naturally.
     EndTurn,

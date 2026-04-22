@@ -60,6 +60,7 @@ pub struct ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_call_id: String,
+    pub tool_name: String,
     pub success: bool,
     pub output: String,
 }
@@ -248,12 +249,14 @@ mod tests {
     fn tool_result_serde_round_trip() {
         let result = ToolResult {
             tool_call_id: "call_123".into(),
+            tool_name: "buffer_read".into(),
             success: true,
             output: "Hello world".into(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.tool_call_id, "call_123");
+        assert_eq!(parsed.tool_name, "buffer_read");
         assert!(parsed.success);
     }
 

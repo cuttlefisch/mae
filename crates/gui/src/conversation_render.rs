@@ -132,8 +132,24 @@ pub fn render_conversation_window(
         // Wrap lines to fit viewport width
         let screen_lines = wrap_lines(&rendered, inner_width);
 
-        let auto_start = screen_lines.len().saturating_sub(viewport_height);
-        let start = auto_start.saturating_sub(conv.scroll);
+        // Transition: use win.scroll_offset for parity with text buffers.
+        // We still fall back to conv.scroll if offset is 0 to preserve legacy scroll behavior.
+        let start = if _win.scroll_offset > 0 {
+            _win.scroll_offset
+        } else {
+            screen_lines
+                .len()
+                .saturating_sub(viewport_height)
+                .saturating_sub(conv.scroll)
+        };
+
+        // Selection range (char offsets in flattened text)
+        let highlight_selection = matches!(editor.mode, mae_core::Mode::Visual(_));
+        let (sel_start, sel_end) = if highlight_selection && focused {
+            editor.visual_selection_range()
+        } else {
+            (0, 0)
+        };
 
         // Manual indexing loop so InputPrompt cursor rendering can consume
         // all wrapped InputPrompt screen lines at once (fixing duplication).
@@ -145,9 +161,34 @@ pub fn render_conversation_window(
         let mut viewport_row = 0;
         let mut input_prompt_rendered = false;
 
+        // Flatten text for selection mapping if needed.
+        let flat = if highlight_selection {
+            Some(conv.flat_text())
+        } else {
+            None
+        };
+
         while viewport_row < visible.len() {
             let sl = visible[viewport_row];
             let row = inner_row + viewport_row;
+
+            // Selection background for this line
+            if let Some(ref ft) = flat {
+                // Find this line's start in flat text (approximate mapping)
+                // In a perfect world we'd track byte/char offsets during wrap_lines.
+                if let Some(line_start_byte) = ft.find(sl.text) {
+                    let line_start_char = ft[..line_start_byte].chars().count();
+                    let line_end_char = line_start_char + sl.text.chars().count();
+
+                    if sel_start < line_end_char && sel_end > line_start_char {
+                        let s = sel_start.saturating_sub(line_start_char);
+                        let e = (sel_end - line_start_char).min(sl.text.chars().count());
+                        let sel_bg =
+                            theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
+                        canvas.draw_rect_fill(row, inner_col + s, e - s, 1, sel_bg);
+                    }
+                }
+            }
 
             if *sl.style == LineStyle::InputPrompt {
                 let input_fg = theme::ts_fg(editor, "conversation.input");

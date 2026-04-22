@@ -1,0 +1,30 @@
+
+--- RESPONSE ---
+{
+  "text": null,
+  "tool_calls": [
+    {
+      "id": "c1",
+      "name": "shell_exec",
+      "arguments": {
+        "command": "echo ui-test"
+      }
+    }
+  ],
+  "stop_reason": "ToolUse",
+  "usage": null
+}
+--- RESPONSE ---
+{
+  "text": "Ok",
+  "tool_calls": [],
+  "stop_reason": "EndTurn",
+  "usage": null
+}
+--- RESPONSE ---
+{
+  "text": "Hello!",
+  "tool_calls": [],
+  "stop_reason": "EndTurn",
+  "usage": null
+}

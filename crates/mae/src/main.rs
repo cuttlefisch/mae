@@ -919,6 +919,14 @@ async fn run_headless_self_test(
                         drain_lsp_intents(editor, lsp_command_tx);
                         let result = ToolResult {
                             tool_call_id,
+                            tool_name: match kind {
+                                DeferredKind::LspDefinition => "lsp_definition",
+                                DeferredKind::LspReferences => "lsp_references",
+                                DeferredKind::LspHover => "lsp_hover",
+                                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+                                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+                            }
+                            .into(),
                             success: false,
                             output: format!(
                                 "Deferred tool ({:?}) not supported in headless mode",
@@ -1383,6 +1391,7 @@ pub(crate) fn try_complete_deferred(
             };
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_definition".into(),
                 success: true,
                 output: output.to_string(),
             })
@@ -1402,6 +1411,7 @@ pub(crate) fn try_complete_deferred(
             let count = locs.len();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_references".into(),
                 success: true,
                 output: serde_json::json!({"count": count, "references": locs}).to_string(),
             })
@@ -1414,6 +1424,7 @@ pub(crate) fn try_complete_deferred(
             };
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_hover".into(),
                 success: true,
                 output: output.to_string(),
             })
@@ -1438,6 +1449,7 @@ pub(crate) fn try_complete_deferred(
             let count = syms.len();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_workspace_symbol".into(),
                 success: true,
                 output: serde_json::json!({"count": count, "symbols": syms}).to_string(),
             })
@@ -1463,6 +1475,7 @@ pub(crate) fn try_complete_deferred(
             let syms: Vec<serde_json::Value> = symbols.iter().map(format_doc_symbol).collect();
             Some(ToolResult {
                 tool_call_id: tool_call_id.to_string(),
+                tool_name: "lsp_document_symbols".into(),
                 success: true,
                 output: serde_json::json!({"symbols": syms}).to_string(),
             })
@@ -1470,6 +1483,14 @@ pub(crate) fn try_complete_deferred(
         // Also handle LSP errors while a deferred call is pending
         (_, LspTaskEvent::Error { message }) => Some(ToolResult {
             tool_call_id: tool_call_id.to_string(),
+            tool_name: match kind {
+                DeferredKind::LspDefinition => "lsp_definition",
+                DeferredKind::LspReferences => "lsp_references",
+                DeferredKind::LspHover => "lsp_hover",
+                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+            }
+            .into(),
             success: false,
             output: format!("LSP error: {}", message),
         }),

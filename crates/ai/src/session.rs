@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -77,6 +78,10 @@ pub struct AgentSession {
     last_tool_calls: Option<Vec<ToolCall>>,
     /// Number of times the exact same tool calls have been seen consecutively.
     consecutive_identical_tools: usize,
+    /// History of tool call signatures (name:args) for oscillating loop detection.
+    turn_history: std::collections::VecDeque<String>,
+    /// Path to the session's auto-saved transcript log.
+    transcript_path: Option<PathBuf>,
 }
 
 impl AgentSession {
@@ -87,8 +92,7 @@ impl AgentSession {
         event_tx: mpsc::Sender<AiEvent>,
         command_rx: mpsc::Receiver<AiCommand>,
     ) -> Self {
-        // Partition tools into core (always sent) + extended (on request).
-        // Core tools include the request_tools meta-tool.
+        // ... (partition tools omitted for brevity)
         let mut core_tools: Vec<ToolDefinition> = tools
             .iter()
             .filter(|t| crate::tools::classify_tool_tier(&t.name) == crate::tools::ToolTier::Core)
@@ -98,6 +102,19 @@ impl AgentSession {
 
         let system_prompt_tokens = token_estimate::estimate_tokens(&system_prompt);
         let tools_tokens = token_estimate::estimate_tools_tokens(&core_tools);
+
+        // Setup transcript logging
+        let transcript_path = if let Ok(mut p) = std::env::current_dir() {
+            p.push(".mae");
+            p.push("transcripts");
+            let _ = std::fs::create_dir_all(&p);
+            let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+            p.push(filename);
+            Some(p)
+        } else {
+            None
+        };
+
         AgentSession {
             provider,
             all_tools: tools,
@@ -127,6 +144,8 @@ impl AgentSession {
             target_buffer: None,
             last_tool_calls: None,
             consecutive_identical_tools: 0,
+            turn_history: std::collections::VecDeque::with_capacity(6),
+            transcript_path,
         }
     }
 
@@ -172,6 +191,7 @@ impl AgentSession {
         if command.is_empty() {
             return ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: "Missing 'command' argument".into(),
             };
@@ -187,6 +207,7 @@ impl AgentSession {
                 warn!(command, pattern, "blocked dangerous shell command");
                 return ToolResult {
                     tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
                     success: false,
                     output: format!("Command blocked: contains dangerous pattern '{}'", pattern),
                 };
@@ -236,17 +257,20 @@ impl AgentSession {
 
                 ToolResult {
                     tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
                     success: output.status.success(),
                     output: out,
                 }
             }
             Ok(Err(e)) => ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: format!("Failed to execute command: {}", e),
             },
             Err(_) => ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: format!("Command timed out after {} seconds", timeout_secs),
             },
@@ -448,7 +472,7 @@ impl AgentSession {
             };
             let original_tokens = result_tokens;
             result.output = format!(
-                "{}\n...\n[truncated — {} tokens, showing first {}]",
+                "{}\n...\n[TRUNCATED — {} tokens, showing first {}]. WARNING: Tool result was truncated because it exceeded 25% of the context budget. If you need the full data, use more specific tool arguments (e.g. 'categories' for self_test_suite) to request a smaller chunk.",
                 truncated, original_tokens, max_result_tokens
             );
             debug!(
@@ -735,26 +759,19 @@ impl AgentSession {
             };
 
             if !response.tool_calls.is_empty() {
-                let current_identical = if let Some(ref last_calls) = self.last_tool_calls {
-                    if last_calls.len() == response.tool_calls.len() {
-                        let mut identical = true;
-                        for (c1, c2) in last_calls.iter().zip(response.tool_calls.iter()) {
-                            if c1.name != c2.name || c1.arguments != c2.arguments {
-                                identical = false;
-                                break;
-                            }
-                        }
-                        identical
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                // Signature: sorted tool names + arguments for robust comparison
+                let mut names: Vec<String> = response
+                    .tool_calls
+                    .iter()
+                    .map(|c| format!("{}:{}", c.name, c.arguments))
+                    .collect();
+                names.sort();
+                let turn_sig = names.join("|");
 
-                if current_identical {
+                // Oscillating Loop Detection: check if this turn matches any of the last 6 turns
+                if self.turn_history.contains(&turn_sig) {
                     self.consecutive_identical_tools += 1;
-                    if self.consecutive_identical_tools >= 3 {
+                    if self.consecutive_identical_tools >= 4 {
                         let _ = self
                             .event_tx
                             .send(AiEvent::Error(
@@ -770,7 +787,26 @@ impl AgentSession {
                 } else {
                     self.consecutive_identical_tools = 0;
                 }
+
+                if self.turn_history.len() >= 6 {
+                    self.turn_history.pop_front();
+                }
+                self.turn_history.push_back(turn_sig);
                 self.last_tool_calls = Some(response.tool_calls.clone());
+            }
+
+            // Auto-save turn to transcript
+            if let Some(ref path) = self.transcript_path {
+                if let Ok(json) = serde_json::to_string_pretty(&response) {
+                    let file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path);
+                    if let Ok(mut f) = file {
+                        let _ = std::io::Write::write_all(&mut f, b"\n--- RESPONSE ---\n");
+                        let _ = std::io::Write::write_all(&mut f, json.as_bytes());
+                    }
+                }
             }
 
             // Send text response if present
@@ -805,14 +841,25 @@ impl AgentSession {
                 return;
             }
 
+            let mut seen_calls = std::collections::HashSet::new();
+            let mut deduplicated_calls = Vec::new();
+            for call in &response.tool_calls {
+                let sig = format!("{}:{}", call.name, call.arguments);
+                if seen_calls.insert(sig) {
+                    deduplicated_calls.push(call.clone());
+                } else {
+                    debug!(tool = %call.name, "dropped identical parallel tool call");
+                }
+            }
+
             // Record assistant message with tool calls (preserve text if present)
             let content = if let Some(text) = response.text.clone() {
                 MessageContent::TextWithToolCalls {
                     text,
-                    tool_calls: response.tool_calls.clone(),
+                    tool_calls: deduplicated_calls.clone(),
                 }
             } else {
-                MessageContent::ToolCalls(response.tool_calls.clone())
+                MessageContent::ToolCalls(deduplicated_calls.clone())
             };
             self.messages.push(Message {
                 role: Role::Assistant,
@@ -820,7 +867,7 @@ impl AgentSession {
             });
 
             // Execute each tool call
-            for call in &response.tool_calls {
+            for call in &deduplicated_calls {
                 // UI Notification: tool execution started
                 let _ = self
                     .event_tx
@@ -874,6 +921,7 @@ impl AgentSession {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(ToolResult {
                             tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
                             success: true,
                             output,
                         }),
@@ -932,6 +980,7 @@ impl AgentSession {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(ToolResult {
                             tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
                             success: true,
                             output: activity.into(),
                         }),
@@ -956,6 +1005,7 @@ impl AgentSession {
                         .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: result_text,
                     };
@@ -986,6 +1036,7 @@ impl AgentSession {
                         .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: result_text,
                     };
@@ -1015,6 +1066,7 @@ impl AgentSession {
                         .await;
                     let result = ToolResult {
                         tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: result_text,
                     };
@@ -1052,6 +1104,7 @@ impl AgentSession {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     success: true,
                                     output: reply,
                                 }),
@@ -1069,6 +1122,7 @@ impl AgentSession {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     success: false,
                                     output: "User canceled or request failed".into(),
                                 }),
@@ -1107,6 +1161,7 @@ impl AgentSession {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     success: approved,
                                     output: output.into(),
                                 }),
@@ -1124,6 +1179,7 @@ impl AgentSession {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     success: false,
                                     output: "User canceled or request failed".into(),
                                 }),
@@ -1179,6 +1235,7 @@ impl AgentSession {
                                 role: Role::Tool,
                                 content: MessageContent::ToolResult(ToolResult {
                                     tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
                                     success: false,
                                     output: "Sub-agent delegation failed".into(),
                                 }),
@@ -1481,6 +1538,7 @@ mod tests {
                 reply
                     .send(ToolResult {
                         tool_call_id: "call_1".into(),
+                        tool_name: "cursor_info".into(),
                         success: true,
                         output: r#"{"cursor_row":1}"#.into(),
                     })
@@ -1993,6 +2051,7 @@ mod tests {
                 Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
                     let _ = reply.send(ToolResult {
                         tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: "ok".into(),
                     });
@@ -2053,9 +2112,10 @@ mod tests {
                         break;
                     }
                 }
-                Some(AiEvent::ToolCallRequest { reply, .. }) => {
+                Some(AiEvent::ToolCallRequest { call, reply }) => {
                     let _ = reply.send(ToolResult {
-                        tool_call_id: "x".into(),
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: "ok".into(),
                     });
@@ -2104,6 +2164,7 @@ mod tests {
                 role: Role::Tool,
                 content: MessageContent::ToolResult(ToolResult {
                     tool_call_id: "c1".into(),
+                    tool_name: "t1".into(),
                     success: true,
                     output: "ok".into(),
                 }),
@@ -2163,6 +2224,7 @@ mod tests {
                 role: Role::Tool,
                 content: MessageContent::ToolResult(ToolResult {
                     tool_call_id: "id1".into(),
+                    tool_name: "t1".into(),
                     success: true,
                     output: "tool result 1".into(),
                 }),

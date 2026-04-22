@@ -116,7 +116,7 @@ impl GeminiProvider {
                         "role": "function", // Gemini uses 'function' role for tool results
                         "parts": [{
                             "function_response": {
-                                "name": tr.name_placeholder(), // We need the name here
+                                "name": tr.tool_name,
                                 "response": {
                                     "result": tr.output,
                                 }
@@ -236,26 +236,6 @@ impl GeminiProvider {
             stop_reason,
             usage,
         })
-    }
-}
-
-/// Extension trait to get name from ToolResult since we don't store it there natively
-/// but Gemini needs it.
-trait ToolResultExt {
-    fn name_placeholder(&self) -> String;
-}
-
-impl ToolResultExt for ToolResult {
-    fn name_placeholder(&self) -> String {
-        // In MAE, tool_call_id is often "call_NAME_INDEX" for Gemini.
-        // We try to extract the name.
-        if self.tool_call_id.starts_with("call_") {
-            let parts: Vec<&str> = self.tool_call_id.split('_').collect();
-            if parts.len() >= 2 {
-                return parts[1].to_string();
-            }
-        }
-        "unknown_tool".to_string()
     }
 }
 
