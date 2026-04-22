@@ -159,12 +159,16 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         AiEvent::SessionComplete {
             text: _text,
             target_buffer,
+            transcript_path,
         } => {
             info!("AI session complete");
             if let Some(conv_buf) =
                 find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
             {
                 conv_buf.end_streaming();
+                if let Some(ref path) = transcript_path {
+                    conv_buf.push_system(format!("Transcript saved to: {}", path));
+                }
             }
             editor.sync_conversation_buffer_rope();
             editor.ai_streaming = false;
@@ -354,7 +358,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                             let _ = main_event_tx.send(evt).await;
                             break;
                         }
-                        AiEvent::Error(msg) => {
+                        AiEvent::Error(msg, _) => {
                             let _ = reply.send(ToolResult {
                                 tool_call_id: "delegate".into(),
                                 tool_name: "delegate".into(),
@@ -399,10 +403,13 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         } => {
             debug!(%session_id, %agent_name, "AI event metadata received");
         }
-        AiEvent::Error(msg) => {
+        AiEvent::Error(msg, transcript_path) => {
             error!(error = %msg, "AI error event");
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.push_system(format!("Error: {}", msg));
+                if let Some(ref path) = transcript_path {
+                    conv_buf.push_system(format!("Transcript saved to: {}", path));
+                }
                 conv_buf.end_streaming();
             }
             editor.ai_streaming = false;

@@ -123,6 +123,7 @@ pub enum AiEvent {
     SessionComplete {
         text: String,
         target_buffer: Option<String>,
+        transcript_path: Option<String>,
     },
     /// AI wants to ask the user a clarifying question.
     AskUser {
@@ -147,7 +148,7 @@ pub enum AiEvent {
         agent_name: String,
     },
     /// An error occurred in the AI transport.
-    Error(String),
+    Error(String, Option<String>),
     /// Incremental cost tally after a successful provider round. The
     /// main thread uses this to keep the status-line spend counter
     /// fresh without having to inspect the provider response itself.

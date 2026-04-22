@@ -547,6 +547,10 @@ impl AgentSession {
                             .send(AiEvent::SessionComplete {
                                 text: "[Interrupted by user]".into(),
                                 target_buffer: self.target_buffer.clone(),
+                                transcript_path: self
+                                    .transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
                             })
                             .await;
                         if let Some(start_idx) = self.transaction_start_idx {
@@ -618,6 +622,9 @@ impl AgentSession {
                     .event_tx
                     .send(AiEvent::Error(
                         "Context window nearly full — stopping tool calls".into(),
+                        self.transcript_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
                     ))
                     .await;
                 if let Some(start_idx) = self.transaction_start_idx {
@@ -704,6 +711,9 @@ impl AgentSession {
                             .event_tx
                             .send(AiEvent::Error(
                                 "Context window full — pruning old messages, retrying...".into(),
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
                             ))
                             .await;
                         self.aggressive_prune();
@@ -722,10 +732,15 @@ impl AgentSession {
                             Err(retry_err) => {
                                 let _ = self
                                     .event_tx
-                                    .send(AiEvent::Error(format!(
-                                        "Context overflow recovery failed: {}",
-                                        retry_err.message
-                                    )))
+                                    .send(AiEvent::Error(
+                                        format!(
+                                            "Context overflow recovery failed: {}",
+                                            retry_err.message
+                                        ),
+                                        self.transcript_path
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().to_string()),
+                                    ))
                                     .await;
                                 if let Some(start_idx) = self.transaction_start_idx {
                                     self.collapse_transaction(start_idx);
@@ -748,7 +763,15 @@ impl AgentSession {
                         tokio::time::sleep(backoff).await;
                         continue;
                     } else {
-                        let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                e.message,
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
+                            ))
+                            .await;
                         if let Some(start_idx) = self.transaction_start_idx {
                             self.collapse_transaction(start_idx);
                         }
@@ -776,8 +799,12 @@ impl AgentSession {
                             .event_tx
                             .send(AiEvent::Error(
                                 "AI got stuck in an infinite tool loop — aborting".into(),
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
                             ))
                             .await;
+
                         if let Some(start_idx) = self.transaction_start_idx {
                             self.collapse_transaction(start_idx);
                         }
@@ -832,6 +859,10 @@ impl AgentSession {
                     .send(AiEvent::SessionComplete {
                         text: final_text,
                         target_buffer: self.target_buffer.clone(),
+                        transcript_path: self
+                            .transcript_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
                     })
                     .await;
                 if let Some(start_idx) = self.transaction_start_idx {
@@ -917,6 +948,28 @@ impl AgentSession {
                             output: output.clone(),
                         })
                         .await;
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            success: true,
+                            output,
+                        }),
+                    });
+                    continue;
+                }
+
+                // read_transcript allows the AI to see its own raw logs
+                if call.name == "read_transcript" {
+                    let output = if let Some(ref path) = self.transcript_path {
+                        match std::fs::read_to_string(path) {
+                            Ok(s) => s,
+                            Err(e) => format!("Failed to read transcript file: {}", e),
+                        }
+                    } else {
+                        "Transcript logging is disabled for this session".into()
+                    };
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(ToolResult {
@@ -1259,7 +1312,7 @@ impl AgentSession {
                     error!("event channel closed — cannot send tool call request");
                     let _ = self
                         .event_tx
-                        .send(AiEvent::Error("Event channel closed".into()))
+                        .send(AiEvent::Error("Event channel closed".into(), None))
                         .await;
                     if let Some(start_idx) = self.transaction_start_idx {
                         self.collapse_transaction(start_idx);
@@ -1295,7 +1348,7 @@ impl AgentSession {
                             .await;
                         let _ = self
                             .event_tx
-                            .send(AiEvent::Error("Tool result channel closed".into()))
+                            .send(AiEvent::Error("Tool result channel closed".into(), None))
                             .await;
                         if let Some(start_idx) = self.transaction_start_idx {
                             self.collapse_transaction(start_idx);
@@ -1576,7 +1629,7 @@ mod tests {
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
         match recv_filtered(&mut event_rx).await {
-            AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
+            AiEvent::Error(msg, _) => assert!(msg.contains("No more mock responses")),
             other => panic!("expected Error, got {:?}", other),
         }
 
@@ -2106,7 +2159,7 @@ mod tests {
         let mut found_circuit_breaker = false;
         for _ in 0..50 {
             match event_rx.recv().await {
-                Some(AiEvent::Error(msg)) => {
+                Some(AiEvent::Error(msg, _)) => {
                     if msg.contains("stuck in an infinite tool loop") {
                         found_circuit_breaker = true;
                         break;

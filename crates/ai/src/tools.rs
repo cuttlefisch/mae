@@ -1480,7 +1480,17 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
-        // --- Input lock ---
+        // --- Transcript Access ---
+        ToolDefinition {
+            name: "read_transcript".into(),
+            description: "Read the full JSON transcript of the current AI session. This contains the raw provider responses, full tool outputs, and reasoning steps. Use this if you get stuck or need to review your own previous thoughts in detail. No arguments needed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         ToolDefinition {
             name: "input_lock".into(),
             description: "Lock or unlock editor keyboard input. When locked, all user keystrokes are discarded except Esc/Ctrl-C (which cancel and unlock). Use this before running multi-step operations (like self-tests) to prevent user input from interfering with editor state. Check current lock status via 'introspect' to avoid redundant calls.".into(),
@@ -2497,7 +2507,7 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 97);
+        assert_eq!(tools.len(), 98);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));
@@ -2508,6 +2518,7 @@ mod tests {
         assert!(names.contains(&"create_plan"));
         assert!(names.contains(&"update_plan"));
         assert!(names.contains(&"github_pr_status"));
+        assert!(names.contains(&"read_transcript"));
         assert!(names.contains(&"github_pr_create"));
         assert!(names.contains(&"terminal_spawn"));
         assert!(names.contains(&"terminal_send"));

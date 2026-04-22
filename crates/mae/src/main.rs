@@ -960,7 +960,7 @@ async fn run_headless_self_test(
                 }
                 break;
             }
-            Some(AiEvent::Error(msg)) => {
+            Some(AiEvent::Error(msg, _)) => {
                 eprintln!("mae: AI error during self-test: {}", msg);
                 return 2;
             }
