@@ -3,6 +3,7 @@
 //! Computes cursor position from editor state and draws mode-appropriate
 //! cursor shapes using Skia.
 
+use mae_core::wrap::{wrap_cursor_position, wrap_line_display_rows};
 use mae_core::{grapheme, Editor, Mode};
 use skia_safe::Color4f;
 
@@ -62,16 +63,65 @@ pub fn compute_cursor_position(
             } else {
                 String::new()
             };
-            let display_col = grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
 
-            let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
-            let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
-            let screen_col = gutter_w + display_col.saturating_sub(scroll_col);
+            let text_width = win_inner.width.saturating_sub(gutter_w);
+            let wrap = editor.word_wrap && text_width > 0;
 
-            if screen_row < win_inner.height {
-                Some((screen_row, screen_col))
+            if wrap {
+                let show_break_w = editor.show_break.chars().count();
+                // Count display rows consumed by lines before the cursor line.
+                let mut screen_row = 0;
+                for ln in win.scroll_offset..win.cursor_row {
+                    if ln < buf.line_count() {
+                        let line = buf.rope().line(ln);
+                        let lt: String = line.chars().collect();
+                        screen_row += wrap_line_display_rows(
+                            lt.trim_end_matches('\n'),
+                            text_width,
+                            editor.break_indent,
+                            show_break_w,
+                        );
+                    }
+                }
+
+                // Row/col within the wrapped cursor line.
+                let (row_off, col) = wrap_cursor_position(
+                    &line_text,
+                    win.cursor_col,
+                    text_width,
+                    editor.break_indent,
+                    show_break_w,
+                );
+                screen_row += row_off;
+
+                if screen_row < win_inner.height {
+                    let indent_len = if editor.break_indent && row_off > 0 {
+                        let chars: Vec<char> = line_text.chars().collect();
+                        mae_core::wrap::leading_indent_len(&chars)
+                    } else {
+                        0
+                    };
+                    let prefix_w = if row_off > 0 {
+                        indent_len + show_break_w
+                    } else {
+                        0
+                    };
+                    Some((screen_row, gutter_w + prefix_w + col))
+                } else {
+                    None
+                }
             } else {
-                None
+                let display_col =
+                    grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
+                let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
+                let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
+                let screen_col = gutter_w + display_col.saturating_sub(scroll_col);
+
+                if screen_row < win_inner.height {
+                    Some((screen_row, screen_col))
+                } else {
+                    None
+                }
             }
         }
     }
@@ -130,15 +180,19 @@ mod tests {
 
     #[test]
     fn cursor_shape_insert_is_bar() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Insert;
+        let editor = Editor {
+            mode: Mode::Insert,
+            ..Default::default()
+        };
         assert_eq!(cursor_shape(&editor), CursorShape::Bar);
     }
 
     #[test]
     fn cursor_shape_visual_is_block() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Visual(mae_core::VisualType::Char);
+        let editor = Editor {
+            mode: Mode::Visual(mae_core::VisualType::Char),
+            ..Default::default()
+        };
         assert_eq!(cursor_shape(&editor), CursorShape::Block);
     }
 
@@ -155,10 +209,12 @@ mod tests {
 
     #[test]
     fn compute_cursor_command_mode() {
-        let mut editor = Editor::default();
-        editor.mode = Mode::Command;
-        editor.command_line = "w".to_string();
-        editor.command_cursor = 1;
+        let editor = Editor {
+            mode: Mode::Command,
+            command_line: "w".to_string(),
+            command_cursor: 1,
+            ..Default::default()
+        };
         let inner = CellRect::new(1, 1, 78, 22);
         let pos = compute_cursor_position(&editor, inner, 3);
         assert!(pos.is_some());

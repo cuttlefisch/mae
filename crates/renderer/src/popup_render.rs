@@ -310,6 +310,8 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
         PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
         PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
+        PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
+        PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
     };
 
     let block = Block::default()

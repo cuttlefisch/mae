@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use mae_ai::{
     ai_specific_tools, tools_from_registry, AgentSession, AiCommand, AiEvent, ClaudeProvider,
-    OpenAiProvider, ProviderConfig,
+    GeminiProvider, OpenAiProvider, ProviderConfig,
 };
 use mae_core::Editor;
 use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
@@ -96,6 +96,130 @@ fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
     Some((path, Mutex::new(file)))
 }
 
+/// Resolve the history file path (~/.local/state/mae/history.scm).
+pub fn history_file_path() -> Option<PathBuf> {
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
+    let dir = state_home.join("mae");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("history.scm"))
+}
+
+/// Serialize editor history (recent files/projects) into executable Scheme.
+pub fn save_history(editor: &Editor) -> std::io::Result<()> {
+    let Some(path) = history_file_path() else {
+        return Ok(());
+    };
+
+    let mut script = String::new();
+    script.push_str(";; MAE generated history file. Do not edit by hand.\n\n");
+
+    // We write them in reverse order, so that when executed, the
+    // push operation preserves the same MRU ordering.
+    for file in editor.recent_files.list().iter().rev() {
+        script.push_str(&format!(
+            "(recent-files-add! \"{}\")\n",
+            file.to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        ));
+    }
+
+    for project in editor.recent_projects.list().iter().rev() {
+        script.push_str(&format!(
+            "(recent-projects-add! \"{}\")\n",
+            project
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        ));
+    }
+
+    std::fs::write(path, script)
+}
+
+/// Load and evaluate the history Scheme file.
+pub fn load_history(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    if let Some(path) = history_file_path() {
+        if path.exists() {
+            match scheme.load_file(&path) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    debug!(path = %path.display(), "history loaded successfully");
+                }
+                Err(e) => {
+                    error!(path = %path.display(), error = %e, "history load failed");
+                }
+            }
+        }
+    }
+}
+
+/// Create a comprehensive debug dump of the editor state.
+pub fn debug_dump(editor: &Editor) {
+    use serde_json::json;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let state_home = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+
+    let dir = state_home.join("mae/dumps");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("debug_dump_{}.json", timestamp));
+
+    let messages = editor
+        .message_log
+        .entries()
+        .into_iter()
+        .map(|e| {
+            json!({
+                "level": e.level.to_string(),
+                "target": e.target,
+                "message": e.message,
+                "seq": e.seq,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let conversation = editor.conversation().map(|c| {
+        c.entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "role": format!("{:?}", e.role),
+                    "content": e.content,
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let dump = json!({
+        "timestamp": timestamp,
+        "editor_mode": format!("{:?}", editor.mode),
+        "buffer_count": editor.buffers.len(),
+        "window_count": editor.window_mgr.window_count(),
+        "recent_files": editor.recent_files.list(),
+        "recent_projects": editor.recent_projects.list(),
+        "messages": messages,
+        "ai_conversation": conversation,
+    });
+
+    if let Ok(content) = serde_json::to_string_pretty(&dump) {
+        if let Err(e) = std::fs::write(&path, content) {
+            error!(path = %path.display(), error = %e, "failed to write debug dump");
+        } else {
+            info!(path = %path.display(), "debug dump saved");
+        }
+    }
+}
+
 /// Tracing layer that captures events into the in-editor MessageLog.
 /// This makes log entries viewable via `:messages` without requiring
 /// external log tooling — the Emacs `*Messages*` pattern.
@@ -181,12 +305,17 @@ pub fn setup_ai(
     editor: &Editor,
 ) -> (
     tokio::sync::mpsc::Receiver<AiEvent>,
+    tokio::sync::mpsc::Sender<AiEvent>,
     Option<tokio::sync::mpsc::Sender<AiCommand>>,
 ) {
+    // Ensure PATH is populated from the user's shell environment so we can
+    // find agent binaries like 'gemini' or 'claude' when running in GUI mode.
+    mae_shell::path::sync_path_from_shell();
+
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<AiCommand>(8);
 
-    let config = load_ai_config();
+    let config = load_ai_config(editor);
 
     if let Some(config) = config {
         let provider_name = config.provider_type.clone();
@@ -195,6 +324,7 @@ pub fn setup_ai(
         info!(provider = %provider_name, model = %model, "initializing AI provider");
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
+            "gemini" => Box::new(GeminiProvider::new(config)),
             _ => Box::new(ClaudeProvider::new(config)), // default to Claude
         };
 
@@ -204,46 +334,145 @@ pub fn setup_ai(
             t
         };
 
-        let session = AgentSession::new(provider, tools, build_system_prompt(), event_tx, cmd_rx)
-            .with_budget(model, budget);
+        let session = AgentSession::new(
+            provider,
+            tools,
+            build_system_prompt("pair-programmer"),
+            event_tx.clone(),
+            cmd_rx,
+        )
+        .with_budget(model, budget);
 
-        tokio::spawn(session.run());
+        spawn_ai_session(session);
 
-        (event_rx, Some(cmd_tx))
+        (event_rx, event_tx, Some(cmd_tx))
     } else {
         // No AI configured — event channel exists but nothing sends to it
-        (event_rx, None)
+        (event_rx, event_tx, None)
     }
 }
 
-/// Load the AI provider configuration by layering env vars over the TOML
-/// config file (if any) over built-in defaults. See `config.rs` for the
-/// precedence details.
-pub fn load_ai_config() -> Option<ProviderConfig> {
+pub fn spawn_ai_session(session: AgentSession) {
+    tokio::spawn(session.run());
+}
+
+/// Load the AI provider configuration by layering:
+///   env vars > Scheme (init.scm) > TOML (config.toml) > defaults.
+/// See `config.rs` for the full precedence details.
+pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     let file = crate::config::load_config();
-    crate::config::resolve_ai_config(&file)
+    let scheme = crate::config::SchemeAiOverrides::from_editor(editor);
+    crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
-fn build_system_prompt() -> String {
-    let base = include_str!("system_prompt.md");
-    let mut prompt = base.to_string();
+pub fn build_system_prompt(profile: &str) -> String {
+    let mut prompt = String::new();
 
-    // Add working directory context
+    // 1. Load the profile-specific base from prioritized locations:
+    //    Project-local (.mae/prompts/*.xml) > User-config (~/.config/mae/prompts/*.xml) > Bundled (prompts/*.xml)
+    let profile_filename = format!("{}.xml", profile);
+    let mut base_content = None;
+
+    // Check project-local
     if let Ok(cwd) = std::env::current_dir() {
-        prompt.push_str(&format!("\n\n## Working Directory\n`{}`\n", cwd.display()));
+        let path = cwd.join(".mae/prompts").join(&profile_filename);
+        if path.exists() {
+            base_content = std::fs::read_to_string(path).ok();
+        }
     }
 
-    // Add git status context if in a git repo
-    if let Ok(output) = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--branch"])
-        .output()
-    {
-        if output.status.success() {
-            let status = String::from_utf8_lossy(&output.stdout);
-            if !status.is_empty() {
-                prompt.push_str(&format!("\n## Git Status\n```\n{}```\n", status));
+    // Check user-config
+    if base_content.is_none() {
+        if let Some(config_dir) = dirs::config_dir() {
+            let path = config_dir.join("mae/prompts").join(&profile_filename);
+            if path.exists() {
+                base_content = std::fs::read_to_string(path).ok();
             }
         }
+    }
+
+    // Fall back to bundled
+    let content = base_content.unwrap_or_else(|| match profile {
+        "explorer" => include_str!("prompts/explorer.xml").to_string(),
+        "planner" => include_str!("prompts/planner.xml").to_string(),
+        "reviewer" => include_str!("prompts/reviewer.xml").to_string(),
+        _ => include_str!("prompts/pair-programmer.xml").to_string(),
+    });
+    prompt.push_str(&content);
+
+    // 2. Add dynamic context
+    if let Ok(cwd) = std::env::current_dir() {
+        prompt.push_str(&format!(
+            "\n\n<context>\n## Working Directory\n`{}`\n",
+            cwd.display()
+        ));
+
+        // Add project context from CLAUDE.md, README.md, etc.
+        let project_files = ["CLAUDE.md", "README.md", "README.org", ".project"];
+        for filename in &project_files {
+            let path = cwd.join(filename);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let max_chars = 8000;
+                    let truncated = if content.len() > max_chars {
+                        format!("{}...\n[truncated]", &content[..max_chars])
+                    } else {
+                        content
+                    };
+                    prompt.push_str(&format!(
+                        "\n## Project Context ({})\n```\n{}\n```\n",
+                        filename, truncated
+                    ));
+                    break;
+                }
+            }
+        }
+
+        // Add memory context from .mae/memory/*.txt
+        let memory_dir = cwd.join(".mae/memory");
+        if memory_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(memory_dir) {
+                prompt.push_str("\n## Long-term Memory\n");
+                for entry in entries.flatten() {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        prompt.push_str(&format!("- {}\n", content.trim()));
+                    }
+                }
+            }
+        }
+
+        // Add active plans from .mae/plans/*.md
+        let plan_dir = cwd.join(".mae/plans");
+        if plan_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(plan_dir) {
+                prompt.push_str("\n## Active Plans\n");
+                for entry in entries.flatten() {
+                    if entry.path().extension().is_some_and(|e| e == "md") {
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            prompt.push_str(&format!(
+                                "### Plan: {}\n```markdown\n{}\n```\n",
+                                entry.file_name().to_string_lossy(),
+                                content
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add git status
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["status", "--porcelain", "--branch"])
+            .output()
+        {
+            if output.status.success() {
+                let status = String::from_utf8_lossy(&output.stdout);
+                if !status.is_empty() {
+                    prompt.push_str(&format!("\n## Git Status\n```\n{}```\n", status));
+                }
+            }
+        }
+        prompt.push_str("</context>\n");
     }
 
     prompt
@@ -302,20 +531,37 @@ pub fn find_conversation_buffer_mut(editor: &mut Editor) -> Option<&mut mae_core
 ///   MAE_LSP_RUST=rust-analyzer
 ///   MAE_LSP_PYTHON=pylsp
 ///   MAE_LSP_TYPESCRIPT="typescript-language-server --stdio"
-pub fn setup_lsp() -> (
+pub fn setup_lsp(
+    root_uri: Option<String>,
+) -> (
     tokio::sync::mpsc::Receiver<LspTaskEvent>,
     tokio::sync::mpsc::Sender<LspCommand>,
 ) {
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
 
-    insert_if_set(&mut configs, "rust", "MAE_LSP_RUST", "rust-analyzer", &[]);
-    insert_if_set(&mut configs, "python", "MAE_LSP_PYTHON", "pylsp", &[]);
+    insert_if_set(
+        &mut configs,
+        "rust",
+        "MAE_LSP_RUST",
+        "rust-analyzer",
+        &[],
+        root_uri.clone(),
+    );
+    insert_if_set(
+        &mut configs,
+        "python",
+        "MAE_LSP_PYTHON",
+        "pylsp",
+        &[],
+        root_uri.clone(),
+    );
     insert_if_set(
         &mut configs,
         "typescript",
         "MAE_LSP_TYPESCRIPT",
         "typescript-language-server",
         &["--stdio"],
+        root_uri.clone(),
     );
     insert_if_set(
         &mut configs,
@@ -323,8 +569,16 @@ pub fn setup_lsp() -> (
         "MAE_LSP_TYPESCRIPT",
         "typescript-language-server",
         &["--stdio"],
+        root_uri.clone(),
     );
-    insert_if_set(&mut configs, "go", "MAE_LSP_GO", "gopls", &[]);
+    insert_if_set(
+        &mut configs,
+        "go",
+        "MAE_LSP_GO",
+        "gopls",
+        &[],
+        root_uri.clone(),
+    );
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<LspCommand>(64);
     let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<LspTaskEvent>(64);
@@ -344,6 +598,7 @@ fn insert_if_set(
     env_var: &str,
     default_cmd: &str,
     default_args: &[&str],
+    root_uri: Option<String>,
 ) {
     let (command, args) = match std::env::var(env_var) {
         Ok(v) => {
@@ -366,7 +621,7 @@ fn insert_if_set(
         LspServerConfig {
             command,
             args,
-            root_uri: None,
+            root_uri,
         },
     );
 }

@@ -226,6 +226,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
         normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
         normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
+        normal.bind(parse_key_seq_spaced("SPC a m"), "ai-set-mode");
+        normal.bind(parse_key_seq_spaced("SPC a P"), "ai-set-profile");
         // +help
         normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
@@ -444,11 +446,37 @@ impl Editor {
         let mut shell_insert = Keymap::new("shell-insert");
         shell_insert.bind(parse_key_seq_spaced("C-\\ C-n"), "shell-normal-mode");
 
+        // Git status keymap (Magit-lite)
+        let mut git_status = Keymap::new("git-status");
+        git_status.bind(parse_key_seq("j"), "move-down");
+        git_status.bind(parse_key_seq("k"), "move-up");
+        git_status.bind(parse_key_seq("s"), "git-stage");
+        git_status.bind(parse_key_seq("u"), "git-unstage");
+        git_status.bind(parse_key_seq("S"), "git-stage-all");
+        git_status.bind(parse_key_seq("U"), "git-unstage-all");
+        git_status.bind(parse_key_seq("c c"), "git-commit");
+        git_status.bind(parse_key_seq("l l"), "git-log");
+        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-status-toggle");
+        git_status.bind(vec![KeyPress::special(Key::Enter)], "git-status-open");
+        git_status.bind(parse_key_seq("q"), "enter-normal-mode");
+        git_status.bind(parse_key_seq("g r"), "git-status"); // Refresh
+
+        // Org-mode keymap
+        let mut org = Keymap::new("org");
+        org.bind(vec![KeyPress::special(Key::Tab)], "org-cycle");
+        org.bind(parse_key_seq_spaced("S-Left"), "org-todo-prev");
+        org.bind(parse_key_seq_spaced("S-Right"), "org-todo-next");
+        org.bind(parse_key_seq_spaced("S-Up"), "org-priority-up");
+        org.bind(parse_key_seq_spaced("S-Down"), "org-priority-down");
+        org.bind(vec![KeyPress::special(Key::Enter)], "org-open-link");
+
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);
         maps.insert("visual".to_string(), visual);
         maps.insert("command".to_string(), Keymap::new("command"));
         maps.insert("shell-insert".to_string(), shell_insert);
+        maps.insert("git-status".to_string(), git_status);
+        maps.insert("org".to_string(), org);
 
         maps
     }

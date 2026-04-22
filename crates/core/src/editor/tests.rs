@@ -4352,3 +4352,107 @@ fn set_project_root_command() {
     ed.execute_command("set-project-root");
     assert!(ed.status_msg.contains("Usage"));
 }
+
+// ---- switch_to_buffer_non_conversation tests ----
+
+#[test]
+fn test_switch_non_conv_normal_window() {
+    // When focused window is NOT conversation, it still avoids stealing focus
+    // by splitting or using another window.
+    let mut ed = Editor::new();
+    ed.buffers.push(Buffer::new());
+    assert!(!ed.is_conversation_buffer(ed.active_buffer_idx()));
+    let ok = ed.switch_to_buffer_non_conversation(1);
+    assert!(ok);
+    // Focus remains on buffer 0
+    assert_eq!(ed.active_buffer_idx(), 0);
+    // Buffer 1 is now visible in another window (the split)
+    assert!(ed.window_mgr.iter_windows().any(|w| w.buffer_idx == 1));
+}
+
+#[test]
+fn test_switch_non_conv_routes_to_other_window() {
+    // With a split, if conversation is focused, the new buffer goes to the other pane.
+    let mut ed = Editor::new();
+    // Create a conversation buffer.
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+    // Split vertically so there are two windows.
+    let area = ed.default_area();
+    let new_id = ed
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 0, area)
+        .expect("split should succeed");
+    // Focus the conversation window (not the new split).
+    // The focused window should still be on conv_idx after split — split
+    // doesn't change focus.
+    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    // Add a third buffer and route it.
+    ed.buffers.push(Buffer::new());
+    let target_idx = ed.buffers.len() - 1;
+    let ok = ed.switch_to_buffer_non_conversation(target_idx);
+    assert!(ok);
+    // Focused window should STILL show conversation.
+    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    // The other window should show the target buffer.
+    let other_win = ed.window_mgr.window(new_id).expect("split window exists");
+    assert_eq!(other_win.buffer_idx, target_idx);
+}
+
+#[test]
+fn test_switch_non_conv_auto_splits() {
+    // Single *AI* window: auto-splits to keep conversation visible.
+    let mut ed = Editor::new();
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+    assert_eq!(ed.window_mgr.window_count(), 1);
+    // Add a target buffer.
+    ed.buffers.push(Buffer::new());
+    let target_idx = ed.buffers.len() - 1;
+    let ok = ed.switch_to_buffer_non_conversation(target_idx);
+    assert!(ok);
+    // Should have split into 2 windows.
+    assert_eq!(ed.window_mgr.window_count(), 2);
+}
+
+#[test]
+fn test_open_file_non_conv_preserves_ai() {
+    // open_file_non_conversation with *AI* focused keeps conversation visible.
+    let mut ed = Editor::new();
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+    // Create a temp file.
+    let dir = std::env::temp_dir().join("mae_test_open_non_conv");
+    let _ = fs::create_dir_all(&dir);
+    let file_path = dir.join("test.txt");
+    fs::write(&file_path, "hello").unwrap();
+    ed.open_file_non_conversation(file_path.to_str().unwrap());
+    // Focused window should still show conversation.
+    assert_eq!(ed.active_buffer_idx(), conv_idx);
+    // Cleanup.
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_focus_hooks_fired() {
+    let mut ed = Editor::new();
+    // Register dummy functions so fire_hook actually queues something
+    ed.hooks.add("focus-out", "dummy-fn");
+    ed.hooks.add("focus-in", "dummy-fn");
+
+    // Create a split so we can switch focus
+    ed.buffers.push(Buffer::new());
+    let area = ed.default_area();
+    ed.window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    ed.execute_command("focus-right");
+    let hooks: Vec<_> = ed
+        .pending_hook_evals
+        .iter()
+        .map(|(h, _)| h.as_str())
+        .collect();
+    assert!(hooks.contains(&"focus-out"));
+    assert!(hooks.contains(&"focus-in"));
+}

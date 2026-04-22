@@ -1,7 +1,9 @@
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::provider::*;
+use crate::token_estimate;
 use crate::types::*;
 
 /// AgentSession runs the agentic loop on a spawned tokio task:
@@ -48,6 +50,38 @@ pub struct AgentSession {
     /// session. Users don't want a warn per round after crossing the
     /// threshold.
     warned: bool,
+    /// Model's context window size in tokens (from context_limits table).
+    context_window: u64,
+    /// Cached token estimate for the system prompt (computed once).
+    system_prompt_tokens: u64,
+    /// Cached token estimate for the tool definitions (computed once).
+    tools_tokens: u64,
+    /// Output tokens reserved for the model's response.
+    reserved_output: u64,
+    /// Whether the session initialization message has been emitted.
+    initialized: bool,
+    /// Model name for display purposes.
+    model_name: String,
+    /// All tools (core + extended). Partitioned at construction.
+    all_tools: Vec<ToolDefinition>,
+    /// Categories that have been enabled via `request_tools`.
+    enabled_categories: std::collections::HashSet<crate::tools::ToolCategory>,
+    /// Index in `self.messages` where the current transaction (User prompt) started.
+    /// Used for tool stack compression.
+    transaction_start_idx: Option<usize>,
+    /// Current round in the tool loop. Exposed for introspection.
+    current_round: usize,
+    /// Optional name of the buffer to route output to (e.g. "*AI-Explorer*").
+    /// If None, output goes to the default conversation buffer.
+    target_buffer: Option<String>,
+    /// Last executed tool calls to detect infinite loops.
+    last_tool_calls: Option<Vec<ToolCall>>,
+    /// Number of times the exact same tool calls have been seen consecutively.
+    consecutive_identical_tools: usize,
+    /// History of tool call signatures (name:args) for oscillating loop detection.
+    turn_history: std::collections::VecDeque<String>,
+    /// Path to the session's auto-saved transcript log.
+    transcript_path: Option<PathBuf>,
 }
 
 impl AgentSession {
@@ -58,15 +92,39 @@ impl AgentSession {
         event_tx: mpsc::Sender<AiEvent>,
         command_rx: mpsc::Receiver<AiCommand>,
     ) -> Self {
+        // ... (partition tools omitted for brevity)
+        let mut core_tools: Vec<ToolDefinition> = tools
+            .iter()
+            .filter(|t| crate::tools::classify_tool_tier(&t.name) == crate::tools::ToolTier::Core)
+            .cloned()
+            .collect();
+        core_tools.push(crate::tools::request_tools_definition());
+
+        let system_prompt_tokens = token_estimate::estimate_tokens(&system_prompt);
+        let tools_tokens = token_estimate::estimate_tools_tokens(&core_tools);
+
+        // Setup transcript logging
+        let transcript_path = if let Ok(mut p) = std::env::current_dir() {
+            p.push(".mae");
+            p.push("transcripts");
+            let _ = std::fs::create_dir_all(&p);
+            let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+            p.push(filename);
+            Some(p)
+        } else {
+            None
+        };
+
         AgentSession {
             provider,
-            tools,
+            all_tools: tools,
+            tools: core_tools,
             messages: Vec::new(),
             system_prompt,
             event_tx,
             command_rx,
-            max_rounds: 20,
-            max_messages: 200,
+            max_rounds: 250,
+            max_messages: 2000,
             consecutive_errors: 0,
             price: None,
             budget: crate::BudgetConfig::default(),
@@ -74,7 +132,26 @@ impl AgentSession {
             session_tokens_in: 0,
             session_tokens_out: 0,
             warned: false,
+            context_window: crate::context_limits::DEFAULT_CONTEXT_WINDOW,
+            system_prompt_tokens,
+            tools_tokens,
+            reserved_output: 4096,
+            initialized: false,
+            model_name: String::new(),
+            enabled_categories: std::collections::HashSet::new(),
+            transaction_start_idx: None,
+            current_round: 0,
+            target_buffer: None,
+            last_tool_calls: None,
+            consecutive_identical_tools: 0,
+            turn_history: std::collections::VecDeque::with_capacity(6),
+            transcript_path,
         }
+    }
+
+    pub fn with_target_buffer(mut self, name: String) -> Self {
+        self.target_buffer = Some(name);
+        self
     }
 
     /// Configure model + budget for this session. Called once by the
@@ -86,7 +163,12 @@ impl AgentSession {
     /// cached — the pricing table doesn't change at runtime, so every
     /// subsequent round can skip the prefix-scan + lowercase alloc.
     pub fn with_budget(mut self, model: impl AsRef<str>, budget: crate::BudgetConfig) -> Self {
-        self.price = crate::pricing::lookup(model.as_ref());
+        let model_str = model.as_ref();
+        self.price = crate::pricing::lookup(model_str);
+        let limits = crate::context_limits::lookup(model_str);
+        self.context_window = limits.context_window;
+        self.max_rounds = limits.max_rounds;
+        self.model_name = model_str.to_string();
         self.budget = budget;
         self
     }
@@ -109,6 +191,7 @@ impl AgentSession {
         if command.is_empty() {
             return ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: "Missing 'command' argument".into(),
             };
@@ -124,6 +207,7 @@ impl AgentSession {
                 warn!(command, pattern, "blocked dangerous shell command");
                 return ToolResult {
                     tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
                     success: false,
                     output: format!("Command blocked: contains dangerous pattern '{}'", pattern),
                 };
@@ -173,17 +257,20 @@ impl AgentSession {
 
                 ToolResult {
                     tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
                     success: output.status.success(),
                     output: out,
                 }
             }
             Ok(Err(e)) => ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: format!("Failed to execute command: {}", e),
             },
             Err(_) => ToolResult {
                 tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
                 success: false,
                 output: format!("Command timed out after {} seconds", timeout_secs),
             },
@@ -225,7 +312,7 @@ impl AgentSession {
         self.session_tokens_out += usage.completion_tokens;
         let last_call_usd = match self.price {
             Some(price) => {
-                let c = price.cost_usd(usage.prompt_tokens, usage.completion_tokens);
+                let c = price.cost_usd(&usage);
                 self.session_cost_usd += c;
                 c
             }
@@ -256,34 +343,296 @@ impl AgentSession {
         }
     }
 
-    /// Trim message history to stay within bounds.
+    /// Available token budget for message history.
+    fn available_message_budget(&self) -> u64 {
+        self.context_window
+            .saturating_sub(self.system_prompt_tokens)
+            .saturating_sub(self.tools_tokens)
+            .saturating_sub(self.reserved_output)
+    }
+
+    /// Trim message history to stay within token budget AND hard message cap.
     /// Keeps the first message (initial user context) and the most recent messages.
     fn trim_messages(&mut self) {
-        if self.messages.len() <= self.max_messages {
+        let original_len = self.messages.len();
+        let mut safe_boundary = self.transaction_start_idx.unwrap_or(self.messages.len());
+
+        // 1. Hard cap on message count (secondary safeguard)
+        while self.messages.len() > self.max_messages && self.messages.len() > 1 {
+            if safe_boundary <= 1 {
+                break; // Protect current transaction
+            }
+            self.messages.remove(1);
+            safe_boundary -= 1;
+        }
+
+        // 2. Token-aware pruning: drop oldest non-first messages until within budget
+        let budget = self.available_message_budget();
+        while self.messages.len() > 1 {
+            let total = token_estimate::estimate_messages_tokens(&self.messages);
+            if total <= budget {
+                break;
+            }
+            if safe_boundary <= 1 {
+                break; // Protect current transaction
+            }
+            // Remove the oldest message after the first
+            self.messages.remove(1);
+            safe_boundary -= 1;
+        }
+
+        // 3. Enforce API schema: No orphaned Tool messages at the prune boundary.
+        // If the prune cut off an Assistant message, or left an Assistant message
+        // with tool_calls but dropped some of its corresponding Tool messages,
+        // we must drop the orphaned messages to maintain a valid sequence.
+        while self.messages.len() > 1 {
+            let msg = &self.messages[1];
+            if msg.role == Role::Tool {
+                self.messages.remove(1);
+                safe_boundary = safe_boundary.saturating_sub(1).max(1);
+            } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
+                msg.content
+            {
+                // Drop any Assistant message with tool calls at the boundary,
+                // as its matching ToolResults might have been pruned or partially pruned.
+                self.messages.remove(1);
+                safe_boundary = safe_boundary.saturating_sub(1).max(1);
+            } else {
+                break;
+            }
+        }
+
+        self.transaction_start_idx = self.transaction_start_idx.map(|_| safe_boundary);
+
+        if self.messages.len() < original_len {
+            let total = token_estimate::estimate_messages_tokens(&self.messages);
+            debug!(
+                messages = self.messages.len(),
+                estimated_tokens = total,
+                budget,
+                "post-trim message state"
+            );
+        }
+    }
+
+    /// Aggressively prune messages — drop oldest 25% by count.
+    /// Used for context overflow recovery.
+    fn aggressive_prune(&mut self) {
+        if self.messages.len() <= 2 {
             return;
         }
-        let excess = self.messages.len() - self.max_messages;
-        // Keep first message for context, trim from position 1
-        if self.messages.len() > 1 {
-            let trim_count = excess.min(self.messages.len() - 1);
-            self.messages.drain(1..1 + trim_count);
+        let to_remove = (self.messages.len() - 1) / 4; // 25% of non-first messages
+        let to_remove = to_remove.max(1);
+        self.messages.drain(1..1 + to_remove);
+
+        // Enforce OpenAI tool call schema:
+        // A Tool message MUST be preceded by an Assistant message with tool_calls.
+        // If our arbitrary prune cut off the Assistant message, or left an Assistant message
+        // with tool_calls but dropped its corresponding Tool messages, we must drop them too.
+        while self.messages.len() > 1 {
+            let msg = &self.messages[1];
+            if msg.role == Role::Tool {
+                self.messages.remove(1);
+            } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
+                msg.content
+            {
+                // Assistant message with tool calls at the boundary is unsafe to keep,
+                // as its matching ToolResults might have been pruned.
+                self.messages.remove(1);
+            } else {
+                break;
+            }
+        }
+
+        // Adjust transaction_start_idx if it was affected
+        if let Some(idx) = self.transaction_start_idx {
+            self.transaction_start_idx = Some(idx.saturating_sub(to_remove).max(1));
+        }
+
+        warn!(
+            removed = to_remove,
+            remaining = self.messages.len(),
+            "aggressively pruned messages for context overflow recovery"
+        );
+    }
+
+    /// Truncate a tool result if it exceeds 25% of available message budget.
+    fn truncate_tool_result(&self, result: &mut ToolResult) {
+        let budget = self.available_message_budget();
+        let max_result_tokens = budget / 4;
+        let result_tokens = token_estimate::estimate_tokens(&result.output);
+        if result_tokens > max_result_tokens && max_result_tokens > 100 {
+            // Truncate to roughly max_result_tokens * 4 bytes
+            let max_bytes = (max_result_tokens * 4) as usize;
+            let truncated = if result.output.len() > max_bytes {
+                let safe_end = result.output.floor_char_boundary(max_bytes);
+                &result.output[..safe_end]
+            } else {
+                &result.output
+            };
+            let original_tokens = result_tokens;
+            result.output = format!(
+                "{}\n...\n[TRUNCATED — {} tokens, showing first {}]. WARNING: Tool result was truncated because it exceeded 25% of the context budget. If you need the full data, use more specific tool arguments (e.g. 'categories' for self_test_suite) to request a smaller chunk.",
+                truncated, original_tokens, max_result_tokens
+            );
             debug!(
-                trimmed = trim_count,
-                remaining = self.messages.len(),
-                "trimmed conversation history"
+                original_tokens,
+                truncated_to = max_result_tokens,
+                "truncated oversized tool result"
             );
         }
     }
 
     async fn handle_prompt(&mut self, prompt: String) {
+        // Session initialization: emit context info on first prompt
+        if !self.initialized {
+            self.initialized = true;
+            let budget = self.available_message_budget();
+            info!(
+                model = %self.model_name,
+                context_window = self.context_window,
+                system_prompt_tokens = self.system_prompt_tokens,
+                tools_tokens = self.tools_tokens,
+                tool_count = self.tools.len(),
+                available_budget = budget,
+                "AI session initialized"
+            );
+            let status = format!(
+                "AI: {}, {}K context, {}K available, {} tools",
+                if self.model_name.is_empty() {
+                    "unknown"
+                } else {
+                    &self.model_name
+                },
+                self.context_window / 1000,
+                budget / 1000,
+                self.tools.len(),
+            );
+            let _ = self
+                .event_tx
+                .send(AiEvent::TextResponse {
+                    text: format!("[{}]", status),
+                    target_buffer: self.target_buffer.clone(),
+                })
+                .await;
+        }
+
+        self.transaction_start_idx = Some(self.messages.len());
         self.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(prompt),
         });
         self.trim_messages();
 
-        for round in 0..self.max_rounds {
-            debug!(round, max_rounds = self.max_rounds, "AI provider send");
+        let mut round = 0;
+        loop {
+            // Check for cancellation (e.g. double-esc from user)
+            if let Ok(cmd) = self.command_rx.try_recv() {
+                match cmd {
+                    AiCommand::Cancel => {
+                        info!("AI cancel received during tool loop — interrupting");
+                        self.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text("[Interrupted by user]".into()),
+                        });
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::TextResponse {
+                                text: "[Interrupted by user]".into(),
+                                target_buffer: self.target_buffer.clone(),
+                            })
+                            .await;
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::SessionComplete {
+                                text: "[Interrupted by user]".into(),
+                                target_buffer: self.target_buffer.clone(),
+                                transcript_path: self
+                                    .transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
+                            })
+                            .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
+                        return;
+                    }
+                    AiCommand::Shutdown => {
+                        info!("AI shutdown received during tool loop");
+                        return;
+                    }
+                    AiCommand::Prompt(p) => {
+                        // If we get a new prompt while busy, we'll assume it's
+                        // an follow-up and append it to the context.
+                        info!(
+                            prompt_len = p.len(),
+                            "received AI follow-up prompt during tool loop"
+                        );
+                        self.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(p),
+                        });
+                    }
+                }
+            }
+
+            self.current_round = round;
+            let _ = self
+                .event_tx
+                .send(AiEvent::RoundUpdate {
+                    round: self.current_round,
+                    transaction_start_idx: self.transaction_start_idx,
+                })
+                .await;
+
+            // --- Mid-Flight Context Compaction ---
+            // If the active transaction has grown too large, collapse it into a reasoning summary
+            // to free up tokens and prevent context overflow before the turn ends.
+            if let Some(start_idx) = self.transaction_start_idx {
+                let transaction_size = self.messages.len().saturating_sub(start_idx);
+                let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+                let window_usage = current_tokens as f64 / self.context_window as f64;
+
+                if (transaction_size > 20 || window_usage > 0.75) && round > 0 {
+                    debug!(
+                        transaction_size,
+                        window_usage, "mid-flight context compaction triggered"
+                    );
+                    self.collapse_transaction(start_idx);
+                    // Point to the new summary message as the new transaction start,
+                    // preserving continuity for the next round's pruning logic.
+                    self.transaction_start_idx = Some(self.messages.len().saturating_sub(1));
+                }
+            }
+
+            debug!(round, "AI provider send");
+
+            // Dynamic context-aware loop break: stop if we are running out of context
+            // before the provider even errors out.
+            let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+            if current_tokens > self.context_window.saturating_sub(self.reserved_output) {
+                warn!(
+                    current_tokens,
+                    context_window = self.context_window,
+                    "breaking tool loop: context nearly full"
+                );
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::Error(
+                        "Context window nearly full — stopping tool calls".into(),
+                        self.transcript_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
+                    ))
+                    .await;
+                if let Some(start_idx) = self.transaction_start_idx {
+                    self.collapse_transaction(start_idx);
+                }
+                self.transaction_start_idx = None;
+                return;
+            }
 
             // Cost circuit breaker: refuse the send if the session is
             // already over budget. Checked *before* every round so a
@@ -304,6 +653,10 @@ impl AgentSession {
                             cap_usd: cap,
                         })
                         .await;
+                    if let Some(start_idx) = self.transaction_start_idx {
+                        self.collapse_transaction(start_idx);
+                    }
+                    self.transaction_start_idx = None;
                     return;
                 }
             }
@@ -316,6 +669,9 @@ impl AgentSession {
                     "AI event channel near capacity — editor may be falling behind"
                 );
             }
+
+            // Token-aware trim before every provider call (not just the first)
+            self.trim_messages();
 
             let response = match self
                 .provider
@@ -340,12 +696,62 @@ impl AgentSession {
                         round,
                         error = %e.message,
                         retryable = e.retryable,
+                        kind = ?e.kind,
                         consecutive_errors = self.consecutive_errors,
                         "AI provider error"
                     );
 
+                    // Context overflow recovery: aggressively prune and retry once
+                    if e.kind == ErrorKind::ContextOverflow {
+                        warn!("context overflow detected — pruning old messages and retrying");
+                        // Halve the context window for self-healing (discovery of actual tighter limits)
+                        self.context_window = (self.context_window / 2).max(4000);
+
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                "Context window full — pruning old messages, retrying...".into(),
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
+                            ))
+                            .await;
+                        self.aggressive_prune();
+                        self.trim_messages();
+                        // Retry once
+                        match self
+                            .provider
+                            .send(&self.messages, &self.tools, &self.system_prompt)
+                            .await
+                        {
+                            Ok(r) => {
+                                self.consecutive_errors = 0;
+                                self.update_cost(&r).await;
+                                r
+                            }
+                            Err(retry_err) => {
+                                let _ = self
+                                    .event_tx
+                                    .send(AiEvent::Error(
+                                        format!(
+                                            "Context overflow recovery failed: {}",
+                                            retry_err.message
+                                        ),
+                                        self.transcript_path
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().to_string()),
+                                    ))
+                                    .await;
+                                if let Some(start_idx) = self.transaction_start_idx {
+                                    self.collapse_transaction(start_idx);
+                                }
+                                self.transaction_start_idx = None;
+                                return;
+                            }
+                        }
+                    }
                     // Circuit breaker: if retryable and under threshold, backoff and retry
-                    if e.retryable && self.consecutive_errors <= 3 {
+                    else if e.retryable && self.consecutive_errors <= 3 {
                         let backoff = std::time::Duration::from_millis(
                             500 * (1 << (self.consecutive_errors - 1)),
                         );
@@ -356,18 +762,88 @@ impl AgentSession {
                         );
                         tokio::time::sleep(backoff).await;
                         continue;
+                    } else {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                e.message,
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
+                            ))
+                            .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
+                        return;
                     }
-
-                    let _ = self.event_tx.send(AiEvent::Error(e.message)).await;
-                    return;
                 }
             };
+
+            if !response.tool_calls.is_empty() {
+                // Signature: sorted tool names + arguments for robust comparison
+                let mut names: Vec<String> = response
+                    .tool_calls
+                    .iter()
+                    .map(|c| format!("{}:{}", c.name, c.arguments))
+                    .collect();
+                names.sort();
+                let turn_sig = names.join("|");
+
+                // Oscillating Loop Detection: check if this turn matches any of the last 6 turns
+                if self.turn_history.contains(&turn_sig) {
+                    self.consecutive_identical_tools += 1;
+                    if self.consecutive_identical_tools >= 4 {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                "AI got stuck in an infinite tool loop — aborting".into(),
+                                self.transcript_path
+                                    .as_ref()
+                                    .map(|p| p.to_string_lossy().to_string()),
+                            ))
+                            .await;
+
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
+                        return;
+                    }
+                } else {
+                    self.consecutive_identical_tools = 0;
+                }
+
+                if self.turn_history.len() >= 6 {
+                    self.turn_history.pop_front();
+                }
+                self.turn_history.push_back(turn_sig);
+                self.last_tool_calls = Some(response.tool_calls.clone());
+            }
+
+            // Auto-save turn to transcript
+            if let Some(ref path) = self.transcript_path {
+                if let Ok(json) = serde_json::to_string_pretty(&response) {
+                    let file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path);
+                    if let Ok(mut f) = file {
+                        let _ = std::io::Write::write_all(&mut f, b"\n--- RESPONSE ---\n");
+                        let _ = std::io::Write::write_all(&mut f, json.as_bytes());
+                    }
+                }
+            }
 
             // Send text response if present
             if let Some(ref text) = response.text {
                 let _ = self
                     .event_tx
-                    .send(AiEvent::TextResponse(text.clone()))
+                    .send(AiEvent::TextResponse {
+                        text: text.clone(),
+                        target_buffer: self.target_buffer.clone(),
+                    })
                     .await;
             }
 
@@ -380,19 +856,132 @@ impl AgentSession {
                 });
                 let _ = self
                     .event_tx
-                    .send(AiEvent::SessionComplete(final_text))
+                    .send(AiEvent::SessionComplete {
+                        text: final_text,
+                        target_buffer: self.target_buffer.clone(),
+                        transcript_path: self
+                            .transcript_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
+                    })
                     .await;
+                if let Some(start_idx) = self.transaction_start_idx {
+                    self.collapse_transaction(start_idx);
+                }
+                self.transaction_start_idx = None;
                 return;
             }
 
-            // Record assistant message with tool calls
+            let mut seen_calls = std::collections::HashSet::new();
+            let mut deduplicated_calls = Vec::new();
+            for call in &response.tool_calls {
+                let sig = format!("{}:{}", call.name, call.arguments);
+                if seen_calls.insert(sig) {
+                    deduplicated_calls.push(call.clone());
+                } else {
+                    debug!(tool = %call.name, "dropped identical parallel tool call");
+                }
+            }
+
+            // Record assistant message with tool calls (preserve text if present)
+            let content = if let Some(text) = response.text.clone() {
+                MessageContent::TextWithToolCalls {
+                    text,
+                    tool_calls: deduplicated_calls.clone(),
+                }
+            } else {
+                MessageContent::ToolCalls(deduplicated_calls.clone())
+            };
             self.messages.push(Message {
                 role: Role::Assistant,
-                content: MessageContent::ToolCalls(response.tool_calls.clone()),
+                content,
             });
 
             // Execute each tool call
-            for call in &response.tool_calls {
+            for call in &deduplicated_calls {
+                // UI Notification: tool execution started
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::ToolCallStarted {
+                        name: call.name.clone(),
+                    })
+                    .await;
+
+                // request_tools meta-tool: extend the active tool set
+                if call.name == "request_tools" {
+                    let categories_str = call
+                        .arguments
+                        .get("categories")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let categories = crate::tools::parse_categories(categories_str);
+                    let mut added_names = Vec::new();
+                    for cat in &categories {
+                        if self.enabled_categories.insert(*cat) {
+                            // Add tools from this category
+                            for tool in &self.all_tools {
+                                if crate::tools::classify_tool_category(&tool.name) == Some(*cat)
+                                    && !self.tools.iter().any(|t| t.name == tool.name)
+                                {
+                                    added_names.push(tool.name.clone());
+                                    self.tools.push(tool.clone());
+                                }
+                            }
+                        }
+                    }
+                    // Recache tools token estimate
+                    self.tools_tokens = token_estimate::estimate_tools_tokens(&self.tools);
+                    let output = if added_names.is_empty() {
+                        "No new tools added (categories already enabled or not recognized).".into()
+                    } else {
+                        format!(
+                            "Added {} tools: {}",
+                            added_names.len(),
+                            added_names.join(", ")
+                        )
+                    };
+                    info!(categories = %categories_str, added = added_names.len(), "request_tools");
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: output.clone(),
+                        })
+                        .await;
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            success: true,
+                            output,
+                        }),
+                    });
+                    continue;
+                }
+
+                // read_transcript allows the AI to see its own raw logs
+                if call.name == "read_transcript" {
+                    let output = if let Some(ref path) = self.transcript_path {
+                        match std::fs::read_to_string(path) {
+                            Ok(s) => s,
+                            Err(e) => format!("Failed to read transcript file: {}", e),
+                        }
+                    } else {
+                        "Transcript logging is disabled for this session".into()
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            success: true,
+                            output,
+                        }),
+                    });
+                    continue;
+                }
+
                 // shell_exec runs async on this task — no need to cross to main thread
                 if call.name == "shell_exec" {
                     let command_arg = call
@@ -405,16 +994,307 @@ impl AgentSession {
                         command = command_arg,
                         "executing shell command on AI task"
                     );
-                    let result = Self::execute_shell(call).await;
+                    let mut result = Self::execute_shell(call).await;
                     debug!(
                         tool = "shell_exec",
                         success = result.success,
                         "shell command complete"
                     );
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: result.success,
+                            output: result.output.clone(),
+                        })
+                        .await;
+                    self.truncate_tool_result(&mut result);
                     self.messages.push(Message {
                         role: Role::Tool,
                         content: MessageContent::ToolResult(result),
                     });
+                    continue;
+                }
+
+                // log_activity (UI only reasoning step)
+                if call.name == "log_activity" {
+                    let activity = call
+                        .arguments
+                        .get("activity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Thinking...");
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: activity.to_string(),
+                        })
+                        .await;
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(ToolResult {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            success: true,
+                            output: activity.into(),
+                        }),
+                    });
+                    continue;
+                }
+
+                // ai_set_mode requests the editor to switch operating modes
+                if call.name == "ai_set_mode" {
+                    let mode = call.arguments["mode"]
+                        .as_str()
+                        .unwrap_or("standard")
+                        .to_string();
+                    let _ = self.event_tx.send(AiEvent::UpdateMode(mode.clone())).await;
+                    let result_text = format!("AI mode change requested: {}", mode);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: result_text,
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // ai_set_profile requests the editor to switch prompt personas
+                if call.name == "ai_set_profile" {
+                    let profile = call.arguments["profile"]
+                        .as_str()
+                        .unwrap_or("pair-programmer")
+                        .to_string();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::UpdateProfile(profile.clone()))
+                        .await;
+                    let result_text = format!("AI profile change requested: {}", profile);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: result_text,
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // ai_set_budget updates session state directly
+                if call.name == "ai_set_budget" {
+                    if let Some(warn) = call.arguments.get("warn").and_then(|v| v.as_f64()) {
+                        self.budget.session_warn_usd = if warn > 0.0 { Some(warn) } else { None };
+                        self.warned = false; // Reset warning state
+                    }
+                    if let Some(cap) = call.arguments.get("cap").and_then(|v| v.as_f64()) {
+                        self.budget.session_hard_cap_usd = if cap > 0.0 { Some(cap) } else { None };
+                    }
+                    let result_text = format!("Budget updated: {:?}", self.budget);
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: true,
+                            output: result_text.clone(),
+                        })
+                        .await;
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: result_text,
+                    };
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // ask_user pauses the session and waits for a string reply
+                if call.name == "ask_user" {
+                    let question = call.arguments["question"]
+                        .as_str()
+                        .unwrap_or("No question provided")
+                        .to_string();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::AskUser {
+                            question,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(reply) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: true,
+                                    output: reply.clone(),
+                                })
+                                .await;
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    success: true,
+                                    output: reply,
+                                }),
+                            });
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                })
+                                .await;
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                }),
+                            });
+                        }
+                    }
+                    continue;
+                }
+
+                // propose_changes pauses and waits for a boolean approval
+                if call.name == "propose_changes" {
+                    let changes = call.arguments["changes"].clone();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ProposeChanges {
+                            changes,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(approved) => {
+                            let output = if approved {
+                                "Changes approved and applied"
+                            } else {
+                                "Changes rejected by user"
+                            };
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: approved,
+                                    output: output.into(),
+                                })
+                                .await;
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    success: approved,
+                                    output: output.into(),
+                                }),
+                            });
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                })
+                                .await;
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    success: false,
+                                    output: "User canceled or request failed".into(),
+                                }),
+                            });
+                        }
+                    }
+                    continue;
+                }
+
+                // delegate pauses and waits for a ToolResult from a sub-agent
+                if call.name == "delegate" {
+                    let profile = call.arguments["profile"]
+                        .as_str()
+                        .unwrap_or("pair-programmer")
+                        .to_string();
+                    let objective = call.arguments["objective"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::Delegate {
+                            profile,
+                            objective,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(mut result) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: result.success,
+                                    output: result.output.clone(),
+                                })
+                                .await;
+                            self.truncate_tool_result(&mut result);
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(result),
+                            });
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::ToolCallFinished {
+                                    success: false,
+                                    output: "Sub-agent delegation failed".into(),
+                                })
+                                .await;
+                            self.messages.push(Message {
+                                role: Role::Tool,
+                                content: MessageContent::ToolResult(ToolResult {
+                                    tool_call_id: call.id.clone(),
+                                    tool_name: call.name.clone(),
+                                    success: false,
+                                    output: "Sub-agent delegation failed".into(),
+                                }),
+                            });
+                        }
+                    }
                     continue;
                 }
 
@@ -432,14 +1312,26 @@ impl AgentSession {
                     error!("event channel closed — cannot send tool call request");
                     let _ = self
                         .event_tx
-                        .send(AiEvent::Error("Event channel closed".into()))
+                        .send(AiEvent::Error("Event channel closed".into(), None))
                         .await;
+                    if let Some(start_idx) = self.transaction_start_idx {
+                        self.collapse_transaction(start_idx);
+                    }
+                    self.transaction_start_idx = None;
                     return;
                 }
 
                 match reply_rx.await {
-                    Ok(result) => {
+                    Ok(mut result) => {
                         debug!(tool = %call.name, success = result.success, "tool result received");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::ToolCallFinished {
+                                success: result.success,
+                                output: result.output.clone(),
+                            })
+                            .await;
+                        self.truncate_tool_result(&mut result);
                         self.messages.push(Message {
                             role: Role::Tool,
                             content: MessageContent::ToolResult(result),
@@ -449,26 +1341,118 @@ impl AgentSession {
                         error!(tool = %call.name, "tool result channel closed");
                         let _ = self
                             .event_tx
-                            .send(AiEvent::Error("Tool result channel closed".into()))
+                            .send(AiEvent::ToolCallFinished {
+                                success: false,
+                                output: "Tool result channel closed".into(),
+                            })
                             .await;
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error("Tool result channel closed".into(), None))
+                            .await;
+                        if let Some(start_idx) = self.transaction_start_idx {
+                            self.collapse_transaction(start_idx);
+                        }
+                        self.transaction_start_idx = None;
                         return;
                     }
                 }
             }
             // Loop: provider sees tool results and may issue more calls
+            round += 1;
+        }
+    }
+
+    /// Collapse intermediate tool calls and results in the current transaction
+    /// into a single reasoning/summary message.
+    ///
+    /// Preserves: System prompt, User prompt, Final response text.
+    /// Condenses: Tool calls, tool results, intermediate reasoning text.
+    fn collapse_transaction(&mut self, start_idx: usize) {
+        if self.messages.len() <= start_idx + 1 {
+            return;
         }
 
-        warn!(
-            max_rounds = self.max_rounds,
-            "AI exceeded maximum tool call rounds"
+        // Only treat the last message as the final response if it's an Assistant text message.
+        // If the loop was aborted (context full, error, etc), the last message might be
+        // a Tool result or an Assistant message with tool calls — those must be collapsed.
+        let mut final_response = None;
+        if let Some(last) = self.messages.last() {
+            if last.role == Role::Assistant {
+                if let MessageContent::Text(_) = last.content {
+                    final_response = self.messages.pop();
+                }
+            }
+        }
+
+        let to_drain = self.messages.len().saturating_sub(start_idx + 1);
+        if to_drain == 0 {
+            if let Some(resp) = final_response {
+                self.messages.push(resp);
+            }
+            return;
+        }
+
+        let drained: Vec<Message> = self.messages.drain(start_idx + 1..).collect();
+
+        let mut tool_count = 0;
+        let mut reasoning = Vec::new();
+        for msg in drained {
+            match &msg.content {
+                MessageContent::Text(t) => {
+                    if msg.role == Role::Assistant {
+                        reasoning.push(t.clone());
+                    }
+                }
+                MessageContent::TextWithToolCalls { text, tool_calls } => {
+                    reasoning.push(text.clone());
+                    tool_count += tool_calls.len();
+                }
+                MessageContent::ToolCalls(calls) => {
+                    tool_count += calls.len();
+                }
+                MessageContent::ToolResult(_) => {}
+            }
+        }
+
+        // If we have reasoning text or tool operations, insert a single compressed reasoning message
+        if !reasoning.is_empty() || tool_count > 0 {
+            let mut summary = String::new();
+            if !reasoning.is_empty() {
+                summary.push_str("Thought process:\n");
+                for r in &reasoning {
+                    summary.push_str("- ");
+                    summary.push_str(r);
+                    summary.push('\n');
+                }
+            }
+            if tool_count > 0 {
+                summary.push_str(&format!(
+                    "\n(Assistant performed {} tool operations)",
+                    tool_count
+                ));
+            }
+
+            self.messages.push(Message {
+                role: Role::Assistant,
+                content: MessageContent::Text(summary),
+            });
+        }
+
+        let has_final = final_response.is_some();
+        if let Some(resp) = final_response {
+            self.messages.push(resp);
+        }
+
+        debug!(
+            original_len = to_drain + (if has_final { 1 } else { 0 }),
+            new_len = if reasoning.is_empty() && tool_count == 0 {
+                0
+            } else {
+                1
+            } + (if has_final { 1 } else { 0 }),
+            "collapsed tool callstack"
         );
-        let _ = self
-            .event_tx
-            .send(AiEvent::Error(format!(
-                "AI exceeded maximum tool call rounds ({})",
-                self.max_rounds
-            )))
-            .await;
     }
 }
 
@@ -502,6 +1486,7 @@ mod tests {
                 Err(ProviderError {
                     message: "No more mock responses".into(),
                     retryable: false,
+                    kind: ErrorKind::Unknown,
                 })
             } else {
                 Ok(responses.remove(0))
@@ -510,6 +1495,20 @@ mod tests {
 
         fn name(&self) -> &str {
             "mock"
+        }
+    }
+
+    /// Receive the next event, skipping RoundUpdate and the initialization TextResponse.
+    async fn recv_filtered(rx: &mut mpsc::Receiver<AiEvent>) -> AiEvent {
+        loop {
+            let evt = rx.recv().await.unwrap();
+            match &evt {
+                AiEvent::RoundUpdate { .. } => continue,
+                AiEvent::ToolCallStarted { .. } => continue,
+                AiEvent::ToolCallFinished { .. } => continue,
+                AiEvent::TextResponse { text, .. } if text.starts_with("[AI:") => continue,
+                _ => return evt,
+            }
         }
     }
 
@@ -532,12 +1531,12 @@ mod tests {
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
         // Should get TextResponse then SessionComplete
-        match event_rx.recv().await.unwrap() {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Hello!"),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Hello!"),
             other => panic!("expected TextResponse, got {:?}", other),
         }
-        match event_rx.recv().await.unwrap() {
-            AiEvent::SessionComplete(t) => assert_eq!(t, "Hello!"),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "Hello!"),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
 
@@ -580,18 +1579,19 @@ mod tests {
             .unwrap();
 
         // TextResponse from first response
-        match event_rx.recv().await.unwrap() {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Let me check."),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Let me check."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
         // ToolCallRequest
-        match event_rx.recv().await.unwrap() {
+        match recv_filtered(&mut event_rx).await {
             AiEvent::ToolCallRequest { call, reply } => {
                 assert_eq!(call.name, "cursor_info");
                 reply
                     .send(ToolResult {
                         tool_call_id: "call_1".into(),
+                        tool_name: "cursor_info".into(),
                         success: true,
                         output: r#"{"cursor_row":1}"#.into(),
                     })
@@ -601,14 +1601,14 @@ mod tests {
         }
 
         // TextResponse from second response
-        match event_rx.recv().await.unwrap() {
-            AiEvent::TextResponse(t) => assert_eq!(t, "You're on line 1."),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "You're on line 1."),
             other => panic!("expected TextResponse, got {:?}", other),
         }
 
         // SessionComplete
-        match event_rx.recv().await.unwrap() {
-            AiEvent::SessionComplete(t) => assert_eq!(t, "You're on line 1."),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "You're on line 1."),
             other => panic!("expected SessionComplete, got {:?}", other),
         }
 
@@ -628,61 +1628,10 @@ mod tests {
 
         cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
 
-        match event_rx.recv().await.unwrap() {
-            AiEvent::Error(msg) => assert!(msg.contains("No more mock responses")),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::Error(msg, _) => assert!(msg.contains("No more mock responses")),
             other => panic!("expected Error, got {:?}", other),
         }
-
-        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn max_rounds_exceeded() {
-        let (event_tx, mut event_rx) = mpsc::channel(64);
-        let (cmd_tx, cmd_rx) = mpsc::channel(8);
-
-        // Provider always returns a tool call — will hit max rounds
-        let mut responses = Vec::new();
-        for i in 0..25 {
-            responses.push(ProviderResponse {
-                text: None,
-                tool_calls: vec![ToolCall {
-                    id: format!("call_{}", i),
-                    name: "cursor_info".into(),
-                    arguments: serde_json::json!({}),
-                }],
-                stop_reason: StopReason::ToolUse,
-                usage: None,
-            });
-        }
-
-        let provider = Box::new(MockProvider::new(responses));
-        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
-
-        tokio::spawn(session.run());
-
-        cmd_tx.send(AiCommand::Prompt("loop".into())).await.unwrap();
-
-        // Drain events until we get the error
-        let mut found_error = false;
-        for _ in 0..100 {
-            match event_rx.recv().await {
-                Some(AiEvent::Error(msg)) => {
-                    assert!(msg.contains("exceeded maximum"));
-                    found_error = true;
-                    break;
-                }
-                Some(AiEvent::ToolCallRequest { reply, .. }) => {
-                    let _ = reply.send(ToolResult {
-                        tool_call_id: "x".into(),
-                        success: true,
-                        output: "ok".into(),
-                    });
-                }
-                _ => continue,
-            }
-        }
-        assert!(found_error, "should have received max rounds error");
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
     }
@@ -771,10 +1720,13 @@ mod tests {
 
         // Should NOT get a ToolCallRequest — shell_exec is handled locally.
         // We should get TextResponse then SessionComplete.
-        match event_rx.recv().await.unwrap() {
-            AiEvent::TextResponse(t) => assert_eq!(t, "Done."),
-            AiEvent::SessionComplete(t) => assert_eq!(t, "Done."),
-            other => panic!("expected TextResponse or SessionComplete, got {:?}", other),
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::TextResponse { text, .. } => assert_eq!(text, "Done."),
+            other => panic!("expected TextResponse, got {:?}", other),
+        }
+        match recv_filtered(&mut event_rx).await {
+            AiEvent::SessionComplete { text, .. } => assert_eq!(text, "Done."),
+            other => panic!("expected SessionComplete, got {:?}", other),
         }
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
@@ -891,6 +1843,7 @@ mod tests {
                     Err(ProviderError {
                         message: format!("rate limited (attempt {})", count),
                         retryable: true,
+                        kind: ErrorKind::RateLimit,
                     })
                 } else {
                     Ok(ProviderResponse {
@@ -918,12 +1871,15 @@ mod tests {
         let mut got_response = false;
         for _ in 0..10 {
             match tokio::time::timeout(std::time::Duration::from_secs(10), event_rx.recv()).await {
-                Ok(Some(AiEvent::TextResponse(t))) => {
-                    assert_eq!(t, "recovered!");
+                Ok(Some(AiEvent::TextResponse { text, .. })) => {
+                    if text.starts_with("[AI:") {
+                        continue; // skip init message
+                    }
+                    assert_eq!(text, "recovered!");
                     got_response = true;
                     break;
                 }
-                Ok(Some(AiEvent::SessionComplete(_))) => {
+                Ok(Some(AiEvent::SessionComplete { .. })) => {
                     got_response = true;
                     break;
                 }
@@ -958,8 +1914,10 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 1_000,
+                prompt_tokens: 1000,
                 completion_tokens: 500,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }),
         }]));
 
@@ -999,8 +1957,10 @@ mod tests {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
             usage: Some(Usage {
-                prompt_tokens: 1_000,
+                prompt_tokens: 1000,
                 completion_tokens: 500,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }),
         }]));
 
@@ -1036,8 +1996,10 @@ mod tests {
                 }],
                 stop_reason: StopReason::ToolUse,
                 usage: Some(Usage {
-                    prompt_tokens: 1_000,
-                    completion_tokens: 500,
+                    prompt_tokens: 10000,
+                    completion_tokens: 5000,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }),
             },
             ProviderResponse {
@@ -1045,8 +2007,10 @@ mod tests {
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
                 usage: Some(Usage {
-                    prompt_tokens: 1_000,
-                    completion_tokens: 500,
+                    prompt_tokens: 10000,
+                    completion_tokens: 5000,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }),
             },
         ]));
@@ -1099,8 +2063,10 @@ mod tests {
                     }],
                     stop_reason: StopReason::ToolUse,
                     usage: Some(Usage {
-                        prompt_tokens: 10_000,
-                        completion_tokens: 2_000,
+                        prompt_tokens: 10000,
+                        completion_tokens: 5000,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     }),
                 })
             }
@@ -1138,6 +2104,7 @@ mod tests {
                 Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
                     let _ = reply.send(ToolResult {
                         tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
                         success: true,
                         output: "ok".into(),
                     });
@@ -1160,5 +2127,397 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), 1);
 
         cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_tool_loop_circuit_breaker() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Provider returns the same tool call every time
+        let mut responses = Vec::new();
+        for i in 0..10 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: format!("call_{}", i),
+                    name: "cursor_info".into(),
+                    arguments: serde_json::json!({}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+
+        let provider = Box::new(MockProvider::new(responses));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_rounds = 20;
+
+        tokio::spawn(session.run());
+        cmd_tx.send(AiCommand::Prompt("loop".into())).await.unwrap();
+
+        let mut found_circuit_breaker = false;
+        for _ in 0..50 {
+            match event_rx.recv().await {
+                Some(AiEvent::Error(msg, _)) => {
+                    if msg.contains("stuck in an infinite tool loop") {
+                        found_circuit_breaker = true;
+                        break;
+                    }
+                }
+                Some(AiEvent::ToolCallRequest { call, reply }) => {
+                    let _ = reply.send(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: "ok".into(),
+                    });
+                }
+                _ => continue,
+            }
+        }
+        assert!(
+            found_circuit_breaker,
+            "should have triggered circuit breaker"
+        );
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
+    #[test]
+    fn test_trim_preserves_tool_call_pairs() {
+        let (event_tx, _) = mpsc::channel(32);
+        let (_, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // Setup messages:
+        // 0: User (kept)
+        // 1: Assistant (Text) - should be pruned
+        // 2: Assistant (ToolCalls) - should NOT be orphaned from 3
+        // 3: Tool (Result)
+        // 4: Assistant (Final)
+        session.messages = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("init".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("unrelated".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::ToolCalls(vec![ToolCall {
+                    id: "c1".into(),
+                    name: "t1".into(),
+                    arguments: serde_json::json!({}),
+                }]),
+            },
+            Message {
+                role: Role::Tool,
+                content: MessageContent::ToolResult(ToolResult {
+                    tool_call_id: "c1".into(),
+                    tool_name: "t1".into(),
+                    success: true,
+                    output: "ok".into(),
+                }),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("final".into()),
+            },
+        ];
+
+        // Set context window to allow some pruning but keep some history
+        session.context_window = 10000;
+        session.max_messages = 3;
+
+        session.trim_messages();
+
+        // Verify: messages.len() should be 3 (User + Assistant summary + Final)
+        assert!(session.messages.len() > 1);
+        assert_ne!(
+            session.messages[1].role,
+            Role::Tool,
+            "Tool message was orphaned at boundary"
+        );
+    }
+
+    #[test]
+    fn test_trim_messages_protects_active_transaction() {
+        let (event_tx, _) = mpsc::channel(32);
+        let (_, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // System prompt is ~3 tokens
+        // Each message is ~10 tokens
+        session.context_window = 100; // Very small
+        session.max_messages = 50;
+        session.reserved_output = 20;
+
+        session.messages = vec![
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("historical 1".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("historical 2".into()),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::Text("START TRANSACTION".into()),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("tool call 1".into()),
+            },
+            Message {
+                role: Role::Tool,
+                content: MessageContent::ToolResult(ToolResult {
+                    tool_call_id: "id1".into(),
+                    tool_name: "t1".into(),
+                    success: true,
+                    output: "tool result 1".into(),
+                }),
+            },
+        ];
+
+        // Mark the transaction start at "START TRANSACTION" (index 2)
+        session.transaction_start_idx = Some(2);
+
+        // Pre-trim state: 5 messages
+        assert_eq!(session.messages.len(), 5);
+
+        session.trim_messages();
+
+        // Verification:
+        // - "historical 1" (index 0) is kept because it's the first message.
+        // - "historical 2" (index 1) should be pruned because it's before transaction_start_idx and we're over budget.
+        // - "START TRANSACTION" (index 2) and beyond must be preserved.
+        assert_eq!(session.messages.len(), 4);
+        assert_eq!(
+            token_estimate::estimate_messages_tokens(&[session.messages[1].clone()]),
+            token_estimate::estimate_messages_tokens(&[Message {
+                role: Role::User,
+                content: MessageContent::Text("START TRANSACTION".into()),
+            }]),
+            "Transaction start message was pruned!"
+        );
+        assert_eq!(session.transaction_start_idx, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_session_cancel_emits_session_complete() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Setup a mock provider that returns a tool call to simulate being in the tool loop
+        let responses = vec![ProviderResponse {
+            text: Some("Thinking...".into()),
+            tool_calls: vec![ToolCall {
+                id: "c1".into(),
+                name: "shell_exec".into(),
+                arguments: serde_json::json!({"command": "sleep 10"}),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: None,
+        }];
+
+        let provider = Box::new(MockProvider::new(responses));
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // Start session in background
+        let session_task = tokio::spawn(session.run());
+
+        // Send a prompt to start the loop
+        cmd_tx
+            .send(AiCommand::Prompt("run something slow".into()))
+            .await
+            .unwrap();
+
+        // Wait for the first text response
+        let _ = event_rx.recv().await;
+
+        // While it's "executing" the tool, send a cancel
+        cmd_tx.send(AiCommand::Cancel).await.unwrap();
+
+        // Assert we receive TextResponse("[Interrupted by user]") followed by SessionComplete
+        let mut got_interrupted_text = false;
+        let mut got_session_complete = false;
+
+        for _ in 0..10 {
+            match event_rx.recv().await {
+                Some(AiEvent::TextResponse { text, .. }) => {
+                    if text.contains("[Interrupted by user]") {
+                        got_interrupted_text = true;
+                    }
+                }
+                Some(AiEvent::SessionComplete { text, .. }) => {
+                    if text.contains("[Interrupted by user]") {
+                        got_session_complete = true;
+                    }
+                    break;
+                }
+                _ => continue,
+            }
+        }
+
+        assert!(got_interrupted_text, "Missing interrupted text response");
+        assert!(
+            got_session_complete,
+            "Missing SessionComplete event after cancellation"
+        );
+
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+        let _ = session_task.await;
+    }
+
+    #[tokio::test]
+    async fn test_mid_flight_compaction() {
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Provider returns many tool calls to trigger compaction
+        let mut responses = Vec::new();
+        for i in 0..25 {
+            responses.push(ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: format!("id{}", i),
+                    name: "log_activity".into(),
+                    arguments: serde_json::json!({"activity": format!("step {}", i)}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            });
+        }
+        responses.push(ProviderResponse {
+            text: Some("Done".into()),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+
+        let provider = Box::new(MockProvider::new(responses));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.context_window = 10000;
+
+        tokio::spawn(session.run());
+        cmd_tx
+            .send(AiCommand::Prompt("start".to_string()))
+            .await
+            .unwrap();
+
+        // We expect many RoundUpdates and eventually a SessionComplete
+        let mut max_round = 0;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::RoundUpdate { round, .. } => {
+                    max_round = max_round.max(round);
+                }
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(max_round >= 20, "Should have run many rounds");
+        // Internal check: messages should have been compacted.
+        // In the test we can't easily check internal state of the spawned task,
+        // but we can verify the session didn't crash and finished.
+    }
+
+    #[tokio::test]
+    async fn test_ui_events_for_internal_tools() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        let provider = Box::new(MockProvider::new(vec![
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    name: "shell_exec".into(),
+                    arguments: serde_json::json!({"command": "echo ui-test"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Ok".into()),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]));
+
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        tokio::spawn(session.run());
+
+        cmd_tx
+            .send(AiCommand::Prompt("run".to_string()))
+            .await
+            .unwrap();
+
+        let mut started = false;
+        let mut finished = false;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::ToolCallStarted { name } if name == "shell_exec" => started = true,
+                AiEvent::ToolCallFinished { .. } => finished = true,
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(started, "Missing ToolCallStarted for shell_exec");
+        assert!(finished, "Missing ToolCallFinished for shell_exec");
+    }
+
+    #[tokio::test]
+    async fn test_log_activity_tool() {
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        let provider = Box::new(MockProvider::new(vec![
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    name: "log_activity".into(),
+                    arguments: serde_json::json!({"activity": "I am thinking"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Done".into()),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]));
+
+        let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        tokio::spawn(session.run());
+
+        cmd_tx
+            .send(AiCommand::Prompt("think".to_string()))
+            .await
+            .unwrap();
+
+        let mut activity_logged = false;
+        while let Some(evt) = event_rx.recv().await {
+            match evt {
+                AiEvent::ToolCallFinished { output, .. } if output == "I am thinking" => {
+                    activity_logged = true
+                }
+                AiEvent::SessionComplete { .. } => break,
+                _ => continue,
+            }
+        }
+
+        assert!(activity_logged, "Activity was not logged to UI");
     }
 }

@@ -22,7 +22,7 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
     });
     if let Some(idx) = existing_idx {
         let name = editor.buffers[idx].name.clone();
-        editor.switch_to_buffer(idx);
+        editor.switch_to_buffer_non_conversation(idx);
         return Ok(format!(
             "Switched to existing buffer '{}' (already open)",
             name
@@ -30,15 +30,20 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
     }
 
     // Open new buffer
-    editor.open_file(path);
+    editor.open_file_non_conversation(path);
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
     } else {
-        Ok(format!(
-            "Opened '{}' ({} lines)",
-            editor.active_buffer().name,
-            editor.active_buffer().line_count()
-        ))
+        let target_name = editor
+            .ai_target_buffer_idx
+            .map(|idx| editor.buffers[idx].name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let line_count = editor
+            .ai_target_buffer_idx
+            .map(|idx| editor.buffers[idx].line_count())
+            .unwrap_or(0);
+
+        Ok(format!("Opened '{}' ({} lines)", target_name, line_count))
     }
 }
 
@@ -55,7 +60,7 @@ pub fn execute_switch_buffer(
         .find_buffer_by_name(name)
         .ok_or_else(|| format!("No buffer named '{}'", name))?;
 
-    editor.switch_to_buffer(idx);
+    editor.switch_to_buffer_non_conversation(idx);
     Ok(format!("Switched to buffer '{}'", name))
 }
 
@@ -171,7 +176,7 @@ pub fn execute_create_file(
     std::fs::write(file_path, content).map_err(|e| format!("Failed to create file: {}", e))?;
 
     // Open it as a buffer
-    editor.open_file(path);
+    editor.open_file_non_conversation(path);
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
     } else {

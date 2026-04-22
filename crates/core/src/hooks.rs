@@ -22,6 +22,10 @@ pub const HOOK_NAMES: &[&str] = &[
     "command-pre",
     "command-post",
     "file-changed-on-disk",
+    "app-start",
+    "app-exit",
+    "focus-in",
+    "focus-out",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.

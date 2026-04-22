@@ -191,7 +191,7 @@ fn render_shell_grid(
         for (col_idx, cell_opt) in row_cells.iter().enumerate() {
             let bg = cell_opt.as_ref().map(|c| c.bg).unwrap_or(default_bg);
 
-            if run_bg.map_or(false, |rb| color4f_eq(rb, bg)) {
+            if run_bg.is_some_and(|rb| color4f_eq(rb, bg)) {
                 run_len += 1;
             } else {
                 // Flush previous run.

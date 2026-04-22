@@ -44,6 +44,47 @@ struct SharedState {
     pending_messages: Vec<String>,
     /// Shell inputs to send: (buffer_index, text).
     pending_shell_inputs: Vec<(usize, String)>,
+    /// Recent files to add: (path).
+    pending_recent_files: Vec<String>,
+    /// Recent projects to add: (path).
+    pending_recent_projects: Vec<String>,
+    /// Visual buffer operations.
+    pending_visual_ops: Vec<VisualOp>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VisualOp {
+    AddRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fill: Option<String>,
+        stroke: Option<String>,
+    },
+    AddLine {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        color: String,
+        thickness: f32,
+    },
+    AddCircle {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fill: Option<String>,
+        stroke: Option<String>,
+    },
+    AddText {
+        x: f32,
+        y: f32,
+        text: String,
+        font_size: f32,
+        color: String,
+    },
+    Clear,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -209,6 +250,101 @@ impl SchemeRuntime {
             SteelVal::Void
         });
 
+        let s = shared.clone();
+        engine.register_fn("recent-files-add!", move |path: String| {
+            s.lock().unwrap().pending_recent_files.push(path);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("recent-projects-add!", move |path: String| {
+            s.lock().unwrap().pending_recent_projects.push(path);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-rect!",
+            move |x: f64, y: f64, w: f64, h: f64, fill: Option<String>, stroke: Option<String>| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddRect {
+                    x: x as f32,
+                    y: y as f32,
+                    w: w as f32,
+                    h: h as f32,
+                    fill,
+                    stroke,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn("visual-buffer-clear!", move || {
+            s.lock().unwrap().pending_visual_ops.push(VisualOp::Clear);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-line!",
+            move |x1: f64, y1: f64, x2: f64, y2: f64, color: String, thickness: f64| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddLine {
+                    x1: x1 as f32,
+                    y1: y1 as f32,
+                    x2: x2 as f32,
+                    y2: y2 as f32,
+                    color,
+                    thickness: thickness as f32,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-circle!",
+            move |cx: f64, cy: f64, r: f64, fill: Option<String>, stroke: Option<String>| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddCircle {
+                    cx: cx as f32,
+                    cy: cy as f32,
+                    r: r as f32,
+                    fill,
+                    stroke,
+                });
+                SteelVal::Void
+            },
+        );
+
+        let s = shared.clone();
+        engine.register_fn(
+            "visual-buffer-add-text!",
+            move |x: f64, y: f64, text: String, font_size: f64, color: String| {
+                let mut state = s.lock().unwrap();
+                state.pending_visual_ops.push(VisualOp::AddText {
+                    x: x as f32,
+                    y: y as f32,
+                    text,
+                    font_size: font_size as f32,
+                    color,
+                });
+                SteelVal::Void
+            },
+        );
+
+        // Register default values for state-injected variables.
+        // This prevents FreeIdentifier errors in init.scm during startup.
+        engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
+        engine.register_value("*buffer-modified?*", SteelVal::BoolV(false));
+        engine.register_value("*buffer-line-count*", SteelVal::IntV(0));
+        engine.register_value("*buffer-char-count*", SteelVal::IntV(0));
+        engine.register_value("*cursor-row*", SteelVal::IntV(1));
+        engine.register_value("*cursor-col*", SteelVal::IntV(1));
+        engine.register_value("*mode*", SteelVal::StringV("normal".into()));
+        engine.register_value("*shell-buffers*", SteelVal::ListV(vec![].into()));
+
         Ok(SchemeRuntime {
             engine,
             shared,
@@ -306,6 +442,7 @@ impl SchemeRuntime {
             mae_core::Mode::FileBrowser => "file-browser",
             mae_core::Mode::CommandPalette => "command-palette",
             mae_core::Mode::ShellInsert => "shell-insert",
+            mae_core::Mode::GitStatus => "git-status",
         };
         self.engine
             .register_value("*mode*", SteelVal::StringV(mode_str.into()));
@@ -469,6 +606,93 @@ impl SchemeRuntime {
         // (shell-send-input BUF-IDX TEXT) — queue shell terminal input.
         for (buf_idx, text) in state.pending_shell_inputs.drain(..) {
             editor.pending_shell_inputs.push((buf_idx, text));
+        }
+
+        // Recent files and projects
+        for path in state.pending_recent_files.drain(..) {
+            editor.recent_files.push(std::path::PathBuf::from(path));
+        }
+        for path in state.pending_recent_projects.drain(..) {
+            editor.recent_projects.push(std::path::PathBuf::from(path));
+        }
+
+        // Visual buffer operations
+        let visual_ops = std::mem::take(&mut state.pending_visual_ops);
+        if !visual_ops.is_empty() {
+            let buf_idx = editor.active_buffer_idx();
+            if editor.buffers[buf_idx].kind == mae_core::BufferKind::Visual {
+                if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+                    for op in visual_ops {
+                        match op {
+                            VisualOp::AddRect {
+                                x,
+                                y,
+                                w,
+                                h,
+                                fill,
+                                stroke,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Rect {
+                                    x,
+                                    y,
+                                    w,
+                                    h,
+                                    fill,
+                                    stroke,
+                                });
+                            }
+                            VisualOp::AddLine {
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                color,
+                                thickness,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Line {
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    color,
+                                    thickness,
+                                });
+                            }
+                            VisualOp::AddCircle {
+                                cx,
+                                cy,
+                                r,
+                                fill,
+                                stroke,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Circle {
+                                    cx,
+                                    cy,
+                                    r,
+                                    fill,
+                                    stroke,
+                                });
+                            }
+                            VisualOp::AddText {
+                                x,
+                                y,
+                                text,
+                                font_size,
+                                color,
+                            } => {
+                                vb.add(mae_core::visual_buffer::VisualElement::Text {
+                                    x,
+                                    y,
+                                    text,
+                                    font_size,
+                                    color,
+                                });
+                            }
+                            VisualOp::Clear => vb.clear(),
+                        }
+                    }
+                }
+            }
         }
 
         // Drop the lock before dispatching commands (which may call
@@ -1015,5 +1239,38 @@ mod tests {
         let result = rt.eval("*shell-buffers*").unwrap();
         // Should contain the index of the shell buffer (1).
         assert!(result.contains("1"));
+    }
+
+    #[test]
+    fn test_recent_files_and_projects() {
+        let mut editor = Editor::new();
+        let mut runtime = SchemeRuntime::new().unwrap();
+
+        // Initially empty
+        assert_eq!(editor.recent_files.len(), 0);
+        assert_eq!(editor.recent_projects.len(), 0);
+
+        // Evaluate scheme calls
+        runtime
+            .eval("(recent-files-add! \"/tmp/test.txt\")")
+            .unwrap();
+        runtime
+            .eval("(recent-projects-add! \"/tmp/project\")")
+            .unwrap();
+
+        // Apply to editor
+        runtime.apply_to_editor(&mut editor);
+
+        // Verify editor state updated
+        assert_eq!(editor.recent_files.len(), 1);
+        assert_eq!(
+            editor.recent_files.list()[0],
+            std::path::PathBuf::from("/tmp/test.txt")
+        );
+        assert_eq!(editor.recent_projects.len(), 1);
+        assert_eq!(
+            editor.recent_projects.list()[0],
+            std::path::PathBuf::from("/tmp/project")
+        );
     }
 }

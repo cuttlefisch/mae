@@ -84,6 +84,34 @@ pub fn execute_shell_send_input(editor: &mut Editor, args: &Value) -> Result<Str
     Ok(format!("Input queued for shell terminal {}", buf_idx))
 }
 
+/// Queue an intent to spawn a new shell terminal buffer.
+pub fn execute_terminal_spawn(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("*Terminal*")
+        .to_string();
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let buf = mae_core::Buffer::new_shell(&name);
+    editor.buffers.push(buf);
+    let idx = editor.buffers.len() - 1;
+
+    if let Some(cmd) = command {
+        editor.pending_agent_spawns.push((idx, cmd));
+        Ok(format!(
+            "Agent terminal spawning with command in buffer {}",
+            idx
+        ))
+    } else {
+        editor.pending_shell_spawns.push(idx);
+        Ok(format!("Interactive terminal spawning in buffer {}", idx))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

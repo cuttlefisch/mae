@@ -16,7 +16,7 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
         self.file_picker = Some(FilePicker::scan(&root));
-        self.mode = Mode::FilePicker;
+        self.set_mode(Mode::FilePicker);
     }
 
     /// `project-browse` — open directory browser at project root.
@@ -28,12 +28,12 @@ impl Editor {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
         self.file_browser = Some(crate::FileBrowser::open(&root));
-        self.mode = Mode::FileBrowser;
+        self.set_mode(Mode::FileBrowser);
     }
 
     /// `project-search` — interactive grep in project root, results in scratch buffer.
     pub(crate) fn project_search(&mut self) {
-        self.mode = Mode::Command;
+        self.set_mode(Mode::Command);
         let root = self
             .project
             .as_ref()
@@ -65,7 +65,7 @@ impl Editor {
         }
         let name_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
         self.command_palette = Some(CommandPalette::for_recent_files(&name_refs));
-        self.mode = Mode::CommandPalette;
+        self.set_mode(Mode::CommandPalette);
     }
 
     /// `project-switch` — palette with recently used project roots.
@@ -79,7 +79,7 @@ impl Editor {
             .collect();
         let name_refs: Vec<&str> = roots.iter().map(|s| s.as_str()).collect();
         self.command_palette = Some(CommandPalette::for_project_switch(&name_refs));
-        self.mode = Mode::CommandPalette;
+        self.set_mode(Mode::CommandPalette);
     }
 
     /// `add-project` — add a directory to recent projects and switch to it.
@@ -121,6 +121,6 @@ impl Editor {
         }
         let name_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
         self.command_palette = Some(CommandPalette::for_recent_files(&name_refs));
-        self.mode = Mode::CommandPalette;
+        self.set_mode(Mode::CommandPalette);
     }
 }

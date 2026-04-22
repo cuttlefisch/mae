@@ -50,6 +50,7 @@ pub fn render_status_bar(
             Mode::FileBrowser => " BROWSE ",
             Mode::CommandPalette => " COMMAND PALETTE ",
             Mode::ShellInsert => " TERMINAL ",
+            mae_core::Mode::GitStatus => " GIT STATUS ",
         }
     };
 
@@ -69,6 +70,7 @@ pub fn render_status_bar(
             Mode::Command => "ui.statusline.mode.command",
             Mode::ConversationInput => "ui.statusline.mode.conversation",
             Mode::ShellInsert => "ui.statusline.mode.insert",
+            mae_core::Mode::GitStatus => "ui.statusline.mode.command",
             Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
                 "ui.statusline.mode.command"
             }

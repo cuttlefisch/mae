@@ -1,4 +1,7 @@
-# CLAUDE.md — Modern AI Editor (MAE)
+# AI Development Guide (CLAUDE.md) — Modern AI Editor (MAE)
+
+> [!CAUTION]
+> **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail. Always monitor your API usage and costs directly in your provider dashboards.
 
 ## What This Project Is
 
@@ -27,7 +30,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
-| `mae-ai` | AI agent integration — tool-calling transport, maps to Scheme API | `reqwest`, `serde_json` |
+| `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 
 ## Architecture Principles
@@ -66,7 +69,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - REPL / eval-expression (`:eval`)
 
 ### Phase 3: AI Integration — COMPLETE
-- Tool-calling transport (Claude API + OpenAI API)
+- Tool-calling transport (Claude, OpenAI, Gemini, and DeepSeek APIs)
 - Scheme API surface mapped to AI tool definitions (10 tools + all commands)
 - AI can read/edit buffers, navigate, execute commands, inspect editor state
 - Conversation buffer with streaming, tool call display
@@ -145,7 +148,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
 - Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
 - `--check-config` CLI flag + CI E2E validation step ✅
-- **Next: vertical line color bug (M3 remaining), variable-height lines (M5), inline images (M6), PDF preview (M7), scrollbar (M8)**
+- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Variable-height lines (8 M5)**
 
 ## Key Design Decisions Already Made
 

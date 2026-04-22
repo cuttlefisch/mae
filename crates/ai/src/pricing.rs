@@ -43,15 +43,24 @@ use serde::{Deserialize, Serialize};
 pub struct ModelPrice {
     /// Standard input rate.
     pub input_per_mtok: f64,
+    /// Rate for tokens read from cache (Anthropic/DeepSeek).
+    pub cache_read_per_mtok: f64,
     /// Output rate.
     pub output_per_mtok: f64,
 }
 
 impl ModelPrice {
     /// Estimated cost in USD for a single request.
-    pub fn cost_usd(&self, input_tokens: u64, output_tokens: u64) -> f64 {
-        (input_tokens as f64 / 1_000_000.0) * self.input_per_mtok
-            + (output_tokens as f64 / 1_000_000.0) * self.output_per_mtok
+    ///
+    /// Applies the `cache_read_per_mtok` rate to `usage.cache_read_tokens`
+    /// and the standard `input_per_mtok` to the remainder of input tokens.
+    pub fn cost_usd(&self, usage: &crate::provider::Usage) -> f64 {
+        let cached = usage.cache_read_tokens;
+        let standard_input = usage.prompt_tokens.saturating_sub(cached);
+
+        (standard_input as f64 / 1_000_000.0) * self.input_per_mtok
+            + (cached as f64 / 1_000_000.0) * self.cache_read_per_mtok
+            + (usage.completion_tokens as f64 / 1_000_000.0) * self.output_per_mtok
     }
 }
 
@@ -83,6 +92,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-opus-4",
         ModelPrice {
             input_per_mtok: 15.0,
+            cache_read_per_mtok: 1.50, // 10% rate for cached input
             output_per_mtok: 75.0,
         },
     ),
@@ -91,6 +101,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-sonnet-4",
         ModelPrice {
             input_per_mtok: 3.0,
+            cache_read_per_mtok: 0.30,
             output_per_mtok: 15.0,
         },
     ),
@@ -99,6 +110,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-haiku-4",
         ModelPrice {
             input_per_mtok: 1.0,
+            cache_read_per_mtok: 0.10,
             output_per_mtok: 5.0,
         },
     ),
@@ -107,6 +119,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-3-5-sonnet",
         ModelPrice {
             input_per_mtok: 3.0,
+            cache_read_per_mtok: 0.30,
             output_per_mtok: 15.0,
         },
     ),
@@ -117,6 +130,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-3-5-haiku",
         ModelPrice {
             input_per_mtok: 1.0,
+            cache_read_per_mtok: 0.10,
             output_per_mtok: 5.0,
         },
     ),
@@ -124,6 +138,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "claude-3-opus",
         ModelPrice {
             input_per_mtok: 15.0,
+            cache_read_per_mtok: 1.50,
             output_per_mtok: 75.0,
         },
     ),
@@ -133,6 +148,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "gpt-4o-mini",
         ModelPrice {
             input_per_mtok: 0.15,
+            cache_read_per_mtok: 0.075, // OpenAI 50% discount
             output_per_mtok: 0.60,
         },
     ),
@@ -140,6 +156,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "gpt-4o",
         ModelPrice {
             input_per_mtok: 2.50,
+            cache_read_per_mtok: 1.25,
             output_per_mtok: 10.0,
         },
     ),
@@ -147,6 +164,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "gpt-4-turbo",
         ModelPrice {
             input_per_mtok: 10.0,
+            cache_read_per_mtok: 5.0,
             output_per_mtok: 30.0,
         },
     ),
@@ -154,6 +172,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "gpt-4",
         ModelPrice {
             input_per_mtok: 30.0,
+            cache_read_per_mtok: 15.0,
             output_per_mtok: 60.0,
         },
     ),
@@ -161,6 +180,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "o1-mini",
         ModelPrice {
             input_per_mtok: 3.0,
+            cache_read_per_mtok: 1.50,
             output_per_mtok: 12.0,
         },
     ),
@@ -168,7 +188,71 @@ const TABLE: &[(&str, ModelPrice)] = &[
         "o1",
         ModelPrice {
             input_per_mtok: 15.0,
+            cache_read_per_mtok: 7.50,
             output_per_mtok: 60.0,
+        },
+    ),
+    // ---- Gemini ----
+    // Gemini pricing varies by prompt size; these are baseline rates.
+    (
+        "gemini-3.1-pro",
+        ModelPrice {
+            input_per_mtok: 2.0,
+            cache_read_per_mtok: 0.50, // Gemini cache discount
+            output_per_mtok: 12.0,
+        },
+    ),
+    // Gemini 3.1 Flash-Lite
+    (
+        "gemini-3.1-flash-lite",
+        ModelPrice {
+            input_per_mtok: 0.25,
+            cache_read_per_mtok: 0.06,
+            output_per_mtok: 1.50,
+        },
+    ),
+    // Gemini 3.0 Flash (Preview)
+    (
+        "gemini-3.0-flash",
+        ModelPrice {
+            input_per_mtok: 0.50,
+            cache_read_per_mtok: 0.125,
+            output_per_mtok: 3.0,
+        },
+    ),
+    // Gemini 2.5 Pro (Stable)
+    (
+        "gemini-2.5-pro",
+        ModelPrice {
+            input_per_mtok: 1.25,
+            cache_read_per_mtok: 0.31,
+            output_per_mtok: 10.0,
+        },
+    ),
+    // Gemini 2.5 Flash
+    (
+        "gemini-2.5-flash",
+        ModelPrice {
+            input_per_mtok: 0.30,
+            cache_read_per_mtok: 0.075,
+            output_per_mtok: 2.50,
+        },
+    ),
+    // ---- DeepSeek ----
+    (
+        "deepseek-reasoner",
+        ModelPrice {
+            input_per_mtok: 0.55,
+            cache_read_per_mtok: 0.055, // 90% discount on DeepSeek
+            output_per_mtok: 2.19,
+        },
+    ),
+    (
+        "deepseek-chat",
+        ModelPrice {
+            input_per_mtok: 0.27,
+            cache_read_per_mtok: 0.027,
+            output_per_mtok: 1.10,
         },
     ),
 ];
@@ -211,7 +295,12 @@ mod tests {
         let sonnet = lookup("claude-sonnet-4-5").unwrap();
         // 10k input + 1k output at $3/$15 per Mtok:
         // 10_000/1_000_000 * 3 + 1_000/1_000_000 * 15 = 0.03 + 0.015 = 0.045
-        let cost = sonnet.cost_usd(10_000, 1_000);
+        let usage = crate::provider::Usage {
+            prompt_tokens: 10_000,
+            completion_tokens: 1_000,
+            ..Default::default()
+        };
+        let cost = sonnet.cost_usd(&usage);
         assert!((cost - 0.045).abs() < 1e-9);
     }
 
@@ -220,8 +309,13 @@ mod tests {
         let h = lookup("claude-haiku-4-5").unwrap();
         let s = lookup("claude-sonnet-4-5").unwrap();
         let o = lookup("claude-opus-4-6").unwrap();
-        assert!(h.cost_usd(1000, 1000) < s.cost_usd(1000, 1000));
-        assert!(s.cost_usd(1000, 1000) < o.cost_usd(1000, 1000));
+        let usage = crate::provider::Usage {
+            prompt_tokens: 1000,
+            completion_tokens: 1000,
+            ..Default::default()
+        };
+        assert!(h.cost_usd(&usage) < s.cost_usd(&usage));
+        assert!(s.cost_usd(&usage) < o.cost_usd(&usage));
     }
 
     #[test]
@@ -234,8 +328,46 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_chat_lookup() {
+        let p = lookup("deepseek-chat").unwrap();
+        assert_eq!(p.input_per_mtok, 0.27);
+        assert_eq!(p.output_per_mtok, 1.10);
+    }
+
+    #[test]
+    fn deepseek_reasoner_lookup() {
+        let p = lookup("deepseek-reasoner").unwrap();
+        assert_eq!(p.input_per_mtok, 0.55);
+        assert_eq!(p.cache_read_per_mtok, 0.055);
+        assert_eq!(p.output_per_mtok, 2.19);
+    }
+
+    #[test]
+    fn deepseek_cache_discount_applied() {
+        let p = lookup("deepseek-chat").unwrap();
+        // 1M prompt tokens, all cached.
+        // Cache rate is 0.027 per Mtok.
+        let usage = crate::provider::Usage {
+            prompt_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(p.cost_usd(&usage), 0.027);
+
+        // 1M prompt tokens, none cached.
+        // Standard rate is 0.27 per Mtok.
+        let usage_no_cache = crate::provider::Usage {
+            prompt_tokens: 1_000_000,
+            cache_read_tokens: 0,
+            ..Default::default()
+        };
+        assert_eq!(p.cost_usd(&usage_no_cache), 0.27);
+    }
+
+    #[test]
     fn zero_tokens_zero_cost() {
         let p = lookup("claude-haiku-4-5").unwrap();
-        assert_eq!(p.cost_usd(0, 0), 0.0);
+        let usage = crate::provider::Usage::default();
+        assert_eq!(p.cost_usd(&usage), 0.0);
     }
 }
