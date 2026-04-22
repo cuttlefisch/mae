@@ -47,7 +47,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "ai_set_mode".into(),
-            description: "Switch the AI operating mode. 'standard' requires manual approval for edits, 'plan' focuses on drafting architectural changes without touching code, 'auto-accept' enables hands-free execution for small tasks.".into(),
+            description: "Switch the AI operating mode. 'standard' requires manual approval for edits, 'plan' focuses on drafting architectural changes without touching code, 'auto-accept' enables hands-free execution for small tasks. Workflow Hint: Switch to 'plan' mode when drafting complex architectural changes to ensure safety. Switch to 'standard' once the plan is approved.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -201,7 +201,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "shell_exec".into(),
-            description: "Execute a shell command and return stdout/stderr. Anti-Looping: If a command fails, do not blindly retry the exact same command. Analyze the error, use diagnostics, or try a different approach.".into(),
+            description: "Execute a shell command and return stdout/stderr. Anti-Looping: If a command fails, do not blindly retry the exact same command. Analyze the error, use diagnostics, or try a different approach. Workflow Hint: Use this for `git status`, running tests, or building the project. Always use this to verify bug fixes before reporting success. For PR status, follow up with `github_pr_status`.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -515,7 +515,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "lsp_diagnostics".into(),
-            description: "Read diagnostics (errors, warnings, hints) reported by language servers. Returns JSON with per-file diagnostics plus global severity counts. Use scope='all' to include every file, scope='buffer' (default) for just the active buffer. Positions are 1-indexed.".into(),
+            description: "Read diagnostics (errors, warnings, hints) reported by language servers. Returns JSON with per-file diagnostics plus global severity counts. Use scope='all' to include every file, scope='buffer' (default) for just the active buffer. Positions are 1-indexed. Workflow Hint: Always check this after a `buffer_write` to ensure your edit didn't introduce new syntax or type errors.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -1356,7 +1356,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         // --- Agent Orchestration & Memory ---
         ToolDefinition {
             name: "delegate".into(),
-            description: "Spawn a specialized sub-agent for a specific sub-task (e.g. 'explorer' for code mapping, 'planner' for drafting changes). The sub-agent has a separate context but shares the session budget.".into(),
+            description: "Spawn a specialized sub-agent for a specific sub-task (e.g. 'explorer' for code mapping, 'planner' for drafting changes). The sub-agent has a separate context but shares the session budget. Workflow Hint: Use this aggressively to offload high-volume codebase exploration or repetitive batch tasks, keeping the main context lean.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -1400,7 +1400,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "create_plan".into(),
-            description: "Create a new implementation plan in the project's plans directory. Plans should be markdown files documenting complex tasks.".into(),
+            description: "Create a new implementation plan in the project's plans directory. Plans should be markdown files documenting complex tasks. Workflow Hint: Use this after exploring the codebase for a complex task, but BEFORE making any file edits. Present the plan to the user for approval.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -2275,7 +2275,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "github_pr_status".into(),
-            description: "Check the status of the current PR and its CI checks using the 'gh' CLI.".into(),
+            description: "Check the status of the current PR and its CI checks using the 'gh' CLI. Workflow Hint: Use this *after* confirming the local branch via `git status`. It fetches the remote PR link, review status, and CI checks.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
