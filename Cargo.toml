@@ -21,4 +21,4 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 tracing = "0.1"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }

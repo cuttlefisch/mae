@@ -8,6 +8,6 @@ license.workspace = true
 [dependencies]
 mae-core = { path = "../core" }
 mae-shell = { path = "../shell" }
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 tracing = { workspace = true }
