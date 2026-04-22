@@ -1,7 +1,7 @@
 /target
 **/*.rs.bk
-**/*.mae/transcripts
-**/*.mae/
+**/*/.mae/transcripts
+**/*/.mae/
 Cargo.lock
 *.swp
 *.swo
