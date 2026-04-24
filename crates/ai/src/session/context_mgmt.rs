@@ -120,161 +120,44 @@ impl AgentSession {
         );
     }
 
-    /// Summarize older conversation turns into compact recaps before resorting
-    /// to `trim_messages()` which drops messages entirely.
+    /// Compact conversation history by truncating old tool results.
     ///
-    /// Strategy:
-    /// 1. Protect: `messages[0]` (initial context), current transaction, last 4 messages
-    /// 2. Group compactable messages into chunks of ~6
-    /// 3. Replace each chunk with one summary message
-    /// 4. Adjust `transaction_start_idx` after compaction
-    /// 5. Enforce orphan-free boundary (no dangling Tool/ToolCalls messages)
+    /// Strategy: keep all messages (preserving conversation structure and progress
+    /// context), but replace large tool result outputs with a short summary.
+    /// This is idempotent — already-compacted results stay compacted.
+    ///
+    /// Protected zones (untouched):
+    /// - `messages[0]` (initial context)
+    /// - Current transaction (`transaction_start_idx..`)
+    /// - Last 4 messages (recent context)
     pub(super) fn compact_history(&mut self) {
-        let total = self.messages.len();
-        if total < 8 {
-            return; // Not enough messages to compact
-        }
-
-        // Determine protected ranges
-        let tx_start = self.transaction_start_idx.unwrap_or(total);
+        let tx_start = self.transaction_start_idx.unwrap_or(self.messages.len());
         let protect_tail = 4;
-        let compactable_end = total.saturating_sub(protect_tail).min(tx_start);
+        let compact_end = self
+            .messages
+            .len()
+            .saturating_sub(protect_tail)
+            .min(tx_start);
+        let mut compacted = 0;
 
-        // Must have at least 6 compactable messages (indices 1..compactable_end)
-        if compactable_end <= 7 {
-            return;
-        }
-
-        let chunk_size = 6;
-        let mut new_messages: Vec<Message> = Vec::new();
-        // Keep first message (initial context)
-        new_messages.push(self.messages[0].clone());
-
-        let mut i = 1;
-        while i < compactable_end {
-            let end = (i + chunk_size).min(compactable_end);
-            if end - i < 3 {
-                // Too small to summarize, keep as-is
-                for msg in &self.messages[i..end] {
-                    new_messages.push(msg.clone());
+        for msg in &mut self.messages[1..compact_end] {
+            if let MessageContent::ToolResult(ref mut r) = msg.content {
+                let token_est = token_estimate::estimate_tokens(&r.output);
+                if token_est > 100 {
+                    let first_lines: String =
+                        r.output.lines().take(2).collect::<Vec<_>>().join("\n");
+                    let status = if r.success { "✓" } else { "✗" };
+                    r.output = format!(
+                        "[{} {} — {} tokens compacted]\n{}",
+                        status, r.tool_name, token_est, first_lines
+                    );
+                    compacted += 1;
                 }
-                i = end;
-                continue;
-            }
-            let chunk = &self.messages[i..end];
-            let summary = Self::summarize_chunk(chunk);
-            new_messages.push(Message {
-                role: Role::User,
-                content: MessageContent::Text(summary),
-            });
-            i = end;
-        }
-
-        // Ensure no orphaned Tool messages at the boundary
-        // (The protected tail starts at compactable_end)
-        let mut tail_start = compactable_end;
-        while tail_start < total {
-            let msg = &self.messages[tail_start];
-            if msg.role == Role::Tool {
-                tail_start += 1; // Skip orphaned Tool message
-            } else if matches!(
-                msg.content,
-                MessageContent::ToolCalls(_) | MessageContent::TextWithToolCalls { .. }
-            ) {
-                tail_start += 1; // Skip orphaned ToolCalls
-            } else {
-                break;
             }
         }
-
-        // Append protected tail
-        for msg in &self.messages[tail_start..] {
-            new_messages.push(msg.clone());
+        if compacted > 0 {
+            debug!(compacted, "compact_history: truncated old tool results");
         }
-
-        let removed = total - new_messages.len();
-        if removed == 0 {
-            return;
-        }
-
-        // Adjust transaction_start_idx
-        if let Some(old_idx) = self.transaction_start_idx {
-            let new_idx = new_messages
-                .len()
-                .saturating_sub(total.saturating_sub(old_idx));
-            self.transaction_start_idx = Some(new_idx);
-        }
-
-        debug!(
-            original = total,
-            compacted = new_messages.len(),
-            removed,
-            "compact_history summarized old turns"
-        );
-        self.messages = new_messages;
-    }
-
-    fn summarize_chunk(messages: &[Message]) -> String {
-        let mut tool_names: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut key_points: Vec<String> = Vec::new();
-
-        for msg in messages {
-            match &msg.content {
-                MessageContent::Text(t) => {
-                    if msg.role == Role::Assistant && key_points.len() < 3 {
-                        // Take first sentence
-                        let first = t.split(['.', '\n']).next().unwrap_or(t);
-                        if !first.trim().is_empty() && first.len() < 200 {
-                            key_points.push(first.trim().to_string());
-                        }
-                    }
-                }
-                MessageContent::ToolCalls(calls) => {
-                    for c in calls {
-                        *tool_names.entry(c.name.clone()).or_insert(0) += 1;
-                    }
-                }
-                MessageContent::TextWithToolCalls { text, tool_calls } => {
-                    if msg.role == Role::Assistant && key_points.len() < 3 {
-                        let first = text.split(['.', '\n']).next().unwrap_or(text);
-                        if !first.trim().is_empty() && first.len() < 200 {
-                            key_points.push(first.trim().to_string());
-                        }
-                    }
-                    for c in tool_calls {
-                        *tool_names.entry(c.name.clone()).or_insert(0) += 1;
-                    }
-                }
-                MessageContent::ToolResult(_) => {}
-            }
-        }
-
-        let mut summary = format!("[Context summary — {} turns compacted]\n", messages.len());
-
-        if !tool_names.is_empty() {
-            let mut tools: Vec<String> = tool_names
-                .iter()
-                .map(|(name, count)| {
-                    if *count > 1 {
-                        format!("{}×{}", name, count)
-                    } else {
-                        name.clone()
-                    }
-                })
-                .collect();
-            tools.sort();
-            summary.push_str(&format!("Tools: {}\n", tools.join(", ")));
-        }
-
-        if !key_points.is_empty() {
-            summary.push_str("Key points:\n");
-            for point in &key_points {
-                summary.push_str(&format!("- {}\n", point));
-            }
-        }
-
-        summary
     }
 
     /// Truncate a tool result if it exceeds 25% of available message budget.

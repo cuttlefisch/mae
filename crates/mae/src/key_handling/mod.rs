@@ -119,6 +119,8 @@ mod git_status;
 mod insert;
 mod normal;
 mod search;
+#[cfg(test)]
+mod tests;
 mod visual;
 
 pub use command::build_self_test_prompt;
@@ -181,6 +183,7 @@ pub fn handle_key(
     // When the splash is visible, j/k/Up/Down navigate, Enter selects,
     // and any other key dismisses the splash (by inserting into scratch).
     if editor.mode == Mode::Normal && is_splash_visible(editor) {
+        debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 let count = mae_renderer::splash_render::splash_action_count();

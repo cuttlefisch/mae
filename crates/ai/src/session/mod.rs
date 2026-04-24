@@ -111,6 +111,9 @@ pub struct AgentSession {
     /// Original system prompt (preserved for reference after truncation).
     #[allow(dead_code)]
     pub(super) original_system_prompt: String,
+    /// Self-test mode flag: disables context compaction to prevent
+    /// progress loss that causes the agent to loop.
+    pub(super) is_self_test: bool,
     /// Path to the session's auto-saved transcript log.
     pub(super) transcript_path: Option<PathBuf>,
     /// Cached string representation of transcript_path (computed once).
@@ -193,6 +196,7 @@ impl AgentSession {
             progress: progress::ProgressTracker::new(10, false),
             degradation_level: DegradationLevel::Normal,
             original_system_prompt,
+            is_self_test: false,
             transcript_path_str: transcript_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
@@ -209,6 +213,7 @@ impl AgentSession {
     pub fn with_self_test_mode(mut self) -> Self {
         self.progress = progress::ProgressTracker::new(15, true);
         self.max_rounds = 75;
+        self.is_self_test = true;
         self
     }
 

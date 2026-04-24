@@ -1,6 +1,8 @@
 //! Conversation (AI chat) buffer rendering for the GUI backend.
 
-use mae_core::conversation::{screen_line_count, LineStyle};
+use mae_core::conversation::{
+    char_boundary_at, chars_to_display_cols, screen_line_count, wrap_text_into_rows, LineStyle,
+};
 use mae_core::{Editor, Mode, Window};
 use unicode_width::UnicodeWidthChar;
 
@@ -98,39 +100,6 @@ fn wrap_visible_lines<'a>(
 
     screen_lines.truncate(viewport_height);
     screen_lines
-}
-
-/// Find the byte offset at approximately `n` display columns, snapped to a char boundary.
-/// CJK characters count as 2 columns.
-fn char_boundary_at(s: &str, n: usize) -> usize {
-    let mut col = 0;
-    for (byte_idx, ch) in s.char_indices() {
-        let w = ch.width().unwrap_or(1);
-        if col + w > n {
-            return byte_idx;
-        }
-        col += w;
-    }
-    s.len()
-}
-
-/// Split text into rows of at most `width` display columns, respecting char boundaries.
-fn wrap_text_into_rows(text: &str, width: usize) -> Vec<&str> {
-    let w = width.max(1);
-    if text.is_empty() {
-        return vec![text];
-    }
-    if screen_line_count(text, w) <= 1 {
-        return vec![text];
-    }
-    let mut rows = Vec::new();
-    let mut remaining = text;
-    while !remaining.is_empty() {
-        let end = char_boundary_at(remaining, w);
-        rows.push(&remaining[..end]);
-        remaining = &remaining[end..];
-    }
-    rows
 }
 
 /// Render a conversation buffer window.
@@ -233,10 +202,12 @@ pub fn render_conversation_window(
                 let line_end_char = line_start_char + sl.text.chars().count();
 
                 if sel_start < line_end_char && sel_end > line_start_char {
-                    let s = sel_start.saturating_sub(line_start_char);
-                    let e = (sel_end - line_start_char).min(sl.text.chars().count());
+                    let s_char = sel_start.saturating_sub(line_start_char);
+                    let e_char = (sel_end - line_start_char).min(sl.text.chars().count());
+                    let s_col = chars_to_display_cols(sl.text, s_char);
+                    let e_col = chars_to_display_cols(sl.text, e_char);
                     let sel_bg = theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
-                    canvas.draw_rect_fill(row, inner_col + s, e - s, 1, sel_bg);
+                    canvas.draw_rect_fill(row, inner_col + s_col, e_col - s_col, 1, sel_bg);
                 }
             }
 

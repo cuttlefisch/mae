@@ -9,7 +9,7 @@
 //! results). Render it directly.
 
 use serde::{Deserialize, Serialize};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Count how many screen lines a rendered line produces when wrapped to `width` columns.
 /// Uses display width (UnicodeWidthStr) so CJK characters count as 2 columns.
@@ -23,6 +23,47 @@ pub fn screen_line_count(text: &str, width: usize) -> usize {
         return 1;
     }
     cols.div_ceil(w)
+}
+
+/// Find the byte offset at approximately `n` display columns, snapped to a char boundary.
+/// CJK characters count as 2 columns.
+pub fn char_boundary_at(s: &str, n: usize) -> usize {
+    let mut col = 0;
+    for (byte_idx, ch) in s.char_indices() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if col + w > n {
+            return byte_idx;
+        }
+        col += w;
+    }
+    s.len()
+}
+
+/// Split text into rows of at most `width` display columns, respecting char boundaries.
+pub fn wrap_text_into_rows(text: &str, width: usize) -> Vec<&str> {
+    let w = width.max(1);
+    if text.is_empty() {
+        return vec![text];
+    }
+    if screen_line_count(text, w) <= 1 {
+        return vec![text];
+    }
+    let mut rows = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let end = char_boundary_at(remaining, w);
+        rows.push(&remaining[..end]);
+        remaining = &remaining[end..];
+    }
+    rows
+}
+
+/// Convert a char count into a display column count, accounting for wide (CJK) characters.
+pub fn chars_to_display_cols(text: &str, char_count: usize) -> usize {
+    text.chars()
+        .take(char_count)
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(1))
+        .sum()
 }
 
 // Role of a conversation entry.
@@ -965,5 +1006,136 @@ mod tests {
         assert_eq!(before, "h");
         assert_eq!(cursor, "é");
         assert_eq!(after, "llo");
+    }
+
+    // ---- char_boundary_at tests (migrated from GUI) ----
+
+    #[test]
+    fn char_boundary_at_basic() {
+        assert_eq!(char_boundary_at("hello", 3), 3);
+        assert_eq!(char_boundary_at("hello", 10), 5);
+        assert_eq!(char_boundary_at("", 5), 0);
+    }
+
+    #[test]
+    fn char_boundary_at_multibyte() {
+        let s = "héllo"; // é is 2 bytes
+        let boundary = char_boundary_at(s, 2);
+        assert!(s.is_char_boundary(boundary));
+    }
+
+    #[test]
+    fn char_boundary_at_cjk() {
+        let s = "日本語テスト"; // 6 chars, 12 display columns
+        let boundary = char_boundary_at(s, 4); // 4 display cols = 2 CJK chars
+        assert_eq!(boundary, 6); // 2 chars × 3 bytes
+        assert!(s.is_char_boundary(boundary));
+    }
+
+    // ---- wrap_text_into_rows tests (migrated from GUI) ----
+
+    #[test]
+    fn wrap_text_into_rows_basic() {
+        let text = "a".repeat(20);
+        let rows = wrap_text_into_rows(&text, 10);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].len(), 10);
+        assert_eq!(rows[1].len(), 10);
+    }
+
+    #[test]
+    fn wrap_text_into_rows_exact() {
+        let text = "a".repeat(10);
+        let rows = wrap_text_into_rows(&text, 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 10);
+    }
+
+    #[test]
+    fn wrap_text_into_rows_short() {
+        let rows = wrap_text_into_rows("hello", 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], "hello");
+    }
+
+    #[test]
+    fn wrap_text_into_rows_empty() {
+        let rows = wrap_text_into_rows("", 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], "");
+    }
+
+    // ---- screen_line_count regression tests ----
+
+    #[test]
+    fn screen_line_count_basic_regression() {
+        assert_eq!(screen_line_count("hello", 80), 1);
+        assert_eq!(screen_line_count("", 80), 1);
+        assert_eq!(screen_line_count(&"a".repeat(20), 10), 2);
+        assert_eq!(screen_line_count(&"a".repeat(30), 10), 3);
+    }
+
+    #[test]
+    fn screen_line_count_cjk() {
+        // 6 CJK chars = 12 display columns
+        assert_eq!(screen_line_count("日本語テスト", 12), 1);
+        assert_eq!(screen_line_count("日本語テスト", 6), 2);
+        assert_eq!(screen_line_count("日本語テスト", 4), 3);
+    }
+
+    #[test]
+    fn screen_line_count_edge_cases() {
+        assert_eq!(screen_line_count("", 1), 1);
+        assert_eq!(screen_line_count("a", 1), 1);
+        assert_eq!(screen_line_count("ab", 1), 2);
+        // width=0 is clamped to 1
+        assert_eq!(screen_line_count("abc", 0), 3);
+        // Mixed ASCII + CJK: "hi日" = 2 + 2 = 4 display cols
+        assert_eq!(screen_line_count("hi日", 4), 1);
+        assert_eq!(screen_line_count("hi日", 3), 2);
+    }
+
+    #[test]
+    fn ensure_screen_counts_cache_invalidation() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        let (counts, _total) = conv.ensure_screen_counts(80);
+        let count_len_1 = counts.len();
+        assert!(count_len_1 > 0);
+        let ver1 = conv.version();
+
+        conv.push_assistant("world");
+        assert!(conv.version() > ver1);
+        // After mutation, counts must be recomputed
+        let (counts2, _) = conv.ensure_screen_counts(80);
+        assert!(counts2.len() > count_len_1);
+    }
+
+    #[test]
+    fn ensure_screen_counts_width_change() {
+        let mut conv = Conversation::new();
+        conv.push_assistant("a".repeat(20));
+        let (_, total80) = conv.ensure_screen_counts(80);
+        let (_, total10) = conv.ensure_screen_counts(10);
+        // At width 10, the 20-char line wraps to 2 screen lines
+        assert!(total10 > total80);
+    }
+
+    // ---- chars_to_display_cols tests ----
+
+    #[test]
+    fn chars_to_cols_ascii() {
+        assert_eq!(chars_to_display_cols("hello", 3), 3);
+    }
+
+    #[test]
+    fn chars_to_cols_cjk() {
+        assert_eq!(chars_to_display_cols("日本語", 2), 4);
+    }
+
+    #[test]
+    fn chars_to_cols_mixed() {
+        // "hi日本" — 2 ASCII (2 cols) + 1 CJK (2 cols) = 4 cols for 3 chars
+        assert_eq!(chars_to_display_cols("hi日本", 3), 4);
     }
 }

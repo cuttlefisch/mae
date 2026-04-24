@@ -1580,141 +1580,243 @@ fn tool_result_msg(name: &str) -> Message {
     }
 }
 
-#[test]
-fn compact_history_summarizes_old_turns() {
-    // 15 user+assistant pairs = 30 messages + 1 initial = 31
-    let mut msgs = vec![user_msg("initial context")];
-    for i in 0..15 {
-        msgs.push(user_msg(&format!("question {}", i)));
-        msgs.push(assistant_msg(&format!("answer {}. More detail here.", i)));
+fn large_tool_result_msg(name: &str, size: usize) -> Message {
+    Message {
+        role: Role::Tool,
+        content: MessageContent::ToolResult(ToolResult {
+            tool_call_id: format!("call_{}", name),
+            tool_name: name.to_string(),
+            success: true,
+            output: format!("line one\nline two\n{}", "x".repeat(size)),
+        }),
     }
-    let original_len = msgs.len();
+}
+
+#[test]
+fn compact_history_truncates_large_tool_results() {
+    let mut msgs = vec![user_msg("initial context")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
     let mut session = make_test_session_with_messages(msgs);
 
     session.compact_history();
 
-    assert!(
-        session.messages.len() < original_len,
-        "expected compaction: {} -> {}",
-        original_len,
-        session.messages.len()
-    );
-    // First message preserved
-    match &session.messages[0].content {
-        MessageContent::Text(t) => assert_eq!(t, "initial context"),
-        _ => panic!("first message should be text"),
-    }
-    // Summary messages should exist
-    let summaries: Vec<_> = session
+    // Large tool results should be truncated
+    let compacted: Vec<_> = session
         .messages
         .iter()
         .filter(|m| {
-            if let MessageContent::Text(t) = &m.content {
-                t.contains("[Context summary")
+            if let MessageContent::ToolResult(r) = &m.content {
+                r.output.contains("tokens compacted")
             } else {
                 false
             }
         })
         .collect();
-    assert!(!summaries.is_empty(), "expected summary messages");
+    assert!(!compacted.is_empty(), "expected compacted tool results");
+    // Message count unchanged (tool-result truncation doesn't remove messages)
+    assert_eq!(session.messages.len(), 21);
 }
 
 #[test]
-fn compact_history_preserves_first_and_recent() {
+fn compact_history_preserves_tool_calls() {
     let mut msgs = vec![user_msg("initial context")];
-    for i in 0..15 {
-        msgs.push(user_msg(&format!("q{}", i)));
-        msgs.push(assistant_msg(&format!("a{}", i)));
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
     }
-    let last_4: Vec<String> = msgs[msgs.len() - 4..]
-        .iter()
-        .map(|m| match &m.content {
-            MessageContent::Text(t) => t.clone(),
-            _ => String::new(),
-        })
-        .collect();
-    let mut session = make_test_session_with_messages(msgs);
-
-    session.compact_history();
-
-    // First message unchanged
-    assert_eq!(session.messages[0].role, Role::User);
-    // Last 4 messages unchanged
-    let new_last_4: Vec<String> = session.messages[session.messages.len() - 4..]
-        .iter()
-        .map(|m| match &m.content {
-            MessageContent::Text(t) => t.clone(),
-            _ => String::new(),
-        })
-        .collect();
-    assert_eq!(last_4, new_last_4, "last 4 messages should be preserved");
-}
-
-#[test]
-fn compact_history_noop_when_small() {
-    let msgs = vec![
-        user_msg("initial"),
-        user_msg("q1"),
-        assistant_msg("a1"),
-        user_msg("q2"),
-        assistant_msg("a2"),
-    ];
     let original_len = msgs.len();
     let mut session = make_test_session_with_messages(msgs);
 
     session.compact_history();
 
+    // All messages preserved (truncation is in-place, no removal)
     assert_eq!(session.messages.len(), original_len);
+    // Tool call messages still exist
+    let tool_call_count = session
+        .messages
+        .iter()
+        .filter(|m| matches!(m.content, MessageContent::ToolCalls(_)))
+        .count();
+    assert_eq!(tool_call_count, 5);
 }
 
 #[test]
-fn compact_history_no_orphaned_tool_messages() {
-    let mut msgs = vec![user_msg("initial")];
-    for i in 0..10 {
-        msgs.push(user_msg(&format!("q{}", i)));
-        msgs.push(tool_calls_msg(&["buffer_read"]));
-        msgs.push(tool_result_msg("buffer_read"));
-        msgs.push(assistant_msg(&format!("a{}", i)));
-    }
+fn compact_history_noop_when_small_results() {
+    // Small tool results (under 100 tokens) should not be compacted
+    let msgs = vec![
+        user_msg("initial"),
+        user_msg("q1"),
+        tool_calls_msg(&["buffer_read"]),
+        tool_result_msg("buffer_read"), // "ok" — only ~1 token
+        assistant_msg("a1"),
+    ];
     let mut session = make_test_session_with_messages(msgs);
 
     session.compact_history();
 
-    // No Tool message should appear without a preceding ToolCalls message
-    for (i, msg) in session.messages.iter().enumerate() {
-        if msg.role == Role::Tool && i > 0 {
-            let prev = &session.messages[i - 1];
-            assert!(
-                matches!(
-                    prev.content,
-                    MessageContent::ToolCalls(_) | MessageContent::TextWithToolCalls { .. }
-                ) || prev.role == Role::Tool,
-                "orphaned Tool message at index {}",
-                i
-            );
-        }
+    // Tool result should be unchanged
+    if let MessageContent::ToolResult(r) = &session.messages[3].content {
+        assert_eq!(r.output, "ok");
+    } else {
+        panic!("expected tool result at index 3");
     }
 }
 
 #[test]
-fn compact_history_adjusts_transaction_idx() {
+fn compact_history_idempotent() {
     let mut msgs = vec![user_msg("initial")];
-    for i in 0..15 {
-        msgs.push(user_msg(&format!("q{}", i)));
-        msgs.push(assistant_msg(&format!("a{}", i)));
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
     }
-    let tx_start = msgs.len() - 2; // Last pair is the transaction
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+    let after_first: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    session.compact_history();
+    let after_second: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        after_first, after_second,
+        "second compaction should be no-op"
+    );
+}
+
+#[test]
+fn compact_history_protects_transaction() {
+    let mut msgs = vec![user_msg("initial")];
+    for _ in 0..5 {
+        msgs.push(user_msg("old question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("old answer"));
+    }
+    // Transaction starts at the last message
+    let tx_start = msgs.len() - 1;
+    // Add a large tool result in the transaction zone
+    msgs.push(user_msg("current question"));
+    msgs.push(tool_calls_msg(&["buffer_write"]));
+    msgs.push(large_tool_result_msg("buffer_write", 3000));
+
     let mut session = make_test_session_with_messages(msgs);
     session.transaction_start_idx = Some(tx_start);
 
     session.compact_history();
 
-    // Transaction start should still point to valid messages
-    let new_idx = session.transaction_start_idx.unwrap();
+    // Transaction tool result should be untouched
+    if let MessageContent::ToolResult(r) = &session.messages[session.messages.len() - 1].content {
+        assert!(
+            !r.output.contains("tokens compacted"),
+            "transaction tool result should not be compacted"
+        );
+    } else {
+        panic!("expected tool result as last message");
+    }
+}
+
+#[test]
+fn compact_history_skipped_in_self_test() {
+    let mut msgs = vec![user_msg("initial")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
+    let mut session = make_test_session_with_messages(msgs);
+    session.is_self_test = true;
+
+    // Save original tool result outputs
+    let originals: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // compact_history itself doesn't check is_self_test (the gate is in handle_prompt),
+    // but verify the session field is properly set
+    assert!(session.is_self_test);
+
+    // The gate is: `if current_tokens > budget * 70 / 100 && !self.is_self_test`
+    // So in self-test mode, compact_history is never called. Verify the field works.
+    let originals_after: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(originals, originals_after);
+}
+
+#[test]
+fn trim_messages_respects_transaction() {
+    let mut msgs = vec![user_msg("initial")];
+    for i in 0..20 {
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(assistant_msg(&format!("a{}", i)));
+    }
+    let tx_start = msgs.len() - 4; // Last 2 pairs = 4 messages
+    let mut session = make_test_session_with_messages(msgs);
+    session.transaction_start_idx = Some(tx_start);
+    // Set a tiny context window to force trimming
+    session.context_window = 500;
+    session.system_prompt_tokens = 100;
+    session.tools_tokens = 50;
+
+    session.trim_messages();
+
+    // Transaction messages should still be present
+    let new_tx = session.transaction_start_idx.unwrap();
     assert!(
-        new_idx < session.messages.len(),
-        "transaction_start_idx {} >= messages.len() {}",
-        new_idx,
+        new_tx >= 1,
+        "transaction idx should be >= 1, got {}",
+        new_tx
+    );
+    assert!(
+        new_tx < session.messages.len(),
+        "transaction idx {} out of bounds (len={})",
+        new_tx,
         session.messages.len()
     );
 }

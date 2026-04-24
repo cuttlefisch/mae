@@ -178,7 +178,7 @@ impl AgentSession {
             {
                 let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
                 let budget = self.available_message_budget();
-                if current_tokens > budget * 70 / 100 {
+                if current_tokens > budget * 70 / 100 && !self.is_self_test {
                     self.compact_history();
                 }
             }
