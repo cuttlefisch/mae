@@ -133,6 +133,8 @@ pub struct Editor {
     /// char selects a register whose contents will be inserted at the
     /// cursor. Cleared on resolution or Escape.
     pub pending_insert_register: bool,
+    /// C-o in insert mode: execute one normal command then return to insert.
+    pub insert_mode_oneshot_normal: bool,
     /// First delimiter captured during a `cs<from><to>` sequence. Set
     /// after `cs` + the first char, consumed when the second char
     /// arrives.
@@ -451,6 +453,7 @@ impl Editor {
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
+            insert_mode_oneshot_normal: false,
             pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
@@ -589,6 +592,7 @@ impl Editor {
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
+            insert_mode_oneshot_normal: false,
             pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),

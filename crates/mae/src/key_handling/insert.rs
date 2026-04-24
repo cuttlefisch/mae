@@ -142,7 +142,11 @@ pub(super) fn handle_insert_mode(
             return;
         }
         // C-o: execute one normal-mode command, then return to insert
-        // (defer — requires saving/restoring insert mode; handled via keymap fallthrough for now)
+        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.insert_mode_oneshot_normal = true;
+            editor.set_mode(mae_core::Mode::Normal);
+            return;
+        }
         _ => {}
     }
     super::normal::handle_keymap_mode(editor, scheme, key, pending_keys);

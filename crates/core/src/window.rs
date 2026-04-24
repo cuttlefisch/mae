@@ -273,6 +273,17 @@ impl Window {
         }
     }
 
+    /// Scroll up one line without moving cursor (C-y).
+    pub fn scroll_up_line(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+    }
+
+    /// Scroll down one line without moving cursor (C-e).
+    pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer) {
+        let max_row = buf.display_line_count().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + 1).min(max_row);
+    }
+
     // --- Screen-relative cursor ---
 
     /// Move cursor to top visible line (H).

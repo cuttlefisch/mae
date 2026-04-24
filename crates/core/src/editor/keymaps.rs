@@ -53,6 +53,8 @@ impl Editor {
         normal.bind(parse_key_seq("C-d"), "scroll-half-down");
         normal.bind(parse_key_seq("C-f"), "scroll-page-down");
         normal.bind(parse_key_seq("C-b"), "scroll-page-up");
+        normal.bind(parse_key_seq("C-e"), "scroll-down-line");
+        normal.bind(parse_key_seq("C-y"), "scroll-up-line");
         normal.bind(parse_key_seq("zz"), "scroll-center");
         normal.bind(parse_key_seq("zt"), "scroll-top");
         normal.bind(parse_key_seq("zb"), "scroll-bottom");
@@ -398,6 +400,8 @@ impl Editor {
         visual.bind(parse_key_seq("C-d"), "scroll-half-down");
         visual.bind(parse_key_seq("C-f"), "scroll-page-down");
         visual.bind(parse_key_seq("C-b"), "scroll-page-up");
+        visual.bind(parse_key_seq("C-e"), "scroll-down-line");
+        visual.bind(parse_key_seq("C-y"), "scroll-up-line");
         visual.bind(parse_key_seq("zz"), "scroll-center");
         visual.bind(parse_key_seq("zt"), "scroll-top");
         visual.bind(parse_key_seq("zb"), "scroll-bottom");

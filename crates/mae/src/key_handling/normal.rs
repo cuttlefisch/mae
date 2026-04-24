@@ -59,6 +59,11 @@ pub(super) fn handle_keymap_mode(
             if had_pending_op && Editor::is_motion_command(&cmd) {
                 editor.apply_pending_operator_for_motion(&cmd);
             }
+            // C-o oneshot: return to insert mode after one normal command
+            if editor.insert_mode_oneshot_normal && editor.mode == Mode::Normal {
+                editor.insert_mode_oneshot_normal = false;
+                editor.set_mode(Mode::Insert);
+            }
         }
         LookupResult::Prefix => {
             editor.which_key_prefix = pending_keys.clone();

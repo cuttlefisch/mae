@@ -403,6 +403,98 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Git stash & branch tools ---
+        ToolDefinition {
+            name: "git_stash_push".into(),
+            description: "Save working directory changes to the stash. Optionally provide a message.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "message".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Optional stash message".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_stash_pop".into(),
+            description: "Apply the most recent stash and remove it from the stash list.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_stash_list".into(),
+            description: "List all stashed changes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_branch_list".into(),
+            description: "List all local and remote branches.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "git_branch_delete".into(),
+            description: "Delete a git branch.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "branch".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Branch name to delete".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "force".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Force delete even if not fully merged (default: false)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["branch".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "git_merge".into(),
+            description: "Merge a branch into the current branch.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "branch".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Branch name to merge".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["branch".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- GitHub PR tools ---
         ToolDefinition {
             name: "github_pr_status".into(),

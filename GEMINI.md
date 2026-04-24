@@ -63,7 +63,8 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 See `ROADMAP.md` for granular milestone tracking. All core phases (1-8) are complete:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
 - Knowledge base, embedded shell, MCP bridge, GUI backend
-- 1,500+ tests, CI green
+- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction, graceful degradation, web fetch)
+- 1,580 tests, CI green
 
 ## File Conventions
 

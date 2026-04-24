@@ -475,6 +475,58 @@ impl Editor {
                     }
                 }
             }
+            "scroll-down-line" => {
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
+                match kind {
+                    crate::BufferKind::Messages => {
+                        let total = self.message_log.len();
+                        let vh = self.viewport_height;
+                        let win = self.window_mgr.focused_window_mut();
+                        let max = total.saturating_sub(vh);
+                        for _ in 0..n {
+                            win.scroll_offset = (win.scroll_offset + 1).min(max);
+                        }
+                    }
+                    crate::BufferKind::Conversation => {
+                        if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            for _ in 0..n {
+                                conv.scroll_down(1);
+                            }
+                        }
+                    }
+                    _ => {
+                        let buf = &self.buffers[idx];
+                        for _ in 0..n {
+                            self.window_mgr.focused_window_mut().scroll_down_line(buf);
+                        }
+                    }
+                }
+            }
+            "scroll-up-line" => {
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
+                match kind {
+                    crate::BufferKind::Messages => {
+                        let win = self.window_mgr.focused_window_mut();
+                        for _ in 0..n {
+                            win.scroll_offset = win.scroll_offset.saturating_sub(1);
+                        }
+                    }
+                    crate::BufferKind::Conversation => {
+                        if let Some(ref mut conv) = self.buffers[idx].conversation {
+                            for _ in 0..n {
+                                conv.scroll_up(1);
+                            }
+                        }
+                    }
+                    _ => {
+                        for _ in 0..n {
+                            self.window_mgr.focused_window_mut().scroll_up_line();
+                        }
+                    }
+                }
+            }
             "scroll-center" => {
                 let vh = self.viewport_height;
                 self.window_mgr.focused_window_mut().scroll_center(vh);
@@ -792,6 +844,7 @@ impl Editor {
             }
 
             "enter-normal-mode" => {
+                self.insert_mode_oneshot_normal = false;
                 if matches!(self.mode, Mode::Visual(_)) {
                     self.save_visual_state();
                 }

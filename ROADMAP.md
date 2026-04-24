@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.5.0-dev (1,523 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, watchdog recovery).
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.5.0 (1,580 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch).
 
 ---
 
@@ -9,10 +9,10 @@ Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.5.0-dev (1,523 te
 Identified gaps in MAE's AI peer capabilities compared to industry standards (Claude Code, Gemini, Cursor).
 
 - [ ] **Memory Synthesis**: Sub-agent pattern to read and synthesize persistent memory into concise context.
-- [ ] **Context Compaction**: Automated summarization of conversation history to preserve token budget.
+- [x] **Context Compaction**: Automated summarization of conversation history to preserve token budget (v0.5.0).
 - [ ] **Dynamic Tool Discovery (MCP Search)**: Enhanced `request_tools` with fuzzy search across all registered MCP servers.
 - [ ] **Semantic Code Search**: Integration with vector embeddings for "meaning-based" codebase navigation.
-- [ ] **Web Fetch**: Tool for reading raw code/docs from URLs (GitHub, documentation sites).
+- [x] **Web Fetch**: Tool for reading raw code/docs from URLs (GitHub, documentation sites) (v0.5.0).
 - [ ] **Verification Specialist**: Dedicated sub-agent/tool for isolated test execution and PASS/FAIL verdicts.
 - [x] **Tool-Level Defenses**: Explicit anti-looping and boundary guardrails in tool descriptions (v0.4.0).
 - [x] **UX Mode Cycling**: Shift-Tab to cycle between `manual`, `auto-accept`, and `plan` modes (v0.4.0).
@@ -28,15 +28,59 @@ Agent reliability improvements from crash log analysis and self-test failures.
 - [x] **Softened Oscillation Detector**: A-B-A-B patterns now warn first, abort only after reaching stagnant threshold (was: immediate abort on 2+ repeats) (v0.5.0).
 - [x] **Self-Test Mode**: Wider checkpoint interval (15) and higher tolerance (4 stagnant) for `--self-test` runs (v0.5.0).
 - [x] **Watchdog Recovery**: Prolonged stalls (>10s) now set a recovery flag; main loop checks on wake and cancels pending AI work + forces redraw (was: log-only) (v0.5.0).
-- [ ] **Prompt Caching**: Leverage provider-specific prompt caching (Claude cache_control, OpenAI cached_prompt_tokens) for system prompt + tool definitions to reduce costs.
-- [ ] **Token Budget Dashboard**: Real-time context window usage visualization in status bar.
-- [ ] **Graceful Degradation**: Auto-reduce tool set when approaching context limits rather than hard-failing.
+- [x] **Prompt Caching**: Leverage provider-specific prompt caching (Claude cache_control, OpenAI cached_prompt_tokens) for system prompt + tool definitions to reduce costs (v0.5.0).
+- [x] **Token Budget Dashboard**: Real-time context window usage visualization in status bar — cache hit rate, color-coded context utilization (v0.5.0).
+- [x] **Graceful Degradation**: Auto-reduce tool set when approaching context limits rather than hard-failing. One-way degradation: Normal → ToolsShed (>85%) → Minimal (>92%) (v0.5.0).
+- [x] **ANSI-Only Themes**: `light-ansi` and `dark-ansi` themes for terminal environments where RGB hex doesn't map well (v0.5.0).
+- [x] **XDG Transcript Logging**: Session transcripts saved to `~/.local/share/mae/transcripts/` (XDG-compliant) instead of project-local `.mae/` (v0.5.0).
+
+---
+
+## AI UX & Editing (v0.6.0)
+
+User-facing AI interaction quality — from org-roam exploration notes (2026-04-23).
+
+### Editing UX
+- [ ] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. Must inherit from theme (no raw ANSI escape codes). Used for both "preview changes" and "changes made" display.
+- [ ] **Clickable Links in Output**: File paths in AI/shell output open in editor on click/Enter. User-configurable: open in current window or new split.
+- [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
+- [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
+
+### Agent Quality
+- [ ] **Prompt Reliability**: Favor small introspection tools (list available commands) over hardcoded command args in prompts. Tool context cleanup: fetch response, clear extra tool-call context, keep only response info.
+- [ ] **KB Prompt Integration**: AI reads prompts from KB as source of truth. Prompt library with forking, testing, selection of active prompts. Versioned KB nodes for user modifications.
+- [ ] **Network Status Command**: Diagnose connectivity issues — no network, API unreachable, agent communication error. Surface in status bar or `:ai-status`.
+
+### Tool Inspection
+- [ ] **Step Through Command Execution**: Inspect each tool call's stdin/stdout/stderr and command args. Debug view for AI actions.
+- [ ] **Session Record/Replay with DAP**: Full session recording with DAP introspection for post-hoc debugging of agent behavior.
+
+### Git Workflow
+- [ ] **Git Stash Tools**: `git stash push`, `git stash pop` exposed to AI.
+- [ ] **Branch Management Tools**: Create, switch, delete, merge branches via AI tools.
+- [ ] **PR Comment Summaries**: When amending an open PR with new commits, auto-summarize changes in a comment.
+
+### Vim Parity
+- [ ] **C-e / C-y**: Single-line scroll down/up (evil-mode parity).
+- [ ] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15).
+
+### Setup & Onboarding
+- [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
+
+### Project Navigation
+- [ ] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, follow-focus, git status markers, eye icon for files in AI context.
+
+### Org Mode
+- [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
+
+### Test Infrastructure
+- [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
 
 ---
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,484 tests)
+### What We Have (1,580 tests)
 
 | Category | Features |
 |----------|----------|
@@ -52,9 +96,9 @@ Agent reliability improvements from crash log analysis and self-test failures.
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools |
+| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
-| **Themes** | 7 bundled, TOML-based, hot-switchable |
+| **Themes** | 9 bundled (incl. light-ansi, dark-ansi), TOML-based, hot-switchable |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
