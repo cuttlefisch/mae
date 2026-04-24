@@ -19,13 +19,11 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(config: ProviderConfig) -> Self {
-        OpenAiProvider {
-            client: Client::builder()
-                .timeout(Duration::from_secs(config.timeout_secs))
-                .build()
-                .expect("failed to build HTTP client"),
-            config,
-        }
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .build()
+            .unwrap_or_default();
+        OpenAiProvider { client, config }
     }
 
     /// Convert canonical ToolDefinition to OpenAI's function-calling format.
@@ -327,7 +325,7 @@ impl AgentProvider for OpenAiProvider {
             ProviderError {
                 message: format!("JSON parse error: {} (body starts with: {})", e, preview),
                 retryable: false,
-                kind: ErrorKind::Unknown,
+                kind: ErrorKind::Transport,
             }
         })?;
 

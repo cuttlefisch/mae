@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.0 (1,324+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.1 (1,590 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.4.1 modularization complete.
 
 ---
 
@@ -182,6 +182,29 @@ xdisp.c monolith, Xi Editor's over-engineering, and Remacs's accumulated debt.
 - Steel is working well for current use case (config loading, REPL, define-key/define-command)
 - Trait extraction is insurance for hypothetical future; not blocking self-hosting
 - Will revisit if Steel shows scaling issues under real workloads
+
+---
+
+## Phase 3g-v2: v0.4.1 Modularization & Code Smell Audit ✅
+
+Second round of architecture splits — 6 god files broken into module directories, plus 12 code smell fixes across AI providers, session management, and tool execution.
+
+### File Splits (6 files → module directories)
+- [x] `key_handling.rs` (2,056 lines) → `key_handling/` directory (10 mode-specific modules)
+- [x] `main.rs` → extracted `terminal_loop`, `lsp_bridge`, `dap_bridge`, `shell_keys` modules
+- [x] `tools.rs` + `executor.rs` → `tools/` and `executor/` module directories
+- [x] `session.rs` (2,791 lines) → `session/` directory with focused submodules
+- [x] All 1,590 tests preserved, zero warnings
+
+### Code Smell Audit (12 fixes)
+- [x] Provider modules: removed dead code, simplified error paths, fixed clippy lints
+- [x] Session management: extracted serialization logic, reduced coupling
+- [x] Executor: clarified tool dispatch, removed redundant matches
+- [x] Model-agnostic system prompt: works across Claude, OpenAI, Gemini, DeepSeek
+
+### Deferred Items
+- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M5+)
+- [ ] **Packaging readiness** — audit mae-dap, mae-lsp, mae-kb for crates.io publishability (→ Phase 10)
 
 ---
 
@@ -1081,7 +1104,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 3f (AI multi-file) ✅ ← needed for self-hosting
     │       │
-    │       └─→ Phase 3g (hardening) ✅ ← before codebase grows further
+    │       └─→ Phase 3g (hardening) ✅ → Phase 3g-v2 (v0.4.1 modularization) ✅
     │
     ├─→ Phase 3h (vim/emacs parity) ✅
     │
@@ -1110,11 +1133,13 @@ Phase 3e (editor essentials) ✅ COMPLETE
 1. **Phase 8 M3 remaining** (GUI polish) — vertical line color bug in insert mode
 2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
 3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
-4. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
-5. **Phase 4c M3 remaining** — variable hover, watch expressions
-6. **LSP packaging review** — multi-language defaults, user-configurable server selection
-7. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-8. **Phase 9** (Org-Mode Editing) — full org-mode environment
+4. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M5+)
+5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
+6. **Phase 4c M3 remaining** — variable hover, watch expressions
+7. **LSP packaging review** — multi-language defaults, user-configurable server selection
+8. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
+9. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+10. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 
@@ -1134,4 +1159,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M1  | 26 ✅ | shell-insert keymap, permission config, GUI renderer, input translation |
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
-| **Total** | **1,324** | All passing, 0 failures |
+| v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
+| **Total** | **1,590** | All passing, 0 failures |

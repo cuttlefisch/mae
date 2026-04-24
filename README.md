@@ -2,16 +2,16 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C324%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C590%20passing-brightgreen.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
-[![Lines of Code](https://img.shields.io/badge/lines-~26k-informational.svg)](#)
+[![Lines of Code](https://img.shields.io/badge/lines-~76k-informational.svg)](#)
 
 > [!CAUTION]
 > **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,324 tests. GPL-3.0-or-later.
+runtime. 1,590 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 

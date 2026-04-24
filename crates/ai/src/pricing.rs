@@ -193,27 +193,18 @@ const TABLE: &[(&str, ModelPrice)] = &[
         },
     ),
     // ---- Gemini ----
-    // Gemini pricing varies by prompt size; these are baseline rates.
+    // Gemini 2.5 Flash-Lite
     (
-        "gemini-3.1-pro",
-        ModelPrice {
-            input_per_mtok: 2.0,
-            cache_read_per_mtok: 0.50, // Gemini cache discount
-            output_per_mtok: 12.0,
-        },
-    ),
-    // Gemini 3.1 Flash-Lite
-    (
-        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash-lite",
         ModelPrice {
             input_per_mtok: 0.25,
             cache_read_per_mtok: 0.06,
             output_per_mtok: 1.50,
         },
     ),
-    // Gemini 3.0 Flash (Preview)
+    // Gemini 2.0 Flash
     (
-        "gemini-3.0-flash",
+        "gemini-2.0-flash",
         ModelPrice {
             input_per_mtok: 0.50,
             cache_read_per_mtok: 0.125,

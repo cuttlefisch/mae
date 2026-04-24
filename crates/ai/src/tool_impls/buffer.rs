@@ -29,6 +29,13 @@ pub fn execute_buffer_write(
     editor: &mut Editor,
     args: &serde_json::Value,
 ) -> Result<String, String> {
+    if editor.ai_mode == "plan" {
+        return Err(
+            "buffer_write is disabled in plan mode. Use create_plan to draft changes instead."
+                .into(),
+        );
+    }
+
     let start_line = args
         .get("start_line")
         .and_then(|v| v.as_u64())

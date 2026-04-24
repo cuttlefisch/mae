@@ -1,3 +1,10 @@
+mod ai_exec;
+mod core_exec;
+mod dap_exec;
+mod kb_exec;
+mod lsp_exec;
+mod shell_exec;
+
 use mae_core::Editor;
 
 use crate::tools::PermissionPolicy;
@@ -6,29 +13,6 @@ use crate::types::*;
 use crate::tool_impls::lsp::{
     execute_lsp_definition, execute_lsp_document_symbols, execute_lsp_hover,
     execute_lsp_references, execute_lsp_workspace_symbol,
-};
-use crate::tool_impls::{
-    execute_ai_load, execute_ai_save, execute_buffer_read, execute_buffer_write,
-    execute_close_buffer, execute_command_list, execute_create_file, execute_create_plan,
-    execute_cursor_info, execute_dap_continue, execute_dap_disconnect, execute_dap_evaluate,
-    execute_dap_expand_variable, execute_dap_inspect_variable, execute_dap_list_variables,
-    execute_dap_output, execute_dap_remove_breakpoint, execute_dap_select_frame,
-    execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
-    execute_debug_state, execute_editor_state, execute_event_recording, execute_file_read,
-    execute_get_option, execute_git_checkout, execute_git_commit, execute_git_diff,
-    execute_git_log, execute_git_pull, execute_git_push, execute_git_stage, execute_git_status,
-    execute_git_unstage, execute_github_pr_create, execute_github_pr_status, execute_help_open,
-    execute_introspect, execute_kb_get, execute_kb_graph, execute_kb_links_from,
-    execute_kb_links_to, execute_kb_list, execute_kb_search, execute_list_buffers,
-    execute_lsp_diagnostics, execute_mouse_event, execute_open_file, execute_org_cycle,
-    execute_org_open_link, execute_org_todo_cycle, execute_project_files, execute_project_info,
-    execute_project_search, execute_rename_file, execute_render_inspect, execute_save_memory,
-    execute_set_option, execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
-    execute_shell_send_input, execute_switch_buffer, execute_switch_project, execute_syntax_tree,
-    execute_terminal_spawn, execute_theme_inspect, execute_trigger_hook, execute_update_plan,
-    execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
-    execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
-    execute_window_layout,
 };
 
 /// What kind of deferred LSP tool call is pending.
@@ -174,83 +158,8 @@ pub fn execute_tool(
         });
     }
 
-    // 5. Dispatch synchronous tools
-    let ai_tool_names = [
-        "buffer_read",
-        "buffer_write",
-        "cursor_info",
-        "file_read",
-        "list_buffers",
-        "editor_state",
-        "window_layout",
-        "command_list",
-        "debug_state",
-        "shell_exec",
-        "open_file",
-        "switch_buffer",
-        "close_buffer",
-        "create_file",
-        "project_files",
-        "project_info",
-        "project_search",
-        "switch_project",
-        "lsp_diagnostics",
-        "syntax_tree",
-        "dap_start",
-        "dap_set_breakpoint",
-        "dap_continue",
-        "dap_step",
-        "dap_inspect_variable",
-        "dap_remove_breakpoint",
-        "dap_list_variables",
-        "dap_expand_variable",
-        "dap_select_frame",
-        "dap_select_thread",
-        "dap_output",
-        "dap_evaluate",
-        "dap_disconnect",
-        "kb_get",
-        "kb_search",
-        "kb_list",
-        "kb_links_from",
-        "kb_links_to",
-        "kb_graph",
-        "help_open",
-        "shell_list",
-        "shell_read_output",
-        "shell_send_input",
-        "ai_permissions",
-        "self_test_suite",
-        "input_lock",
-        "get_option",
-        "set_option",
-        "ai_save",
-        "ai_load",
-        "save_memory",
-        "create_plan",
-        "update_plan",
-        "rename_file",
-        "perf_stats",
-        "perf_benchmark",
-        "theme_inspect",
-        "shell_scrollback",
-        "terminal_spawn",
-        "terminal_send",
-        "terminal_read",
-        "terminal_list",
-        "github_pr_status",
-        "github_pr_create",
-        "mouse_event",
-        "render_inspect",
-        "introspect",
-    ];
-    let result = if ai_tool_names.contains(&call.name.as_str()) {
-        execute_ai_tool(editor, call)
-    } else if let Some(cmd_name) = call.name.strip_prefix("command_") {
-        execute_registry_command(editor, cmd_name)
-    } else {
-        execute_ai_tool(editor, call)
-    };
+    // 5. Dispatch synchronous tools via submodules
+    let result = dispatch_tool(editor, call);
 
     ExecuteResult::Immediate(ToolResult {
         tool_call_id: call.id.clone(),
@@ -260,191 +169,49 @@ pub fn execute_tool(
     })
 }
 
+/// Dispatch a synchronous tool call to the appropriate submodule.
+fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String> {
+    // Try each category dispatcher in turn
+    if let Some(result) = core_exec::dispatch(editor, call) {
+        return result;
+    }
+    if let Some(result) = ai_exec::dispatch(editor, call) {
+        return result;
+    }
+    if let Some(result) = lsp_exec::dispatch(editor, call) {
+        return result;
+    }
+    if let Some(result) = dap_exec::dispatch(editor, call) {
+        return result;
+    }
+    if let Some(result) = kb_exec::dispatch(editor, call) {
+        return result;
+    }
+    if let Some(result) = shell_exec::dispatch(editor, call) {
+        return result;
+    }
+
+    // Perf tools (kept in mod.rs since they are small and cross-cutting)
+    match call.name.as_str() {
+        "perf_stats" => return execute_perf_stats(editor),
+        "perf_benchmark" => return execute_perf_benchmark(editor, &call.arguments),
+        _ => {}
+    }
+
+    // Registry commands (command_* prefix)
+    if let Some(cmd_name) = call.name.strip_prefix("command_") {
+        return execute_registry_command(editor, cmd_name);
+    }
+
+    Err(format!("Unknown tool: {}", call.name))
+}
+
 fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
     let cmd_name = tool_suffix.replace('_', "-");
     if editor.dispatch_builtin(&cmd_name) {
         Ok(format!("Executed: {}", cmd_name))
     } else {
         Err(format!("Unknown command: {}", cmd_name))
-    }
-}
-
-fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String> {
-    match call.name.as_str() {
-        "buffer_read" => execute_buffer_read(editor, &call.arguments),
-        "buffer_write" => execute_buffer_write(editor, &call.arguments),
-        "cursor_info" => execute_cursor_info(editor),
-        "file_read" => execute_file_read(&call.arguments),
-        "list_buffers" => execute_list_buffers(editor),
-        "editor_state" => execute_editor_state(editor),
-        "window_layout" => execute_window_layout(editor),
-        "command_list" => execute_command_list(editor),
-        "debug_state" => execute_debug_state(editor),
-        "open_file" => execute_open_file(editor, &call.arguments),
-        "switch_buffer" => execute_switch_buffer(editor, &call.arguments),
-        "close_buffer" => execute_close_buffer(editor, &call.arguments),
-        "create_file" => execute_create_file(editor, &call.arguments),
-        "project_files" => execute_project_files(&call.arguments),
-        "project_info" => execute_project_info(editor),
-        "project_search" => execute_project_search(&call.arguments),
-        "switch_project" => execute_switch_project(editor, &call.arguments),
-        "lsp_diagnostics" => execute_lsp_diagnostics(editor, &call.arguments),
-        "syntax_tree" => execute_syntax_tree(editor, &call.arguments),
-        "dap_start" => execute_dap_start(editor, &call.arguments),
-        "dap_set_breakpoint" => execute_dap_set_breakpoint(editor, &call.arguments),
-        "dap_continue" => execute_dap_continue(editor),
-        "dap_step" => execute_dap_step(editor, &call.arguments),
-        "dap_inspect_variable" => execute_dap_inspect_variable(editor, &call.arguments),
-        "dap_remove_breakpoint" => execute_dap_remove_breakpoint(editor, &call.arguments),
-        "dap_list_variables" => execute_dap_list_variables(editor),
-        "dap_expand_variable" => execute_dap_expand_variable(editor, &call.arguments),
-        "dap_select_frame" => execute_dap_select_frame(editor, &call.arguments),
-        "dap_select_thread" => execute_dap_select_thread(editor, &call.arguments),
-        "dap_output" => execute_dap_output(editor, &call.arguments),
-        "dap_evaluate" => execute_dap_evaluate(editor, &call.arguments),
-        "dap_disconnect" => execute_dap_disconnect(editor, &call.arguments),
-        "kb_get" => execute_kb_get(editor, &call.arguments),
-        "kb_search" => execute_kb_search(editor, &call.arguments),
-        "kb_list" => execute_kb_list(editor, &call.arguments),
-        "kb_links_from" => execute_kb_links_from(editor, &call.arguments),
-        "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
-        "kb_graph" => execute_kb_graph(editor, &call.arguments),
-        "help_open" => execute_help_open(editor, &call.arguments),
-        "get_option" => execute_get_option(editor, &call.arguments),
-        "set_option" => execute_set_option(editor, &call.arguments),
-        "shell_list" => execute_shell_list(editor),
-        "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
-        "shell_send_input" => execute_shell_send_input(editor, &call.arguments),
-        "terminal_spawn" => execute_terminal_spawn(editor, &call.arguments),
-        "terminal_send" => execute_shell_send_input(editor, &call.arguments),
-        "terminal_read" => execute_shell_read_output(editor, &call.arguments),
-        "terminal_list" => execute_shell_list(editor),
-        "github_pr_status" => execute_github_pr_status(editor),
-        "github_pr_create" => execute_github_pr_create(editor, &call.arguments),
-        "shell_exec" => execute_shell_exec_sync(&call.arguments),
-        "ai_save" => execute_ai_save(editor, &call.arguments),
-        "ai_load" => execute_ai_load(editor, &call.arguments),
-        "save_memory" => execute_save_memory(&call.arguments),
-        "create_plan" => execute_create_plan(&call.arguments),
-        "update_plan" => execute_update_plan(&call.arguments),
-        "rename_file" => execute_rename_file(editor, &call.arguments),
-        "perf_stats" => execute_perf_stats(editor),
-        "perf_benchmark" => execute_perf_benchmark(editor, &call.arguments),
-        "theme_inspect" => execute_theme_inspect(editor, &call.arguments),
-        "shell_scrollback" => execute_shell_scrollback(editor, &call.arguments),
-        "mouse_event" => execute_mouse_event(editor, &call.arguments),
-        "render_inspect" => execute_render_inspect(editor, &call.arguments),
-        "introspect" => execute_introspect(editor, &call.arguments),
-        "trigger_hook" => execute_trigger_hook(editor, &call.arguments),
-        "visual_buffer_add_rect" => execute_visual_buffer_add_rect(editor, &call.arguments),
-        "visual_buffer_add_line" => execute_visual_buffer_add_line(editor, &call.arguments),
-        "visual_buffer_add_circle" => execute_visual_buffer_add_circle(editor, &call.arguments),
-        "visual_buffer_add_text" => execute_visual_buffer_add_text(editor, &call.arguments),
-        "visual_buffer_clear" => execute_visual_buffer_clear(editor),
-        "org_cycle" => execute_org_cycle(editor),
-        "org_todo_cycle" => execute_org_todo_cycle(editor, &call.arguments),
-        "org_open_link" => execute_org_open_link(editor),
-        "event_recording" => execute_event_recording(editor, &call.arguments),
-
-        // --- Git operations ---
-        "git_status" => execute_git_status(editor),
-        "git_diff" => execute_git_diff(editor, &call.arguments),
-        "git_log" => execute_git_log(editor, &call.arguments),
-        "git_stage" => execute_git_stage(editor, &call.arguments),
-        "git_unstage" => execute_git_unstage(editor, &call.arguments),
-        "git_commit" => execute_git_commit(editor, &call.arguments),
-        "git_push" => execute_git_push(editor, &call.arguments),
-        "git_pull" => execute_git_pull(editor, &call.arguments),
-        "git_checkout" => execute_git_checkout(editor, &call.arguments),
-
-        _ => Err(format!("Unknown tool: {}", call.name)),
-    }
-}
-
-/// Synchronous shell_exec for MCP callers and other non-session paths.
-///
-/// The AI session handles shell_exec async (see `AgentSession::execute_shell`),
-/// but MCP tool calls bypass the session and go through `execute_tool` directly.
-/// This synchronous version uses `std::process::Command` so MCP agents can
-/// run shell commands without the async session context.
-fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String, String> {
-    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-
-    if command.is_empty() {
-        return Err("Missing 'command' argument".into());
-    }
-
-    // Same blocklist as session's async version.
-    let blocked_patterns = ["rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", ">(){ :"];
-    for pattern in &blocked_patterns {
-        if command.contains(pattern) {
-            return Err(format!(
-                "Command blocked: contains dangerous pattern '{}'",
-                pattern
-            ));
-        }
-    }
-
-    let timeout_secs = args
-        .get("timeout_secs")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(30)
-        .min(120);
-
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to execute: {}", e))?;
-
-    let timeout = std::time::Duration::from_secs(timeout_secs);
-    let start = std::time::Instant::now();
-    let output = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                break child
-                    .wait_with_output()
-                    .map_err(|e| format!("Wait failed: {}", e))?
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    return Err(format!("Command timed out after {}s", timeout_secs));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(e) => return Err(format!("Wait failed: {}", e)),
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let status = output.status.code().unwrap_or(-1);
-
-    let mut out = format!("exit_code: {}\n", status);
-    if !stdout.is_empty() {
-        let stdout_str = if stdout.len() > 10_000 {
-            format!("{}...[truncated]", &stdout[..10_000])
-        } else {
-            stdout.to_string()
-        };
-        out.push_str(&format!("stdout:\n{}\n", stdout_str));
-    }
-    if !stderr.is_empty() {
-        let stderr_str = if stderr.len() > 5_000 {
-            format!("{}...[truncated]", &stderr[..5_000])
-        } else {
-            stderr.to_string()
-        };
-        out.push_str(&format!("stderr:\n{}\n", stderr_str));
-    }
-
-    if output.status.success() {
-        Ok(out)
-    } else {
-        Err(out)
     }
 }
 
@@ -485,7 +252,10 @@ fn execute_perf_stats(editor: &mut Editor) -> Result<String, String> {
     Ok(serde_json::to_string_pretty(&stats).unwrap())
 }
 
-fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+fn execute_perf_benchmark(
+    _editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
     let benchmark = args
         .get("benchmark")
         .and_then(|v| v.as_str())
@@ -558,7 +328,6 @@ fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Resu
         _ => return Err(format!("Unknown benchmark type: {}", benchmark)),
     };
 
-    let _ = editor; // satisfy borrow checker
     let result = serde_json::json!({
         "benchmark": benchmark,
         "size": size,

@@ -90,7 +90,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
                 ExecuteResult::Deferred { kind, .. } => {
                     info!(?kind, "deferred AI tool — awaiting LSP response");
-                    crate::drain_lsp_intents(editor, ctx.lsp_command_tx);
+                    crate::lsp_bridge::drain_lsp_intents(editor, ctx.lsp_command_tx);
                     *ctx.deferred_ai_reply =
                         Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
                 }
@@ -516,7 +516,7 @@ pub fn handle_mcp_request(
                 pending = deferred_mcp_reply.len(),
                 "deferred MCP tool — awaiting LSP response"
             );
-            crate::drain_lsp_intents(editor, lsp_command_tx);
+            crate::lsp_bridge::drain_lsp_intents(editor, lsp_command_tx);
             deferred_mcp_reply.push((kind, mcp_req.reply, tokio::time::Instant::now()));
             false
         }
@@ -555,7 +555,9 @@ pub fn try_resolve_deferred(
     deferred_ai_reply: &mut DeferredAiReply,
 ) -> bool {
     if let Some((kind, ref tool_call_id, _, _)) = *deferred_ai_reply {
-        if let Some(result) = crate::try_complete_deferred(lsp_event, kind, tool_call_id) {
+        if let Some(result) =
+            crate::lsp_bridge::try_complete_deferred(lsp_event, kind, tool_call_id)
+        {
             let (_, _, reply, _) = deferred_ai_reply.take().unwrap();
             debug!(tool_call_id = %result.tool_call_id, "deferred tool call completed");
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -580,7 +582,7 @@ pub fn try_resolve_deferred_mcp(
     let mut i = 0;
     while i < deferred_mcp_reply.len() {
         let kind = deferred_mcp_reply[i].0;
-        if let Some(result) = crate::try_complete_deferred(lsp_event, kind, "mcp") {
+        if let Some(result) = crate::lsp_bridge::try_complete_deferred(lsp_event, kind, "mcp") {
             let (_, reply, _) = deferred_mcp_reply.swap_remove(i);
             debug!(?kind, "deferred MCP tool call completed");
             let _ = reply.send(mae_mcp::McpToolResult {
