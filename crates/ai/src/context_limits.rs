@@ -66,9 +66,7 @@ const TABLE: &[(&str, u64, usize)] = &[
     ("o1", 200_000, 100),
     // ---- Google (Gemini) ----
     // Gemini agent loops are typically optimized for ~50 rounds.
-    ("gemini-3.1-pro", 1_000_000, 50),
-    ("gemini-3.1-flash", 1_000_000, 50),
-    ("gemini-3.0-flash", 1_000_000, 50),
+    ("gemini-2.5-flash-lite", 1_000_000, 50),
     ("gemini-2.5-pro", 1_000_000, 50),
     ("gemini-2.5-flash", 1_000_000, 50),
     // ---- DeepSeek ----

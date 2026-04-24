@@ -19,13 +19,11 @@ pub struct ClaudeProvider {
 
 impl ClaudeProvider {
     pub fn new(config: ProviderConfig) -> Self {
-        ClaudeProvider {
-            client: Client::builder()
-                .timeout(Duration::from_secs(config.timeout_secs))
-                .build()
-                .expect("failed to build HTTP client"),
-            config,
-        }
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .build()
+            .unwrap_or_default();
+        ClaudeProvider { client, config }
     }
 
     /// Convert canonical ToolDefinition to Claude's tool format.
@@ -253,7 +251,7 @@ impl AgentProvider for ClaudeProvider {
                 ProviderError {
                     message: format!("HTTP error: {}", e),
                     retryable: e.is_timeout(),
-                    kind: ErrorKind::Unknown,
+                    kind: ErrorKind::Transport,
                 }
             })?;
 
@@ -265,7 +263,7 @@ impl AgentProvider for ClaudeProvider {
             ProviderError {
                 message: format!("JSON parse error: {}", e),
                 retryable: false,
-                kind: ErrorKind::Unknown,
+                kind: ErrorKind::Transport,
             }
         })?;
 

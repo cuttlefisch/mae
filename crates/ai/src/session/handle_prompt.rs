@@ -76,16 +76,10 @@ impl AgentSession {
                             .send(AiEvent::SessionComplete {
                                 text: "[Interrupted by user]".into(),
                                 target_buffer: self.target_buffer.clone(),
-                                transcript_path: self
-                                    .transcript_path
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string()),
+                                transcript_path: self.transcript_path_str.clone(),
                             })
                             .await;
-                        if let Some(start_idx) = self.transaction_start_idx {
-                            self.collapse_transaction(start_idx);
-                        }
-                        self.transaction_start_idx = None;
+                        self.finalize_transaction();
                         return;
                     }
                     AiCommand::Shutdown => {
@@ -116,17 +110,9 @@ impl AgentSession {
                 warn!(max_rounds = self.max_rounds, "round limit reached");
                 let _ = self
                     .event_tx
-                    .send(AiEvent::Error(
-                        msg,
-                        self.transcript_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string()),
-                    ))
+                    .send(AiEvent::Error(msg, self.transcript_path_str.clone()))
                     .await;
-                if let Some(start_idx) = self.transaction_start_idx {
-                    self.collapse_transaction(start_idx);
-                }
-                self.transaction_start_idx = None;
+                self.finalize_transaction();
                 return;
             }
 
@@ -174,15 +160,10 @@ impl AgentSession {
                     .event_tx
                     .send(AiEvent::Error(
                         "Context window nearly full — stopping tool calls".into(),
-                        self.transcript_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string()),
+                        self.transcript_path_str.clone(),
                     ))
                     .await;
-                if let Some(start_idx) = self.transaction_start_idx {
-                    self.collapse_transaction(start_idx);
-                }
-                self.transaction_start_idx = None;
+                self.finalize_transaction();
                 return;
             }
 
@@ -205,10 +186,7 @@ impl AgentSession {
                             cap_usd: cap,
                         })
                         .await;
-                    if let Some(start_idx) = self.transaction_start_idx {
-                        self.collapse_transaction(start_idx);
-                    }
-                    self.transaction_start_idx = None;
+                    self.finalize_transaction();
                     return;
                 }
             }
@@ -263,9 +241,7 @@ impl AgentSession {
                             .event_tx
                             .send(AiEvent::Error(
                                 "Context window full — pruning old messages, retrying...".into(),
-                                self.transcript_path
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string()),
+                                self.transcript_path_str.clone(),
                             ))
                             .await;
                         self.aggressive_prune();
@@ -289,15 +265,10 @@ impl AgentSession {
                                             "Context overflow recovery failed: {}",
                                             retry_err.message
                                         ),
-                                        self.transcript_path
-                                            .as_ref()
-                                            .map(|p| p.to_string_lossy().to_string()),
+                                        self.transcript_path_str.clone(),
                                     ))
                                     .await;
-                                if let Some(start_idx) = self.transaction_start_idx {
-                                    self.collapse_transaction(start_idx);
-                                }
-                                self.transaction_start_idx = None;
+                                self.finalize_transaction();
                                 return;
                             }
                         }
@@ -317,17 +288,9 @@ impl AgentSession {
                     } else {
                         let _ = self
                             .event_tx
-                            .send(AiEvent::Error(
-                                e.message,
-                                self.transcript_path
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string()),
-                            ))
+                            .send(AiEvent::Error(e.message, self.transcript_path_str.clone()))
                             .await;
-                        if let Some(start_idx) = self.transaction_start_idx {
-                            self.collapse_transaction(start_idx);
-                        }
-                        self.transaction_start_idx = None;
+                        self.finalize_transaction();
                         return;
                     }
                 }
@@ -356,16 +319,11 @@ impl AgentSession {
                                 repeat_count + 1,
                                 self.turn_history.len()
                             ),
-                            self.transcript_path
-                                .as_ref()
-                                .map(|p| p.to_string_lossy().to_string()),
+                            self.transcript_path_str.clone(),
                         ))
                         .await;
 
-                    if let Some(start_idx) = self.transaction_start_idx {
-                        self.collapse_transaction(start_idx);
-                    }
-                    self.transaction_start_idx = None;
+                    self.finalize_transaction();
                     return;
                 }
 
@@ -413,16 +371,10 @@ impl AgentSession {
                     .send(AiEvent::SessionComplete {
                         text: final_text,
                         target_buffer: self.target_buffer.clone(),
-                        transcript_path: self
-                            .transcript_path
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string()),
+                        transcript_path: self.transcript_path_str.clone(),
                     })
                     .await;
-                if let Some(start_idx) = self.transaction_start_idx {
-                    self.collapse_transaction(start_idx);
-                }
-                self.transaction_start_idx = None;
+                self.finalize_transaction();
                 return;
             }
 
@@ -870,10 +822,7 @@ impl AgentSession {
                         .event_tx
                         .send(AiEvent::Error("Event channel closed".into(), None))
                         .await;
-                    if let Some(start_idx) = self.transaction_start_idx {
-                        self.collapse_transaction(start_idx);
-                    }
-                    self.transaction_start_idx = None;
+                    self.finalize_transaction();
                     return;
                 }
 
@@ -906,10 +855,7 @@ impl AgentSession {
                             .event_tx
                             .send(AiEvent::Error("Tool result channel closed".into(), None))
                             .await;
-                        if let Some(start_idx) = self.transaction_start_idx {
-                            self.collapse_transaction(start_idx);
-                        }
-                        self.transaction_start_idx = None;
+                        self.finalize_transaction();
                         return;
                     }
                 }

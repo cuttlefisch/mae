@@ -252,7 +252,10 @@ fn execute_perf_stats(editor: &mut Editor) -> Result<String, String> {
     Ok(serde_json::to_string_pretty(&stats).unwrap())
 }
 
-fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+fn execute_perf_benchmark(
+    _editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
     let benchmark = args
         .get("benchmark")
         .and_then(|v| v.as_str())
@@ -325,7 +328,6 @@ fn execute_perf_benchmark(editor: &mut Editor, args: &serde_json::Value) -> Resu
         _ => return Err(format!("Unknown benchmark type: {}", benchmark)),
     };
 
-    let _ = editor; // satisfy borrow checker
     let result = serde_json::json!({
         "benchmark": benchmark,
         "size": size,

@@ -146,4 +146,12 @@ impl AgentSession {
             );
         }
     }
+
+    /// Collapse and clear the current transaction, if any.
+    pub(super) fn finalize_transaction(&mut self) {
+        if let Some(start_idx) = self.transaction_start_idx {
+            self.collapse_transaction(start_idx);
+        }
+        self.transaction_start_idx = None;
+    }
 }

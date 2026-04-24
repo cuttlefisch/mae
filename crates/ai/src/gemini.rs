@@ -16,13 +16,11 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(config: ProviderConfig) -> Self {
-        GeminiProvider {
-            client: Client::builder()
-                .timeout(Duration::from_secs(config.timeout_secs))
-                .build()
-                .expect("failed to build HTTP client"),
-            config,
-        }
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .build()
+            .unwrap_or_default();
+        GeminiProvider { client, config }
     }
 
     /// Convert canonical ToolDefinition to Gemini's tool format.
@@ -194,13 +192,6 @@ impl GeminiProvider {
 
         let finish_reason = first_candidate.get("finishReason").and_then(|s| s.as_str());
         let stop_reason = match finish_reason {
-            Some("STOP") => {
-                if !tool_calls.is_empty() {
-                    StopReason::ToolUse
-                } else {
-                    StopReason::EndTurn
-                }
-            }
             Some("MAX_TOKENS") => StopReason::MaxTokens,
             _ => {
                 if !tool_calls.is_empty() {
@@ -309,7 +300,7 @@ impl AgentProvider for GeminiProvider {
             ProviderError {
                 message: format!("JSON parse error: {}", e),
                 retryable: false,
-                kind: ErrorKind::Unknown,
+                kind: ErrorKind::Transport,
             }
         })?;
 

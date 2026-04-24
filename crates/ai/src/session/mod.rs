@@ -89,6 +89,8 @@ pub struct AgentSession {
     pub(super) turn_history: std::collections::VecDeque<String>,
     /// Path to the session's auto-saved transcript log.
     pub(super) transcript_path: Option<PathBuf>,
+    /// Cached string representation of transcript_path (computed once).
+    pub(super) transcript_path_str: Option<String>,
 }
 
 impl AgentSession {
@@ -153,6 +155,9 @@ impl AgentSession {
             current_profile: "pair-programmer".into(),
             last_tool_calls: None,
             turn_history: std::collections::VecDeque::with_capacity(6),
+            transcript_path_str: transcript_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
             transcript_path,
         }
     }
