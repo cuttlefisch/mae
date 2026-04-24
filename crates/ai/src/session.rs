@@ -74,10 +74,12 @@ pub struct AgentSession {
     /// Optional name of the buffer to route output to (e.g. "*AI-Explorer*").
     /// If None, output goes to the default conversation buffer.
     target_buffer: Option<String>,
-    /// Last executed tool calls to detect infinite loops.
+    /// Current AI operating mode (standard/plan/auto-accept), injected per-turn.
+    current_mode: String,
+    /// Current AI prompt profile, injected per-turn.
+    current_profile: String,
+    /// Last executed tool calls (for diagnostics).
     last_tool_calls: Option<Vec<ToolCall>>,
-    /// Number of times the exact same tool calls have been seen consecutively.
-    consecutive_identical_tools: usize,
     /// History of tool call signatures (name:args) for oscillating loop detection.
     turn_history: std::collections::VecDeque<String>,
     /// Path to the session's auto-saved transcript log.
@@ -142,8 +144,9 @@ impl AgentSession {
             transaction_start_idx: None,
             current_round: 0,
             target_buffer: None,
+            current_mode: "standard".into(),
+            current_profile: "pair-programmer".into(),
             last_tool_calls: None,
-            consecutive_identical_tools: 0,
             turn_history: std::collections::VecDeque::with_capacity(6),
             transcript_path,
         }
@@ -415,14 +418,14 @@ impl AgentSession {
         }
     }
 
-    /// Aggressively prune messages — drop oldest 25% by count.
-    /// Used for context overflow recovery.
+    /// Prune oldest messages for context overflow recovery.
+    /// Drops ~10% of non-first messages to preserve as much context as possible.
     fn aggressive_prune(&mut self) {
         if self.messages.len() <= 2 {
             return;
         }
-        let to_remove = (self.messages.len() - 1) / 4; // 25% of non-first messages
-        let to_remove = to_remove.max(1);
+        let to_remove = (self.messages.len() - 1) / 10; // 10% of non-first messages
+        let to_remove = to_remove.max(2);
         self.messages.drain(1..1 + to_remove);
 
         // Enforce OpenAI tool call schema:
@@ -472,7 +475,7 @@ impl AgentSession {
             };
             let original_tokens = result_tokens;
             result.output = format!(
-                "{}\n...\n[TRUNCATED — {} tokens, showing first {}]. WARNING: Tool result was truncated because it exceeded 25% of the context budget. If you need the full data, use more specific tool arguments (e.g. 'categories' for self_test_suite) to request a smaller chunk.",
+                "{}\n...\n[TRUNCATED — {} tokens, showing first {}]. Result exceeded 25% of context budget. To get the data you need:\n- For file reads: use start_line/end_line to request a specific range\n- For searches: use a more specific query or glob pattern\n- For shell output: pipe through head/tail/grep to filter\n- Do NOT retry the same call — narrow your request instead.",
                 truncated, original_tokens, max_result_tokens
             );
             debug!(
@@ -518,9 +521,14 @@ impl AgentSession {
         }
 
         self.transaction_start_idx = Some(self.messages.len());
+        // Inject current mode/profile context so the model knows its constraints
+        let contextualized_prompt = format!(
+            "[Context: mode={}, profile={}]\n\n{}",
+            self.current_mode, self.current_profile, prompt
+        );
         self.messages.push(Message {
             role: Role::User,
-            content: MessageContent::Text(prompt),
+            content: MessageContent::Text(contextualized_prompt),
         });
         self.trim_messages();
 
@@ -576,6 +584,29 @@ impl AgentSession {
                         });
                     }
                 }
+            }
+
+            // Enforce max_rounds to prevent runaway tool loops
+            if round >= self.max_rounds {
+                let msg = format!(
+                    "AI reached maximum rounds ({}) — stopping to prevent runaway loop",
+                    self.max_rounds
+                );
+                warn!(max_rounds = self.max_rounds, "round limit reached");
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::Error(
+                        msg,
+                        self.transcript_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
+                    ))
+                    .await;
+                if let Some(start_idx) = self.transaction_start_idx {
+                    self.collapse_transaction(start_idx);
+                }
+                self.transaction_start_idx = None;
+                return;
             }
 
             self.current_round = round;
@@ -704,8 +735,8 @@ impl AgentSession {
                     // Context overflow recovery: aggressively prune and retry once
                     if e.kind == ErrorKind::ContextOverflow {
                         warn!("context overflow detected — pruning old messages and retrying");
-                        // Halve the context window for self-healing (discovery of actual tighter limits)
-                        self.context_window = (self.context_window / 2).max(4000);
+                        // Reduce context window by 20% for self-healing (discovery of actual tighter limits)
+                        self.context_window = (self.context_window * 4 / 5).max(4000);
 
                         let _ = self
                             .event_tx
@@ -791,28 +822,30 @@ impl AgentSession {
                 names.sort();
                 let turn_sig = names.join("|");
 
-                // Oscillating Loop Detection: check if this turn matches any of the last 6 turns
-                if self.turn_history.contains(&turn_sig) {
-                    self.consecutive_identical_tools += 1;
-                    if self.consecutive_identical_tools >= 4 {
-                        let _ = self
-                            .event_tx
-                            .send(AiEvent::Error(
-                                "AI got stuck in an infinite tool loop — aborting".into(),
-                                self.transcript_path
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().to_string()),
-                            ))
-                            .await;
+                // Oscillating Loop Detection: count how many times this turn signature
+                // appears in the recent history window. Catches both strict repeats
+                // (A→A→A) and oscillating patterns (A→B→A→B).
+                let repeat_count = self.turn_history.iter().filter(|s| *s == &turn_sig).count();
+                if repeat_count >= 2 {
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::Error(
+                            format!(
+                                "AI got stuck in a tool loop (same pattern seen {} times in last {} turns) — aborting",
+                                repeat_count + 1,
+                                self.turn_history.len()
+                            ),
+                            self.transcript_path
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().to_string()),
+                        ))
+                        .await;
 
-                        if let Some(start_idx) = self.transaction_start_idx {
-                            self.collapse_transaction(start_idx);
-                        }
-                        self.transaction_start_idx = None;
-                        return;
+                    if let Some(start_idx) = self.transaction_start_idx {
+                        self.collapse_transaction(start_idx);
                     }
-                } else {
-                    self.consecutive_identical_tools = 0;
+                    self.transaction_start_idx = None;
+                    return;
                 }
 
                 if self.turn_history.len() >= 6 {
@@ -1047,6 +1080,7 @@ impl AgentSession {
                         .as_str()
                         .unwrap_or("standard")
                         .to_string();
+                    self.current_mode = mode.clone();
                     let _ = self.event_tx.send(AiEvent::UpdateMode(mode.clone())).await;
                     let result_text = format!("AI mode change requested: {}", mode);
                     let _ = self
@@ -1075,6 +1109,7 @@ impl AgentSession {
                         .as_str()
                         .unwrap_or("pair-programmer")
                         .to_string();
+                    self.current_profile = profile.clone();
                     let _ = self
                         .event_tx
                         .send(AiEvent::UpdateProfile(profile.clone()))
@@ -2160,7 +2195,7 @@ mod tests {
         for _ in 0..50 {
             match event_rx.recv().await {
                 Some(AiEvent::Error(msg, _)) => {
-                    if msg.contains("stuck in an infinite tool loop") {
+                    if msg.contains("stuck in a tool loop") {
                         found_circuit_breaker = true;
                         break;
                     }
@@ -2519,5 +2554,185 @@ mod tests {
         }
 
         assert!(activity_logged, "Activity was not logged to UI");
+    }
+
+    #[tokio::test]
+    async fn test_max_rounds_enforcement() {
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Provider always returns tool calls with unique args (to avoid
+        // oscillation detection) — would loop forever without max_rounds
+        struct InfiniteProvider {
+            call_count: std::sync::Mutex<usize>,
+        }
+        #[async_trait::async_trait]
+        impl AgentProvider for InfiniteProvider {
+            async fn send(
+                &self,
+                _: &[Message],
+                _: &[ToolDefinition],
+                _: &str,
+            ) -> Result<ProviderResponse, ProviderError> {
+                let mut count = self.call_count.lock().unwrap();
+                *count += 1;
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![ToolCall {
+                        id: format!("c{}", count),
+                        name: "editor_state".into(),
+                        arguments: serde_json::json!({"round": *count}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            }
+            fn name(&self) -> &str {
+                "infinite"
+            }
+        }
+
+        let provider = Box::new(InfiniteProvider {
+            call_count: std::sync::Mutex::new(0),
+        });
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_rounds = 3;
+
+        tokio::spawn(session.run());
+        cmd_tx.send(AiCommand::Prompt("go".into())).await.unwrap();
+
+        let mut found_max_rounds_error = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, event_rx.recv()).await {
+                Ok(Some(AiEvent::Error(msg, _))) if msg.contains("maximum rounds") => {
+                    found_max_rounds_error = true;
+                    break;
+                }
+                Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
+                    let _ = reply.send(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: "ok".into(),
+                    });
+                }
+                _ => continue,
+            }
+        }
+        assert!(
+            found_max_rounds_error,
+            "should have hit max_rounds limit after 3 rounds"
+        );
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_oscillation_ab_pattern_detected() {
+        let (event_tx, mut event_rx) = mpsc::channel(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+        // Alternates between two different tools: A, B, A, B, ...
+        struct OscillatingProvider {
+            call_count: std::sync::Mutex<usize>,
+        }
+        #[async_trait::async_trait]
+        impl AgentProvider for OscillatingProvider {
+            async fn send(
+                &self,
+                _: &[Message],
+                _: &[ToolDefinition],
+                _: &str,
+            ) -> Result<ProviderResponse, ProviderError> {
+                let mut count = self.call_count.lock().unwrap();
+                *count += 1;
+                let name = if (*count).is_multiple_of(2) {
+                    "cursor_info"
+                } else {
+                    "editor_state"
+                };
+                Ok(ProviderResponse {
+                    text: None,
+                    tool_calls: vec![ToolCall {
+                        id: format!("c{}", count),
+                        name: name.into(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                })
+            }
+            fn name(&self) -> &str {
+                "oscillating"
+            }
+        }
+
+        let provider = Box::new(OscillatingProvider {
+            call_count: std::sync::Mutex::new(0),
+        });
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        session.max_rounds = 20; // High enough that only oscillation detection should fire
+
+        tokio::spawn(session.run());
+        cmd_tx.send(AiCommand::Prompt("go".into())).await.unwrap();
+
+        let mut found_loop_error = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, event_rx.recv()).await {
+                Ok(Some(AiEvent::Error(msg, _))) if msg.contains("stuck in a tool loop") => {
+                    found_loop_error = true;
+                    break;
+                }
+                Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
+                    let _ = reply.send(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        output: "ok".into(),
+                    });
+                }
+                _ => continue,
+            }
+        }
+        assert!(
+            found_loop_error,
+            "should have detected A-B-A-B oscillation pattern"
+        );
+        cmd_tx.send(AiCommand::Shutdown).await.unwrap();
+    }
+
+    #[test]
+    fn test_aggressive_prune_removes_ten_percent() {
+        let (event_tx, _) = mpsc::channel(32);
+        let (_, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+
+        // Add 21 messages (1 system + 20 content = 10% of 20 = 2 removed)
+        for i in 0..21 {
+            session.messages.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(format!("msg{}", i)),
+            });
+        }
+        assert_eq!(session.messages.len(), 21);
+
+        session.aggressive_prune();
+        // 10% of 20 non-first = 2, so 21 - 2 = 19
+        assert_eq!(session.messages.len(), 19);
+        // First message preserved
+        match &session.messages[0].content {
+            MessageContent::Text(t) => assert_eq!(t, "msg0"),
+            _ => panic!("expected text"),
+        }
     }
 }
