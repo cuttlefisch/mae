@@ -1553,11 +1553,15 @@ impl Editor {
 
         match kind {
             crate::BufferKind::Conversation => {
-                let win = self.window_mgr.focused_window_mut();
-                if delta > 0 {
-                    win.scroll_offset = win.scroll_offset.saturating_add(lines * scroll_speed);
-                } else {
-                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
+                    let amount = lines * scroll_speed;
+                    if delta > 0 {
+                        // Scroll wheel up = show older content = increase scroll
+                        conv.scroll_up(amount);
+                    } else {
+                        // Scroll wheel down = show newer content = decrease scroll
+                        conv.scroll_down(amount);
+                    }
                 }
             }
             crate::BufferKind::Shell => {

@@ -137,7 +137,22 @@ pub fn render_status_bar(
     };
 
     let total_lines = buf.line_count();
-    let pct = if total_lines <= 1 {
+    let pct = if buf.kind == mae_core::BufferKind::Conversation {
+        if let Some(ref conv) = buf.conversation {
+            let total = conv.line_count();
+            if total <= 1 {
+                "All".to_string()
+            } else if conv.scroll == 0 {
+                "Bot".to_string()
+            } else if conv.scroll >= total {
+                "Top".to_string()
+            } else {
+                format!("{}%", (total.saturating_sub(conv.scroll)) * 100 / total)
+            }
+        } else {
+            "All".to_string()
+        }
+    } else if total_lines <= 1 {
         "All".to_string()
     } else if win.cursor_row == 0 {
         "Top".to_string()

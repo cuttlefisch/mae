@@ -130,18 +130,10 @@ pub fn render_conversation_window(
         let viewport_height = inner_height;
 
         // Wrap lines to fit viewport width
-        let screen_lines = wrap_lines(&rendered, inner_width);
+        let screen_lines = wrap_lines(rendered, inner_width);
 
-        // Transition: use win.scroll_offset for parity with text buffers.
-        // We still fall back to conv.scroll if offset is 0 to preserve legacy scroll behavior.
-        let start = if _win.scroll_offset > 0 {
-            _win.scroll_offset
-        } else {
-            screen_lines
-                .len()
-                .saturating_sub(viewport_height)
-                .saturating_sub(conv.scroll)
-        };
+        let auto_start = screen_lines.len().saturating_sub(viewport_height);
+        let start = auto_start.saturating_sub(conv.scroll);
 
         // Selection range (char offsets in flattened text)
         let highlight_selection = matches!(editor.mode, mae_core::Mode::Visual(_));

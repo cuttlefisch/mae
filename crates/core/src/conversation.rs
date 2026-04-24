@@ -61,13 +61,16 @@ pub struct Conversation {
     pub input_line: String,
     /// Byte offset of the editing cursor within `input_line`.
     pub input_cursor: usize,
-    /// DEPRECATED: Conversation-specific scroll state.
-    /// Use window.scroll_offset instead for parity with text buffers.
+    /// Conversation-specific scroll state: 0 = bottom (auto-follow),
+    /// positive = scrolled up N lines from the bottom.
     pub scroll: usize,
     pub streaming: bool,
     /// When streaming started, used to display elapsed time in the UI.
     pub streaming_start: Option<std::time::Instant>,
     version: u64,
+    /// Pre-computed rendered lines, rebuilt on every content mutation.
+    /// Avoids O(N) allocation per frame during scrolling.
+    cached_lines: Vec<RenderedLine>,
 }
 
 impl Default for Conversation {
@@ -84,7 +87,7 @@ impl Conversation {
     }
 
     pub fn new() -> Self {
-        Conversation {
+        let mut conv = Conversation {
             entries: Vec::new(),
             input_line: String::new(),
             input_cursor: 0,
@@ -92,7 +95,10 @@ impl Conversation {
             streaming: false,
             streaming_start: None,
             version: 0,
-        }
+            cached_lines: Vec::new(),
+        };
+        conv.rebuild_render_cache();
+        conv
     }
 
     /// Maximum conversation entries to retain.
@@ -118,6 +124,7 @@ impl Conversation {
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
     }
 
     pub fn push_assistant(&mut self, text: impl Into<String>) {
@@ -128,6 +135,7 @@ impl Conversation {
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
     }
 
     pub fn push_tool_call(&mut self, name: impl Into<String>) {
@@ -138,6 +146,7 @@ impl Conversation {
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
     }
 
     pub fn push_tool_result(
@@ -156,6 +165,7 @@ impl Conversation {
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
     }
 
     pub fn push_system(&mut self, text: impl Into<String>) {
@@ -166,6 +176,7 @@ impl Conversation {
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
     }
 
     /// Append a streaming chunk to the last assistant entry.
@@ -175,6 +186,7 @@ impl Conversation {
             if last.role == ConversationRole::Assistant {
                 last.content.push_str(text);
                 self.version += 1;
+                self.rebuild_render_cache();
                 return;
             }
         }
@@ -187,6 +199,7 @@ impl Conversation {
         if let Some(entry) = self.entries.get_mut(index) {
             entry.collapsed = !entry.collapsed;
             self.version += 1;
+            self.rebuild_render_cache();
         }
     }
 
@@ -225,11 +238,22 @@ impl Conversation {
         self.entries = wire.entries;
         self.trim_entries();
         self.version += 1;
+        self.rebuild_render_cache();
         Ok(())
     }
 
+    /// Rebuild the cached rendered lines. Called after every content mutation.
+    fn rebuild_render_cache(&mut self) {
+        self.cached_lines = self.compute_rendered_lines();
+    }
+
+    /// Return pre-computed rendered lines (zero-allocation on read).
+    pub fn rendered_lines(&self) -> &[RenderedLine] {
+        &self.cached_lines
+    }
+
     /// Render all entries + input line into display lines.
-    pub fn rendered_lines(&self) -> Vec<RenderedLine> {
+    fn compute_rendered_lines(&self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
 
         for (i, entry) in self.entries.iter().enumerate() {
@@ -365,7 +389,7 @@ impl Conversation {
     /// Flatten all rendered lines into a single string for visual mode operations.
     /// This is the text that visual mode selection coordinates map to.
     pub fn flat_text(&self) -> String {
-        self.rendered_lines()
+        self.cached_lines
             .iter()
             .map(|rl| rl.text.as_str())
             .collect::<Vec<_>>()
@@ -374,7 +398,7 @@ impl Conversation {
 
     /// Total rendered line count (for scroll calculations).
     pub fn line_count(&self) -> usize {
-        self.rendered_lines().len()
+        self.cached_lines.len()
     }
 
     /// Split the input prompt into spans for cursor rendering.
@@ -405,6 +429,7 @@ impl Conversation {
     pub fn input_insert_char(&mut self, ch: char) {
         self.input_line.insert(self.input_cursor, ch);
         self.input_cursor += ch.len_utf8();
+        self.rebuild_render_cache();
     }
 
     /// Delete the char immediately before the cursor (Backspace / C-h).
@@ -417,6 +442,7 @@ impl Conversation {
         let removed_len = self.input_cursor - prev_start;
         self.input_line.remove(prev_start);
         self.input_cursor -= removed_len;
+        self.rebuild_render_cache();
     }
 
     /// Delete the char at the cursor (C-d / Delete).
@@ -425,7 +451,7 @@ impl Conversation {
             return;
         }
         self.input_line.remove(self.input_cursor);
-        // cursor stays at same byte offset (now pointing to the next char)
+        self.rebuild_render_cache();
     }
 
     /// Move cursor to start of input (C-a / Home).
@@ -475,17 +501,20 @@ impl Conversation {
         };
         self.input_line.drain(word_start..self.input_cursor);
         self.input_cursor = word_start;
+        self.rebuild_render_cache();
     }
 
     /// Delete from start of input to cursor (C-u).
     pub fn input_kill_to_start(&mut self) {
         self.input_line.drain(..self.input_cursor);
         self.input_cursor = 0;
+        self.rebuild_render_cache();
     }
 
     /// Delete from cursor to end of input (C-k).
     pub fn input_kill_to_end(&mut self) {
         self.input_line.truncate(self.input_cursor);
+        self.rebuild_render_cache();
     }
 
     // -----------------------------------------------------------------------
@@ -509,8 +538,7 @@ impl Conversation {
 
     /// Jump to the top of the conversation history.
     pub fn scroll_to_top(&mut self) {
-        // Clamped to the actual line count in the renderer; set a large value.
-        self.scroll = usize::MAX / 2;
+        self.scroll = self.cached_lines.len();
     }
 }
 

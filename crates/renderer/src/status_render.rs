@@ -104,15 +104,32 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         format!(" {} ", file_type)
     };
 
-    let total_lines = buf.line_count();
-    let pct = if total_lines <= 1 {
-        "All".to_string()
-    } else if win.cursor_row == 0 {
-        "Top".to_string()
-    } else if win.cursor_row + 1 >= total_lines {
-        "Bot".to_string()
+    let pct = if buf.kind == mae_core::BufferKind::Conversation {
+        if let Some(ref conv) = buf.conversation {
+            let total = conv.line_count();
+            if total <= 1 {
+                "All".to_string()
+            } else if conv.scroll == 0 {
+                "Bot".to_string()
+            } else if conv.scroll >= total {
+                "Top".to_string()
+            } else {
+                format!("{}%", (total.saturating_sub(conv.scroll)) * 100 / total)
+            }
+        } else {
+            "All".to_string()
+        }
     } else {
-        format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+        let total_lines = buf.line_count();
+        if total_lines <= 1 {
+            "All".to_string()
+        } else if win.cursor_row == 0 {
+            "Top".to_string()
+        } else if win.cursor_row + 1 >= total_lines {
+            "Bot".to_string()
+        } else {
+            format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+        }
     };
 
     let tier_str = format!(" [AI:{}|{}]", editor.ai_mode, editor.ai_permission_tier);
