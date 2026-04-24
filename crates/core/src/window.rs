@@ -273,15 +273,29 @@ impl Window {
         }
     }
 
-    /// Scroll up one line without moving cursor (C-y).
-    pub fn scroll_up_line(&mut self) {
+    /// Scroll up one line (C-y). Cursor stays on screen.
+    pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        // If cursor scrolled below the viewport, pull it up to the bottom visible line.
+        if viewport_height > 0 {
+            let bottom = self.scroll_offset + viewport_height - 1;
+            if self.cursor_row > bottom {
+                self.cursor_row = bottom;
+                self.clamp_cursor(buf);
+            }
+        }
     }
 
-    /// Scroll down one line without moving cursor (C-e).
-    pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer) {
+    /// Scroll down one line (C-e). Cursor stays on screen.
+    pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         let max_row = buf.display_line_count().saturating_sub(1);
         self.scroll_offset = (self.scroll_offset + 1).min(max_row);
+        // If cursor scrolled above the viewport, push it down to the top visible line.
+        if self.cursor_row < self.scroll_offset {
+            self.cursor_row = self.scroll_offset;
+            self.clamp_cursor(buf);
+        }
+        let _ = viewport_height; // used by scroll_up_line for symmetry
     }
 
     // --- Screen-relative cursor ---
@@ -1080,6 +1094,52 @@ mod tests {
         win.scroll_half_up(20);
         assert_eq!(win.cursor_row, 0);
         assert_eq!(win.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_down_line_clamps_cursor_to_viewport() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 0;
+        win.scroll_offset = 0;
+        // Scroll viewport down 5 lines — cursor at row 0 is now above viewport.
+        for _ in 0..5 {
+            win.scroll_down_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 5);
+        // Cursor must have been pushed to the top of the viewport.
+        assert_eq!(win.cursor_row, 5);
+    }
+
+    #[test]
+    fn scroll_up_line_clamps_cursor_to_viewport() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 50;
+        win.scroll_offset = 40;
+        // Scroll viewport up 15 lines — cursor at row 50 would go below viewport.
+        for _ in 0..15 {
+            win.scroll_up_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 25);
+        // Cursor must have been pulled to bottom visible line (25 + 19 = 44).
+        assert_eq!(win.cursor_row, 44);
+    }
+
+    #[test]
+    fn scroll_down_line_continues_past_cursor() {
+        // Regression: C-e used to stop when cursor hit viewport bottom.
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 10;
+        win.scroll_offset = 0;
+        // Scroll 30 lines — well past the cursor's original position.
+        for _ in 0..30 {
+            win.scroll_down_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 30);
+        // Cursor should be at top of viewport.
+        assert_eq!(win.cursor_row, 30);
     }
 
     // --- WindowManager tests ---

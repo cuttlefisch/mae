@@ -212,17 +212,69 @@ fn render_shell_grid(
             }
         }
 
-        // Draw text (non-space characters).
-        for (col_idx, cell_opt) in row_cells.iter().enumerate() {
-            if let Some(cell) = cell_opt {
-                if cell.ch != ' ' {
-                    let col = area_col + col_idx;
-                    if cell.bold {
-                        canvas.draw_text_bold(row, col, &cell.ch.to_string(), cell.fg);
-                    } else {
-                        canvas.draw_text_at(row, col, &cell.ch.to_string(), cell.fg);
+        // Draw text: coalesce adjacent cells with same style into text runs.
+        {
+            let mut run_buf = String::with_capacity(area_width);
+            let mut run_start = 0usize;
+            let mut run_fg = default_fg;
+            let mut run_bold = false;
+
+            for (col_idx, cell_opt) in row_cells.iter().enumerate() {
+                let (ch, fg, bold) = if let Some(cell) = cell_opt {
+                    (cell.ch, cell.fg, cell.bold)
+                } else {
+                    (' ', default_fg, false)
+                };
+
+                let style_match = if run_buf.is_empty() {
+                    true
+                } else {
+                    theme::color4f_eq(fg, run_fg) && bold == run_bold
+                };
+
+                if ch.is_ascii() && style_match {
+                    if run_buf.is_empty() {
+                        run_start = col_idx;
+                        run_fg = fg;
+                        run_bold = bold;
+                    }
+                    run_buf.push(ch);
+                } else {
+                    // Flush current run.
+                    if !run_buf.is_empty() {
+                        canvas.draw_text_run(
+                            row,
+                            area_col + run_start,
+                            &run_buf,
+                            run_fg,
+                            run_bold,
+                            false,
+                            1.0,
+                        );
+                        run_buf.clear();
+                    }
+                    if ch.is_ascii() {
+                        run_start = col_idx;
+                        run_fg = fg;
+                        run_bold = bold;
+                        run_buf.push(ch);
+                    } else if ch != ' ' {
+                        // Non-ASCII — per-char fallback.
+                        canvas.draw_char(row, area_col + col_idx, ch, fg, bold, false, 1.0);
                     }
                 }
+            }
+            // Flush final run.
+            if !run_buf.is_empty() {
+                canvas.draw_text_run(
+                    row,
+                    area_col + run_start,
+                    &run_buf,
+                    run_fg,
+                    run_bold,
+                    false,
+                    1.0,
+                );
             }
         }
     }
@@ -410,10 +462,8 @@ fn index_to_named(idx: u8) -> NamedColor {
     }
 }
 
-/// Fast equality check for Color4f (skia_safe doesn't derive PartialEq).
-fn color4f_eq(a: Color4f, b: Color4f) -> bool {
-    a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
-}
+// color4f_eq moved to crate::theme — re-import via `theme::color4f_eq`.
+use crate::theme::color4f_eq;
 
 #[cfg(test)]
 mod tests {

@@ -526,8 +526,11 @@ impl Editor {
                     }
                     _ => {
                         let buf = &self.buffers[idx];
+                        let vh = self.viewport_height;
                         for _ in 0..n {
-                            self.window_mgr.focused_window_mut().scroll_down_line(buf);
+                            self.window_mgr
+                                .focused_window_mut()
+                                .scroll_down_line(buf, vh);
                         }
                     }
                 }
@@ -550,8 +553,10 @@ impl Editor {
                         }
                     }
                     _ => {
+                        let buf = &self.buffers[idx];
+                        let vh = self.viewport_height;
                         for _ in 0..n {
-                            self.window_mgr.focused_window_mut().scroll_up_line();
+                            self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
                         }
                     }
                 }
