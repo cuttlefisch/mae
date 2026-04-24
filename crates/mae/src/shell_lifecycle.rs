@@ -81,7 +81,8 @@ pub fn spawn_pending_shells(
     };
 
     for buf_idx in shell_spawns {
-        let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
+        let (inner_cols, inner_rows) =
+            crate::shell_keys::shell_dims_for_buffer(editor, renderer, buf_idx);
         let cwd = editor.active_project_root().map(|p| p.to_path_buf());
         let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
@@ -105,7 +106,8 @@ pub fn spawn_pending_shells(
 
     // Spawn agent shells: command runs directly as PTY program.
     for (buf_idx, command) in agent_spawns {
-        let (inner_cols, inner_rows) = crate::shell_dims_for_buffer(editor, renderer, buf_idx);
+        let (inner_cols, inner_rows) =
+            crate::shell_keys::shell_dims_for_buffer(editor, renderer, buf_idx);
         let cwd = editor.active_project_root().map(|p| p.to_path_buf());
         let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_command(
@@ -155,7 +157,7 @@ pub fn resize_shells(
     shell_last_dims: &mut HashMap<usize, (u16, u16)>,
 ) {
     for (buf_idx, shell) in shell_terminals {
-        let dims = crate::shell_dims_for_buffer(editor, renderer, *buf_idx);
+        let dims = crate::shell_keys::shell_dims_for_buffer(editor, renderer, *buf_idx);
         if shell_last_dims.get(buf_idx) != Some(&dims) {
             shell.resize(dims.0, dims.1);
             shell_last_dims.insert(*buf_idx, dims);
