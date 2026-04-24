@@ -1698,9 +1698,9 @@ fn handle_conversation_input(
         // --- Cycle AI Mode ---
         KeyCode::BackTab => {
             editor.ai_mode = match editor.ai_mode.as_str() {
-                "manual" => "auto-accept".into(),
+                "standard" => "auto-accept".into(),
                 "auto-accept" => "plan".into(),
-                _ => "manual".into(),
+                _ => "standard".into(),
             };
             editor.set_status(format!("[AI] Mode: {}", editor.ai_mode));
         }

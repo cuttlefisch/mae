@@ -115,7 +115,7 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
     };
 
-    let tier_str = format!(" [AI:{}]", editor.ai_permission_tier);
+    let tier_str = format!(" [AI:{}|{}]", editor.ai_mode, editor.ai_permission_tier);
 
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
 
