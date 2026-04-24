@@ -136,16 +136,24 @@ impl AgentSession {
         let system_prompt_tokens = token_estimate::estimate_tokens(&system_prompt);
         let tools_tokens = token_estimate::estimate_tools_tokens(&core_tools);
 
-        // Setup transcript logging
-        let transcript_path = if let Ok(mut p) = std::env::current_dir() {
-            p.push(".mae");
-            p.push("transcripts");
-            let _ = std::fs::create_dir_all(&p);
-            let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
-            p.push(filename);
-            Some(p)
-        } else {
-            None
+        // Setup transcript logging — XDG-compliant path:
+        //   $XDG_DATA_HOME/mae/transcripts/ (default: ~/.local/share/mae/transcripts/)
+        // Falls back to $HOME/.local/share/mae/transcripts/ if XDG is unset.
+        let transcript_path = {
+            let base = std::env::var("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+                .ok();
+            if let Some(mut p) = base {
+                p.push("mae");
+                p.push("transcripts");
+                let _ = std::fs::create_dir_all(&p);
+                let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+                p.push(filename);
+                Some(p)
+            } else {
+                None
+            }
         };
 
         let original_system_prompt = system_prompt.clone();
