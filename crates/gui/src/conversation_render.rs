@@ -15,14 +15,15 @@ struct ScreenLine<'a> {
 /// Count how many screen lines a rendered line produces when wrapped to `width`.
 /// O(1) for lines shorter than width, O(chars) only for lines that wrap.
 fn screen_line_count(text: &str, width: usize) -> usize {
-    if text.is_empty() || text.len() <= width {
+    let w = width.max(1);
+    if text.is_empty() || text.len() <= w {
         return 1;
     }
     let chars = text.chars().count();
-    if chars <= width {
+    if chars <= w {
         return 1;
     }
-    chars.div_ceil(width)
+    chars.div_ceil(w)
 }
 
 /// Wrap only the rendered lines visible in the viewport. Returns screen lines
