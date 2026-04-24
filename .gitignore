@@ -2,6 +2,7 @@
 **/*.rs.bk
 **/*/.mae/transcripts
 **/*/.mae/
+.mae
 Cargo.lock
 *.swp
 *.swo
