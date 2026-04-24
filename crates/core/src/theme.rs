@@ -90,7 +90,11 @@ impl ThemeResolver for BundledResolver {
 /// Return all bundled theme TOML strings, compiled into the binary.
 pub fn bundled_themes() -> HashMap<String, &'static str> {
     let mut m = HashMap::new();
-    m.insert("default".into(), include_str!("themes/default.toml"));
+    let default_dark = include_str!("themes/default.toml");
+    m.insert("default".into(), default_dark);
+    // "dark-ansi" is an alias for the default ANSI-only dark theme.
+    m.insert("dark-ansi".into(), default_dark);
+    m.insert("light-ansi".into(), include_str!("themes/light-ansi.toml"));
     m.insert(
         "gruvbox-dark".into(),
         include_str!("themes/gruvbox-dark.toml"),

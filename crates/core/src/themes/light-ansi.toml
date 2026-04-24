@@ -1,0 +1,78 @@
+# Light ANSI theme — named ANSI colors only, light background.
+# Designed for terminals with light color schemes (light mode IDE, light terminal).
+# Uses no RGB hex values — adapts to whatever your terminal's ANSI palette is.
+
+[palette]
+
+[styles]
+"ui.background" = { bg = "white" }
+"ui.text" = { fg = "black" }
+"ui.window.border" = { fg = "gray" }
+"ui.window.border.active" = { fg = "blue" }
+"ui.statusline" = { fg = "black", bg = "gray" }
+"ui.statusline.text" = { fg = "black", bg = "gray" }
+"ui.statusline.mode.normal" = { fg = "white", bg = "blue", bold = true }
+"ui.statusline.mode.insert" = { fg = "white", bg = "green", bold = true }
+"ui.statusline.mode.command" = { fg = "white", bg = "yellow", bold = true }
+"ui.statusline.mode.conversation" = { fg = "white", bg = "magenta", bold = true }
+"ui.statusline.mode.locked" = { fg = "white", bg = "red", bold = true }
+"ui.statusline.mode.mcp" = { fg = "white", bg = "yellow", bold = true }
+"ui.gutter" = { fg = "gray" }
+"ui.gutter.selected" = { fg = "yellow" }
+"ui.popup" = { fg = "black" }
+"ui.popup.key" = { fg = "black", bold = true }
+"ui.popup.group" = { fg = "cyan", bold = true }
+"ui.popup.text" = { fg = "dark_gray" }
+"ui.commandline" = { fg = "black" }
+"ui.cursor" = { fg = "white", bg = "black" }
+"ui.selection" = { bg = "cyan" }
+"ui.search.match" = { fg = "black", bg = "yellow" }
+"ui.cursorline" = { bg = "gray" }
+
+"diagnostic.error" = { fg = "red", bold = true }
+"diagnostic.warn" = { fg = "yellow" }
+"diagnostic.info" = { fg = "green" }
+"diagnostic.hint" = { fg = "blue" }
+"diagnostic.debug" = { fg = "dark_gray" }
+"diagnostic.trace" = { fg = "dark_gray", dim = true }
+"diagnostic.target" = { fg = "cyan" }
+
+"conversation.user" = { fg = "blue", bold = true }
+"conversation.assistant" = { fg = "green", bold = true }
+"conversation.system" = { fg = "yellow" }
+"conversation.tool" = { fg = "yellow" }
+"conversation.tool.result" = { fg = "dark_gray" }
+"conversation.input" = { fg = "blue" }
+"conversation.user.text" = { fg = "black" }
+"conversation.assistant.text" = { fg = "black" }
+
+"debug.current_line" = { bg = "yellow", fg = "black" }
+"debug.breakpoint" = { fg = "red", bold = true }
+"debug.variable.name" = { fg = "yellow" }
+"debug.variable.type" = { fg = "cyan" }
+"debug.variable.value" = { fg = "black" }
+"debug.stack.active" = { fg = "black", bold = true }
+"debug.stack.inactive" = { fg = "dark_gray" }
+"debug.output" = { fg = "black" }
+"debug.hint" = { fg = "dark_gray" }
+
+"keyword" = { fg = "red" }
+"string" = { fg = "green" }
+"number" = { fg = "magenta" }
+"comment" = { fg = "dark_gray", italic = true }
+"function" = { fg = "cyan" }
+"type" = { fg = "yellow" }
+"variable" = { fg = "black" }
+"operator" = { fg = "black" }
+"constant" = { fg = "magenta" }
+"attribute" = { fg = "cyan" }
+"namespace" = { fg = "yellow" }
+"punctuation" = { fg = "dark_gray" }
+
+"markup.heading" = { fg = "blue", bold = true }
+"markup.link" = { fg = "cyan", underline = true }
+"markup.literal" = { fg = "green" }
+"markup.bold" = { fg = "black", bold = true }
+"markup.italic" = { fg = "black", italic = true }
+"markup.list" = { fg = "magenta" }
+"markup.quote" = { fg = "dark_gray", italic = true }
