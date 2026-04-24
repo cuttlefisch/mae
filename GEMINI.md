@@ -34,6 +34,9 @@ The full architecture spec lives in `README.org`. Read it before starting any wo
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links |
+| `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
+| `mae-mcp` | MCP bridge — Unix socket server, JSON-RPC, stdio shim |
+| `mae` | Binary crate — event loop, key handling, CLI entry point |
 
 ## Architecture Principles
 
@@ -63,8 +66,8 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 See `ROADMAP.md` for granular milestone tracking. All core phases (1-8) are complete:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
 - Knowledge base, embedded shell, MCP bridge, GUI backend
-- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction, graceful degradation, web fetch)
-- 1,580 tests, CI green
+- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction redesign, graceful degradation, web fetch, 25 regression tests)
+- 1,603 tests, CI green
 
 ## File Conventions
 
