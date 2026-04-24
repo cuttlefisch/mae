@@ -378,8 +378,8 @@ fn build_self_test_plan(filter: &str) -> String {
                 },
                 {
                     "tool": "command_list",
-                    "args": {},
-                    "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt"
+                    "args": {"format": "names"},
+                    "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt. The compact names list is sufficient — do NOT call command_list again with full format."
                 },
                 {
                     "tool": "ai_permissions",
