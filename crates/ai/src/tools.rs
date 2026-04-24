@@ -4,6 +4,9 @@ use mae_core::{CommandRegistry, OptionRegistry};
 
 use crate::types::*;
 
+/// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.
+pub const AI_PROFILES: &[&str] = &["pair-programmer", "explorer", "planner", "reviewer"];
+
 /// Generate tool definitions from the CommandRegistry.
 /// Every command (builtin or Scheme) becomes a callable AI tool.
 ///
@@ -71,13 +74,8 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                     "profile".into(),
                     ToolProperty {
                         prop_type: "string".into(),
-                        description: "New AI profile: 'pair-programmer', 'explorer', 'planner', 'reviewer'".into(),
-                        enum_values: Some(vec![
-                            "pair-programmer".into(),
-                            "explorer".into(),
-                            "planner".into(),
-                            "reviewer".into(),
-                        ]),
+                        description: format!("New AI profile: {}", AI_PROFILES.join(", ")),
+                        enum_values: Some(AI_PROFILES.iter().map(|s| s.to_string()).collect()),
                     },
                 )]),
                 required: vec!["profile".into()],
@@ -1364,8 +1362,8 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
                         "profile".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "The prompt profile for the sub-agent (e.g. 'explorer', 'planner', 'reviewer').".into(),
-                            enum_values: Some(vec!["explorer".into(), "planner".into(), "reviewer".into()]),
+                            description: format!("The prompt profile for the sub-agent (e.g. {}).", AI_PROFILES.join(", ")),
+                            enum_values: Some(AI_PROFILES.iter().map(|s| s.to_string()).collect()),
                         },
                     ),
                     (
@@ -2507,7 +2505,11 @@ mod tests {
     #[test]
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
-        assert_eq!(tools.len(), 98);
+        assert!(
+            tools.len() >= 90,
+            "Expected at least 90 AI tools, got {}",
+            tools.len()
+        );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));

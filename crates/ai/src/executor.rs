@@ -237,7 +237,9 @@ pub fn execute_tool(
         "terminal_spawn",
         "terminal_send",
         "terminal_read",
-        "terminal_list",
+        // Note: session-level tools (ai_set_mode, ai_set_profile, ai_set_budget,
+        // log_activity, request_tools) are intercepted in session.rs before reaching
+        // the executor and are NOT listed here.
         "github_pr_status",
         "github_pr_create",
         "mouse_event",
@@ -318,7 +320,6 @@ fn execute_ai_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, Strin
         "terminal_spawn" => execute_terminal_spawn(editor, &call.arguments),
         "terminal_send" => execute_shell_send_input(editor, &call.arguments),
         "terminal_read" => execute_shell_read_output(editor, &call.arguments),
-        "terminal_list" => execute_shell_list(editor),
         "github_pr_status" => execute_github_pr_status(editor),
         "github_pr_create" => execute_github_pr_create(editor, &call.arguments),
         "shell_exec" => execute_shell_exec_sync(&call.arguments),
