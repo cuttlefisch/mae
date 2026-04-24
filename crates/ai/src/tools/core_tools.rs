@@ -162,10 +162,17 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "command_list".into(),
-            description: "List all available editor commands with their documentation and sources (builtin/scheme).".into(),
+            description: "List all available editor commands. Use format='names' for a compact list of just command names (recommended). Default returns full JSON with docs and sources.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::new(),
+                properties: HashMap::from([(
+                    "format".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Output format: 'names' for compact name-only list, 'full' for JSON with docs (default: 'full')".into(),
+                        enum_values: None,
+                    },
+                )]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),

@@ -45,20 +45,36 @@ pub fn execute_window_layout(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&windows).map_err(|e| e.to_string())
 }
 
-pub fn execute_command_list(editor: &Editor) -> Result<String, String> {
-    let commands: Vec<serde_json::Value> = editor
-        .commands
-        .list_commands()
-        .iter()
-        .map(|cmd| {
-            serde_json::json!({
-                "name": cmd.name,
-                "doc": cmd.doc,
-                "source": format!("{:?}", cmd.source),
+pub fn execute_command_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let format = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("full");
+
+    if format == "names" {
+        // Compact output: just command names, one per line
+        let names: Vec<&str> = editor
+            .commands
+            .list_commands()
+            .iter()
+            .map(|cmd| cmd.name.as_str())
+            .collect();
+        Ok(format!("{} commands:\n{}", names.len(), names.join("\n")))
+    } else {
+        let commands: Vec<serde_json::Value> = editor
+            .commands
+            .list_commands()
+            .iter()
+            .map(|cmd| {
+                serde_json::json!({
+                    "name": cmd.name,
+                    "doc": cmd.doc,
+                    "source": format!("{:?}", cmd.source),
+                })
             })
-        })
-        .collect();
-    serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
+            .collect();
+        serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
+    }
 }
 
 pub fn execute_get_option(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {

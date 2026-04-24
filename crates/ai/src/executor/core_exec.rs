@@ -21,7 +21,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "list_buffers" => execute_list_buffers(editor),
         "editor_state" => execute_editor_state(editor),
         "window_layout" => execute_window_layout(editor),
-        "command_list" => execute_command_list(editor),
+        "command_list" => execute_command_list(editor, &call.arguments),
         "debug_state" => execute_debug_state(editor),
         "open_file" => execute_open_file(editor, &call.arguments),
         "switch_buffer" => execute_switch_buffer(editor, &call.arguments),

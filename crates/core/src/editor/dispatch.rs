@@ -255,26 +255,55 @@ impl Editor {
             }
             "move-to-first-line" => {
                 self.record_jump();
-                let buf = &self.buffers[self.active_buffer_idx()];
-                if let Some(target) = count {
-                    // ngg = go to line n (1-indexed)
-                    let row = (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
-                    self.window_mgr.focused_window_mut().cursor_row = row;
-                    self.window_mgr.focused_window_mut().clamp_cursor(buf);
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Conversation {
+                    if let Some(ref mut conv) = self.buffers[idx].conversation {
+                        conv.scroll_to_top();
+                    }
                 } else {
-                    self.window_mgr.focused_window_mut().move_to_first_line(buf);
+                    let buf = &self.buffers[idx];
+                    if let Some(target) = count {
+                        // ngg = go to line n (1-indexed)
+                        let row =
+                            (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
+                        self.window_mgr.focused_window_mut().cursor_row = row;
+                        self.window_mgr.focused_window_mut().clamp_cursor(buf);
+                    } else {
+                        self.window_mgr.focused_window_mut().move_to_first_line(buf);
+                    }
                 }
             }
             "move-to-last-line" => {
                 self.record_jump();
-                let buf = &self.buffers[self.active_buffer_idx()];
-                if let Some(target) = count {
-                    // nG = go to line n (1-indexed)
-                    let row = (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
-                    self.window_mgr.focused_window_mut().cursor_row = row;
-                    self.window_mgr.focused_window_mut().clamp_cursor(buf);
+                let idx = self.active_buffer_idx();
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Conversation {
+                    // Conversation uses its own scroll state, not cursor_row.
+                    if let Some(ref mut conv) = self.buffers[idx].conversation {
+                        if let Some(target) = count {
+                            // nG in conversation: scroll to approximate position
+                            let rendered_len = conv.rendered_lines().len();
+                            if target <= rendered_len {
+                                conv.scroll = rendered_len.saturating_sub(target);
+                            } else {
+                                conv.scroll_to_top();
+                            }
+                        } else {
+                            conv.scroll_to_bottom();
+                        }
+                    }
                 } else {
-                    self.window_mgr.focused_window_mut().move_to_last_line(buf);
+                    let buf = &self.buffers[idx];
+                    if let Some(target) = count {
+                        // nG = go to line n (1-indexed)
+                        let row =
+                            (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
+                        self.window_mgr.focused_window_mut().cursor_row = row;
+                        self.window_mgr.focused_window_mut().clamp_cursor(buf);
+                    } else {
+                        self.window_mgr.focused_window_mut().move_to_last_line(buf);
+                    }
                 }
             }
             "move-word-forward" => {
@@ -1889,7 +1918,7 @@ impl Editor {
             "yank-file-path" => {
                 if let Some(path) = self.active_buffer().file_path() {
                     let path_str = path.display().to_string();
-                    self.registers.insert('+', path_str.clone());
+                    self.write_named_register('+', &path_str);
                     self.set_status(format!("Yanked: {}", path_str));
                 } else {
                     self.set_status("Buffer has no file path");
