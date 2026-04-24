@@ -113,7 +113,6 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 };
                 editor.set_status(display);
             }
-            editor.sync_conversation_buffer_rope();
         }
         AiEvent::ToolCallStarted { name } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -154,7 +153,6 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             {
                 conv_buf.append_streaming_chunk(&text);
             }
-            editor.sync_conversation_buffer_rope();
         }
         AiEvent::SessionComplete {
             text: _text,

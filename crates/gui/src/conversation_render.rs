@@ -12,21 +12,61 @@ struct ScreenLine<'a> {
     style: &'a LineStyle,
 }
 
-/// Wrap rendered lines into screen lines that fit within `width`.
-fn wrap_lines<'a>(
+/// Count how many screen lines a rendered line produces when wrapped to `width`.
+/// O(1) for lines shorter than width, O(chars) only for lines that wrap.
+fn screen_line_count(text: &str, width: usize) -> usize {
+    if text.is_empty() || text.len() <= width {
+        return 1;
+    }
+    let chars = text.chars().count();
+    if chars <= width {
+        return 1;
+    }
+    chars.div_ceil(width)
+}
+
+/// Wrap only the rendered lines visible in the viewport. Returns screen lines
+/// starting at `start_screen_line` and collecting up to `viewport_height` lines.
+/// O(viewport) wrapping instead of O(total_lines).
+fn wrap_visible_lines<'a>(
     rendered: &'a [mae_core::conversation::RenderedLine],
     width: usize,
+    start_screen_line: usize,
+    viewport_height: usize,
 ) -> Vec<ScreenLine<'a>> {
-    let mut screen_lines = Vec::new();
     let w = width.max(1);
-    for rl in rendered {
+
+    // Find which rendered line contains start_screen_line
+    let mut cumulative = 0;
+    let mut first_rendered = 0;
+    let mut skip_within_first = 0;
+
+    for (i, rl) in rendered.iter().enumerate() {
+        let count = screen_line_count(&rl.text, w);
+        if cumulative + count > start_screen_line {
+            first_rendered = i;
+            skip_within_first = start_screen_line - cumulative;
+            break;
+        }
+        cumulative += count;
+        // If we reach the end without finding the start, show from the last line
+        if i == rendered.len() - 1 {
+            first_rendered = i;
+            skip_within_first = 0;
+        }
+    }
+
+    // Wrap only the rendered lines we need
+    let needed = viewport_height + skip_within_first;
+    let mut screen_lines = Vec::with_capacity(needed + 4);
+
+    for rl in &rendered[first_rendered..] {
         if rl.text.is_empty() || rl.text.len() <= w {
             screen_lines.push(ScreenLine {
                 text: &rl.text,
                 style: &rl.style,
             });
         } else {
-            // Split into chunks of `w` characters, respecting char boundaries
             let mut remaining = rl.text.as_str();
             while !remaining.is_empty() {
                 let end = char_boundary_at(remaining, w);
@@ -37,7 +77,17 @@ fn wrap_lines<'a>(
                 remaining = &remaining[end..];
             }
         }
+        if screen_lines.len() >= needed {
+            break;
+        }
     }
+
+    // Skip the lines before the viewport within the first rendered line
+    if skip_within_first > 0 {
+        screen_lines.drain(..skip_within_first.min(screen_lines.len()));
+    }
+
+    screen_lines.truncate(viewport_height);
     screen_lines
 }
 
@@ -128,12 +178,20 @@ pub fn render_conversation_window(
     if let Some(ref conv) = buf.conversation {
         let rendered = conv.rendered_lines();
         let viewport_height = inner_height;
+        let w = inner_width.max(1);
 
-        // Wrap lines to fit viewport width
-        let screen_lines = wrap_lines(rendered, inner_width);
+        // Phase 1: Count total screen lines without allocating (O(N) integer math).
+        let total_screen_lines: usize = rendered
+            .iter()
+            .map(|rl| screen_line_count(&rl.text, w))
+            .sum();
 
-        let auto_start = screen_lines.len().saturating_sub(viewport_height);
+        let auto_start = total_screen_lines.saturating_sub(viewport_height);
         let start = auto_start.saturating_sub(conv.scroll);
+
+        // Phase 2: Find which rendered lines map to the visible viewport.
+        // Only wrap those lines — O(viewport) instead of O(N).
+        let screen_lines = wrap_visible_lines(rendered, w, start, viewport_height);
 
         // Selection range (char offsets in flattened text)
         let highlight_selection = matches!(editor.mode, mae_core::Mode::Visual(_));
@@ -145,11 +203,8 @@ pub fn render_conversation_window(
 
         // Manual indexing loop so InputPrompt cursor rendering can consume
         // all wrapped InputPrompt screen lines at once (fixing duplication).
-        let visible: Vec<_> = screen_lines
-            .iter()
-            .skip(start)
-            .take(viewport_height)
-            .collect();
+        // screen_lines is already viewport-sized from wrap_visible_lines.
+        let visible: Vec<_> = screen_lines.iter().collect();
         let mut viewport_row = 0;
         let mut input_prompt_rendered = false;
 
@@ -333,28 +388,36 @@ mod tests {
     }
 
     #[test]
-    fn wrap_lines_short_lines_unchanged() {
+    fn wrap_visible_short_lines_unchanged() {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "short".into(),
             style: LineStyle::AssistantText,
             entry_index: None,
         }];
-        let wrapped = wrap_lines(&rendered, 80);
+        let wrapped = wrap_visible_lines(&rendered, 80, 0, 100);
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].text, "short");
     }
 
     #[test]
-    fn wrap_lines_long_line_splits() {
+    fn wrap_visible_long_line_splits() {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "a".repeat(20),
             style: LineStyle::AssistantText,
             entry_index: None,
         }];
-        let wrapped = wrap_lines(&rendered, 10);
+        let wrapped = wrap_visible_lines(&rendered, 10, 0, 100);
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].text.len(), 10);
         assert_eq!(wrapped[1].text.len(), 10);
+    }
+
+    #[test]
+    fn screen_line_count_basic() {
+        assert_eq!(screen_line_count("hello", 80), 1);
+        assert_eq!(screen_line_count("", 80), 1);
+        assert_eq!(screen_line_count(&"a".repeat(20), 10), 2);
+        assert_eq!(screen_line_count(&"a".repeat(30), 10), 3);
     }
 
     #[test]
@@ -382,14 +445,31 @@ mod tests {
     }
 
     #[test]
-    fn wrap_lines_input_prompt_still_wraps() {
+    fn wrap_visible_input_prompt_still_wraps() {
         let rendered = vec![mae_core::conversation::RenderedLine {
             text: "> ".to_string() + &"x".repeat(30),
             style: LineStyle::InputPrompt,
             entry_index: None,
         }];
-        let wrapped = wrap_lines(&rendered, 16);
+        let wrapped = wrap_visible_lines(&rendered, 16, 0, 100);
         assert_eq!(wrapped.len(), 2);
         assert!(wrapped.iter().all(|sl| *sl.style == LineStyle::InputPrompt));
+    }
+
+    #[test]
+    fn wrap_visible_only_wraps_viewport() {
+        // 10 lines, viewport of 3 starting at line 5
+        let rendered: Vec<_> = (0..10)
+            .map(|i| mae_core::conversation::RenderedLine {
+                text: format!("line {}", i),
+                style: LineStyle::AssistantText,
+                entry_index: Some(i),
+            })
+            .collect();
+        let wrapped = wrap_visible_lines(&rendered, 80, 5, 3);
+        assert_eq!(wrapped.len(), 3);
+        assert_eq!(wrapped[0].text, "line 5");
+        assert_eq!(wrapped[1].text, "line 6");
+        assert_eq!(wrapped[2].text, "line 7");
     }
 }

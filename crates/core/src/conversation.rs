@@ -247,6 +247,18 @@ impl Conversation {
         self.cached_lines = self.compute_rendered_lines();
     }
 
+    /// O(1) update of just the input prompt line in the cache.
+    /// Used by input editing methods to avoid O(N) full rebuild.
+    fn update_input_in_cache(&mut self) {
+        if let Some(last) = self.cached_lines.last_mut() {
+            if last.style == LineStyle::InputPrompt {
+                last.text = format!("> {}", self.input_line);
+                return;
+            }
+        }
+        self.rebuild_render_cache();
+    }
+
     /// Return pre-computed rendered lines (zero-allocation on read).
     pub fn rendered_lines(&self) -> &[RenderedLine] {
         &self.cached_lines
@@ -429,7 +441,7 @@ impl Conversation {
     pub fn input_insert_char(&mut self, ch: char) {
         self.input_line.insert(self.input_cursor, ch);
         self.input_cursor += ch.len_utf8();
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     /// Delete the char immediately before the cursor (Backspace / C-h).
@@ -442,7 +454,7 @@ impl Conversation {
         let removed_len = self.input_cursor - prev_start;
         self.input_line.remove(prev_start);
         self.input_cursor -= removed_len;
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     /// Delete the char at the cursor (C-d / Delete).
@@ -451,7 +463,7 @@ impl Conversation {
             return;
         }
         self.input_line.remove(self.input_cursor);
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     /// Move cursor to start of input (C-a / Home).
@@ -501,20 +513,20 @@ impl Conversation {
         };
         self.input_line.drain(word_start..self.input_cursor);
         self.input_cursor = word_start;
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     /// Delete from start of input to cursor (C-u).
     pub fn input_kill_to_start(&mut self) {
         self.input_line.drain(..self.input_cursor);
         self.input_cursor = 0;
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     /// Delete from cursor to end of input (C-k).
     pub fn input_kill_to_end(&mut self) {
         self.input_line.truncate(self.input_cursor);
-        self.rebuild_render_cache();
+        self.update_input_in_cache();
     }
 
     // -----------------------------------------------------------------------
