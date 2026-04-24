@@ -208,6 +208,7 @@ impl AgentSession {
     /// Configure for self-test mode: wider checkpoint interval, higher stagnation tolerance.
     pub fn with_self_test_mode(mut self) -> Self {
         self.progress = progress::ProgressTracker::new(15, true);
+        self.max_rounds = 75;
         self
     }
 

@@ -360,16 +360,24 @@ impl SkiaCanvas {
     }
 
     /// Draw text at a specific (row, col) cell position with given fg color.
+    /// CJK characters advance by 2 columns.
     pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
-        for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, false, false, 1.0);
+        use unicode_width::UnicodeWidthChar;
+        let mut c = col;
+        for ch in text.chars() {
+            self.draw_char(row, c, ch, fg, false, false, 1.0);
+            c += ch.width().unwrap_or(1);
         }
     }
 
     /// Draw text at a specific (row, col) with bold font.
+    /// CJK characters advance by 2 columns.
     pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
-        for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, true, false, 1.0);
+        use unicode_width::UnicodeWidthChar;
+        let mut c = col;
+        for ch in text.chars() {
+            self.draw_char(row, c, ch, fg, true, false, 1.0);
+            c += ch.width().unwrap_or(1);
         }
     }
 

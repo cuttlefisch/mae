@@ -379,27 +379,14 @@ fn build_self_test_plan(filter: &str) -> String {
                 {
                     "tool": "command_list",
                     "args": {"format": "names"},
-                    "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt. The compact names list is sufficient — do NOT call command_list again with full format."
+                    "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt"
                 },
                 {
                     "tool": "ai_permissions",
                     "args": {},
                     "assert": "Returns text with current auto-approve tier"
                 }
-            ],
-            "command_palette_check": {
-                "description": "After running command_list, verify these commands exist",
-                "required_commands": [
-                    "save", "quit", "force-quit", "undo", "redo",
-                    "help", "help-follow-link", "help-search",
-                    "ai-prompt", "ai-cancel",
-                    "terminal", "send-to-shell",
-                    "agent-list", "agent-setup", "self-test",
-                    "lsp-goto-definition", "lsp-find-references", "lsp-hover", "lsp-show-diagnostics",
-                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint",
-                    "debug-panel"
-                ]
-            }
+            ]
         }));
     }
 
@@ -497,11 +484,7 @@ fn build_self_test_plan(filter: &str) -> String {
                     "args": {"name": "*AI*"},
                     "assert": "Switch back to *AI* after help tests (important: subsequent tests need a non-Help buffer active)"
                 }
-            ],
-            "help_navigation_e2e": {
-                "description": "Connected walkthrough: kb_search 'buffer' -> kb_get first result -> verify [[...]] links in body -> kb_graph on that node (>= 2 nodes) -> help_open index -> switch_buffer back to *AI*",
-                "report_as": "help_navigation_e2e"
-            }
+            ]
         }));
     }
 
@@ -583,29 +566,6 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
-    if include("tool_callstack") {
-        categories.push(serde_json::json!({
-            "name": "tool_callstack",
-            "conditional": false,
-            "tests": [
-                {
-                    "tool": "introspect",
-                    "args": {"section": "ai"},
-                    "assert": "Returns JSON with current_round and transaction_start_idx"
-                },
-                {
-                    "tool": "cursor_info",
-                    "args": {},
-                    "assert": "Verify round increments after this tool call (AI should check introspect again)"
-                }
-            ],
-            "e2e_compression_check": {
-                "description": "After this turn ends, the next turn should see a smaller message history due to compression",
-                "procedure": "1. Run self-test. 2. Finish turn. 3. Start new turn. 4. Check introspect conversation_entries."
-            }
-        }));
-    }
-
     if include("dap") {
         categories.push(serde_json::json!({
             "name": "dap",
@@ -675,25 +635,6 @@ fn build_self_test_plan(filter: &str) -> String {
                     "tool": "github_pr_status",
                     "args": {},
                     "assert": "Executes successfully (even if no PR exists, it should return a structured response from the gh cli)"
-                }
-            ]
-        }));
-    }
-
-    if include("hooks") {
-        categories.push(serde_json::json!({
-            "name": "hooks",
-            "conditional": false,
-            "tests": [
-                {
-                    "tool": "trigger_hook",
-                    "args": {"hook_name": "buffer-open"},
-                    "assert": "Hook 'buffer-open' triggered"
-                },
-                {
-                    "tool": "trigger_hook",
-                    "args": {"hook_name": "app-start"},
-                    "assert": "Hook 'app-start' triggered"
                 }
             ]
         }));

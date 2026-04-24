@@ -9,6 +9,21 @@
 //! results). Render it directly.
 
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
+
+/// Count how many screen lines a rendered line produces when wrapped to `width` columns.
+/// Uses display width (UnicodeWidthStr) so CJK characters count as 2 columns.
+pub fn screen_line_count(text: &str, width: usize) -> usize {
+    let w = width.max(1);
+    if text.is_empty() {
+        return 1;
+    }
+    let cols = UnicodeWidthStr::width(text);
+    if cols <= w {
+        return 1;
+    }
+    cols.div_ceil(w)
+}
 
 // Role of a conversation entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +86,10 @@ pub struct Conversation {
     /// Pre-computed rendered lines, rebuilt on every content mutation.
     /// Avoids O(N) allocation per frame during scrolling.
     cached_lines: Vec<RenderedLine>,
+    /// Per-line screen counts cached alongside rendered lines.
+    /// Width-dependent — invalidated when width changes.
+    cached_screen_counts: Vec<usize>,
+    cached_screen_width: usize,
 }
 
 impl Default for Conversation {
@@ -96,6 +115,8 @@ impl Conversation {
             streaming_start: None,
             version: 0,
             cached_lines: Vec::new(),
+            cached_screen_counts: Vec::new(),
+            cached_screen_width: 0,
         };
         conv.rebuild_render_cache();
         conv
@@ -245,6 +266,7 @@ impl Conversation {
     /// Rebuild the cached rendered lines. Called after every content mutation.
     fn rebuild_render_cache(&mut self) {
         self.cached_lines = self.compute_rendered_lines();
+        self.cached_screen_counts.clear();
     }
 
     /// O(1) update of just the input prompt line in the cache.
@@ -253,6 +275,7 @@ impl Conversation {
         if let Some(last) = self.cached_lines.last_mut() {
             if last.style == LineStyle::InputPrompt {
                 last.text = format!("> {}", self.input_line);
+                self.cached_screen_counts.clear();
                 return;
             }
         }
@@ -262,6 +285,32 @@ impl Conversation {
     /// Return pre-computed rendered lines (zero-allocation on read).
     pub fn rendered_lines(&self) -> &[RenderedLine] {
         &self.cached_lines
+    }
+
+    /// Ensure per-line screen counts are computed for the given width.
+    /// Returns `(per_line_counts, total_screen_lines)`.
+    /// Amortized O(1) when width and content are unchanged.
+    pub fn ensure_screen_counts(&mut self, width: usize) -> (&[usize], usize) {
+        let w = width.max(1);
+        if self.cached_screen_counts.len() != self.cached_lines.len()
+            || self.cached_screen_width != w
+        {
+            self.cached_screen_counts = self
+                .cached_lines
+                .iter()
+                .map(|rl| screen_line_count(&rl.text, w))
+                .collect();
+            self.cached_screen_width = w;
+        }
+        let total: usize = self.cached_screen_counts.iter().sum();
+        (&self.cached_screen_counts, total)
+    }
+
+    /// Return pre-computed screen counts (must call `ensure_screen_counts` first).
+    /// Returns `(per_line_counts, total)`. If not yet computed, returns empty.
+    pub fn screen_counts(&self) -> (&[usize], usize) {
+        let total: usize = self.cached_screen_counts.iter().sum();
+        (&self.cached_screen_counts, total)
     }
 
     /// Render all entries + input line into display lines.

@@ -1,6 +1,8 @@
 //! Conversation (AI chat) buffer rendering for the GUI backend.
 
-use mae_core::{conversation::LineStyle, Editor, Mode, Window};
+use mae_core::conversation::{screen_line_count, LineStyle};
+use mae_core::{Editor, Mode, Window};
+use unicode_width::UnicodeWidthChar;
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -10,27 +12,19 @@ use crate::theme;
 struct ScreenLine<'a> {
     text: &'a str,
     style: &'a LineStyle,
-}
-
-/// Count how many screen lines a rendered line produces when wrapped to `width`.
-/// O(1) for lines shorter than width, O(chars) only for lines that wrap.
-fn screen_line_count(text: &str, width: usize) -> usize {
-    let w = width.max(1);
-    if text.is_empty() || text.len() <= w {
-        return 1;
-    }
-    let chars = text.chars().count();
-    if chars <= w {
-        return 1;
-    }
-    chars.div_ceil(w)
+    /// Character offset of this screen line in the flattened conversation text.
+    char_offset: usize,
 }
 
 /// Wrap only the rendered lines visible in the viewport. Returns screen lines
 /// starting at `start_screen_line` and collecting up to `viewport_height` lines.
 /// O(viewport) wrapping instead of O(total_lines).
+///
+/// `screen_counts` is a pre-computed per-rendered-line count from
+/// `Conversation::ensure_screen_counts`. This avoids recomputing display widths.
 fn wrap_visible_lines<'a>(
     rendered: &'a [mae_core::conversation::RenderedLine],
+    screen_counts: &[usize],
     width: usize,
     start_screen_line: usize,
     viewport_height: usize,
@@ -42,42 +36,56 @@ fn wrap_visible_lines<'a>(
     let mut first_rendered = 0;
     let mut skip_within_first = 0;
 
-    for (i, rl) in rendered.iter().enumerate() {
-        let count = screen_line_count(&rl.text, w);
+    for (i, &count) in screen_counts.iter().enumerate() {
         if cumulative + count > start_screen_line {
             first_rendered = i;
             skip_within_first = start_screen_line - cumulative;
             break;
         }
         cumulative += count;
-        // If we reach the end without finding the start, show from the last line
         if i == rendered.len() - 1 {
             first_rendered = i;
             skip_within_first = 0;
         }
     }
 
+    // Compute char_offset for the first rendered line we'll wrap.
+    // Each rendered line contributes chars().count() + 1 (for the newline separator
+    // in flat_text). The last line has no trailing newline but we only need relative
+    // offsets within the viewport so the +1 for joining newlines is correct.
+    let mut base_char_offset: usize = rendered[..first_rendered]
+        .iter()
+        .map(|rl| rl.text.chars().count() + 1) // +1 for '\n' join
+        .sum();
+
     // Wrap only the rendered lines we need
     let needed = viewport_height + skip_within_first;
     let mut screen_lines = Vec::with_capacity(needed + 4);
 
     for rl in &rendered[first_rendered..] {
-        if rl.text.is_empty() || rl.text.len() <= w {
+        let line_chars = rl.text.chars().count();
+        if rl.text.is_empty() || screen_line_count(&rl.text, w) <= 1 {
             screen_lines.push(ScreenLine {
                 text: &rl.text,
                 style: &rl.style,
+                char_offset: base_char_offset,
             });
         } else {
             let mut remaining = rl.text.as_str();
+            let mut local_char_offset = 0;
             while !remaining.is_empty() {
                 let end = char_boundary_at(remaining, w);
+                let chunk = &remaining[..end];
                 screen_lines.push(ScreenLine {
-                    text: &remaining[..end],
+                    text: chunk,
                     style: &rl.style,
+                    char_offset: base_char_offset + local_char_offset,
                 });
+                local_char_offset += chunk.chars().count();
                 remaining = &remaining[end..];
             }
         }
+        base_char_offset += line_chars + 1; // +1 for '\n' join
         if screen_lines.len() >= needed {
             break;
         }
@@ -92,28 +100,27 @@ fn wrap_visible_lines<'a>(
     screen_lines
 }
 
-/// Find the byte offset at approximately `n` characters, snapped to a char boundary.
+/// Find the byte offset at approximately `n` display columns, snapped to a char boundary.
+/// CJK characters count as 2 columns.
 fn char_boundary_at(s: &str, n: usize) -> usize {
-    if n >= s.len() {
-        return s.len();
-    }
-    // Walk char indices to find the boundary at the nth char
-    let mut last = 0;
-    for (i, (byte_idx, _)) in s.char_indices().enumerate() {
-        if i >= n {
+    let mut col = 0;
+    for (byte_idx, ch) in s.char_indices() {
+        let w = ch.width().unwrap_or(1);
+        if col + w > n {
             return byte_idx;
         }
-        last = byte_idx;
+        col += w;
     }
-    // If we ran out of chars, return full length
-    let _ = last;
     s.len()
 }
 
-/// Split text into rows of at most `width` characters, respecting char boundaries.
+/// Split text into rows of at most `width` display columns, respecting char boundaries.
 fn wrap_text_into_rows(text: &str, width: usize) -> Vec<&str> {
     let w = width.max(1);
-    if text.is_empty() || text.len() <= w {
+    if text.is_empty() {
+        return vec![text];
+    }
+    if screen_line_count(text, w) <= 1 {
         return vec![text];
     }
     let mut rows = Vec::new();
@@ -181,18 +188,26 @@ pub fn render_conversation_window(
         let viewport_height = inner_height;
         let w = inner_width.max(1);
 
-        // Phase 1: Count total screen lines without allocating (O(N) integer math).
-        let total_screen_lines: usize = rendered
-            .iter()
-            .map(|rl| screen_line_count(&rl.text, w))
-            .sum();
+        // Use pre-computed screen counts (populated by ensure_screen_counts before render).
+        let (screen_counts, total_screen_lines) = conv.screen_counts();
+        // Fallback if counts weren't pre-computed (e.g. width mismatch).
+        let local_counts;
+        let (counts, total) = if screen_counts.len() == rendered.len() {
+            (screen_counts, total_screen_lines)
+        } else {
+            local_counts = rendered
+                .iter()
+                .map(|rl| screen_line_count(&rl.text, w))
+                .collect::<Vec<_>>();
+            let t: usize = local_counts.iter().sum();
+            (local_counts.as_slice(), t)
+        };
 
-        let auto_start = total_screen_lines.saturating_sub(viewport_height);
+        let auto_start = total.saturating_sub(viewport_height);
         let start = auto_start.saturating_sub(conv.scroll);
 
         // Phase 2: Find which rendered lines map to the visible viewport.
-        // Only wrap those lines — O(viewport) instead of O(N).
-        let screen_lines = wrap_visible_lines(rendered, w, start, viewport_height);
+        let screen_lines = wrap_visible_lines(rendered, counts, w, start, viewport_height);
 
         // Selection range (char offsets in flattened text)
         let highlight_selection = matches!(editor.mode, mae_core::Mode::Visual(_));
@@ -204,37 +219,24 @@ pub fn render_conversation_window(
 
         // Manual indexing loop so InputPrompt cursor rendering can consume
         // all wrapped InputPrompt screen lines at once (fixing duplication).
-        // screen_lines is already viewport-sized from wrap_visible_lines.
         let visible: Vec<_> = screen_lines.iter().collect();
         let mut viewport_row = 0;
         let mut input_prompt_rendered = false;
-
-        // Flatten text for selection mapping if needed.
-        let flat = if highlight_selection {
-            Some(conv.flat_text())
-        } else {
-            None
-        };
 
         while viewport_row < visible.len() {
             let sl = visible[viewport_row];
             let row = inner_row + viewport_row;
 
-            // Selection background for this line
-            if let Some(ref ft) = flat {
-                // Find this line's start in flat text (approximate mapping)
-                // In a perfect world we'd track byte/char offsets during wrap_lines.
-                if let Some(line_start_byte) = ft.find(sl.text) {
-                    let line_start_char = ft[..line_start_byte].chars().count();
-                    let line_end_char = line_start_char + sl.text.chars().count();
+            // Selection background — uses char_offset from wrap phase (no flat_text needed)
+            if highlight_selection {
+                let line_start_char = sl.char_offset;
+                let line_end_char = line_start_char + sl.text.chars().count();
 
-                    if sel_start < line_end_char && sel_end > line_start_char {
-                        let s = sel_start.saturating_sub(line_start_char);
-                        let e = (sel_end - line_start_char).min(sl.text.chars().count());
-                        let sel_bg =
-                            theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
-                        canvas.draw_rect_fill(row, inner_col + s, e - s, 1, sel_bg);
-                    }
+                if sel_start < line_end_char && sel_end > line_start_char {
+                    let s = sel_start.saturating_sub(line_start_char);
+                    let e = (sel_end - line_start_char).min(sl.text.chars().count());
+                    let sel_bg = theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
+                    canvas.draw_rect_fill(row, inner_col + s, e - s, 1, sel_bg);
                 }
             }
 
@@ -262,7 +264,6 @@ pub fn render_conversation_window(
                             let row_end = row_start + row_text.len();
 
                             if cursor_byte >= row_start && cursor_byte < row_end {
-                                // This row contains the cursor.
                                 let local_cursor = cursor_byte - row_start;
                                 let before = &row_text[..local_cursor];
                                 let rest = &row_text[local_cursor..];
@@ -288,23 +289,22 @@ pub fn render_conversation_window(
                                 };
 
                                 canvas.draw_text_at(draw_row, inner_col, before, input_fg);
-                                let col = inner_col + before.len();
+                                let col = inner_col + unicode_width::UnicodeWidthStr::width(before);
+                                let cursor_w = cursor_ch
+                                    .chars()
+                                    .next()
+                                    .and_then(|c| c.width())
+                                    .unwrap_or(1);
                                 if let Some(bg) = cursor_bg {
-                                    canvas.draw_rect_fill(
-                                        draw_row,
-                                        col,
-                                        cursor_ch.len().max(1),
-                                        1,
-                                        bg,
-                                    );
+                                    canvas.draw_rect_fill(draw_row, col, cursor_w, 1, bg);
                                 }
                                 canvas.draw_text_at(draw_row, col, &cursor_ch, cursor_fg);
-                                let col = col + cursor_ch.len().max(1);
+                                let col = col + cursor_w;
                                 canvas.draw_text_at(draw_row, col, after_cursor, input_fg);
                             } else if cursor_byte == row_end && ri == rows.len() - 1 {
-                                // Cursor at very end of last row.
                                 canvas.draw_text_at(draw_row, inner_col, row_text, input_fg);
-                                let col = inner_col + row_text.len();
+                                let col =
+                                    inner_col + unicode_width::UnicodeWidthStr::width(*row_text);
                                 if let Some(bg) = cursor_bg {
                                     canvas.draw_rect_fill(draw_row, col, 1, 1, bg);
                                 }
@@ -315,7 +315,6 @@ pub fn render_conversation_window(
                             byte_offset = row_end;
                         }
                         input_prompt_rendered = true;
-                        // Skip all InputPrompt screen lines we've consumed.
                         let mut skip = 1;
                         while viewport_row + skip < visible.len()
                             && *visible[viewport_row + skip].style == LineStyle::InputPrompt
@@ -327,7 +326,6 @@ pub fn render_conversation_window(
                     }
                 }
 
-                // Already rendered via cursor path — skip duplicate.
                 if input_prompt_rendered {
                     viewport_row += 1;
                     continue;
@@ -388,6 +386,13 @@ mod tests {
         assert!(s.is_char_boundary(boundary));
     }
 
+    fn make_counts(rendered: &[mae_core::conversation::RenderedLine], w: usize) -> Vec<usize> {
+        rendered
+            .iter()
+            .map(|rl| screen_line_count(&rl.text, w))
+            .collect()
+    }
+
     #[test]
     fn wrap_visible_short_lines_unchanged() {
         let rendered = vec![mae_core::conversation::RenderedLine {
@@ -395,7 +400,8 @@ mod tests {
             style: LineStyle::AssistantText,
             entry_index: None,
         }];
-        let wrapped = wrap_visible_lines(&rendered, 80, 0, 100);
+        let counts = make_counts(&rendered, 80);
+        let wrapped = wrap_visible_lines(&rendered, &counts, 80, 0, 100);
         assert_eq!(wrapped.len(), 1);
         assert_eq!(wrapped[0].text, "short");
     }
@@ -407,7 +413,8 @@ mod tests {
             style: LineStyle::AssistantText,
             entry_index: None,
         }];
-        let wrapped = wrap_visible_lines(&rendered, 10, 0, 100);
+        let counts = make_counts(&rendered, 10);
+        let wrapped = wrap_visible_lines(&rendered, &counts, 10, 0, 100);
         assert_eq!(wrapped.len(), 2);
         assert_eq!(wrapped[0].text.len(), 10);
         assert_eq!(wrapped[1].text.len(), 10);
@@ -452,7 +459,8 @@ mod tests {
             style: LineStyle::InputPrompt,
             entry_index: None,
         }];
-        let wrapped = wrap_visible_lines(&rendered, 16, 0, 100);
+        let counts = make_counts(&rendered, 16);
+        let wrapped = wrap_visible_lines(&rendered, &counts, 16, 0, 100);
         assert_eq!(wrapped.len(), 2);
         assert!(wrapped.iter().all(|sl| *sl.style == LineStyle::InputPrompt));
     }
@@ -467,10 +475,28 @@ mod tests {
                 entry_index: Some(i),
             })
             .collect();
-        let wrapped = wrap_visible_lines(&rendered, 80, 5, 3);
+        let counts = make_counts(&rendered, 80);
+        let wrapped = wrap_visible_lines(&rendered, &counts, 80, 5, 3);
         assert_eq!(wrapped.len(), 3);
         assert_eq!(wrapped[0].text, "line 5");
         assert_eq!(wrapped[1].text, "line 6");
         assert_eq!(wrapped[2].text, "line 7");
+    }
+
+    #[test]
+    fn char_boundary_at_cjk() {
+        // Each CJK char is 3 bytes, 2 display columns
+        let s = "日本語テスト"; // 6 chars, 12 display columns
+        let boundary = char_boundary_at(s, 4); // 4 display cols = 2 CJK chars
+        assert_eq!(boundary, 6); // 2 chars × 3 bytes
+        assert!(s.is_char_boundary(boundary));
+    }
+
+    #[test]
+    fn screen_line_count_cjk() {
+        // 6 CJK chars = 12 display columns
+        assert_eq!(screen_line_count("日本語テスト", 12), 1);
+        assert_eq!(screen_line_count("日本語テスト", 6), 2);
+        assert_eq!(screen_line_count("日本語テスト", 4), 3);
     }
 }

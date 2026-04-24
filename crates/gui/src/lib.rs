@@ -236,6 +236,19 @@ impl Renderer for GuiRenderer {
 
         // Pre-compute syntax-highlight spans for every visible text buffer.
         let syntax_spans = compute_visible_syntax_spans(editor);
+
+        // Pre-compute screen line counts for conversation buffers.
+        // Must happen while we have &mut Editor, before the immutable rebind.
+        {
+            let inner_width = (cols).saturating_sub(4); // approximate; borders eat 2+2
+            for buf in &mut editor.buffers {
+                if buf.kind == BufferKind::Conversation {
+                    if let Some(ref mut conv) = buf.conversation {
+                        conv.ensure_screen_counts(inner_width);
+                    }
+                }
+            }
+        }
         let editor: &Editor = editor;
 
         // Layout: window area = rows-2, status bar = 1, command line = 1.
