@@ -73,6 +73,19 @@ pub(crate) async fn run_terminal_loop(
             .heartbeat
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        // Watchdog recovery: cancel pending AI work after prolonged stall (>10s).
+        if editor
+            .watchdog_stall_recovery
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!("watchdog recovery: cancelling pending AI work after stall");
+            if let Some(ref tx) = ai_command_tx {
+                let _ = tx.try_send(AiCommand::Cancel);
+            }
+            deferred_ai_reply = None;
+            render_pending = true;
+        }
+
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
                 editor,

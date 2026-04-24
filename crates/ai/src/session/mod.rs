@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 mod context_mgmt;
 mod handle_prompt;
+pub(crate) mod progress;
 mod run_loop;
 
 #[cfg(test)]
@@ -87,6 +88,8 @@ pub struct AgentSession {
     pub(super) last_tool_calls: Option<Vec<ToolCall>>,
     /// History of tool call signatures (name:args) for oscillating loop detection.
     pub(super) turn_history: std::collections::VecDeque<String>,
+    /// Progress checkpoint tracker for semantic stagnation detection.
+    pub(super) progress: progress::ProgressTracker,
     /// Path to the session's auto-saved transcript log.
     pub(super) transcript_path: Option<PathBuf>,
     /// Cached string representation of transcript_path (computed once).
@@ -155,6 +158,7 @@ impl AgentSession {
             current_profile: "pair-programmer".into(),
             last_tool_calls: None,
             turn_history: std::collections::VecDeque::with_capacity(6),
+            progress: progress::ProgressTracker::new(10, false),
             transcript_path_str: transcript_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
@@ -164,6 +168,12 @@ impl AgentSession {
 
     pub fn with_target_buffer(mut self, name: String) -> Self {
         self.target_buffer = Some(name);
+        self
+    }
+
+    /// Configure for self-test mode: wider checkpoint interval, higher stagnation tolerance.
+    pub fn with_self_test_mode(mut self) -> Self {
+        self.progress = progress::ProgressTracker::new(15, true);
         self
     }
 

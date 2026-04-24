@@ -83,6 +83,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
   AI security (blocklist, circuit breaker, backpressure), error handling audited
 - Registers & clipboard, vim-surround, Scheme REPL, AI prompt UX, command palette
 - **v0.4.1**: Second modularization pass — 6 god files split into module directories (key_handling, main, tools, executor, session), 12 code smell fixes, model-agnostic system prompt (1,590 tests)
+- **v0.5.0**: Agent reliability — progress checkpoint system (semantic stagnation detection), softened oscillation detector (warn-then-abort), self-test mode, watchdog recovery (cancel AI on prolonged stall) (1,523 tests)
 
 ### Phase 4: LSP + DAP + Syntax + KB — COMPLETE (M1-M4 each)
 - LSP client: connection, navigation (gd/gr/K), diagnostics, completion popup ✅

@@ -116,6 +116,35 @@ impl AgentSession {
                 return;
             }
 
+            // Progress checkpoint evaluation
+            if round > 0 && round % self.progress.checkpoint_interval == 0 {
+                use super::progress::CheckpointVerdict;
+                match self.progress.evaluate() {
+                    CheckpointVerdict::Continue => {
+                        debug!(round, "progress checkpoint: good progress");
+                    }
+                    CheckpointVerdict::Warn { message } => {
+                        warn!(round, %message, "progress checkpoint warning");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::TextResponse {
+                                text: format!("[{}]", message),
+                                target_buffer: self.target_buffer.clone(),
+                            })
+                            .await;
+                    }
+                    CheckpointVerdict::Abort { message } => {
+                        warn!(round, %message, "progress checkpoint abort");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(message, self.transcript_path_str.clone()))
+                            .await;
+                        self.finalize_transaction();
+                        return;
+                    }
+                }
+            }
+
             self.current_round = round;
             let _ = self
                 .event_tx
@@ -309,22 +338,42 @@ impl AgentSession {
                 // Oscillating Loop Detection: count how many times this turn signature
                 // appears in the recent history window. Catches both strict repeats
                 // (A->A->A) and oscillating patterns (A->B->A->B).
+                // Softened: first detection is a warning; abort only after stagnant threshold.
                 let repeat_count = self.turn_history.iter().filter(|s| *s == &turn_sig).count();
                 if repeat_count >= 2 {
+                    self.progress.increment_stagnant();
+                    if self.progress.should_abort_stagnant() {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                format!(
+                                    "AI got stuck in a tool loop (same pattern seen {} times in last {} turns, stagnant {}/{}) — aborting",
+                                    repeat_count + 1,
+                                    self.turn_history.len(),
+                                    self.progress.stagnant_count(),
+                                    self.progress.max_stagnant(),
+                                ),
+                                self.transcript_path_str.clone(),
+                            ))
+                            .await;
+                        self.finalize_transaction();
+                        return;
+                    }
+                    // Warning: oscillation detected but not yet at abort threshold
+                    let msg = format!(
+                        "AI tool loop warning: same pattern seen {} times (stagnant {}/{})",
+                        repeat_count + 1,
+                        self.progress.stagnant_count(),
+                        self.progress.max_stagnant(),
+                    );
+                    warn!(%msg, "oscillation detected");
                     let _ = self
                         .event_tx
-                        .send(AiEvent::Error(
-                            format!(
-                                "AI got stuck in a tool loop (same pattern seen {} times in last {} turns) — aborting",
-                                repeat_count + 1,
-                                self.turn_history.len()
-                            ),
-                            self.transcript_path_str.clone(),
-                        ))
+                        .send(AiEvent::TextResponse {
+                            text: format!("[{}]", msg),
+                            target_buffer: self.target_buffer.clone(),
+                        })
                         .await;
-
-                    self.finalize_transaction();
-                    return;
                 }
 
                 if self.turn_history.len() >= 6 {
@@ -860,6 +909,27 @@ impl AgentSession {
                     }
                 }
             }
+            // Record tool calls for progress tracking
+            for call in &deduplicated_calls {
+                // Check the last Tool message for this call's success status
+                let success = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find_map(|m| {
+                        if let MessageContent::ToolResult(r) = &m.content {
+                            if r.tool_name == call.name {
+                                return Some(r.success);
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(false);
+                self.progress
+                    .record_tool_call(&call.name, &call.arguments, success);
+            }
+            self.progress.record_round();
+
             // Loop: provider sees tool results and may issue more calls
             round += 1;
         }

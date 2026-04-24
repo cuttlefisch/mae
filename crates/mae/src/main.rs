@@ -207,6 +207,7 @@ fn main() -> io::Result<()> {
     let watchdog_state = watchdog::spawn_watchdog();
     editor.heartbeat = watchdog_state.heartbeat.clone();
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
+    editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
     // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
     if editor.project.is_none() {

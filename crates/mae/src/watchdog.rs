@@ -3,9 +3,10 @@
 //! Runs on a standalone OS thread (not tokio) so it remains responsive even
 //! when the async runtime is blocked. Checks a shared `AtomicU64` heartbeat
 //! counter every 2 seconds. If the counter hasn't advanced after 3 checks (6s),
-//! it dumps thread state to the log.
+//! it dumps thread state to the log. After prolonged stalls (>10s), sets a
+//! recovery flag that the main thread can check to cancel pending AI work.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -36,6 +37,9 @@ pub struct WatchdogState {
     pub heartbeat: Arc<AtomicU64>,
     /// Number of consecutive stalls detected (0 = healthy).
     pub stall_count: Arc<AtomicU64>,
+    /// Set by watchdog after prolonged stall (>10s). Main thread checks this
+    /// on wake to cancel pending AI work and force a redraw.
+    pub stall_recovery: Arc<AtomicBool>,
 }
 
 impl WatchdogState {
@@ -43,6 +47,7 @@ impl WatchdogState {
         WatchdogState {
             heartbeat: Arc::new(AtomicU64::new(0)),
             stall_count: Arc::new(AtomicU64::new(0)),
+            stall_recovery: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -51,6 +56,13 @@ impl WatchdogState {
     pub fn tick(&self) {
         self.heartbeat.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Check and clear the stall recovery flag. Returns true if recovery
+    /// was requested (main thread should cancel pending AI work and redraw).
+    #[allow(dead_code)]
+    pub fn check_recovery(&self) -> bool {
+        self.stall_recovery.swap(false, Ordering::Relaxed)
+    }
 }
 
 /// Spawn the watchdog thread. Returns the shared state for heartbeat ticking.
@@ -58,18 +70,23 @@ pub fn spawn_watchdog() -> WatchdogState {
     let state = WatchdogState::new();
     let heartbeat = state.heartbeat.clone();
     let stall_count = state.stall_count.clone();
+    let stall_recovery = state.stall_recovery.clone();
 
     thread::Builder::new()
         .name("mae-watchdog".into())
         .spawn(move || {
-            watchdog_loop(heartbeat, stall_count);
+            watchdog_loop(heartbeat, stall_count, stall_recovery);
         })
         .expect("failed to spawn watchdog thread");
 
     state
 }
 
-fn watchdog_loop(heartbeat: Arc<AtomicU64>, stall_count_out: Arc<AtomicU64>) {
+fn watchdog_loop(
+    heartbeat: Arc<AtomicU64>,
+    stall_count_out: Arc<AtomicU64>,
+    stall_recovery: Arc<AtomicBool>,
+) {
     const CHECK_INTERVAL: Duration = Duration::from_secs(2);
     const ALERT_THRESHOLD: u32 = 3; // 6s
     const BACKTRACE_THRESHOLD: u32 = 5; // 10s
@@ -101,8 +118,9 @@ fn watchdog_loop(heartbeat: Arc<AtomicU64>, stall_count_out: Arc<AtomicU64>) {
                 let bt = std::backtrace::Backtrace::force_capture();
                 error!(
                     stall_seconds = consecutive_stalls * 2,
-                    "WATCHDOG: prolonged stall — backtrace from watchdog thread:\n{}", bt
+                    "WATCHDOG: prolonged stall — setting recovery flag\n{}", bt
                 );
+                stall_recovery.store(true, Ordering::Relaxed);
             }
         } else {
             if consecutive_stalls >= ALERT_THRESHOLD {

@@ -343,6 +343,13 @@ pub fn setup_ai(
         )
         .with_budget(model, budget);
 
+        // Self-test mode: wider checkpoint interval, higher stagnation tolerance
+        let session = if std::env::args().any(|a| a == "--self-test") {
+            session.with_self_test_mode()
+        } else {
+            session
+        };
+
         spawn_ai_session(session);
 
         (event_rx, event_tx, Some(cmd_tx))

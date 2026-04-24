@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.1 (1,590 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.4.1 modularization complete.
+Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.5.0-dev (1,523 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, watchdog recovery).
 
 ---
 
@@ -17,6 +17,20 @@ Identified gaps in MAE's AI peer capabilities compared to industry standards (Cl
 - [x] **Tool-Level Defenses**: Explicit anti-looping and boundary guardrails in tool descriptions (v0.4.0).
 - [x] **UX Mode Cycling**: Shift-Tab to cycle between `manual`, `auto-accept`, and `plan` modes (v0.4.0).
 - [x] **Stateful Interruption**: Double-Esc to cancel AI while preserving context for resumption (v0.4.0).
+
+---
+
+## AI UX & Reliability (v0.5.0)
+
+Agent reliability improvements from crash log analysis and self-test failures.
+
+- [x] **Progress Checkpoint System**: Semantic progress evaluation every N rounds (score 0-6) replaces blunt max_rounds as primary stagnation detection. Catches runaway loops without killing complex legitimate tasks (v0.5.0).
+- [x] **Softened Oscillation Detector**: A-B-A-B patterns now warn first, abort only after reaching stagnant threshold (was: immediate abort on 2+ repeats) (v0.5.0).
+- [x] **Self-Test Mode**: Wider checkpoint interval (15) and higher tolerance (4 stagnant) for `--self-test` runs (v0.5.0).
+- [x] **Watchdog Recovery**: Prolonged stalls (>10s) now set a recovery flag; main loop checks on wake and cancels pending AI work + forces redraw (was: log-only) (v0.5.0).
+- [ ] **Prompt Caching**: Leverage provider-specific prompt caching (Claude cache_control, OpenAI cached_prompt_tokens) for system prompt + tool definitions to reduce costs.
+- [ ] **Token Budget Dashboard**: Real-time context window usage visualization in status bar.
+- [ ] **Graceful Degradation**: Auto-reduce tool set when approaching context limits rather than hard-failing.
 
 ---
 

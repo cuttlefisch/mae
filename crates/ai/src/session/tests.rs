@@ -1292,3 +1292,229 @@ fn trim_preserves_tool_history_without_pruning() {
     assert_eq!(session.messages[2].role, Role::Tool);
     assert_eq!(session.messages[3].role, Role::Tool);
 }
+
+// --- Progress checkpoint integration tests ---
+
+/// Helper: build a ProviderResponse with tool calls dispatched to main thread.
+fn tool_call_response(name: &str, args: serde_json::Value) -> ProviderResponse {
+    ProviderResponse {
+        text: None,
+        tool_calls: vec![ToolCall {
+            id: format!("call_{}", name),
+            name: name.to_string(),
+            arguments: args,
+        }],
+        stop_reason: StopReason::ToolUse,
+        usage: Some(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    }
+}
+
+/// 30 identical buffer_read calls → stagnation abort before max_rounds.
+#[tokio::test]
+async fn test_checkpoint_aborts_stagnant_session() {
+    let (event_tx, mut event_rx) = mpsc::channel(1024);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // Build 35 identical buffer_read responses
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for _ in 0..35 {
+        responses.push(tool_call_response(
+            "buffer_read",
+            serde_json::json!({"path": "same.rs"}),
+        ));
+    }
+    // Final end-turn in case we get that far
+    responses.push(ProviderResponse {
+        text: Some("done".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(5, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut saw_error = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "file contents".into(),
+                });
+            }
+            AiEvent::Error(msg, _) if msg.contains("stagnation") || msg.contains("tool loop") => {
+                saw_error = true;
+                break;
+            }
+            AiEvent::Error(_, _) => break,
+            AiEvent::SessionComplete { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(saw_error, "expected stagnation or oscillation abort");
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}
+
+/// 30 varied rounds with different tools and files → completes without stagnation.
+#[tokio::test]
+async fn test_checkpoint_allows_long_varied_session() {
+    let (event_tx, mut event_rx) = mpsc::channel(1024);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // Use only tools that dispatch to main thread (avoid shell_exec which runs real commands)
+    let tools_cycle = [
+        ("buffer_read", serde_json::json!({"path": "a.rs"})),
+        ("buffer_write", serde_json::json!({"path": "a.rs"})),
+        ("project_search", serde_json::json!({"query": "foo"})),
+        ("buffer_read", serde_json::json!({"path": "b.rs"})),
+        ("buffer_write", serde_json::json!({"path": "b.rs"})),
+        ("create_file", serde_json::json!({"path": "c.rs"})),
+        ("buffer_read", serde_json::json!({"path": "c.rs"})),
+        ("open_file", serde_json::json!({"path": "d.rs"})),
+        ("buffer_write", serde_json::json!({"path": "d.rs"})),
+        ("cursor_info", serde_json::json!({})),
+    ];
+
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for i in 0..30 {
+        let (name, args) = &tools_cycle[i % tools_cycle.len()];
+        responses.push(tool_call_response(name, args.clone()));
+    }
+    responses.push(ProviderResponse {
+        text: Some("All done!".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(5, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut saw_stagnation = false;
+    let mut completed = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "ok".into(),
+                });
+            }
+            AiEvent::Error(msg, _) if msg.contains("stagnation") || msg.contains("tool loop") => {
+                saw_stagnation = true;
+                break;
+            }
+            AiEvent::SessionComplete { .. } => {
+                completed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(completed, "session should complete normally");
+    assert!(!saw_stagnation, "should not trigger stagnation abort");
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}
+
+/// Oscillation: A-B-A-B pattern → warn first, abort on second oscillation.
+#[tokio::test]
+async fn test_oscillation_warn_then_abort() {
+    let (event_tx, mut event_rx) = mpsc::channel(128);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // A-B-A-B-A-B-A-B pattern (8 rounds)
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for i in 0..8 {
+        if i % 2 == 0 {
+            responses.push(tool_call_response(
+                "buffer_read",
+                serde_json::json!({"path": "x.rs"}),
+            ));
+        } else {
+            responses.push(tool_call_response(
+                "buffer_write",
+                serde_json::json!({"path": "x.rs"}),
+            ));
+        }
+    }
+    responses.push(ProviderResponse {
+        text: Some("done".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(10, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut warnings = 0;
+    let mut aborted = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "ok".into(),
+                });
+            }
+            AiEvent::TextResponse { text, .. } if text.contains("tool loop warning") => {
+                warnings += 1;
+            }
+            AiEvent::Error(msg, _) if msg.contains("tool loop") => {
+                aborted = true;
+                break;
+            }
+            AiEvent::SessionComplete { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        warnings >= 1,
+        "expected at least 1 oscillation warning, got {}",
+        warnings
+    );
+    assert!(
+        aborted,
+        "expected oscillation abort after reaching stagnant threshold"
+    );
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}

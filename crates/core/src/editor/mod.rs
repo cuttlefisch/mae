@@ -407,6 +407,9 @@ pub struct Editor {
     /// Consecutive stall count from the watchdog (0 = healthy). Read-only
     /// for introspection / debug overlay.
     pub watchdog_stall_count: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Set by watchdog after prolonged stall (>10s). Main loop checks this
+    /// to cancel pending AI work and force a redraw.
+    pub watchdog_stall_recovery: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Input event recorder for reproducible debugging.
     pub event_recorder: crate::event_record::EventRecorder,
 }
@@ -546,6 +549,7 @@ impl Editor {
             restore_session: false,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
         }
     }
@@ -690,6 +694,7 @@ impl Editor {
             restore_session: false,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
         }
     }
