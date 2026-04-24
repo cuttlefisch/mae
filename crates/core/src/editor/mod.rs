@@ -1237,6 +1237,19 @@ impl Editor {
     ///
     /// If the focused window shows a conversation buffer, the new buffer is
     /// routed to another window (or a new split is created). This keeps `*AI*`
+    /// Adjust `ai_target_buffer_idx` after a buffer at `removed_idx` was removed.
+    /// Must be called after every `buffers.remove()` to prevent stale indices.
+    pub fn adjust_ai_target_after_remove(&mut self, removed_idx: usize) {
+        if let Some(ref mut target) = self.ai_target_buffer_idx {
+            if *target == removed_idx {
+                // The target buffer was removed — clear it
+                self.ai_target_buffer_idx = None;
+            } else if *target > removed_idx {
+                *target -= 1;
+            }
+        }
+    }
+
     /// visible during AI tool calls that open/switch files.
     pub fn switch_to_buffer_non_conversation(&mut self, idx: usize) -> bool {
         if idx >= self.buffers.len() {

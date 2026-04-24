@@ -51,6 +51,7 @@ impl Editor {
 
         // Remove the debug buffer.
         self.buffers.remove(debug_idx);
+        self.adjust_ai_target_after_remove(debug_idx);
 
         // Fix up all window buffer_idx references.
         for win in self.window_mgr.iter_windows_mut() {

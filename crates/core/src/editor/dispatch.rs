@@ -1170,6 +1170,7 @@ impl Editor {
                     self.lsp_notify_did_close_for_buffer(idx);
                     self.buffers.remove(idx);
                     self.syntax.shift_after_remove(idx);
+                    self.adjust_ai_target_after_remove(idx);
                     // Fix all window buffer_idx references
                     for win in self.window_mgr.iter_windows_mut() {
                         if win.buffer_idx == idx {
@@ -1200,6 +1201,7 @@ impl Editor {
                     self.lsp_notify_did_close_for_buffer(idx);
                     self.buffers.remove(idx);
                     self.syntax.shift_after_remove(idx);
+                    self.adjust_ai_target_after_remove(idx);
                     for win in self.window_mgr.iter_windows_mut() {
                         if win.buffer_idx == idx {
                             win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
@@ -1956,6 +1958,7 @@ impl Editor {
                 let killed = to_remove.len();
                 for &i in to_remove.iter().rev() {
                     self.buffers.remove(i);
+                    self.adjust_ai_target_after_remove(i);
                 }
                 // Revalidate ALL window buffer_idx values after bulk removal.
                 let buf_count = self.buffers.len();

@@ -354,6 +354,7 @@ impl Editor {
         }
         self.buffers.remove(help_idx);
         self.syntax.shift_after_remove(help_idx);
+        self.adjust_ai_target_after_remove(help_idx);
         // Fix indices that were above the removed buffer.
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx > help_idx {
