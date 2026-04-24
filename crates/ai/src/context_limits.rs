@@ -58,7 +58,7 @@ const TABLE: &[(&str, u64, usize)] = &[
     // ---- OpenAI ----
     // OpenAI is primarily context-limited, but 100 is a safe upper bound
     // to prevent infinite loops / token drains.
-    ("gpt-4o-mini", 128_000, 100),
+    ("gpt-4o-mini", 128_000, 30),
     ("gpt-4o", 128_000, 100),
     ("gpt-4-turbo", 128_000, 100),
     ("gpt-4", 8_192, 50),
@@ -73,8 +73,8 @@ const TABLE: &[(&str, u64, usize)] = &[
     ("gemini-2.5-flash", 1_000_000, 50),
     // ---- DeepSeek ----
     // DeepSeek is often used for heavy reasoning/tool-chains.
-    ("deepseek-reasoner", 64_000, 100),
-    ("deepseek-chat", 64_000, 100),
+    ("deepseek-reasoner", 64_000, 25),
+    ("deepseek-chat", 64_000, 25),
 ];
 
 #[cfg(test)]
@@ -92,7 +92,7 @@ mod tests {
     fn deepseek_chat_limits() {
         let l = lookup("deepseek-chat");
         assert_eq!(l.context_window, 64_000);
-        assert_eq!(l.max_rounds, 100);
+        assert_eq!(l.max_rounds, 25);
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
     fn gpt4o_mini_limits() {
         let l = lookup("gpt-4o-mini");
         assert_eq!(l.context_window, 128_000);
-        assert_eq!(l.max_rounds, 100);
+        assert_eq!(l.max_rounds, 30);
     }
 
     #[test]

@@ -385,23 +385,24 @@ impl AgentSession {
         }
 
         // 3. Enforce API schema: No orphaned Tool messages at the prune boundary.
-        // If the prune cut off an Assistant message, or left an Assistant message
-        // with tool_calls but dropped some of its corresponding Tool messages,
-        // we must drop the orphaned messages to maintain a valid sequence.
-        while self.messages.len() > 1 {
-            let msg = &self.messages[1];
-            if msg.role == Role::Tool {
-                self.messages.remove(1);
-                safe_boundary = safe_boundary.saturating_sub(1).max(1);
-            } else if let MessageContent::TextWithToolCalls { .. } | MessageContent::ToolCalls(_) =
-                msg.content
-            {
-                // Drop any Assistant message with tool calls at the boundary,
-                // as its matching ToolResults might have been pruned or partially pruned.
-                self.messages.remove(1);
-                safe_boundary = safe_boundary.saturating_sub(1).max(1);
-            } else {
-                break;
+        // Only needed after actual pruning — if steps 1-2 didn't remove anything,
+        // there are no orphans and running this would destroy valid tool history.
+        if self.messages.len() < original_len {
+            while self.messages.len() > 1 {
+                let msg = &self.messages[1];
+                if msg.role == Role::Tool {
+                    self.messages.remove(1);
+                    safe_boundary = safe_boundary.saturating_sub(1).max(1);
+                } else if let MessageContent::TextWithToolCalls { .. }
+                | MessageContent::ToolCalls(_) = msg.content
+                {
+                    // Drop any Assistant message with tool calls at the boundary,
+                    // as its matching ToolResults might have been pruned or partially pruned.
+                    self.messages.remove(1);
+                    safe_boundary = safe_boundary.saturating_sub(1).max(1);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -2734,5 +2735,57 @@ mod tests {
             MessageContent::Text(t) => assert_eq!(t, "msg0"),
             _ => panic!("expected text"),
         }
+    }
+
+    #[test]
+    fn trim_preserves_tool_history_without_pruning() {
+        // Regression test: trim_messages must NOT strip tool call history
+        // when no pruning is needed (steps 1-2 didn't remove anything).
+        let (event_tx, _rx) = mpsc::channel(32);
+        let (_tx, cmd_rx) = mpsc::channel(8);
+        let provider = Box::new(MockProvider::new(vec![]));
+        let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+        // Large budget — no pruning needed
+        session.max_messages = 100;
+
+        // Build: [User, Assistant(ToolCalls), Tool, Tool]
+        session.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text("what files are here?".into()),
+        });
+        session.messages.push(Message {
+            role: Role::Assistant,
+            content: MessageContent::ToolCalls(vec![ToolCall {
+                id: "call_1".into(),
+                name: "git_status".into(),
+                arguments: serde_json::json!({}),
+            }]),
+        });
+        session.messages.push(Message {
+            role: Role::Tool,
+            content: MessageContent::ToolResult(ToolResult {
+                tool_call_id: "call_1".into(),
+                tool_name: "git_status".into(),
+                success: true,
+                output: "clean".into(),
+            }),
+        });
+        session.messages.push(Message {
+            role: Role::Tool,
+            content: MessageContent::ToolResult(ToolResult {
+                tool_call_id: "call_2".into(),
+                tool_name: "shell_exec".into(),
+                success: true,
+                output: "ls output".into(),
+            }),
+        });
+
+        assert_eq!(session.messages.len(), 4);
+        session.trim_messages();
+        // All 4 messages must survive — no pruning occurred.
+        assert_eq!(session.messages.len(), 4);
+        assert_eq!(session.messages[1].role, Role::Assistant);
+        assert_eq!(session.messages[2].role, Role::Tool);
+        assert_eq!(session.messages[3].role, Role::Tool);
     }
 }
