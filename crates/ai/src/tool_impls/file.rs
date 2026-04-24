@@ -175,7 +175,17 @@ pub fn execute_create_file(
     // Write the file
     std::fs::write(file_path, content).map_err(|e| format!("Failed to create file: {}", e))?;
 
-    // Open it as a buffer
+    // If a buffer already has this file open, reload it from disk so
+    // the editor sees the freshly written content (not stale buffer state).
+    let file_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    if let Some(existing) = editor.find_buffer_by_name(file_name) {
+        let _ = editor.buffers[existing].reload_from_disk();
+    }
+
+    // Open it as a buffer (reuses existing if present)
     editor.open_file_non_conversation(path);
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
