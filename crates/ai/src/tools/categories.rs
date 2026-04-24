@@ -20,6 +20,7 @@ pub enum ToolCategory {
     ShellMgmt,
     Commands,
     Git,
+    Web,
 }
 
 /// Classify a tool into Core or Extended tier.
@@ -53,6 +54,8 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::Commands)
     } else if name.starts_with("git_") {
         Some(ToolCategory::Git)
+    } else if name.starts_with("web_") {
+        Some(ToolCategory::Web)
     } else {
         None
     }
@@ -68,6 +71,7 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
             "knowledge" | "kb" => Some(ToolCategory::Knowledge),
             "shell" | "shell_mgmt" => Some(ToolCategory::ShellMgmt),
             "commands" | "command" => Some(ToolCategory::Commands),
+            "web" => Some(ToolCategory::Web),
             _ => None,
         })
         .collect()
@@ -77,14 +81,14 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
 pub fn request_tools_definition() -> ToolDefinition {
     ToolDefinition {
         name: "request_tools".into(),
-        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands. Returns tool names added.".into(),
+        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands, web. Returns tool names added.".into(),
         parameters: ToolParameters {
             schema_type: "object".into(),
             properties: HashMap::from([(
                 "categories".into(),
                 ToolProperty {
                     prop_type: "string".into(),
-                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands".into(),
+                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, web".into(),
                     enum_values: None,
                 },
             )]),

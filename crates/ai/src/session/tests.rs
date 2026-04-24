@@ -1518,3 +1518,410 @@ async fn test_oscillation_warn_then_abort() {
     );
     cmd_tx.send(AiCommand::Shutdown).await.ok();
 }
+
+// --- compact_history unit tests ---
+
+fn make_test_session_with_messages(messages: Vec<Message>) -> AgentSession {
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_tx, cmd_rx) = mpsc::channel(8);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    session.messages = messages;
+    session
+}
+
+fn make_session_with_tools(tools: Vec<ToolDefinition>) -> AgentSession {
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_tx, cmd_rx) = mpsc::channel(8);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let sys_prompt = "A".repeat(5000); // Long system prompt for testing truncation
+    AgentSession::new(provider, tools, sys_prompt, event_tx, cmd_rx)
+}
+
+fn user_msg(text: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: MessageContent::Text(text.into()),
+    }
+}
+
+fn assistant_msg(text: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: MessageContent::Text(text.into()),
+    }
+}
+
+fn tool_calls_msg(names: &[&str]) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: MessageContent::ToolCalls(
+            names
+                .iter()
+                .map(|n| ToolCall {
+                    id: format!("call_{}", n),
+                    name: n.to_string(),
+                    arguments: serde_json::json!({}),
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn tool_result_msg(name: &str) -> Message {
+    Message {
+        role: Role::Tool,
+        content: MessageContent::ToolResult(ToolResult {
+            tool_call_id: format!("call_{}", name),
+            tool_name: name.to_string(),
+            success: true,
+            output: "ok".into(),
+        }),
+    }
+}
+
+#[test]
+fn compact_history_summarizes_old_turns() {
+    // 15 user+assistant pairs = 30 messages + 1 initial = 31
+    let mut msgs = vec![user_msg("initial context")];
+    for i in 0..15 {
+        msgs.push(user_msg(&format!("question {}", i)));
+        msgs.push(assistant_msg(&format!("answer {}. More detail here.", i)));
+    }
+    let original_len = msgs.len();
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    assert!(
+        session.messages.len() < original_len,
+        "expected compaction: {} -> {}",
+        original_len,
+        session.messages.len()
+    );
+    // First message preserved
+    match &session.messages[0].content {
+        MessageContent::Text(t) => assert_eq!(t, "initial context"),
+        _ => panic!("first message should be text"),
+    }
+    // Summary messages should exist
+    let summaries: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| {
+            if let MessageContent::Text(t) = &m.content {
+                t.contains("[Context summary")
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(!summaries.is_empty(), "expected summary messages");
+}
+
+#[test]
+fn compact_history_preserves_first_and_recent() {
+    let mut msgs = vec![user_msg("initial context")];
+    for i in 0..15 {
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(assistant_msg(&format!("a{}", i)));
+    }
+    let last_4: Vec<String> = msgs[msgs.len() - 4..]
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    // First message unchanged
+    assert_eq!(session.messages[0].role, Role::User);
+    // Last 4 messages unchanged
+    let new_last_4: Vec<String> = session.messages[session.messages.len() - 4..]
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.clone(),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(last_4, new_last_4, "last 4 messages should be preserved");
+}
+
+#[test]
+fn compact_history_noop_when_small() {
+    let msgs = vec![
+        user_msg("initial"),
+        user_msg("q1"),
+        assistant_msg("a1"),
+        user_msg("q2"),
+        assistant_msg("a2"),
+    ];
+    let original_len = msgs.len();
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    assert_eq!(session.messages.len(), original_len);
+}
+
+#[test]
+fn compact_history_no_orphaned_tool_messages() {
+    let mut msgs = vec![user_msg("initial")];
+    for i in 0..10 {
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(tool_result_msg("buffer_read"));
+        msgs.push(assistant_msg(&format!("a{}", i)));
+    }
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    // No Tool message should appear without a preceding ToolCalls message
+    for (i, msg) in session.messages.iter().enumerate() {
+        if msg.role == Role::Tool && i > 0 {
+            let prev = &session.messages[i - 1];
+            assert!(
+                matches!(
+                    prev.content,
+                    MessageContent::ToolCalls(_) | MessageContent::TextWithToolCalls { .. }
+                ) || prev.role == Role::Tool,
+                "orphaned Tool message at index {}",
+                i
+            );
+        }
+    }
+}
+
+#[test]
+fn compact_history_adjusts_transaction_idx() {
+    let mut msgs = vec![user_msg("initial")];
+    for i in 0..15 {
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(assistant_msg(&format!("a{}", i)));
+    }
+    let tx_start = msgs.len() - 2; // Last pair is the transaction
+    let mut session = make_test_session_with_messages(msgs);
+    session.transaction_start_idx = Some(tx_start);
+
+    session.compact_history();
+
+    // Transaction start should still point to valid messages
+    let new_idx = session.transaction_start_idx.unwrap();
+    assert!(
+        new_idx < session.messages.len(),
+        "transaction_start_idx {} >= messages.len() {}",
+        new_idx,
+        session.messages.len()
+    );
+}
+
+// --- Graceful Degradation tests ---
+
+fn make_extended_tool(name: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.into(),
+        description: "test tool".into(),
+        parameters: crate::types::ToolParameters {
+            schema_type: "object".into(),
+            properties: std::collections::HashMap::new(),
+            required: vec![],
+        },
+        permission: Some(crate::types::PermissionTier::ReadOnly),
+    }
+}
+
+#[test]
+fn graceful_degrade_sheds_extended_tools() {
+    let tools = vec![
+        make_extended_tool("buffer_read"),    // Core
+        make_extended_tool("lsp_definition"), // Extended
+        make_extended_tool("dap_start"),      // Extended
+        make_extended_tool("kb_search"),      // Extended
+    ];
+    let mut session = make_session_with_tools(tools);
+    // Manually add extended tools to the active set (simulating request_tools)
+    session.tools.push(make_extended_tool("lsp_definition"));
+    session.tools.push(make_extended_tool("dap_start"));
+    session.tools.push(make_extended_tool("kb_search"));
+    session.tools_tokens = crate::token_estimate::estimate_tools_tokens(&session.tools);
+
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "padding message {} with some longer content to take up token space",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.90) as u64;
+
+    let original_count = session.tools.len();
+    let changed = session.check_and_degrade();
+
+    assert!(changed, "should have degraded");
+    assert_eq!(
+        session.degradation_level,
+        super::DegradationLevel::ToolsShed
+    );
+    assert!(
+        session.tools.len() < original_count,
+        "expected fewer tools after shedding: {} -> {}",
+        original_count,
+        session.tools.len()
+    );
+    // Only core tools should remain
+    for tool in &session.tools {
+        assert!(
+            crate::tools::classify_tool_tier(&tool.name) == crate::tools::ToolTier::Core
+                || tool.name == "request_tools",
+            "non-core tool {} survived shedding",
+            tool.name
+        );
+    }
+}
+
+#[test]
+fn graceful_degrade_recalcs_tools_tokens() {
+    let tools = vec![
+        make_extended_tool("buffer_read"),
+        make_extended_tool("lsp_definition"),
+        make_extended_tool("dap_start"),
+    ];
+    let mut session = make_session_with_tools(tools);
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "padding {} with longer text to fill context",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.90) as u64;
+    let tokens_before = session.tools_tokens;
+
+    session.check_and_degrade();
+
+    assert!(
+        session.tools_tokens <= tokens_before,
+        "tools_tokens should not increase after shedding"
+    );
+}
+
+#[test]
+fn degradation_to_minimal_shortens_prompt() {
+    let mut session = make_session_with_tools(vec![make_extended_tool("buffer_read")]);
+    // Already shed tools
+    session.degradation_level = super::DegradationLevel::ToolsShed;
+    // Fill heavily to push past 92%
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "heavy padding message {} with extra content",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.95) as u64;
+
+    let changed = session.check_and_degrade();
+
+    assert!(changed, "should degrade to Minimal");
+    assert_eq!(session.degradation_level, super::DegradationLevel::Minimal);
+    assert!(
+        session.system_prompt.contains("truncated"),
+        "system prompt should mention truncation"
+    );
+}
+
+#[test]
+fn degradation_is_one_way() {
+    let mut session = make_session_with_tools(vec![make_extended_tool("buffer_read")]);
+    session.context_window = 100_000;
+    session.system_prompt_tokens = 100;
+    session.reserved_output = 100;
+    // Force to ToolsShed
+    session.degradation_level = super::DegradationLevel::ToolsShed;
+    // Few messages = low usage, but should NOT recover
+    session.messages.push(user_msg("tiny"));
+
+    let changed = session.check_and_degrade();
+
+    assert!(!changed, "should not recover from ToolsShed");
+    assert_eq!(
+        session.degradation_level,
+        super::DegradationLevel::ToolsShed
+    );
+}
+
+// --- strip_html + web_fetch tests ---
+
+#[test]
+fn strip_html_basic() {
+    let html = "<html><body><h1>Hello</h1><p>World &amp; friends</p></body></html>";
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("Hello"), "should contain text");
+    assert!(text.contains("World & friends"), "entities decoded");
+    assert!(!text.contains('<'), "no HTML tags");
+}
+
+#[test]
+fn strip_html_script_style_removed() {
+    let html = r#"<html><head><style>body { color: red }</style></head>
+    <body><script>alert('xss')</script><p>Content</p></body></html>"#;
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("Content"), "content preserved");
+    assert!(!text.contains("alert"), "script removed");
+    assert!(!text.contains("color"), "style removed");
+}
+
+#[test]
+fn strip_html_plain_text_passthrough() {
+    let plain = "This is just plain text with no tags.";
+    let text = AgentSession::strip_html(plain);
+    assert_eq!(text, plain);
+}
+
+#[test]
+fn strip_html_collapses_whitespace() {
+    let html = "<p>Line 1</p>\n\n\n\n\n<p>Line 2</p>";
+    let text = AgentSession::strip_html(html);
+    // Should not have more than one consecutive blank line
+    assert!(!text.contains("\n\n\n"), "excessive blank lines collapsed");
+}
+
+#[test]
+fn strip_html_entities() {
+    let html = "&lt;tag&gt; &quot;quoted&quot; &nbsp; &#39;apos&#39;";
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("<tag>"), "lt/gt decoded");
+    assert!(text.contains("\"quoted\""), "quot decoded");
+    assert!(text.contains("'apos'"), "apos decoded");
+}
+
+#[tokio::test]
+async fn web_fetch_missing_url() {
+    let call = ToolCall {
+        id: "test".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({}),
+    };
+    let result = AgentSession::execute_web_fetch(&call).await;
+    assert!(!result.success);
+    assert!(result.output.contains("Missing"));
+}
+
+#[tokio::test]
+async fn web_fetch_invalid_scheme() {
+    let call = ToolCall {
+        id: "test".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({"url": "ftp://example.com"}),
+    };
+    let result = AgentSession::execute_web_fetch(&call).await;
+    assert!(!result.success);
+    assert!(result.output.contains("Invalid URL scheme"));
+}

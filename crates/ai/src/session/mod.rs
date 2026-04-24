@@ -9,6 +9,18 @@ mod handle_prompt;
 pub(crate) mod progress;
 mod run_loop;
 
+/// Degradation level for context pressure management.
+/// One-way within a session: Normal → ToolsShed → Minimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DegradationLevel {
+    /// All tools, full system prompt.
+    Normal,
+    /// Extended tools removed, core only.
+    ToolsShed,
+    /// System prompt shortened + tools shed.
+    Minimal,
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +64,10 @@ pub struct AgentSession {
     /// (the latter matters for Ollama/unpriced models).
     pub(super) session_tokens_in: u64,
     pub(super) session_tokens_out: u64,
+    /// Cumulative cache read tokens (prompt cache hits).
+    pub(super) session_cache_read: u64,
+    /// Cumulative cache creation tokens.
+    pub(super) session_cache_creation: u64,
     /// One-shot flag so `BudgetWarning` is emitted at most once per
     /// session. Users don't want a warn per round after crossing the
     /// threshold.
@@ -90,6 +106,11 @@ pub struct AgentSession {
     pub(super) turn_history: std::collections::VecDeque<String>,
     /// Progress checkpoint tracker for semantic stagnation detection.
     pub(super) progress: progress::ProgressTracker,
+    /// Current degradation level for context pressure management.
+    pub(super) degradation_level: DegradationLevel,
+    /// Original system prompt (preserved for reference after truncation).
+    #[allow(dead_code)]
+    pub(super) original_system_prompt: String,
     /// Path to the session's auto-saved transcript log.
     pub(super) transcript_path: Option<PathBuf>,
     /// Cached string representation of transcript_path (computed once).
@@ -127,6 +148,7 @@ impl AgentSession {
             None
         };
 
+        let original_system_prompt = system_prompt.clone();
         AgentSession {
             provider,
             all_tools: tools,
@@ -143,6 +165,8 @@ impl AgentSession {
             session_cost_usd: 0.0,
             session_tokens_in: 0,
             session_tokens_out: 0,
+            session_cache_read: 0,
+            session_cache_creation: 0,
             warned: false,
             context_window: crate::context_limits::DEFAULT_CONTEXT_WINDOW,
             system_prompt_tokens,
@@ -159,6 +183,8 @@ impl AgentSession {
             last_tool_calls: None,
             turn_history: std::collections::VecDeque::with_capacity(6),
             progress: progress::ProgressTracker::new(10, false),
+            degradation_level: DegradationLevel::Normal,
+            original_system_prompt,
             transcript_path_str: transcript_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),

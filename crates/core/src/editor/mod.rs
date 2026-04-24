@@ -308,6 +308,14 @@ pub struct Editor {
     pub ai_session_tokens_in: u64,
     /// Cumulative completion tokens this session (all providers).
     pub ai_session_tokens_out: u64,
+    /// Cumulative cache read tokens (prompt cache hits).
+    pub ai_cache_read_tokens: u64,
+    /// Cumulative cache creation tokens.
+    pub ai_cache_creation_tokens: u64,
+    /// Model's context window size in tokens.
+    pub ai_context_window: u64,
+    /// Estimated tokens currently used in context.
+    pub ai_context_used_tokens: u64,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -509,6 +517,10 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            ai_cache_read_tokens: 0,
+            ai_cache_creation_tokens: 0,
+            ai_context_window: 0,
+            ai_context_used_tokens: 0,
             bell_until: None,
             project: None,
             git_branch: None,
@@ -654,6 +666,10 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            ai_cache_read_tokens: 0,
+            ai_cache_creation_tokens: 0,
+            ai_context_window: 0,
+            ai_context_used_tokens: 0,
             bell_until: None,
             project: None,
             git_branch: None,

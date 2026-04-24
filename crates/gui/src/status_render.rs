@@ -159,10 +159,16 @@ pub fn render_status_bar(
             format_tokens(editor.ai_session_tokens_in),
             format_tokens(editor.ai_session_tokens_out),
         );
+        let cache_str =
+            format_cache_hit_rate(editor.ai_cache_read_tokens, editor.ai_session_tokens_in);
+        let ctx_str = format_context_usage(editor.ai_context_used_tokens, editor.ai_context_window);
         if editor.ai_session_cost_usd > 0.0 {
-            format!(" ${:.2} {} ", editor.ai_session_cost_usd, tokens)
+            format!(
+                " ${:.2} {}{}{}",
+                editor.ai_session_cost_usd, tokens, cache_str, ctx_str
+            )
         } else {
-            format!(" {} ", tokens)
+            format!(" {}{}{}", tokens, cache_str, ctx_str)
         }
     };
 
@@ -206,6 +212,22 @@ fn format_tokens(n: u64) -> String {
     }
 }
 
+fn format_cache_hit_rate(cache_read: u64, total_in: u64) -> String {
+    if cache_read == 0 || total_in == 0 {
+        return String::new();
+    }
+    let pct = (cache_read as f64 / total_in as f64 * 100.0).min(100.0);
+    format!(" C:{:.0}%", pct)
+}
+
+fn format_context_usage(used: u64, window: u64) -> String {
+    if window == 0 {
+        return String::new();
+    }
+    let pct = (used as f64 / window as f64 * 100.0).min(100.0);
+    format!(" [{:.0}%]", pct)
+}
+
 /// Render the command/message line at the given screen row.
 pub fn render_command_line(canvas: &mut SkiaCanvas, editor: &Editor, row: usize, cols: usize) {
     let text = if editor.mode == Mode::Command {
@@ -247,5 +269,25 @@ mod tests {
     #[test]
     fn format_tokens_millions() {
         assert_eq!(format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn cache_hit_rate_zero() {
+        assert_eq!(format_cache_hit_rate(0, 1000), "");
+    }
+
+    #[test]
+    fn cache_hit_rate_some() {
+        assert_eq!(format_cache_hit_rate(850, 1000), " C:85%");
+    }
+
+    #[test]
+    fn context_usage_normal() {
+        assert_eq!(format_context_usage(72000, 100000), " [72%]");
+    }
+
+    #[test]
+    fn context_usage_zero_window() {
+        assert_eq!(format_context_usage(5000, 0), "");
     }
 }

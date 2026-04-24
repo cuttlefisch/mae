@@ -179,11 +179,19 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             session_usd,
             tokens_in,
             tokens_out,
+            cache_read_tokens,
+            cache_creation_tokens,
+            context_window,
+            context_used_tokens,
             ..
         } => {
             editor.ai_session_cost_usd = session_usd;
             editor.ai_session_tokens_in = tokens_in;
             editor.ai_session_tokens_out = tokens_out;
+            editor.ai_cache_read_tokens = cache_read_tokens;
+            editor.ai_cache_creation_tokens = cache_creation_tokens;
+            editor.ai_context_window = context_window;
+            editor.ai_context_used_tokens = context_used_tokens;
         }
         AiEvent::BudgetWarning {
             session_usd,

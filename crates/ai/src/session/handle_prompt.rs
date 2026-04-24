@@ -174,6 +174,39 @@ impl AgentSession {
                 }
             }
 
+            // History compaction: summarize old turns before hard trimming
+            {
+                let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+                let budget = self.available_message_budget();
+                if current_tokens > budget * 70 / 100 {
+                    self.compact_history();
+                }
+            }
+
+            // Graceful degradation: shed tools/prompt under context pressure
+            if self.check_and_degrade() {
+                let warning = match self.degradation_level {
+                    super::DegradationLevel::ToolsShed => {
+                        "[Context pressure: extended tools disabled. Use core tools only.]"
+                    }
+                    super::DegradationLevel::Minimal => {
+                        "[Context pressure: minimal mode. System prompt shortened.]"
+                    }
+                    super::DegradationLevel::Normal => unreachable!(),
+                };
+                self.messages.push(Message {
+                    role: Role::User,
+                    content: MessageContent::Text(warning.to_string()),
+                });
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::TextResponse {
+                        text: warning.to_string(),
+                        target_buffer: self.target_buffer.clone(),
+                    })
+                    .await;
+            }
+
             debug!(round, "AI provider send");
 
             // Dynamic context-aware loop break: stop if we are running out of context
@@ -560,6 +593,28 @@ impl AgentSession {
                         .send(AiEvent::ToolCallFinished {
                             success: result.success,
                             output: result.output.clone(),
+                        })
+                        .await;
+                    self.truncate_tool_result(&mut result);
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // web_fetch runs async on this task — no need to cross to main thread
+                if call.name == "web_fetch" {
+                    let mut result = Self::execute_web_fetch(call).await;
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: result.success,
+                            output: if result.output.len() > 200 {
+                                format!("{}...", &result.output[..200])
+                            } else {
+                                result.output.clone()
+                            },
                         })
                         .await;
                     self.truncate_tool_result(&mut result);
