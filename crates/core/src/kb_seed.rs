@@ -244,6 +244,16 @@ the previous chat will be restored automatically if `restore_session` is enabled
 Use `:set` or `(set-option! ...)` to configure the provider:\n\
 - `:set ai_provider deepseek` (or `openai`, `claude`, `gemini`)\n\
 - `:set ai_model deepseek-reasoner`\n\n\
+### Tool Architecture\n\
+The AI has access to 100+ tools split into two tiers:\n\
+- **Core** (~43 tools): always sent with every request (buffer ops, navigation, project, git basics).\n\
+- **Extended** (on demand): requested via the `request_tools` meta-tool. 10 categories: \
+`lsp`, `dap`, `knowledge`, `shell`, `commands`, `git`, `web`, `ai`, `visual`, `debug`.\n\n\
+Key tools:\n\
+- `request_tools` — load a category of extended tools into the conversation.\n\
+- `editor_save_state` / `editor_restore_state` — deterministic session state capture.\n\
+- `web_fetch` — fetch raw content from URLs.\n\
+- `introspect` — inspect threads, performance stats, lock contention.\n\n\
 ### Self-Diagnosis\n\
 The AI can introspect the editor's health. You can ask it to \"introspect\" \
 to see thread states, performance stats, and lock contention.\n\n\
@@ -367,9 +377,9 @@ MAE has a built-in [[concept:debugging|DAP client]] for debugging any language.\
   `:debug-eval <expr>` — evaluate expression in debug context\n\n\
 ### AI debug tools\n\
 The AI agent can drive the debugger using the same tools:\n\
-  `dap_start`, `dap_set_breakpoints`, `dap_continue`, `dap_step_over`\n\
-  `dap_threads`, `dap_stack_trace`, `dap_scopes`, `dap_variables`\n\
-  `dap_evaluate` — evaluate expressions in the debuggee\n\n\
+  `dap_start`, `dap_set_breakpoint`, `dap_remove_breakpoint`, `dap_continue`\n\
+  `dap_step`, `dap_list_variables`, `dap_inspect_variable`, `dap_expand_variable`\n\
+  `dap_select_frame`, `dap_select_thread`, `dap_output`, `dap_evaluate`, `dap_disconnect`\n\n\
 ### Try it\n\
 1. Open a Python file: `:e hello.py`\n\
 2. Set a breakpoint: `SPC d b`\n\
@@ -1262,7 +1272,13 @@ surface and report what works, what's broken, and what's unavailable.\n\n\
 | **editing** | `create_file`, `buffer_write`, `buffer_read`, `open_file`, `switch_buffer`, `close_buffer` |\n\
 | **help** | `kb_search`, `kb_get`, `kb_list`, `kb_graph`, `kb_links_from`, `kb_links_to`, `help_open` |\n\
 | **project** | `project_info`, `project_files`, `project_search` (needs git repo) |\n\
-| **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\n\
+| **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\
+| **dap** | `dap_start`, `dap_set_breakpoint`, `dap_step` (needs lldb-dap or debugpy) |\n\
+| **git** | `git_status`, `git_diff`, `git_log`, `git_stash_list` (needs git repo) |\n\
+| **performance** | `introspect` timing metrics, lock contention, anomaly detection |\n\n\
+## State management\n\
+The self-test uses `editor_save_state` before tests and `editor_restore_state` after \
+to leave the editor in a clean state regardless of pass/fail outcomes.\n\n\
 ## Reading results\n\
 Results appear in the `*AI*` conversation buffer:\n\
 - **[PASS]** — tool returned expected data.\n\
@@ -1291,25 +1307,27 @@ scopes, and variables in a navigable tree view.\n\n\
 | `Enter` | Expand/collapse node |\n\
 | `o` | Open source at selected frame |\n\
 | `q` | Close debug panel |\n\n\
-## AI debug tools (11 tools)\n\
+## AI debug tools (13 tools)\n\
 | Tool | Permission | Description |\n\
 |------|-----------|-------------|\n\
 | `dap_start` | Privileged | Launch adapter + debuggee |\n\
-| `dap_set_breakpoints` | Write | Set breakpoints in a source file |\n\
+| `dap_set_breakpoint` | Write | Set a breakpoint at file:line |\n\
+| `dap_remove_breakpoint` | Write | Remove a breakpoint |\n\
 | `dap_continue` | Write | Resume execution |\n\
-| `dap_step_over` | Write | Step over |\n\
-| `dap_step_into` | Write | Step into |\n\
-| `dap_step_out` | Write | Step out |\n\
-| `dap_threads` | ReadOnly | List threads |\n\
-| `dap_stack_trace` | ReadOnly | Stack frames for a thread |\n\
-| `dap_scopes` | ReadOnly | Scopes for a stack frame |\n\
-| `dap_variables` | ReadOnly | Variables in a scope |\n\
-| `dap_output` | ReadOnly | Debug adapter output |\n\n\
+| `dap_step` | Write | Step over/into/out |\n\
+| `dap_list_variables` | ReadOnly | List variables in current scope |\n\
+| `dap_inspect_variable` | ReadOnly | Inspect a variable's value |\n\
+| `dap_expand_variable` | ReadOnly | Expand a structured variable |\n\
+| `dap_select_frame` | Write | Select a stack frame |\n\
+| `dap_select_thread` | Write | Select a thread |\n\
+| `dap_output` | ReadOnly | Debug adapter output |\n\
+| `dap_evaluate` | Write | Evaluate expression in debuggee |\n\
+| `dap_disconnect` | Write | Disconnect from debug session |\n\n\
 Use `debug_state` to inspect the current session state (threads, frames, breakpoints).\n\n\
 ## Permission tiers\n\
 - **Privileged** — `dap_start` (spawns processes).\n\
-- **Write** — execution control (`continue`, `step_*`, `set_breakpoints`).\n\
-- **ReadOnly** — inspection (`threads`, `stack_trace`, `scopes`, `variables`, `output`).\n\n\
+- **Write** — execution control (`dap_continue`, `dap_step`, `dap_set_breakpoint`, `dap_remove_breakpoint`, `dap_select_frame`, `dap_select_thread`, `dap_evaluate`, `dap_disconnect`).\n\
+- **ReadOnly** — inspection (`dap_list_variables`, `dap_inspect_variable`, `dap_expand_variable`, `dap_output`).\n\n\
 See also: [[concept:ai-as-peer]], [[cmd:debug-panel]], [[cmd:debug-start]], [[key:leader-keys]], [[index]]\n";
 
 const CONCEPT_GUI: &str =
