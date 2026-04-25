@@ -394,6 +394,11 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "editing",
             "conditional": false,
+            "setup": [
+                "Before starting: clean up any leftovers from a previous run.",
+                "Call close_buffer with name='mae-self-test-editing.txt' and force=true (ignore errors if buffer doesn't exist).",
+                "Call shell_exec with command='rm -f /tmp/mae-self-test-editing.txt' to remove any stale test file."
+            ],
             "tests": [
                 {
                     "tool": "create_file",
@@ -435,6 +440,10 @@ fn build_self_test_plan(filter: &str) -> String {
                     "args": {"name": "mae-self-test-editing.txt", "force": true},
                     "assert": "Success (force=true closes even if modified)"
                 }
+            ],
+            "cleanup": [
+                "Call shell_exec with command='rm -f /tmp/mae-self-test-editing.txt'",
+                "Verify you are on the *AI* buffer (switch_buffer if needed)"
             ]
         }));
     }
@@ -484,6 +493,9 @@ fn build_self_test_plan(filter: &str) -> String {
                     "args": {"name": "*AI*"},
                     "assert": "Switch back to *AI* after help tests (important: subsequent tests need a non-Help buffer active)"
                 }
+            ],
+            "cleanup": [
+                "Switch back to *AI* buffer if not already there"
             ]
         }));
     }
@@ -571,6 +583,9 @@ fn build_self_test_plan(filter: &str) -> String {
             "name": "dap",
             "conditional": true,
             "precondition": "Call debug_state first. If it returns 'No active debug session', run dap_start with adapter='lldb' and program='/bin/ls' (or skip if lldb unavailable). If dap_start fails, SKIP this entire category.",
+            "setup": [
+                "Call command_ debug-stop to clean up any stale debug session (ignore errors)."
+            ],
             "tests": [
                 {
                     "tool": "debug_state",
@@ -641,13 +656,24 @@ fn build_self_test_plan(filter: &str) -> String {
     }
 
     let plan = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "description": "MAE self-test plan. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test.",
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
+        "instructions": [
+            "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
+            "Step 1: Call list_buffers and window_layout to capture the current state BEFORE testing.",
+            "Step 2: Execute each category's setup (if any), tests, and cleanup in order.",
+            "Step 3: If a category has a 'setup' array, execute those steps FIRST (ignore errors — they clean up stale state from previous runs).",
+            "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP.",
+            "Step 5: After each category, execute its 'cleanup' array (if any).",
+            "Step 6: Final cleanup — close any buffers you opened that were NOT open at Step 1. Switch back to *AI*.",
+            "Step 7: Output the report. Do NOT quit the editor."
+        ],
         "cleanup": [
-            "Close any test buffers opened (close_buffer with name 'mae-self-test-editing.txt')",
+            "Close any test buffers opened during testing (close_buffer with force=true)",
             "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
             "Switch back to *AI* buffer (switch_buffer) so the user sees the report",
+            "Restore the window/buffer layout to the state captured in Step 1",
             "Do NOT quit the editor",
             "Do NOT close the *AI* or *Help* buffers"
         ],
@@ -1637,7 +1663,7 @@ mod tests {
         ));
         assert!(result.success);
         let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
-        assert_eq!(plan["version"], 1);
+        assert_eq!(plan["version"], 2);
         let cats = plan["categories"].as_array().unwrap();
         let names: Vec<&str> = cats.iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"introspection"));
@@ -1645,6 +1671,40 @@ mod tests {
         assert!(names.contains(&"help"));
         assert!(names.contains(&"project"));
         assert!(names.contains(&"lsp"));
+    }
+
+    #[test]
+    fn self_test_plan_v2_has_setup_and_instructions() {
+        let mut editor = Editor::new();
+        let call = make_call("self_test_suite", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        // Top-level instructions
+        assert!(
+            plan["instructions"].is_array(),
+            "plan should have instructions"
+        );
+        let instr = plan["instructions"][0].as_str().unwrap();
+        assert!(
+            instr.contains("Do NOT call self_test_suite again"),
+            "first instruction should warn against re-calling"
+        );
+        // Editing category has setup
+        let cats = plan["categories"].as_array().unwrap();
+        let editing = cats.iter().find(|c| c["name"] == "editing").unwrap();
+        assert!(
+            editing["setup"].is_array(),
+            "editing should have setup steps"
+        );
+        assert!(
+            editing["cleanup"].is_array(),
+            "editing should have cleanup steps"
+        );
     }
 
     #[test]
