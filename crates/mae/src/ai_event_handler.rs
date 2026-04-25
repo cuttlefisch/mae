@@ -68,21 +68,27 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         AiEvent::ToolCallRequest { call, reply } => {
             editor.ai_streaming = true;
             info!(tool = %call.name, call_id = %call.id, "executing AI tool call");
+            // Update the existing Pending entry (created by ToolCallStarted) to Running,
+            // rather than creating a duplicate entry.
             if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_tool_call(&call.name);
+                conv.update_or_push_tool_call(
+                    &call.name,
+                    mae_core::conversation::ToolCallState::Running,
+                );
             }
             let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
             match exec_result {
                 ExecuteResult::Immediate(result) => {
+                    let elapsed = tool_start.elapsed().as_millis() as u64;
                     info!(
                         tool = %call.name,
-                        duration_ms = tool_start.elapsed().as_millis(),
+                        duration_ms = elapsed,
                         success = result.success,
                         "AI tool completed"
                     );
                     if let Some(conv) = find_conversation_buffer_mut(editor) {
-                        conv.push_tool_result(result.success, &result.output, None);
+                        conv.complete_last_tool_call(result.success, &result.output, Some(elapsed));
                     }
                     if reply.send(result).is_err() {
                         warn!("AI tool result channel closed before reply");
@@ -116,7 +122,10 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         }
         AiEvent::ToolCallStarted { name } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
-                conv.push_tool_call(&name);
+                conv.push_tool_call_with_state(
+                    &name,
+                    mae_core::conversation::ToolCallState::Pending,
+                );
             }
         }
         AiEvent::ToolCallFinished { success, output } => {
@@ -124,7 +133,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 // Auto-expand plans and large writes for better parity with Claude Code/Cursor
                 let expanded = if let Some(last) = conv.entries.last() {
                     match &last.role {
-                        mae_core::conversation::ConversationRole::ToolCall { name } => {
+                        mae_core::conversation::ConversationRole::ToolCall { name, .. } => {
                             matches!(
                                 name.as_str(),
                                 "create_plan" | "update_plan" | "write_file" | "replace"
@@ -135,7 +144,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 } else {
                     false
                 };
-                conv.push_tool_result(success, &output, None);
+                conv.complete_last_tool_call(success, &output, None);
                 if expanded {
                     if let Some(last) = conv.entries.last_mut() {
                         last.collapsed = false;

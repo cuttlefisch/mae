@@ -142,6 +142,7 @@ impl WorkflowTracker {
     }
 
     /// Produce a compact per-turn context injection string (~150 tokens).
+    /// Includes completed results summary and explicit next-action directive.
     pub fn context_injection(&self) -> String {
         if !self.is_active() {
             return String::new();
@@ -154,13 +155,16 @@ impl WorkflowTracker {
 
         let mut done = Vec::new();
         let mut remaining = Vec::new();
+        let mut results = Vec::new();
         for (i, step) in self.steps.iter().enumerate() {
             match step.status {
                 StepStatus::Completed | StepStatus::Skipped | StepStatus::Failed => {
+                    let summary = step.result_summary.as_deref().unwrap_or("done");
                     done.push(format!("{}({})", step.name, step.status));
+                    results.push(format!("{}={}", step.name, summary));
                 }
                 StepStatus::InProgress => {
-                    done.push(format!("{}(▶)", step.name));
+                    done.push(format!("{}(\u{25b6})", step.name));
                 }
                 StepStatus::Pending => {
                     if i > self.current_step {
@@ -178,15 +182,24 @@ impl WorkflowTracker {
             workflow_name, step_num, total, current_name, done_str, remaining_str
         );
 
+        // Include completed results summary for post-compaction orientation
+        if !results.is_empty() {
+            ctx.push_str(&format!("\n[Completed results: {}]", results.join(", ")));
+        }
+
         if self.plan_request_count > 0 {
             ctx.push_str(&format!(
-                "\n[IMPORTANT: Do NOT re-call self_test_suite. You already have the plan. Continue with step: {}]",
+                "\n[IMPORTANT: Do NOT re-call self_test_suite. You already have the plan. \
+                 NEXT: Execute '{}' category tests directly using the tools listed in the plan.]",
                 current_name
             ));
         }
 
         if self.is_complete() {
-            ctx.push_str("\n[All workflow steps complete. Produce your final summary report.]");
+            ctx.push_str(
+                "\n[ALL WORKFLOW STEPS COMPLETE. Do NOT re-run any tests. Do NOT call self_test_suite. \
+                 Output the final === MAE Self-Test Report === using the results above.]"
+            );
         }
 
         ctx
@@ -198,7 +211,7 @@ impl WorkflowTracker {
 pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "introspect" | "cursor_info" | "editor_state" | "list_buffers" | "window_layout"
-        | "command_list" | "ai_permissions" | "perf_stats" => Some("introspection"),
+        | "command_list" | "ai_permissions" => Some("introspection"),
 
         "create_file" | "buffer_write" | "buffer_read" | "open_file" | "close_buffer"
         | "switch_buffer" | "rename_file" | "file_read" => Some("editing"),
@@ -212,14 +225,28 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "lsp_references"
         | "lsp_hover"
         | "lsp_workspace_symbol"
-        | "lsp_document_symbols" => Some("lsp"),
+        | "lsp_document_symbols"
+        | "lsp_diagnostics" => Some("lsp"),
 
-        "perf_benchmark" => Some("performance"),
+        "perf_stats" | "perf_benchmark" => Some("performance"),
 
-        "dap_set_breakpoint" | "dap_continue" | "dap_step" | "dap_stack_trace"
-        | "dap_variables" | "dap_evaluate" | "dap_attach" => Some("dap"),
+        // All actual DAP tools from dap_exec.rs
+        "dap_start"
+        | "dap_set_breakpoint"
+        | "dap_continue"
+        | "dap_step"
+        | "dap_inspect_variable"
+        | "dap_remove_breakpoint"
+        | "dap_list_variables"
+        | "dap_expand_variable"
+        | "dap_select_frame"
+        | "dap_select_thread"
+        | "dap_output"
+        | "dap_evaluate"
+        | "dap_disconnect"
+        | "debug_state" => Some("dap"),
 
-        "git_status" | "git_diff" | "git_log" => Some("git"),
+        "git_status" | "git_diff" | "git_log" | "github_pr_status" => Some("git"),
 
         _ => None,
     }
@@ -279,7 +306,7 @@ mod tests {
         assert!(tracker.is_complete());
 
         let ctx = tracker.context_injection();
-        assert!(ctx.contains("All workflow steps complete"));
+        assert!(ctx.contains("ALL WORKFLOW STEPS COMPLETE"));
     }
 
     #[test]

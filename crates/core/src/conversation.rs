@@ -66,6 +66,20 @@ pub fn chars_to_display_cols(text: &str, char_count: usize) -> usize {
         .sum()
 }
 
+/// State of a tool call in the conversation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolCallState {
+    /// Queued but not started.
+    Pending,
+    /// Currently executing.
+    #[default]
+    Running,
+    /// Result received successfully.
+    Completed,
+    /// Execution failed.
+    Error,
+}
+
 // Role of a conversation entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConversationRole {
@@ -73,6 +87,10 @@ pub enum ConversationRole {
     Assistant,
     ToolCall {
         name: String,
+        #[serde(default)]
+        state: ToolCallState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        elapsed_ms: Option<u64>,
     },
     ToolResult {
         success: bool,
@@ -100,6 +118,14 @@ pub enum LineStyle {
     SystemText,
     Separator,
     InputPrompt,
+    /// Active/running tool (⟳ spinner color)
+    ToolRunning,
+    /// Queued/pending tool (○ dimmed)
+    ToolPending,
+    /// Completed tool (✓ green)
+    ToolSuccess,
+    /// Failed tool (✗ red)
+    ToolError,
 }
 
 /// A single rendered line ready for display.
@@ -131,6 +157,13 @@ pub struct Conversation {
     /// Width-dependent — invalidated when width changes.
     cached_screen_counts: Vec<usize>,
     cached_screen_width: usize,
+    /// Dirty flag for screen counts — set on content mutation,
+    /// cleared after recomputation. Prevents O(N) char-width ops
+    /// per frame when content is unchanged.
+    screen_counts_dirty: bool,
+    /// Maps entry index → first cached_line index, enabling incremental
+    /// re-render of only the last entry during streaming.
+    entry_start_indices: Vec<usize>,
 }
 
 impl Default for Conversation {
@@ -158,6 +191,8 @@ impl Conversation {
             cached_lines: Vec::new(),
             cached_screen_counts: Vec::new(),
             cached_screen_width: 0,
+            screen_counts_dirty: true,
+            entry_start_indices: Vec::new(),
         };
         conv.rebuild_render_cache();
         conv
@@ -201,13 +236,79 @@ impl Conversation {
     }
 
     pub fn push_tool_call(&mut self, name: impl Into<String>) {
+        self.push_tool_call_with_state(name, ToolCallState::Running);
+    }
+
+    /// Push a tool call entry with an explicit state (Pending, Running, etc.)
+    pub fn push_tool_call_with_state(&mut self, name: impl Into<String>, state: ToolCallState) {
         self.entries.push(ConversationEntry {
-            role: ConversationRole::ToolCall { name: name.into() },
+            role: ConversationRole::ToolCall {
+                name: name.into(),
+                state,
+                elapsed_ms: None,
+            },
             content: String::new(),
             collapsed: true,
         });
         self.version += 1;
         self.trim_entries();
+        self.rebuild_render_cache();
+    }
+
+    /// Update the last ToolCall entry matching `name` to a new state,
+    /// or push a new entry if none found. Used to transition Pending → Running
+    /// without creating a duplicate entry.
+    pub fn update_or_push_tool_call(&mut self, name: &str, state: ToolCallState) {
+        // Look for the last Pending/Running ToolCall with this name
+        for entry in self.entries.iter_mut().rev() {
+            if let ConversationRole::ToolCall {
+                name: ref entry_name,
+                state: ref mut entry_state,
+                ..
+            } = entry.role
+            {
+                if entry_name == name
+                    && matches!(entry_state, ToolCallState::Pending | ToolCallState::Running)
+                {
+                    *entry_state = state;
+                    self.version += 1;
+                    self.rebuild_render_cache();
+                    return;
+                }
+            }
+        }
+        // No matching entry — create one
+        self.push_tool_call_with_state(name, state);
+    }
+
+    /// Complete the last ToolCall entry: set state to Completed/Error,
+    /// store the output and elapsed time directly on the ToolCall.
+    /// This merges the ToolResult into the ToolCall for compact display.
+    pub fn complete_last_tool_call(
+        &mut self,
+        success: bool,
+        output: &str,
+        elapsed_ms: Option<u64>,
+    ) {
+        // Find the last ToolCall entry (scan backwards)
+        for entry in self.entries.iter_mut().rev() {
+            if let ConversationRole::ToolCall {
+                ref mut state,
+                elapsed_ms: ref mut ems,
+                ..
+            } = entry.role
+            {
+                *state = if success {
+                    ToolCallState::Completed
+                } else {
+                    ToolCallState::Error
+                };
+                *ems = elapsed_ms;
+                entry.content = output.to_string();
+                break;
+            }
+        }
+        self.version += 1;
         self.rebuild_render_cache();
     }
 
@@ -243,12 +344,16 @@ impl Conversation {
 
     /// Append a streaming chunk to the last assistant entry.
     /// If the last entry isn't an assistant entry, creates one.
+    ///
+    /// Uses incremental cache rebuild: only re-renders the last entry
+    /// instead of all entries. Turns O(all_entries) per token into
+    /// O(last_entry_lines).
     pub fn append_streaming_chunk(&mut self, text: &str) {
         if let Some(last) = self.entries.last_mut() {
             if last.role == ConversationRole::Assistant {
                 last.content.push_str(text);
                 self.version += 1;
-                self.rebuild_render_cache();
+                self.incremental_rebuild_last_entry();
                 return;
             }
         }
@@ -269,6 +374,9 @@ impl Conversation {
     /// entries are persisted; transient state (streaming, input buffer,
     /// version counter) is intentionally not serialized since it has no
     /// meaning across sessions.
+    /// Current wire format version.
+    const WIRE_VERSION: u32 = 2;
+
     pub fn to_json(&self) -> Result<String, String> {
         #[derive(Serialize)]
         struct Wire<'a> {
@@ -276,14 +384,14 @@ impl Conversation {
             entries: &'a [ConversationEntry],
         }
         serde_json::to_string_pretty(&Wire {
-            version: 1,
+            version: Self::WIRE_VERSION,
             entries: &self.entries,
         })
         .map_err(|e| e.to_string())
     }
 
-    /// Replace entries with those loaded from JSON. Rejects unknown
-    /// schema versions so future format changes fail loudly.
+    /// Replace entries with those loaded from JSON. Supports v1 (legacy)
+    /// and v2 (ToolCallState) formats.
     pub fn load_json(&mut self, json: &str) -> Result<(), String> {
         #[derive(Deserialize)]
         struct Wire {
@@ -291,7 +399,7 @@ impl Conversation {
             entries: Vec<ConversationEntry>,
         }
         let wire: Wire = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        if wire.version != 1 {
+        if wire.version != 1 && wire.version != 2 {
             return Err(format!(
                 "Unsupported conversation format version: {}",
                 wire.version
@@ -308,6 +416,8 @@ impl Conversation {
     fn rebuild_render_cache(&mut self) {
         self.cached_lines = self.compute_rendered_lines();
         self.cached_screen_counts.clear();
+        self.screen_counts_dirty = true;
+        self.rebuild_entry_start_indices();
     }
 
     /// O(1) update of just the input prompt line in the cache.
@@ -317,6 +427,7 @@ impl Conversation {
             if last.style == LineStyle::InputPrompt {
                 last.text = format!("> {}", self.input_line);
                 self.cached_screen_counts.clear();
+                self.screen_counts_dirty = true;
                 return;
             }
         }
@@ -329,29 +440,37 @@ impl Conversation {
     }
 
     /// Ensure per-line screen counts are computed for the given width.
-    /// Returns `(per_line_counts, total_screen_lines)`.
-    /// Amortized O(1) when width and content are unchanged.
-    pub fn ensure_screen_counts(&mut self, width: usize) -> (&[usize], usize) {
+    /// Returns `true` if counts were recomputed (content or width changed).
+    /// Amortized O(1) when nothing changed — the dirty flag prevents
+    /// ~30K char-width ops/sec at idle.
+    pub fn ensure_screen_counts(&mut self, width: usize) -> bool {
         let w = width.max(1);
-        if self.cached_screen_counts.len() != self.cached_lines.len()
-            || self.cached_screen_width != w
+        if !self.screen_counts_dirty
+            && self.cached_screen_width == w
+            && self.cached_screen_counts.len() == self.cached_lines.len()
         {
-            self.cached_screen_counts = self
-                .cached_lines
-                .iter()
-                .map(|rl| screen_line_count(&rl.text, w))
-                .collect();
-            self.cached_screen_width = w;
+            return false;
         }
+        self.cached_screen_counts = self
+            .cached_lines
+            .iter()
+            .map(|rl| screen_line_count(&rl.text, w))
+            .collect();
+        self.cached_screen_width = w;
+        self.screen_counts_dirty = false;
+        true
+    }
+
+    /// Return pre-computed screen counts and total.
+    /// Must call `ensure_screen_counts` first.
+    pub fn screen_counts_total(&self) -> (&[usize], usize) {
         let total: usize = self.cached_screen_counts.iter().sum();
         (&self.cached_screen_counts, total)
     }
 
-    /// Return pre-computed screen counts (must call `ensure_screen_counts` first).
-    /// Returns `(per_line_counts, total)`. If not yet computed, returns empty.
+    /// Backwards-compatible alias for `screen_counts_total`.
     pub fn screen_counts(&self) -> (&[usize], usize) {
-        let total: usize = self.cached_screen_counts.iter().sum();
-        (&self.cached_screen_counts, total)
+        self.screen_counts_total()
     }
 
     /// Width used for the cached screen counts. Returns 0 if not yet computed.
@@ -359,120 +478,262 @@ impl Conversation {
         self.cached_screen_width
     }
 
+    /// Rebuild the entry_start_indices map from cached_lines.
+    fn rebuild_entry_start_indices(&mut self) {
+        self.entry_start_indices.clear();
+        let mut current_entry: Option<usize> = None;
+        for (line_idx, rl) in self.cached_lines.iter().enumerate() {
+            if let Some(ei) = rl.entry_index {
+                if current_entry != Some(ei) {
+                    // Ensure vec is large enough
+                    while self.entry_start_indices.len() <= ei {
+                        self.entry_start_indices.push(line_idx);
+                    }
+                    current_entry = Some(ei);
+                }
+            }
+        }
+    }
+
+    /// Incrementally rebuild only the last entry's rendered lines + input prompt.
+    /// O(last_entry_lines) instead of O(all_entries).
+    fn incremental_rebuild_last_entry(&mut self) {
+        if self.entries.is_empty() || self.entry_start_indices.is_empty() {
+            self.rebuild_render_cache();
+            return;
+        }
+        let last_entry_idx = self.entries.len() - 1;
+        let start_line = if last_entry_idx < self.entry_start_indices.len() {
+            self.entry_start_indices[last_entry_idx]
+        } else {
+            // Fallback: full rebuild
+            self.rebuild_render_cache();
+            return;
+        };
+
+        // Truncate cached_lines from the last entry's start
+        self.cached_lines.truncate(start_line);
+
+        // If previous entry was a tool entry and this is too, remove the
+        // separator between them (it sits right before start_line)
+        let this_is_tool = matches!(
+            self.entries[last_entry_idx].role,
+            ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
+        );
+        let prev_is_tool = last_entry_idx > 0
+            && matches!(
+                self.entries[last_entry_idx - 1].role,
+                ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
+            );
+        if this_is_tool && prev_is_tool && !self.cached_lines.is_empty() {
+            if let Some(last) = self.cached_lines.last() {
+                if matches!(last.style, LineStyle::Separator) {
+                    self.cached_lines.pop();
+                }
+            }
+        }
+
+        // Skip rendering ToolResult if previous ToolCall already has result merged
+        let skip_entry = matches!(
+            self.entries[last_entry_idx].role,
+            ConversationRole::ToolResult { .. }
+        ) && last_entry_idx > 0
+            && matches!(
+                self.entries[last_entry_idx - 1].role,
+                ConversationRole::ToolCall { state, .. }
+                    if matches!(state, ToolCallState::Completed | ToolCallState::Error)
+            );
+
+        if !skip_entry {
+            // Re-render just the last entry into a temp buffer, then extend
+            let mut new_lines = Vec::new();
+            let entry = self.entries[last_entry_idx].clone();
+            self.render_entry_into(&mut new_lines, last_entry_idx, &entry);
+            self.cached_lines.extend(new_lines);
+        }
+
+        // Separator before input prompt (always present)
+        self.cached_lines.push(RenderedLine {
+            text: String::new(),
+            style: LineStyle::Separator,
+            entry_index: None,
+        });
+        self.cached_lines.push(RenderedLine {
+            text: format!("> {}", self.input_line),
+            style: LineStyle::InputPrompt,
+            entry_index: None,
+        });
+
+        self.cached_screen_counts.clear();
+        self.screen_counts_dirty = true;
+        // Update start indices for this entry
+        while self.entry_start_indices.len() <= last_entry_idx {
+            self.entry_start_indices.push(start_line);
+        }
+    }
+
+    /// Render a single entry into the provided line buffer.
+    fn render_entry_into(
+        &self,
+        lines: &mut Vec<RenderedLine>,
+        i: usize,
+        entry: &ConversationEntry,
+    ) {
+        match &entry.role {
+            ConversationRole::User => {
+                lines.push(RenderedLine {
+                    text: "[You]".into(),
+                    style: LineStyle::RoleMarker,
+                    entry_index: Some(i),
+                });
+                for line in entry.content.lines() {
+                    lines.push(RenderedLine {
+                        text: line.to_string(),
+                        style: LineStyle::UserText,
+                        entry_index: Some(i),
+                    });
+                }
+                if entry.content.is_empty() {
+                    lines.push(RenderedLine {
+                        text: String::new(),
+                        style: LineStyle::UserText,
+                        entry_index: Some(i),
+                    });
+                }
+            }
+            ConversationRole::Assistant => {
+                lines.push(RenderedLine {
+                    text: "[AI]".into(),
+                    style: LineStyle::RoleMarker,
+                    entry_index: Some(i),
+                });
+                for line in entry.content.lines() {
+                    lines.push(RenderedLine {
+                        text: line.to_string(),
+                        style: LineStyle::AssistantText,
+                        entry_index: Some(i),
+                    });
+                }
+                if entry.content.is_empty() {
+                    lines.push(RenderedLine {
+                        text: String::new(),
+                        style: LineStyle::AssistantText,
+                        entry_index: Some(i),
+                    });
+                }
+            }
+            ConversationRole::ToolCall {
+                ref name,
+                state,
+                elapsed_ms,
+            } => {
+                let (icon, style) = match state {
+                    ToolCallState::Pending => ("\u{25cb}", LineStyle::ToolPending), // ○
+                    ToolCallState::Running => ("\u{27f3}", LineStyle::ToolRunning), // ⟳
+                    ToolCallState::Completed => ("\u{2713}", LineStyle::ToolSuccess), // ✓
+                    ToolCallState::Error => ("\u{2717}", LineStyle::ToolError),     // ✗
+                };
+                let timing = match elapsed_ms {
+                    Some(ms) => format!("  {}ms", ms),
+                    None if *state == ToolCallState::Running => "  ...".to_string(),
+                    _ => String::new(),
+                };
+                if entry.collapsed {
+                    lines.push(RenderedLine {
+                        text: format!("{} {:<30}{}", icon, name, timing),
+                        style,
+                        entry_index: Some(i),
+                    });
+                } else {
+                    lines.push(RenderedLine {
+                        text: format!("{} {}{}", icon, name, timing),
+                        style,
+                        entry_index: Some(i),
+                    });
+                    for line in entry.content.lines() {
+                        lines.push(RenderedLine {
+                            text: format!("  {}", line),
+                            style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
+                        });
+                    }
+                }
+            }
+            ConversationRole::ToolResult {
+                success,
+                elapsed_ms,
+            } => {
+                let marker = if *success { "\u{2713}" } else { "\u{2717}" };
+                let header = match elapsed_ms {
+                    Some(ms) => format!("  [{} {}ms]", marker, ms),
+                    None => format!("  [{}]", marker),
+                };
+                lines.push(RenderedLine {
+                    text: header,
+                    style: LineStyle::ToolResultText,
+                    entry_index: Some(i),
+                });
+                if !entry.collapsed {
+                    for line in entry.content.lines() {
+                        lines.push(RenderedLine {
+                            text: format!("  {}", line),
+                            style: LineStyle::ToolResultText,
+                            entry_index: Some(i),
+                        });
+                    }
+                }
+            }
+            ConversationRole::System => {
+                lines.push(RenderedLine {
+                    text: "[System]".into(),
+                    style: LineStyle::RoleMarker,
+                    entry_index: Some(i),
+                });
+                for line in entry.content.lines() {
+                    lines.push(RenderedLine {
+                        text: line.to_string(),
+                        style: LineStyle::SystemText,
+                        entry_index: Some(i),
+                    });
+                }
+            }
+        }
+    }
+
     /// Render all entries + input line into display lines.
     fn compute_rendered_lines(&self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
 
         for (i, entry) in self.entries.iter().enumerate() {
-            match &entry.role {
-                ConversationRole::User => {
-                    lines.push(RenderedLine {
-                        text: "[You]".into(),
-                        style: LineStyle::RoleMarker,
-                        entry_index: Some(i),
-                    });
-                    for line in entry.content.lines() {
-                        lines.push(RenderedLine {
-                            text: line.to_string(),
-                            style: LineStyle::UserText,
-                            entry_index: Some(i),
-                        });
-                    }
-                    if entry.content.is_empty() {
-                        lines.push(RenderedLine {
-                            text: String::new(),
-                            style: LineStyle::UserText,
-                            entry_index: Some(i),
-                        });
+            // Skip ToolResult if the previous entry is a ToolCall that already
+            // has the result merged (Completed/Error state with content).
+            if matches!(entry.role, ConversationRole::ToolResult { .. }) && i > 0 {
+                if let ConversationRole::ToolCall { state, .. } = &self.entries[i - 1].role {
+                    if matches!(state, ToolCallState::Completed | ToolCallState::Error) {
+                        continue;
                     }
                 }
-                ConversationRole::Assistant => {
-                    lines.push(RenderedLine {
-                        text: "[AI]".into(),
-                        style: LineStyle::RoleMarker,
-                        entry_index: Some(i),
-                    });
-                    for line in entry.content.lines() {
-                        lines.push(RenderedLine {
-                            text: line.to_string(),
-                            style: LineStyle::AssistantText,
-                            entry_index: Some(i),
-                        });
-                    }
-                    if entry.content.is_empty() {
-                        lines.push(RenderedLine {
-                            text: String::new(),
-                            style: LineStyle::AssistantText,
-                            entry_index: Some(i),
-                        });
-                    }
-                }
-                ConversationRole::ToolCall { name } => {
-                    if entry.collapsed {
-                        lines.push(RenderedLine {
-                            text: format!("▸ [Tool: {}]", name),
-                            style: LineStyle::ToolCallHeader,
-                            entry_index: Some(i),
-                        });
-                    } else {
-                        lines.push(RenderedLine {
-                            text: format!("▾ [Tool: {}]", name),
-                            style: LineStyle::ToolCallHeader,
-                            entry_index: Some(i),
-                        });
-                        for line in entry.content.lines() {
-                            lines.push(RenderedLine {
-                                text: format!("  {}", line),
-                                style: LineStyle::ToolResultText,
-                                entry_index: Some(i),
-                            });
-                        }
-                    }
-                }
-                ConversationRole::ToolResult {
-                    success,
-                    elapsed_ms,
-                } => {
-                    let marker = if *success { "✓" } else { "✗" };
-                    let header = match elapsed_ms {
-                        Some(ms) => format!("  [{} {}ms]", marker, ms),
-                        None => format!("  [{}]", marker),
-                    };
-                    if entry.collapsed {
-                        lines.push(RenderedLine {
-                            text: header,
-                            style: LineStyle::ToolResultText,
-                            entry_index: Some(i),
-                        });
-                    } else {
-                        lines.push(RenderedLine {
-                            text: header,
-                            style: LineStyle::ToolResultText,
-                            entry_index: Some(i),
-                        });
-                        for line in entry.content.lines() {
-                            lines.push(RenderedLine {
-                                text: format!("  {}", line),
-                                style: LineStyle::ToolResultText,
-                                entry_index: Some(i),
-                            });
-                        }
-                    }
-                }
-                ConversationRole::System => {
-                    lines.push(RenderedLine {
-                        text: "[System]".into(),
-                        style: LineStyle::RoleMarker,
-                        entry_index: Some(i),
-                    });
-                    for line in entry.content.lines() {
-                        lines.push(RenderedLine {
-                            text: line.to_string(),
-                            style: LineStyle::SystemText,
-                            entry_index: Some(i),
-                        });
-                    }
-                }
+            }
+
+            self.render_entry_into(&mut lines, i, entry);
+
+            // Skip separator between consecutive tool entries for compact display
+            let next_is_tool = self
+                .entries
+                .get(i + 1)
+                .map(|e| {
+                    matches!(
+                        e.role,
+                        ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
+                    )
+                })
+                .unwrap_or(false);
+            let this_is_tool = matches!(
+                entry.role,
+                ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
+            );
+            if this_is_tool && next_is_tool {
+                continue; // no separator between stacked tool lines
             }
 
             // Separator between entries
@@ -858,8 +1119,8 @@ mod tests {
         conv.push_tool_result(true, "file contents\nline 2", None);
 
         let lines = conv.rendered_lines();
-        // Tool call should be collapsed (▸)
-        assert!(lines.iter().any(|l| l.text.contains("▸")));
+        // Tool call should be collapsed with state icon (⟳ for Running)
+        assert!(lines.iter().any(|l| l.text.contains("buffer_read")));
         // Tool result content should not appear when collapsed
         let result_content_lines: Vec<_> = lines
             .iter()
@@ -915,7 +1176,7 @@ mod tests {
         assert_eq!(restored.entries[1].content, "hi there");
         assert!(matches!(
             restored.entries[2].role,
-            ConversationRole::ToolCall { ref name } if name == "buffer_read"
+            ConversationRole::ToolCall { ref name, .. } if name == "buffer_read"
         ));
         assert!(matches!(
             restored.entries[3].role,
@@ -1110,7 +1371,8 @@ mod tests {
     fn ensure_screen_counts_cache_invalidation() {
         let mut conv = Conversation::new();
         conv.push_user("hello");
-        let (counts, _total) = conv.ensure_screen_counts(80);
+        conv.ensure_screen_counts(80);
+        let (counts, _total) = conv.screen_counts_total();
         let count_len_1 = counts.len();
         assert!(count_len_1 > 0);
         let ver1 = conv.version();
@@ -1118,7 +1380,8 @@ mod tests {
         conv.push_assistant("world");
         assert!(conv.version() > ver1);
         // After mutation, counts must be recomputed
-        let (counts2, _) = conv.ensure_screen_counts(80);
+        conv.ensure_screen_counts(80);
+        let (counts2, _) = conv.screen_counts_total();
         assert!(counts2.len() > count_len_1);
     }
 
@@ -1126,8 +1389,10 @@ mod tests {
     fn ensure_screen_counts_width_change() {
         let mut conv = Conversation::new();
         conv.push_assistant("a".repeat(20));
-        let (_, total80) = conv.ensure_screen_counts(80);
-        let (_, total10) = conv.ensure_screen_counts(10);
+        conv.ensure_screen_counts(80);
+        let (_, total80) = conv.screen_counts_total();
+        conv.ensure_screen_counts(10);
+        let (_, total10) = conv.screen_counts_total();
         // At width 10, the 20-char line wraps to 2 screen lines
         assert!(total10 > total80);
     }
@@ -1143,7 +1408,7 @@ mod tests {
         conv.ensure_screen_counts(80);
 
         let rendered = conv.rendered_lines();
-        let (counts, total) = conv.screen_counts();
+        let (counts, total) = conv.screen_counts_total();
         // counts must cover all rendered lines including InputPrompt
         assert_eq!(counts.len(), rendered.len());
         assert!(total > 0);
@@ -1164,6 +1429,64 @@ mod tests {
         assert_eq!(conv.cached_screen_width(), 42);
         conv.ensure_screen_counts(80);
         assert_eq!(conv.cached_screen_width(), 80);
+    }
+
+    // ---- dirty flag + incremental cache tests ----
+
+    #[test]
+    fn ensure_screen_counts_dirty_flag_skips_recompute() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        // First call: recomputes
+        assert!(conv.ensure_screen_counts(80));
+        // Second call at same width: no-op
+        assert!(!conv.ensure_screen_counts(80));
+        // Width change: recomputes
+        assert!(conv.ensure_screen_counts(40));
+        // Same width again: no-op
+        assert!(!conv.ensure_screen_counts(40));
+        // Content change: marks dirty, recomputes
+        conv.push_assistant("world");
+        assert!(conv.ensure_screen_counts(40));
+        assert!(!conv.ensure_screen_counts(40));
+    }
+
+    #[test]
+    fn incremental_streaming_cache() {
+        let mut conv = Conversation::new();
+        conv.push_user("question");
+        conv.push_assistant("start");
+        let lines_before = conv.rendered_lines().len();
+
+        // Streaming append should incrementally update
+        conv.append_streaming_chunk(" more text");
+        let lines_after = conv.rendered_lines().len();
+        // Same number of lines (single-line content)
+        assert_eq!(lines_before, lines_after);
+        // Content should be merged
+        assert_eq!(conv.entries[1].content, "start more text");
+        // Should have AI text in rendered output
+        assert!(conv
+            .rendered_lines()
+            .iter()
+            .any(|l| l.text.contains("start more text")));
+    }
+
+    #[test]
+    fn incremental_streaming_multi_line() {
+        let mut conv = Conversation::new();
+        conv.push_assistant("line1");
+        conv.append_streaming_chunk("\nline2");
+        conv.append_streaming_chunk("\nline3");
+        assert_eq!(conv.entries.len(), 1);
+        assert_eq!(conv.entries[0].content, "line1\nline2\nline3");
+        // Should have 3 content lines + role marker + separator + input prompt
+        let assistant_lines: Vec<_> = conv
+            .rendered_lines()
+            .iter()
+            .filter(|l| l.style == LineStyle::AssistantText)
+            .collect();
+        assert_eq!(assistant_lines.len(), 3);
     }
 
     // ---- chars_to_display_cols tests ----

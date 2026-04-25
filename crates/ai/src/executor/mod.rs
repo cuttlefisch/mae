@@ -495,6 +495,7 @@ fn build_self_test_plan(filter: &str) -> String {
                 }
             ],
             "cleanup": [
+                "Close the *Help* buffer with close_buffer (name: '*Help*', force: true)",
                 "Switch back to *AI* buffer if not already there"
             ]
         }));
@@ -670,12 +671,11 @@ fn build_self_test_plan(filter: &str) -> String {
             "Step 7: Output the report. Do NOT quit the editor."
         ],
         "cleanup": [
-            "Close any test buffers opened during testing (close_buffer with force=true)",
             "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
+            "IMPORTANT: Close ALL buffers you opened during testing that were NOT in the Step 1 list. Use close_buffer with force=true for each one. Common test-opened buffers: mae-self-test-editing.txt, main.rs, *Help*. Compare the current list_buffers output with Step 1 and close any extras.",
             "Switch back to *AI* buffer (switch_buffer) so the user sees the report",
-            "Restore the window/buffer layout to the state captured in Step 1",
             "Do NOT quit the editor",
-            "Do NOT close the *AI* or *Help* buffers"
+            "Do NOT close the *AI* buffer or any buffer that was present in Step 1"
         ],
         "categories": categories
     });
@@ -1815,5 +1815,66 @@ mod tests {
         assert!(result.success);
         assert_eq!(editor.pending_hook_evals.len(), 1);
         assert_eq!(editor.pending_hook_evals[0].0, "buffer-open");
+    }
+
+    /// Regression: every tool referenced in the self-test plan must be
+    /// classified by `classify_tool_to_self_test_step` so the workflow
+    /// tracker can track progress correctly.
+    #[test]
+    fn self_test_plan_tools_all_classified() {
+        let plan_json = build_self_test_plan("");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+
+        let mut unclassified = Vec::new();
+        for cat in categories {
+            if let Some(tests) = cat["tests"].as_array() {
+                for test in tests {
+                    let tool = test["tool"].as_str().unwrap();
+                    if crate::session::workflow::classify_tool_to_self_test_step(tool).is_none() {
+                        unclassified.push(tool.to_string());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            unclassified.is_empty(),
+            "Self-test plan tools not classified by workflow tracker: {:?}",
+            unclassified
+        );
+    }
+
+    /// Regression: every tool in the self-test plan must actually exist
+    /// in the tool registry (or be a special tool like self_test_suite).
+    #[test]
+    fn self_test_plan_tools_match_registry() {
+        let plan_json = build_self_test_plan("");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+
+        let tools = all_tools();
+        let tool_names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
+        // Also add special tools that are handled outside the registry
+        let special_tools = ["self_test_suite", "ai_permissions", "input_lock"];
+
+        let mut missing = Vec::new();
+        for cat in categories {
+            if let Some(tests) = cat["tests"].as_array() {
+                for test in tests {
+                    let tool = test["tool"].as_str().unwrap();
+                    if !tool_names.contains(tool) && !special_tools.contains(&tool) {
+                        missing.push(tool.to_string());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "Self-test plan references tools not in registry: {:?}",
+            missing
+        );
     }
 }

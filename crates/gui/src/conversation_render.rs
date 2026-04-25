@@ -158,7 +158,7 @@ pub fn render_conversation_window(
         let w = inner_width.max(1);
 
         // Use pre-computed screen counts if they match our width.
-        let (screen_counts, total_screen_lines) = conv.screen_counts();
+        let (screen_counts, total_screen_lines) = conv.screen_counts_total();
         let local_counts;
         let (counts, total) =
             if screen_counts.len() == rendered.len() && conv.cached_screen_width() == w {
@@ -322,6 +322,10 @@ pub fn render_conversation_window(
                 LineStyle::AssistantText => theme::ts_fg(editor, "conversation.assistant.text"),
                 LineStyle::ToolCallHeader => theme::ts_fg(editor, "conversation.tool"),
                 LineStyle::ToolResultText => theme::ts_fg(editor, "conversation.tool.result"),
+                LineStyle::ToolRunning => theme::ts_fg(editor, "conversation.tool"),
+                LineStyle::ToolPending => theme::ts_fg(editor, "ui.text.dim"),
+                LineStyle::ToolSuccess => theme::ts_fg(editor, "conversation.tool.result"),
+                LineStyle::ToolError => theme::ts_fg(editor, "diagnostic.error"),
                 LineStyle::SystemText => theme::ts_fg(editor, "conversation.system"),
                 LineStyle::Separator => theme::ts_fg(editor, "ui.text"),
                 LineStyle::InputPrompt => theme::ts_fg(editor, "conversation.input"),

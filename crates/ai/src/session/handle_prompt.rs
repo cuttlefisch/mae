@@ -185,7 +185,14 @@ impl AgentSession {
                     20
                 };
 
-                if (transaction_size > size_threshold || window_usage > 0.75) && round > 0 {
+                // Skip collapse when the workflow is complete — the agent just
+                // needs to emit its final summary, and collapsing now would
+                // erase the test results it needs to report on.
+                let workflow_done = self.workflow.is_active() && self.workflow.is_complete();
+                if (transaction_size > size_threshold || window_usage > 0.75)
+                    && round > 0
+                    && !workflow_done
+                {
                     warn!(
                         transaction_size,
                         %window_usage,
@@ -985,7 +992,7 @@ impl AgentSession {
                         debug!(tool = %call.name, success = result.success, "tool result received");
 
                         // Workflow: auto-activate on first self_test_suite call,
-                        // append warning on re-calls.
+                        // hard-block re-calls (return error instead of plan).
                         if call.name == "self_test_suite" {
                             if self.workflow.plan_request_count == 0 {
                                 let steps = extract_self_test_categories(&result.output);
@@ -994,12 +1001,33 @@ impl AgentSession {
                                     info!("workflow tracker activated for self-test");
                                 }
                             } else {
-                                result.output.push_str(
-                                    "\n\n⚠ You have already received this plan. Check the [Workflow: ...] context in your prompt for progress. Do NOT call self_test_suite again."
+                                // Hard-block: replace the result with an error.
+                                // Must be unmistakable — small models misread subtle messages.
+                                result.success = false;
+                                let wf = self.workflow.context_injection();
+                                let directive = if self.workflow.is_complete() {
+                                    "ALL TESTS ARE ALREADY COMPLETE. Do NOT re-run any tests. \
+                                     Output the final === MAE Self-Test Report === now."
+                                        .to_string()
+                                } else {
+                                    format!(
+                                        "Continue testing from the CURRENT step. Do NOT restart from the beginning. \
+                                         Next step: '{}'",
+                                        self.workflow.current_step_name()
+                                    )
+                                };
+                                result.output = format!(
+                                    "BLOCKED: self_test_suite cannot be called again (called {} times already).\n\
+                                     {}\n\n\
+                                     ACTION REQUIRED: {}\n\
+                                     Do NOT call self_test_suite again. It will always return this error.",
+                                    self.workflow.plan_request_count,
+                                    wf,
+                                    directive
                                 );
                                 warn!(
                                     count = self.workflow.plan_request_count,
-                                    "self_test_suite re-called — appending warning"
+                                    "self_test_suite re-called — hard-blocked"
                                 );
                             }
                             self.workflow.plan_request_count += 1;
@@ -1138,7 +1166,21 @@ impl AgentSession {
             // Preserve workflow progress in the collapsed summary so even
             // reading back collapsed history shows the checkpoint.
             if self.workflow.is_active() {
-                summary.push_str(&format!("\n\n{}", self.workflow.context_injection()));
+                let next = self.workflow.current_step_name();
+                let next_directive = if next.is_empty() {
+                    "All steps complete. Produce your final summary report.".to_string()
+                } else {
+                    format!(
+                        "Your next action: execute the '{}' test category. \
+                         Do NOT call self_test_suite — you already have the plan.",
+                        next
+                    )
+                };
+                summary.push_str(&format!(
+                    "\n\n{}\n\n{}",
+                    self.workflow.context_injection(),
+                    next_directive
+                ));
             }
 
             self.messages.push(Message {

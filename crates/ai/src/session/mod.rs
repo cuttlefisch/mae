@@ -162,6 +162,23 @@ impl AgentSession {
             }
         };
 
+        // Write initial metadata block to transcript (JSONL format).
+        if let Some(ref path) = transcript_path {
+            let metadata = serde_json::json!({
+                "type": "metadata",
+                "mae_version": env!("CARGO_PKG_VERSION"),
+                "model": "",
+                "context_window": 0,
+                "max_rounds": 0,
+                "is_self_test": false,
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "git_commit": option_env!("MAE_GIT_HASH").unwrap_or("dev"),
+                "platform": std::env::consts::OS,
+            });
+            let line = format!("{}\n", serde_json::to_string(&metadata).unwrap_or_default());
+            let _ = std::fs::write(path, &line);
+        }
+
         let original_system_prompt = system_prompt.clone();
         AgentSession {
             provider,
@@ -237,6 +254,29 @@ impl AgentSession {
         self.max_rounds = limits.max_rounds;
         self.model_name = model_str.to_string();
         self.budget = budget;
+        // Update transcript metadata with resolved model info
+        self.write_transcript_metadata();
         self
+    }
+
+    /// Write/update the metadata header line in the transcript file.
+    fn write_transcript_metadata(&self) {
+        if let Some(ref path) = self.transcript_path {
+            let metadata = serde_json::json!({
+                "type": "metadata",
+                "mae_version": env!("CARGO_PKG_VERSION"),
+                "model": self.model_name,
+                "context_window": self.context_window,
+                "max_rounds": self.max_rounds,
+                "reserved_output": self.reserved_output,
+                "max_messages": self.max_messages,
+                "is_self_test": self.is_self_test,
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "git_commit": option_env!("MAE_GIT_HASH").unwrap_or("dev"),
+                "platform": std::env::consts::OS,
+            });
+            let line = format!("{}\n", serde_json::to_string(&metadata).unwrap_or_default());
+            let _ = std::fs::write(path, &line);
+        }
     }
 }

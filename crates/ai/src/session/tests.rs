@@ -2027,3 +2027,43 @@ async fn web_fetch_invalid_scheme() {
     assert!(!result.success);
     assert!(result.output.contains("Invalid URL scheme"));
 }
+
+/// Regression: transcript metadata is written on session creation
+/// and updated after with_budget resolves model info.
+#[test]
+fn transcript_metadata_written() {
+    let tmp_dir = std::env::temp_dir().join("mae-test-transcript");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let transcript_path = tmp_dir.join("test-metadata.json");
+
+    // Create a session manually to test transcript creation
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_cmd_tx, cmd_rx) = mpsc::channel(32);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let tools = vec![];
+    let session = AgentSession::new(provider, tools, "test prompt".into(), event_tx, cmd_rx);
+
+    // Overwrite transcript_path for testing
+    let mut session = session;
+    session.transcript_path = Some(transcript_path.clone());
+    session.write_transcript_metadata();
+
+    // Apply budget to trigger metadata update
+    let session = session.with_budget("claude-sonnet-4-20250514", crate::BudgetConfig::default());
+    let _ = &session; // ensure session lives until assertions
+
+    // Read the transcript file
+    let content = std::fs::read_to_string(&transcript_path).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+
+    assert_eq!(metadata["type"], "metadata");
+    assert_eq!(metadata["model"], "claude-sonnet-4-20250514");
+    assert!(metadata["context_window"].as_u64().unwrap() > 0);
+    assert!(metadata["max_rounds"].as_u64().unwrap() > 0);
+    assert!(metadata["platform"].as_str().is_some());
+    assert!(metadata["mae_version"].as_str().is_some());
+
+    // Cleanup
+    let _ = std::fs::remove_file(&transcript_path);
+    let _ = std::fs::remove_dir(&tmp_dir);
+}
