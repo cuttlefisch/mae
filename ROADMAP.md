@@ -84,7 +84,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,590+ tests)
+### What We Have (1,641 tests)
 
 | Category | Features |
 |----------|----------|
@@ -1241,4 +1241,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
 | v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
-| **Total** | **1,590** | All passing, 0 failures |
+| v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
+| **Total** | **1,641** | All passing, 0 failures |
