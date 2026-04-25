@@ -564,6 +564,7 @@ fn run_gui(
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
+        input_dirty: false,
         bell_sent: false,
         last_theme_name,
         shell_active,
@@ -695,8 +696,11 @@ struct GuiApp {
     // Shell generation tracking (dirty-check optimisation — TUI parity)
     shell_generations: std::collections::HashMap<usize, u64>,
 
-    // Frame cap (60fps)
+    // Frame cap (60fps) + input-pending bypass (Emacs dispnew.c:3254 pattern)
     last_render: std::time::Instant,
+    /// Keyboard/mouse input needs immediate visual feedback.
+    /// Bypasses the 60fps frame cap so scroll/movement is never delayed.
+    input_dirty: bool,
 
     // Bell urgency state
     bell_sent: bool,
@@ -918,6 +922,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 if event.state == winit::event::ElementState::Pressed =>
             {
                 self.dirty = true;
+                self.input_dirty = true;
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1051,17 +1056,19 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 if lines != 0 {
                     self.editor.handle_mouse_scroll(lines);
                     self.dirty = true;
+                    self.input_dirty = true;
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.last_render = std::time::Instant::now();
+                let render_start = std::time::Instant::now();
                 if let Err(e) = self
                     .renderer
                     .render(&mut self.editor, &self.shell_terminals)
                 {
                     warn!(error = %e, "GUI render error");
                 }
-                let frame_elapsed = self.last_render.elapsed().as_micros() as u64;
+                self.last_render = std::time::Instant::now();
+                let frame_elapsed = render_start.elapsed().as_micros() as u64;
                 self.editor.perf_stats.record_frame(frame_elapsed);
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
@@ -1131,11 +1138,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         }
 
         // Frame-capped redraw (60fps = 16.667ms).
+        // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
+        // so keyboard/scroll never waits for the next frame boundary.
         if self.dirty {
             let elapsed = self.last_render.elapsed();
             let frame_budget = std::time::Duration::from_micros(16_667);
-            if elapsed >= frame_budget {
+            if self.input_dirty || elapsed >= frame_budget {
                 self.renderer.request_redraw();
+                self.input_dirty = false;
             } else {
                 // Schedule wakeup for remaining budget.
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(

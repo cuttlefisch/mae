@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.5.0 (1,580 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch).
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,580+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
 
 ---
 
@@ -261,7 +261,7 @@ Second round of architecture splits — 6 god files broken into module directori
 - [x] Model-agnostic system prompt: works across Claude, OpenAI, Gemini, DeepSeek
 
 ### Deferred Items
-- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M5+)
+- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M6+)
 - [ ] **Packaging readiness** — audit mae-dap, mae-lsp, mae-kb for crates.io publishability (→ Phase 10)
 
 ---
@@ -1044,24 +1044,40 @@ Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `Even
 - [x] `get_option` AI tool: read current option values (name, value, type, default, doc) — symmetric with `set_option`
 - [x] `set_option` auto-generated from `OptionRegistry` — no more hardcoded enum drift (was missing `clipboard`)
 
-### M5: Variable-Height Lines & Mixed Fonts
+### M4.5: Display Optimization — COMPLETE
+Emacs-inspired display patterns and CJK correctness.
+- [x] Command line layout fix — row calculation prevents partial bottom row clipping
+- [x] Input-pending pattern (Emacs `dispnew.c:3254`) — keyboard/scroll bypasses 60fps frame cap for immediate feedback
+- [x] `last_render` timing fix — measured after render completes, not before
+- [x] CJK/wide-character correctness — `unicode-width` in wrap, buffer_render, status_render (GUI + terminal)
+- [x] `draw_styled_at` display-width-aware column tracking for CJK text rendering
+- [x] Regression tests: row layout (7 heights x 5 cell sizes), CJK wrap/break/width (6 tests)
+
+### M5: Emacs Display Patterns (Future)
+Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
+- [ ] Glyph matrix hashing — hash visible lines, skip unchanged rows on redraw (`dispnew.c:1262`)
+- [ ] Line-level dirty tracking — per-line content hash, only re-render changed rows (`dispnew.c:4263`)
+- [ ] Scroll region blit — Skia surface copy for scroll optimization (`dispnew.c:5107`)
+- [ ] Idle deferred work — defer syntax highlighting and LSP requests to idle periods (`xdisp.c:4531`)
+
+### M6: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
 - [ ] Headings rendered at larger font sizes
 - [ ] Code blocks rendered in monospace, prose in proportional
 - [ ] Bold/italic/underline/strikethrough font decorations
 - [ ] Line-height varies per line type (heading, code, prose)
 
-### M6: Inline Images
+### M7: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
 - [ ] Org-mode `[[file:image.png]]` auto-preview
 - [ ] Image scaling to fit viewport width
 
-### M7: PDF Preview
+### M8: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
 - [ ] `:pdf <file>` opens a PDF preview buffer
 - [ ] Scroll through pages, zoom in/out
 
-### M8: Mouse & Selection
+### M9: Mouse & Selection
 - [x] Click to place cursor (done in M3)
 - [x] Click-drag to select text (mouse press/drag/release → visual selection)
 - [ ] Scrollbar (vertical)
@@ -1180,7 +1196,9 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm done, module system next
     │
-    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M3 remaining items
+    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M4.5 (display opt) ✅
+    │       │
+    │       └─→ M5 (Emacs display patterns) → M6 (variable-height) → M7+ (images, PDF)
     │
     ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
     │
@@ -1190,14 +1208,15 @@ Phase 3e (editor essentials) ✅ COMPLETE
 **Next priority order:**
 1. **Phase 8 M3 remaining** (GUI polish) — vertical line color bug in insert mode
 2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
-3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
-4. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M5+)
-5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
-6. **Phase 4c M3 remaining** — variable hover, watch expressions
-7. **LSP packaging review** — multi-language defaults, user-configurable server selection
-8. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
-9. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-10. **Phase 9** (Org-Mode Editing) — full org-mode environment
+3. **Phase 8 M5** (Emacs display patterns) — glyph matrix hashing, line-level dirty tracking, scroll region blit, idle deferred work
+4. **Phase 8 M6** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
+5. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M6+)
+6. **Phase 8 M7-M9** (GUI) — inline images, PDF, mouse drag-select
+7. **Phase 4c M3 remaining** — variable hover, watch expressions
+8. **LSP packaging review** — multi-language defaults, user-configurable server selection
+9. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
+10. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+11. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 

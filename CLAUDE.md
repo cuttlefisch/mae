@@ -113,7 +113,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M4 COMPLETE (1,484 tests)
+### Phase 8: GUI Rendering Backend — M1-M4.5 COMPLETE (1,484+ tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -150,7 +150,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
 - Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
 - `--check-config` CLI flag + CI E2E validation step ✅
-- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Variable-height lines (8 M5)**
+- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Emacs display patterns (8 M5), Variable-height lines (8 M6)**
 
 ## Key Design Decisions Already Made
 

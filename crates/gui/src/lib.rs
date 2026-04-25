@@ -135,7 +135,12 @@ impl GuiRenderer {
         self.cell_width = cw;
         self.cell_height = ch;
         self.cols = (size.width as f32 / cw) as u16;
-        self.rows = (size.height as f32 / ch) as u16;
+        let raw_rows = (size.height as f32 / ch) as u16;
+        self.rows = if (raw_rows as f32 * ch).ceil() > size.height as f32 {
+            raw_rows.saturating_sub(1)
+        } else {
+            raw_rows
+        };
 
         info!(
             cols = self.cols,
@@ -158,7 +163,12 @@ impl GuiRenderer {
             self.cell_width = cw;
             self.cell_height = ch;
             self.cols = (width as f32 / cw) as u16;
-            self.rows = (height as f32 / ch) as u16;
+            let raw_rows = (height as f32 / ch) as u16;
+            self.rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
+                raw_rows.saturating_sub(1)
+            } else {
+                raw_rows
+            };
         }
     }
 
@@ -198,7 +208,12 @@ impl GuiRenderer {
             if let Some(window) = &self.window {
                 let ws = window.inner_size();
                 self.cols = (ws.width as f32 / cw) as u16;
-                self.rows = (ws.height as f32 / ch) as u16;
+                let raw_rows = (ws.height as f32 / ch) as u16;
+                self.rows = if (raw_rows as f32 * ch).ceil() > ws.height as f32 {
+                    raw_rows.saturating_sub(1)
+                } else {
+                    raw_rows
+                };
             }
         }
     }
@@ -826,5 +841,31 @@ mod tests {
     fn gui_renderer_viewport_height() {
         let renderer = GuiRenderer::new();
         assert_eq!(renderer.viewport_height().unwrap(), 38);
+    }
+
+    /// Verify that `rows * cell_height` never exceeds window pixel height.
+    /// Regression test: the command line at `rows - 1` was clipped when the
+    /// row calculation allowed a partial bottom row.
+    #[test]
+    fn command_line_row_fits_in_window() {
+        for height in [600u32, 720, 768, 800, 900, 1080, 1440] {
+            for ch_tenth in [140, 160, 185, 200, 225] {
+                let ch = ch_tenth as f32 / 10.0;
+                let raw_rows = (height as f32 / ch) as u16;
+                let rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
+                    raw_rows.saturating_sub(1)
+                } else {
+                    raw_rows
+                };
+                assert!(
+                    (rows as f32 * ch).ceil() <= height as f32,
+                    "rows={} * ch={} = {} exceeds height={}",
+                    rows,
+                    ch,
+                    (rows as f32 * ch).ceil(),
+                    height
+                );
+            }
+        }
     }
 }

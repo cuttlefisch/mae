@@ -11,3 +11,4 @@ mae-shell = { path = "../shell" }
 ratatui = "0.30"
 crossterm = "0.29"
 tracing = { workspace = true }
+unicode-width = "0.2"

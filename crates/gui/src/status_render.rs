@@ -2,6 +2,7 @@
 
 use mae_core::{Editor, Mode, SearchDirection, VisualType};
 use skia_safe::Color4f;
+use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
@@ -98,7 +99,7 @@ pub fn render_status_bar(
     canvas.draw_rect_fill(row, 0, cols, 1, sl_bg);
 
     // Mode label with its own bg.
-    let mode_len = mode_str.len();
+    let mode_len = UnicodeWidthStr::width(mode_str);
     canvas.draw_rect_fill(row, 0, mode_len, 1, mode_bg);
     canvas.draw_text_at(row, 0, mode_str, mode_fg);
 
@@ -213,7 +214,7 @@ pub fn render_status_bar(
         file_type_str, pct, tier_str, debug_info, fps_info, ai_info
     );
     let right_with_pos = format!("{}{}", right_text, position);
-    let right_col = cols.saturating_sub(right_with_pos.len());
+    let right_col = cols.saturating_sub(UnicodeWidthStr::width(right_with_pos.as_str()));
     canvas.draw_text_at(row, right_col, &right_with_pos, sl_fg);
 }
 

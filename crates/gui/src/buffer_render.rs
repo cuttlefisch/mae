@@ -1,7 +1,7 @@
 //! Text buffer rendering: gutter, syntax highlighting, selection, search,
 //! cursorline, hex color preview, tilde lines past EOF.
 
-use mae_core::wrap::{find_wrap_break, leading_indent_len};
+use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
 use mae_core::{Editor, HighlightSpan, Mode, Window};
 use skia_safe::Color4f;
 
@@ -60,7 +60,7 @@ pub fn render_buffer_content(
 
     let wrap = editor.word_wrap && text_width > 0;
     let show_break_width = if wrap {
-        editor.show_break.chars().count()
+        unicode_width::UnicodeWidthStr::width(editor.show_break.as_str())
     } else {
         0
     };
@@ -344,7 +344,17 @@ pub fn render_buffer_content(
             }
 
             let visible_start = col_offset.min(full_count);
-            let visible_end = (visible_start + text_width).min(full_count);
+            // Walk from visible_start accumulating display width to find visible_end.
+            let mut vis_width = 0;
+            let mut visible_end = visible_start;
+            for &ch in &full_chars[visible_start..] {
+                let w = char_width(ch);
+                if vis_width + w > text_width {
+                    break;
+                }
+                vis_width += w;
+                visible_end += 1;
+            }
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];
 
@@ -394,6 +404,15 @@ fn draw_styled_at(
     }
     let ascii_ok = *canvas.ascii_in_font();
 
+    // Pre-compute cumulative display column for each char (CJK = 2 cols).
+    let mut col_offsets = Vec::with_capacity(chars.len() + 1);
+    let mut acc = 0usize;
+    for &ch in chars {
+        col_offsets.push(acc);
+        acc += char_width(ch);
+    }
+    col_offsets.push(acc); // sentinel for total width
+
     // Pass 1: Coalesce background rects.
     {
         let mut run_start = 0;
@@ -408,7 +427,9 @@ fn draw_styled_at(
             };
             if !same || i == styles.len() {
                 if let Some(bg) = run_bg {
-                    canvas.draw_rect_fill(row, col + run_start, i - run_start, 1, bg);
+                    let start_col = col_offsets[run_start];
+                    let width = col_offsets[i] - start_col;
+                    canvas.draw_rect_fill(row, col + start_col, width, 1, bg);
                 }
                 run_start = i;
                 run_bg = this_bg;
@@ -420,7 +441,7 @@ fn draw_styled_at(
     // Pass 2: Text runs — batch chars with uniform style that are in the primary font.
     {
         let mut run_buf = String::with_capacity(128);
-        let mut run_start = 0usize;
+        let mut run_start_col = 0usize;
         let mut run_fg = styles[0].fg;
         let mut run_bold = styles[0].bold;
         let mut run_italic = styles[0].italic;
@@ -437,7 +458,7 @@ fn draw_styled_at(
 
             if can_batch && style_match {
                 if run_buf.is_empty() {
-                    run_start = i;
+                    run_start_col = col_offsets[i];
                     run_fg = cs.fg;
                     run_bold = cs.bold;
                     run_italic = cs.italic;
@@ -448,7 +469,7 @@ fn draw_styled_at(
                 if !run_buf.is_empty() {
                     canvas.draw_text_run(
                         row,
-                        col + run_start,
+                        col + run_start_col,
                         &run_buf,
                         run_fg,
                         run_bold,
@@ -460,21 +481,29 @@ fn draw_styled_at(
 
                 if can_batch {
                     // New style, batchable char — start new run.
-                    run_start = i;
+                    run_start_col = col_offsets[i];
                     run_fg = cs.fg;
                     run_bold = cs.bold;
                     run_italic = cs.italic;
                     run_buf.push(ch);
                 } else if ch != ' ' {
                     // Non-ASCII / missing glyph — per-char fallback.
-                    canvas.draw_char(row, col + i, ch, cs.fg, cs.bold, cs.italic, scale);
+                    canvas.draw_char(
+                        row,
+                        col + col_offsets[i],
+                        ch,
+                        cs.fg,
+                        cs.bold,
+                        cs.italic,
+                        scale,
+                    );
                 }
             }
         }
         if !run_buf.is_empty() {
             canvas.draw_text_run(
                 row,
-                col + run_start,
+                col + run_start_col,
                 &run_buf,
                 run_fg,
                 run_bold,
@@ -486,18 +515,20 @@ fn draw_styled_at(
 
     // Pass 3: Coalesce underline spans.
     {
-        let mut ul_start: Option<(usize, Color4f)> = None;
+        let mut ul_start: Option<(usize, usize, Color4f)> = None; // (char_idx, col_offset, fg)
         for (i, cs) in styles.iter().enumerate() {
             if cs.underline {
                 if ul_start.is_none() {
-                    ul_start = Some((i, cs.fg));
+                    ul_start = Some((i, col_offsets[i], cs.fg));
                 }
-            } else if let Some((start, fg)) = ul_start.take() {
-                canvas.draw_underline_span(row, col + start, i - start, fg);
+            } else if let Some((_, start_col, fg)) = ul_start.take() {
+                let width = col_offsets[i] - start_col;
+                canvas.draw_underline_span(row, col + start_col, width, fg);
             }
         }
-        if let Some((start, fg)) = ul_start {
-            canvas.draw_underline_span(row, col + start, styles.len() - start, fg);
+        if let Some((_, start_col, fg)) = ul_start {
+            let width = col_offsets[styles.len()] - start_col;
+            canvas.draw_underline_span(row, col + start_col, width, fg);
         }
     }
 }

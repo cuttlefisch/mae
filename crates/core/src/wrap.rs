@@ -1,5 +1,7 @@
 //! Word-wrap helpers shared between core (gj/gk dispatch) and renderer.
 
+use unicode_width::UnicodeWidthChar;
+
 /// Characters considered word boundaries for wrapping (neovim `breakat`).
 pub fn is_break_char(ch: char) -> bool {
     matches!(
@@ -27,17 +29,33 @@ pub fn is_break_char(ch: char) -> bool {
     )
 }
 
-/// Find the best wrap break point at or before `limit` within `chars[start..]`.
-/// Returns the index (in `chars`) where the next display line should start.
-/// Prefers breaking after a word-boundary char; falls back to hard break at `limit`.
+/// Display width of a single character (CJK = 2, most others = 1).
+pub fn char_width(ch: char) -> usize {
+    ch.width().unwrap_or(0)
+}
+
+/// Find the best wrap break point within `chars[start..]` that fits in `limit`
+/// display columns. Returns the char index where the next display line should start.
+/// Prefers breaking after a word-boundary char; falls back to hard break.
 pub fn find_wrap_break(chars: &[char], start: usize, limit: usize) -> usize {
-    let end = (start + limit).min(chars.len());
+    // Walk forward accumulating display width to find the hard-break index.
+    let mut width = 0;
+    let mut end = start;
+    for &ch in &chars[start..] {
+        let w = char_width(ch);
+        if width + w > limit {
+            break;
+        }
+        width += w;
+        end += 1;
+    }
     if end >= chars.len() {
         return chars.len();
     }
     // Search backward from end for a break character.
-    // Don't search further back than half the limit to avoid overly short lines.
-    let min_pos = start + limit / 2;
+    // Don't search further back than half the consumed chars to avoid overly short lines.
+    let half_chars = (end - start) / 2;
+    let min_pos = start + half_chars;
     for i in (min_pos..end).rev() {
         if is_break_char(chars[i]) {
             return i + 1; // break *after* the space/punctuation
@@ -47,12 +65,18 @@ pub fn find_wrap_break(chars: &[char], start: usize, limit: usize) -> usize {
     end
 }
 
-/// Count leading whitespace characters in a slice.
+/// Count leading whitespace display columns in a slice.
 pub fn leading_indent_len(chars: &[char]) -> usize {
     chars
         .iter()
         .take_while(|c| **c == ' ' || **c == '\t')
-        .count()
+        .map(|c| char_width(*c))
+        .sum()
+}
+
+/// Display width of a char slice.
+pub fn slice_display_width(chars: &[char]) -> usize {
+    chars.iter().map(|c| char_width(*c)).sum()
 }
 
 /// Compute the display row and column for a given buffer column within a wrapped line.
@@ -96,7 +120,9 @@ pub fn wrap_cursor_position(
         let avail = if row == 0 { text_width } else { cont_text_w };
         let end = find_wrap_break(&chars, pos, avail);
         if cursor_col < end || end >= full_count {
-            return (row, cursor_col.saturating_sub(pos));
+            // Return display column (sum of char widths from pos to cursor_col)
+            let display_col = slice_display_width(&chars[pos..cursor_col.min(end)]);
+            return (row, display_col);
         }
         pos = end;
         row += 1;
@@ -230,5 +256,48 @@ mod tests {
     fn leading_indent() {
         let chars: Vec<char> = "    hello".chars().collect();
         assert_eq!(leading_indent_len(&chars), 4);
+    }
+
+    #[test]
+    fn cjk_char_width() {
+        // CJK unified ideographs are 2 columns wide
+        assert_eq!(char_width('中'), 2);
+        assert_eq!(char_width('a'), 1);
+        assert_eq!(char_width(' '), 1);
+    }
+
+    #[test]
+    fn cjk_wrap_break() {
+        // "你好世界" = 4 CJK chars = 8 display columns
+        let chars: Vec<char> = "你好世界".chars().collect();
+        // limit=5 cols: "你好" = 4 cols fits, "你好世" = 6 cols doesn't → break at 2
+        let brk = find_wrap_break(&chars, 0, 5);
+        assert_eq!(brk, 2);
+    }
+
+    #[test]
+    fn cjk_mixed_wrap() {
+        // "ab你好cd" = 2+4+2 = 8 display columns
+        let chars: Vec<char> = "ab你好cd".chars().collect();
+        // limit=6: "ab你好" = 2+4 = 6 cols → fits, break at 4
+        let brk = find_wrap_break(&chars, 0, 6);
+        assert_eq!(brk, 4);
+    }
+
+    #[test]
+    fn slice_display_width_mixed() {
+        let chars: Vec<char> = "a你b".chars().collect();
+        assert_eq!(slice_display_width(&chars), 4); // 1+2+1
+    }
+
+    #[test]
+    fn wrap_cursor_position_cjk() {
+        // "你好世界" with text_width=5: first row fits "你好" (4 cols)
+        let (row, col) = wrap_cursor_position("你好世界", 0, 5, false, 0);
+        assert_eq!(row, 0);
+        assert_eq!(col, 0); // display col 0
+        let (row, col) = wrap_cursor_position("你好世界", 1, 5, false, 0);
+        assert_eq!(row, 0);
+        assert_eq!(col, 2); // "好" starts at display col 2
     }
 }

@@ -3,6 +3,7 @@
 use mae_core::{Editor, Mode, VisualType};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme_convert::ts;
 
@@ -173,12 +174,12 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
     let right_extra = format!("{}{}{}", file_type_str, pct, tier_str);
 
     let remaining = (area.width as usize)
-        .saturating_sub(mode_str.len())
-        .saturating_sub(left_text.len())
-        .saturating_sub(debug_info.len())
-        .saturating_sub(ai_info.len())
-        .saturating_sub(right_extra.len())
-        .saturating_sub(position.len());
+        .saturating_sub(UnicodeWidthStr::width(mode_str))
+        .saturating_sub(UnicodeWidthStr::width(left_text.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(debug_info.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(ai_info.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(right_extra.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(position.as_str()));
 
     let status_line = Line::from(vec![
         Span::styled(mode_str, mode_style),
