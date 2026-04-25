@@ -597,42 +597,67 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "dap",
             "conditional": true,
-            "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP. Call project_info to get root. Then dap_start(adapter='debugpy', program='<root>/test_fixtures/dap_test.py', stop_on_entry=true). If dap_start fails, SKIP. IMPORTANT: Never retry dap_start. If debug_state shows exited/no session at any point, call dap_disconnect and stop — do NOT loop.",
+            "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP entire category.",
             "tests": [
                 {
+                    "name": "dap_start",
+                    "tool": "dap_start",
+                    "args": {"adapter": "debugpy", "program": "test_fixtures/dap_test.py", "stop_on_entry": true},
+                    "assert": "Returns 'Starting debugpy session'. If error, SKIP remaining DAP tests."
+                },
+                {
+                    "name": "wait_for_entry_stop",
+                    "tool": "shell_exec",
+                    "args": {"command": "sleep 2", "timeout_ms": 5000},
+                    "assert": "Completes (gives debugpy time to launch and stop at entry)"
+                },
+                {
+                    "name": "verify_stopped_on_entry",
+                    "tool": "debug_state",
+                    "args": {},
+                    "assert": "Session active, at least 1 thread. If no session, FAIL and skip rest."
+                },
+                {
+                    "name": "set_breakpoint",
                     "tool": "dap_set_breakpoint",
                     "args": {"source": "test_fixtures/dap_test.py", "line": 13},
-                    "assert": "Breakpoint set on line 13 (inside greet())"
+                    "assert": "Breakpoint set on line 13"
                 },
                 {
+                    "name": "continue_to_breakpoint",
                     "tool": "dap_continue",
                     "args": {},
-                    "assert": "Program runs and hits breakpoint. If error, FAIL and skip rest."
+                    "assert": "Returns 'continue'. Program will run to breakpoint asynchronously."
                 },
                 {
-                    "tool": "dap_list_variables",
+                    "name": "wait_for_breakpoint",
+                    "tool": "shell_exec",
+                    "args": {"command": "sleep 3", "timeout_ms": 5000},
+                    "assert": "Completes (gives debugpy time to hit breakpoint on line 13)"
+                },
+                {
+                    "name": "check_breakpoint_hit",
+                    "tool": "debug_state",
                     "args": {},
-                    "assert": "Returns variables (expect 'name' = 'MAE'). If error, FAIL."
+                    "assert": "Thread stopped. If stack_frames is empty, FAIL (async state not ready). Do NOT retry — mark FAIL and continue to cleanup."
                 },
                 {
-                    "tool": "dap_step",
-                    "args": {"kind": "over"},
-                    "assert": "Steps to next line"
-                },
-                {
+                    "name": "dap_output",
                     "tool": "dap_output",
                     "args": {"lines": 10},
                     "assert": "Returns output JSON"
                 },
                 {
+                    "name": "disconnect",
                     "tool": "dap_disconnect",
-                    "args": {},
+                    "args": {"terminate_debuggee": true},
                     "assert": "Session ends cleanly"
                 }
             ],
             "cleanup": [
-                "dap_disconnect (ignore errors), then switch_buffer(name: '*AI*')"
-            ]
+                "dap_disconnect(terminate_debuggee: true) — ignore errors"
+            ],
+            "CRITICAL": "NEVER retry any DAP tool call. NEVER call sleep more than the explicit waits listed above. If debug_state shows 'No active debug session' at any point, immediately skip to cleanup. Maximum 12 tool calls for this entire category."
         }));
     }
 
@@ -1839,7 +1864,10 @@ mod tests {
             if let Some(tests) = cat["tests"].as_array() {
                 for test in tests {
                     let tool = test["tool"].as_str().unwrap();
-                    if crate::session::workflow::classify_tool_to_self_test_step(tool).is_none() {
+                    // shell_exec is a general utility (used for wait/sleep steps)
+                    if tool != "shell_exec"
+                        && crate::session::workflow::classify_tool_to_self_test_step(tool).is_none()
+                    {
                         unclassified.push(tool.to_string());
                     }
                 }

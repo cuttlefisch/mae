@@ -80,7 +80,7 @@ pub fn execute_dap_start(editor: &mut Editor, args: &Value) -> Result<String, St
         ""
     };
     Ok(format!(
-        "Starting {} session against {}{}",
+        "Starting {} session against {}{}. Session starts asynchronously — wait 2-3 seconds then call debug_state once to verify.",
         adapter, program, entry_note
     ))
 }
@@ -145,7 +145,7 @@ pub fn execute_dap_continue(editor: &mut Editor) -> Result<String, String> {
         return Err("No active debug session".into());
     }
     editor.dap_continue();
-    Ok("continue".into())
+    Ok("Resumed. DAP events (stopped, terminated) arrive asynchronously. Wait 2-3 seconds, then call debug_state once to check. Do NOT loop.".into())
 }
 
 /// Step on the active thread.

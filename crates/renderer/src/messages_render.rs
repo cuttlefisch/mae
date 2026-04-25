@@ -34,11 +34,7 @@ pub(crate) fn render_messages_window(
     let viewport_height = inner.height as usize;
 
     let total = entries.len();
-    let start = if win.scroll_offset > 0 {
-        win.scroll_offset.min(total)
-    } else {
-        total.saturating_sub(viewport_height)
-    };
+    let start = win.scroll_offset.min(total);
 
     let target_style = ts(editor, "diagnostic.target");
 

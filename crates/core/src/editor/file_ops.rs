@@ -67,8 +67,12 @@ impl Editor {
             let new_idx = self.buffers.len() - 1;
             self.window_mgr.focused_window_mut().buffer_idx = new_idx;
         }
-        let count = self.message_log.len();
-        self.set_status(format!("{} log entries", count));
+        // Scroll to bottom so newest entries are visible.
+        // scroll_offset = first visible entry index.
+        let total = self.message_log.len();
+        let vh = self.viewport_height;
+        self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
+        self.set_status(format!("{} log entries", total));
     }
 
     /// Save the message log to an XDG-compliant path.

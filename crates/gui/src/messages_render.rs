@@ -42,11 +42,7 @@ pub fn render_messages_window(
 
     let entries = editor.message_log.entries();
     let total = entries.len();
-    let start = if win.scroll_offset > 0 {
-        win.scroll_offset.min(total)
-    } else {
-        total.saturating_sub(inner_height)
-    };
+    let start = win.scroll_offset.min(total);
 
     let target_fg = theme::ts_fg(editor, "diagnostic.target");
     let text_fg = theme::ts_fg(editor, "ui.text");
