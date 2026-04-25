@@ -117,12 +117,10 @@ impl Editor {
         })?;
         let launch_args = match adapter {
             "debugpy" | "python" => serde_json::json!({
-                "request": "attach",
                 "type": "python",
                 "processId": pid,
             }),
             _ => serde_json::json!({
-                "request": "attach",
                 "pid": pid,
             }),
         };
@@ -704,6 +702,13 @@ fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
 
 /// Build the adapter-specific launch args JSON for a `program` path.
 /// Keeps the preset minimal so most real programs just work.
+/// Build adapter-specific launch arguments.
+///
+/// IMPORTANT: Do NOT include `"request"` here — that's a VS Code launch.json
+/// concept. The DAP protocol puts the command in the top-level message
+/// (`"command": "launch"`), and `arguments` should only contain adapter-
+/// specific configuration. Including `"request": "launch"` in the arguments
+/// causes debugpy to hang (it re-interprets the field as a nested config).
 fn default_launch_args(
     adapter: &str,
     program: &str,
@@ -713,7 +718,6 @@ fn default_launch_args(
     let base_args: Vec<String> = extra.to_vec();
     match adapter {
         "debugpy" | "python" => serde_json::json!({
-            "request": "launch",
             "type": "python",
             "program": program,
             "args": base_args,
@@ -721,7 +725,6 @@ fn default_launch_args(
             "stopOnEntry": stop_on_entry,
         }),
         _ => serde_json::json!({
-            "request": "launch",
             "program": program,
             "args": base_args,
             "stopOnEntry": stop_on_entry,
@@ -1204,6 +1207,12 @@ mod tests {
         let v = default_launch_args("debugpy", "/tmp/x.py", &[], false);
         assert_eq!(v["type"], "python");
         assert_eq!(v["program"], "/tmp/x.py");
+        // "request" must NOT be in arguments — it's a VS Code launch.json field,
+        // not a DAP protocol field. Including it causes debugpy to hang.
+        assert!(
+            v.get("request").is_none(),
+            "launch args must not contain 'request'"
+        );
     }
 
     #[test]
@@ -1211,6 +1220,10 @@ mod tests {
         let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()], false);
         assert_eq!(v["program"], "/bin/ls");
         assert_eq!(v["args"][0], "--help");
+        assert!(
+            v.get("request").is_none(),
+            "launch args must not contain 'request'"
+        );
     }
 
     #[test]

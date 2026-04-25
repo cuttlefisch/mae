@@ -72,6 +72,7 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "update_plan"
         | "save_memory"
         | "debug_state"
+        | "read_messages"
         | "syntax_tree"
         | "switch_project" => ToolTier::Core,
         // Everything else is extended

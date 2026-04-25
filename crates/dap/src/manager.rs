@@ -246,15 +246,15 @@ async fn handle_command(
                     let caps = client.capabilities.clone();
                     let mut sess = Session::new(client, adapter_id.clone());
 
-                    // Wait for the `initialized` event before configurationDone.
-                    // Other events that arrive in the meantime are forwarded
-                    // unchanged to the editor.
-                    let initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
+                    // DAP startup sequence:
+                    //   1. Try to get `initialized` event (some adapters send it
+                    //      right after initialize — e.g. lldb-dap).
+                    //   2. Send launch/attach.
+                    //   3. If we didn't see `initialized` yet, wait for it again
+                    //      (debugpy sends it during launch processing).
+                    //   4. Send configurationDone.
+                    let mut initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
 
-                    // Send launch/attach concurrently with initialized wait is
-                    // technically allowed by the spec, but keeping the order
-                    // sequential (wait → launch → configurationDone) is the
-                    // most broadly-compatible flow.
                     let launch_result = if attach {
                         sess.client.attach(launch_args).await
                     } else {
@@ -270,8 +270,11 @@ async fn handle_command(
                         return;
                     }
 
-                    // Only send configurationDone if the adapter advertises it
-                    // AND we've seen the initialized event.
+                    // Second chance: debugpy sends `initialized` after launch.
+                    if !initialized_seen {
+                        initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
+                    }
+
                     let supports_cfg_done = caps
                         .as_ref()
                         .map(|c| c.supports_configuration_done_request)
@@ -508,7 +511,7 @@ async fn forward_exec(
 /// we saw it. Other events that arrive while waiting are forwarded to
 /// the editor unchanged so nothing is lost.
 async fn wait_for_initialized(sess: &mut Session, event_tx: &mpsc::Sender<DapTaskEvent>) -> bool {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
