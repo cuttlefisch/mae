@@ -66,7 +66,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Vim Parity
 - [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
-- [ ] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15).
+- [x] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15) (v0.5.0).
 
 ### Setup & Onboarding
 - [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
