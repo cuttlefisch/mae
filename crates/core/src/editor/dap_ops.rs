@@ -70,6 +70,19 @@ impl Editor {
         program: &str,
         extra_args: &[String],
     ) -> Result<(), String> {
+        self.dap_start_with_adapter_opts(adapter, program, extra_args, false)
+    }
+
+    /// Like `dap_start_with_adapter` but with an explicit `stop_on_entry`
+    /// flag. When `true`, the debuggee pauses at the entry point, giving
+    /// the caller time to set breakpoints before resuming.
+    pub fn dap_start_with_adapter_opts(
+        &mut self,
+        adapter: &str,
+        program: &str,
+        extra_args: &[String],
+        stop_on_entry: bool,
+    ) -> Result<(), String> {
         if self.debug_state.is_some() {
             return Err("A debug session is already active".into());
         }
@@ -79,7 +92,7 @@ impl Editor {
                 adapter
             )
         })?;
-        let launch_args = default_launch_args(adapter, program, extra_args);
+        let launch_args = default_launch_args(adapter, program, extra_args, stop_on_entry);
         self.dap_start_session(spawn, program.to_string(), launch_args, false);
         Ok(())
     }
@@ -661,7 +674,12 @@ fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
 
 /// Build the adapter-specific launch args JSON for a `program` path.
 /// Keeps the preset minimal so most real programs just work.
-fn default_launch_args(adapter: &str, program: &str, extra: &[String]) -> serde_json::Value {
+fn default_launch_args(
+    adapter: &str,
+    program: &str,
+    extra: &[String],
+    stop_on_entry: bool,
+) -> serde_json::Value {
     let base_args: Vec<String> = extra.to_vec();
     match adapter {
         "debugpy" | "python" => serde_json::json!({
@@ -670,13 +688,13 @@ fn default_launch_args(adapter: &str, program: &str, extra: &[String]) -> serde_
             "program": program,
             "args": base_args,
             "console": "internalConsole",
-            "stopOnEntry": false,
+            "stopOnEntry": stop_on_entry,
         }),
         _ => serde_json::json!({
             "request": "launch",
             "program": program,
             "args": base_args,
-            "stopOnEntry": false,
+            "stopOnEntry": stop_on_entry,
         }),
     }
 }
@@ -1153,14 +1171,14 @@ mod tests {
 
     #[test]
     fn default_launch_args_python_shape() {
-        let v = default_launch_args("debugpy", "/tmp/x.py", &[]);
+        let v = default_launch_args("debugpy", "/tmp/x.py", &[], false);
         assert_eq!(v["type"], "python");
         assert_eq!(v["program"], "/tmp/x.py");
     }
 
     #[test]
     fn default_launch_args_lldb_shape() {
-        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()]);
+        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()], false);
         assert_eq!(v["program"], "/bin/ls");
         assert_eq!(v["args"][0], "--help");
     }

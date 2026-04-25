@@ -51,6 +51,14 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
                             enum_values: None,
                         },
                     ),
+                    (
+                        "stop_on_entry".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Pause at program entry point before running (default: false). Use true when you need to set breakpoints before the program starts.".into(),
+                            enum_values: None,
+                        },
+                    ),
                 ]),
                 required: vec!["adapter".into()],
             },

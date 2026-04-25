@@ -110,15 +110,34 @@ impl Editor {
 
             // Movement — operates on focused window + its buffer
             "move-up" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
-                for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_up(buf);
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        win.scroll_offset = win.scroll_offset.saturating_sub(1);
+                    }
+                } else {
+                    let buf = &self.buffers[idx];
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_up(buf);
+                    }
                 }
             }
             "move-down" => {
-                let buf = &self.buffers[self.active_buffer_idx()];
-                for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_down(buf);
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                    let total = self.message_log.len();
+                    let vh = self.viewport_height;
+                    let max = total.saturating_sub(vh);
+                    let win = self.window_mgr.focused_window_mut();
+                    for _ in 0..n {
+                        win.scroll_offset = (win.scroll_offset + 1).min(max);
+                    }
+                } else {
+                    let buf = &self.buffers[idx];
+                    for _ in 0..n {
+                        self.window_mgr.focused_window_mut().move_down(buf);
+                    }
                 }
             }
             "move-left" => {
@@ -257,7 +276,9 @@ impl Editor {
                 self.record_jump();
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                if kind == crate::BufferKind::Conversation {
+                if kind == crate::BufferKind::Messages {
+                    self.window_mgr.focused_window_mut().scroll_offset = 0;
+                } else if kind == crate::BufferKind::Conversation {
                     if let Some(ref mut conv) = self.buffers[idx].conversation {
                         conv.scroll_to_top();
                     }
@@ -278,7 +299,11 @@ impl Editor {
                 self.record_jump();
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                if kind == crate::BufferKind::Conversation {
+                if kind == crate::BufferKind::Messages {
+                    let total = self.message_log.len();
+                    let vh = self.viewport_height;
+                    self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
+                } else if kind == crate::BufferKind::Conversation {
                     // Conversation uses its own scroll state, not cursor_row.
                     if let Some(ref mut conv) = self.buffers[idx].conversation {
                         if let Some(target) = count {
@@ -675,26 +700,47 @@ impl Editor {
             }
             "yank-line" => {
                 let idx = self.active_buffer_idx();
-                let start_row = self.window_mgr.focused_window().cursor_row;
-                let line_count = self.buffers[idx].line_count();
-                let end_row = (start_row + n).min(line_count);
-                let mut yanked = String::new();
-                for row in start_row..end_row {
-                    yanked.push_str(&self.buffers[idx].line_text(row));
-                }
-                if !yanked.is_empty() {
-                    // Ensure linewise yank always ends with '\n' so paste
-                    // recognizes it as linewise (last line may lack trailing newline).
-                    if !yanked.ends_with('\n') {
-                        yanked.push('\n');
+                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                    // Messages buffer: yank from message_log entries
+                    let entries = self.message_log.entries();
+                    let win = self.window_mgr.focused_window();
+                    let start_row = win.scroll_offset;
+                    let end_row = (start_row + n).min(entries.len());
+                    let mut yanked = String::new();
+                    for e in &entries[start_row..end_row] {
+                        yanked.push_str(&format!("[{}] {}: {}\n", e.level, e.target, e.message));
                     }
-                    self.save_yank(yanked);
-                    let yanked_count = end_row - start_row;
-                    self.set_status(format!(
-                        "{} line{} yanked",
-                        yanked_count,
-                        if yanked_count == 1 { "" } else { "s" }
-                    ));
+                    if !yanked.is_empty() {
+                        self.save_yank(yanked);
+                        let cnt = end_row - start_row;
+                        self.set_status(format!(
+                            "{} line{} yanked",
+                            cnt,
+                            if cnt == 1 { "" } else { "s" }
+                        ));
+                    }
+                } else {
+                    let start_row = self.window_mgr.focused_window().cursor_row;
+                    let line_count = self.buffers[idx].line_count();
+                    let end_row = (start_row + n).min(line_count);
+                    let mut yanked = String::new();
+                    for row in start_row..end_row {
+                        yanked.push_str(&self.buffers[idx].line_text(row));
+                    }
+                    if !yanked.is_empty() {
+                        // Ensure linewise yank always ends with '\n' so paste
+                        // recognizes it as linewise (last line may lack trailing newline).
+                        if !yanked.ends_with('\n') {
+                            yanked.push('\n');
+                        }
+                        self.save_yank(yanked);
+                        let yanked_count = end_row - start_row;
+                        self.set_status(format!(
+                            "{} line{} yanked",
+                            yanked_count,
+                            if yanked_count == 1 { "" } else { "s" }
+                        ));
+                    }
                 }
             }
             "yank-word-forward" => {
@@ -1222,7 +1268,11 @@ impl Editor {
                 }
             }
             "switch-buffer" => {
-                let names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+                let mut names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+                // Always show *Messages* even if buffer hasn't been created yet
+                if !names.iter().any(|n| n == "*Messages*") {
+                    names.push("*Messages*".to_string());
+                }
                 let name_refs: Vec<&str> = names.iter().map(|s: &String| s.as_str()).collect();
 
                 self.command_palette = Some(crate::command_palette::CommandPalette::for_buffers(

@@ -71,6 +71,46 @@ impl Editor {
         self.set_status(format!("{} log entries", count));
     }
 
+    /// Save the message log to an XDG-compliant path.
+    /// Called on editor exit when messages exist.
+    /// Path: `$XDG_DATA_HOME/mae/messages/` (default: `~/.local/share/mae/messages/`)
+    pub fn save_message_log(&self) -> Result<std::path::PathBuf, String> {
+        let entries = self.message_log.entries();
+        if entries.is_empty() {
+            return Err("No messages to save".into());
+        }
+
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| {
+                std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map_err(|_| "Cannot determine data directory")?;
+
+        let dir = base.join("mae").join("messages");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = dir.join(format!("messages-{}.log", epoch));
+
+        let mut content = String::new();
+        for e in &entries {
+            content.push_str(&format!(
+                "[{}] [{}] {}: {}\n",
+                e.seq, e.level, e.target, e.message
+            ));
+        }
+
+        std::fs::write(&path, &content)
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+
+        Ok(path)
+    }
+
     /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.
     pub fn open_conversation_buffer(&mut self) {
         let idx = self.ensure_conversation_buffer_idx();

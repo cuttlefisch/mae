@@ -597,7 +597,7 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "dap",
             "conditional": true,
-            "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP. Call project_info to get root. Then dap_start(adapter='debugpy', program='<root>/test_fixtures/dap_test.py'). If dap_start fails, SKIP. IMPORTANT: Never retry dap_start. If debug_state shows exited/no session at any point, call dap_disconnect and stop — do NOT loop.",
+            "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP. Call project_info to get root. Then dap_start(adapter='debugpy', program='<root>/test_fixtures/dap_test.py', stop_on_entry=true). If dap_start fails, SKIP. IMPORTANT: Never retry dap_start. If debug_state shows exited/no session at any point, call dap_disconnect and stop — do NOT loop.",
             "tests": [
                 {
                     "tool": "dap_set_breakpoint",

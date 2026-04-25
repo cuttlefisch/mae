@@ -26,17 +26,20 @@ impl Editor {
                 if self.active_buffer().modified {
                     self.set_status("No write since last change (add ! to override)");
                 } else {
+                    self.on_quit();
                     self.running = false;
                 }
                 true
             }
             "q!" => {
+                self.on_quit();
                 self.running = false;
                 true
             }
             "wq" | "x" => {
                 self.save_current_buffer();
                 if self.running && !self.active_buffer().modified {
+                    self.on_quit();
                     self.running = false;
                 }
                 true

@@ -66,10 +66,23 @@ pub fn execute_dap_start(editor: &mut Editor, args: &Value) -> Result<String, St
         })
         .unwrap_or_default();
 
+    let stop_on_entry = args
+        .get("stop_on_entry")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // Preconditions (unknown adapter, already-active session) live in
-    // `dap_start_with_adapter` so this tool and `:debug-start` agree.
-    editor.dap_start_with_adapter(adapter, program, &extra_args)?;
-    Ok(format!("Starting {} session against {}", adapter, program))
+    // `dap_start_with_adapter_opts` so this tool and `:debug-start` agree.
+    editor.dap_start_with_adapter_opts(adapter, program, &extra_args, stop_on_entry)?;
+    let entry_note = if stop_on_entry {
+        " (will stop on entry)"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "Starting {} session against {}{}",
+        adapter, program, entry_note
+    ))
 }
 
 /// Set a breakpoint at `source:line`. Idempotent — no-op if already set.

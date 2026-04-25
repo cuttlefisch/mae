@@ -44,7 +44,11 @@ pub(super) fn handle_command_palette_mode(
                     editor.open_help_at(&node_id);
                 }
                 (Some(buf_name), PalettePurpose::SwitchBuffer) => {
-                    if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
+                    if buf_name == "*Messages*" {
+                        // Create on demand if not yet opened
+                        editor.open_messages_buffer();
+                    } else if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name)
+                    {
                         editor.switch_to_buffer(idx);
                         editor.sync_mode_to_buffer();
                     }

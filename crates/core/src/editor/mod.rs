@@ -1488,6 +1488,22 @@ impl Editor {
         self.input_lock = crate::InputLock::None;
     }
 
+    /// Shutdown hook — called before `running = false`. Persists message log.
+    pub fn on_quit(&mut self) {
+        if !self.message_log.is_empty() {
+            match self.save_message_log() {
+                Ok(path) => {
+                    // Log to message_log itself (won't be visible since we're quitting,
+                    // but will appear in the saved file if written before the flush).
+                    tracing::info!("Messages saved to {}", path.display());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to save message log: {}", e);
+                }
+            }
+        }
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
         if !s.is_empty() {
