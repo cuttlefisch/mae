@@ -130,9 +130,9 @@ clippy:
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test, excludes mae-gui)
 ci: fmt-check
-	$(CARGO) clippy --workspace --all-targets --exclude mae-gui -- -D warnings
-	$(CARGO) check --workspace --all-targets --exclude mae-gui
-	$(CARGO) test --workspace --exclude mae-gui
+	$(CARGO) clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
+	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
+	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
 	@echo "CI passed ✓"
 
 ## setup-hooks: configure git to use version-controlled hooks

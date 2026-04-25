@@ -11,6 +11,7 @@ members = [
     "crates/mae",
     "crates/shell",
     "crates/mcp",
+    "test_fixtures",
 ]
 resolver = "2"
 
