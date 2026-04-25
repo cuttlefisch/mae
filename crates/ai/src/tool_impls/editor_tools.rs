@@ -665,6 +665,28 @@ pub fn execute_visual_buffer_clear(editor: &mut Editor) -> Result<String, String
     }
 }
 
+pub fn execute_read_messages(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let last_n = args.get("last_n").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
+    let min_level = match args.get("level").and_then(|v| v.as_str()).unwrap_or("info") {
+        "error" => mae_core::MessageLevel::Error,
+        "warn" => mae_core::MessageLevel::Warn,
+        "debug" => mae_core::MessageLevel::Debug,
+        "trace" => mae_core::MessageLevel::Trace,
+        _ => mae_core::MessageLevel::Info,
+    };
+    let entries = editor.message_log.entries_filtered(min_level);
+    let start = entries.len().saturating_sub(last_n);
+    let lines: Vec<String> = entries[start..]
+        .iter()
+        .map(|e| format!("[{}] [{}] {}", e.level, e.target, e.message))
+        .collect();
+    if lines.is_empty() {
+        Ok("(no messages)".into())
+    } else {
+        Ok(lines.join("\n"))
+    }
+}
+
 pub fn execute_editor_save_state(editor: &mut Editor) -> Result<String, String> {
     let depth = editor.save_state();
     let buf_names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();

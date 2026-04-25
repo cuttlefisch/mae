@@ -351,16 +351,9 @@ pub(crate) fn try_complete_deferred(
             })
         }
         // Also handle LSP errors while a deferred call is pending
-        (_, LspTaskEvent::Error { message }) => Some(ToolResult {
+        (_, LspTaskEvent::Error { message }) if kind.is_lsp() => Some(ToolResult {
             tool_call_id: tool_call_id.to_string(),
-            tool_name: match kind {
-                DeferredKind::LspDefinition => "lsp_definition",
-                DeferredKind::LspReferences => "lsp_references",
-                DeferredKind::LspHover => "lsp_hover",
-                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
-                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
-            }
-            .into(),
+            tool_name: kind.tool_name().into(),
             success: false,
             output: format!("LSP error: {}", message),
         }),

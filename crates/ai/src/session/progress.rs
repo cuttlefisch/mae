@@ -15,6 +15,7 @@ pub(crate) struct CheckpointSnapshot {
     pub failed_calls: usize,
     pub mutating_calls: usize,
     pub read_calls: usize,
+    pub dap_calls: usize,
     pub files_touched: HashSet<String>,
     pub rounds: usize,
     pub had_user_interaction: bool,
@@ -62,6 +63,23 @@ const READ_TOOLS: &[&str] = &[
     "introspect",
 ];
 
+const DAP_TOOLS: &[&str] = &[
+    "dap_start",
+    "dap_set_breakpoint",
+    "dap_remove_breakpoint",
+    "dap_continue",
+    "dap_step",
+    "dap_list_variables",
+    "dap_inspect_variable",
+    "dap_expand_variable",
+    "dap_select_frame",
+    "dap_select_thread",
+    "dap_output",
+    "dap_evaluate",
+    "dap_disconnect",
+    "debug_state",
+];
+
 /// Keys in tool arguments that identify file paths.
 const FILE_ARG_KEYS: &[&str] = &["path", "file_path", "buffer", "file"];
 
@@ -92,6 +110,9 @@ impl ProgressTracker {
         }
         if READ_TOOLS.contains(&name) {
             self.current.read_calls += 1;
+        }
+        if DAP_TOOLS.contains(&name) {
+            self.current.dap_calls += 1;
         }
 
         if name == "ask_user" || name == "propose_changes" {
@@ -195,6 +216,11 @@ impl ProgressTracker {
 
         // +1 for any mutating tool
         if self.current.mutating_calls > 0 {
+            score += 1;
+        }
+
+        // +1 for active debug session work (≥2 DAP tool calls this window)
+        if self.current.dap_calls >= 2 {
             score += 1;
         }
 

@@ -115,6 +115,7 @@ impl Editor {
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         win.scroll_offset = win.scroll_offset.saturating_sub(1);
+                        win.cursor_row = win.cursor_row.saturating_sub(1);
                     }
                 } else {
                     let buf = &self.buffers[idx];
@@ -129,9 +130,11 @@ impl Editor {
                     let total = self.message_log.len();
                     let vh = self.viewport_height;
                     let max = total.saturating_sub(vh);
+                    let line_count = self.buffers[idx].line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         win.scroll_offset = (win.scroll_offset + 1).min(max);
+                        win.cursor_row = (win.cursor_row + 1).min(line_count);
                     }
                 } else {
                     let buf = &self.buffers[idx];
@@ -277,7 +280,10 @@ impl Editor {
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
                 if kind == crate::BufferKind::Messages {
-                    self.window_mgr.focused_window_mut().scroll_offset = 0;
+                    let win = self.window_mgr.focused_window_mut();
+                    win.scroll_offset = 0;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
                 } else if kind == crate::BufferKind::Conversation {
                     if let Some(ref mut conv) = self.buffers[idx].conversation {
                         conv.scroll_to_top();
@@ -302,7 +308,11 @@ impl Editor {
                 if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
                     let vh = self.viewport_height;
-                    self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
+                    let last_line = self.buffers[idx].line_count().saturating_sub(1);
+                    let win = self.window_mgr.focused_window_mut();
+                    win.scroll_offset = total.saturating_sub(vh);
+                    win.cursor_row = last_line;
+                    win.cursor_col = 0;
                 } else if kind == crate::BufferKind::Conversation {
                     // Conversation uses its own scroll state, not cursor_row.
                     if let Some(ref mut conv) = self.buffers[idx].conversation {
@@ -473,6 +483,7 @@ impl Editor {
                         let win = self.window_mgr.focused_window_mut();
                         for _ in 0..n {
                             win.scroll_offset = win.scroll_offset.saturating_sub(amount);
+                            win.cursor_row = win.cursor_row.saturating_sub(amount);
                         }
                     }
                     _ => {
@@ -505,10 +516,12 @@ impl Editor {
                     }
                     crate::BufferKind::Messages => {
                         let total = self.message_log.len();
+                        let line_count = self.buffers[idx].line_count().saturating_sub(1);
                         let win = self.window_mgr.focused_window_mut();
                         let max = total.saturating_sub(vh);
                         for _ in 0..n {
                             win.scroll_offset = (win.scroll_offset + amount).min(max);
+                            win.cursor_row = (win.cursor_row + amount).min(line_count);
                         }
                     }
                     _ => {

@@ -338,6 +338,57 @@ impl Window {
         }
     }
 
+    /// Word-wrap-aware scroll adjustment. Counts visual rows consumed by
+    /// wrapped lines between `scroll_offset` and `cursor_row`, and adjusts
+    /// `scroll_offset` upward until the cursor's wrapped line fits in the
+    /// viewport.
+    ///
+    /// `line_visual_rows` returns how many visual rows a given buffer line
+    /// occupies (>= 1). For non-wrapped buffers, always returns 1.
+    pub fn ensure_scroll_wrapped<F>(&mut self, viewport_height: usize, line_visual_rows: F)
+    where
+        F: Fn(usize) -> usize,
+    {
+        if viewport_height == 0 {
+            return;
+        }
+
+        // Cursor above viewport — scroll up.
+        if self.cursor_row < self.scroll_offset {
+            self.scroll_offset = self.cursor_row;
+        }
+
+        // Cursor below viewport — scroll down until it fits.
+        loop {
+            let mut visual = 0;
+            let mut cursor_visible = false;
+            for line in self.scroll_offset.. {
+                let rows = line_visual_rows(line);
+                if line == self.cursor_row {
+                    if visual + rows <= viewport_height {
+                        cursor_visible = true;
+                    }
+                    break;
+                }
+                visual += rows;
+                if visual >= viewport_height {
+                    break;
+                }
+            }
+            if cursor_visible {
+                break;
+            }
+            self.scroll_offset += 1;
+            // Safety: if cursor_row == scroll_offset, the cursor is on the
+            // first visible line and always visible (even if it wraps past
+            // the viewport — we can't do better without horizontal scrolling).
+            if self.scroll_offset >= self.cursor_row {
+                self.scroll_offset = self.cursor_row;
+                break;
+            }
+        }
+    }
+
     /// Adjust horizontal scroll so the cursor column stays visible.
     /// `viewport_width` is the number of text columns available (after gutter).
     pub fn ensure_scroll_horizontal(&mut self, viewport_width: usize) {

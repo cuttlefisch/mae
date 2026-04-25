@@ -36,6 +36,34 @@ pub type DeferredAiReply = Option<(
     tokio::time::Instant, // created_at
 )>;
 
+/// DAP deferred resolution phase — tracks multi-stage async pipelines.
+/// Unlike LSP (single event → resolve), DAP has a cascade:
+/// Stopped → RefreshThreadsAndStack → StackTraceResult.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
+pub enum DapDeferredPhase {
+    /// Waiting for initial event (Stopped/Terminated/SessionStarted).
+    WaitingForEvent,
+    /// DapStart got SessionStarted with stop_on_entry — awaiting Stopped event.
+    WaitingForStop,
+    /// Got Stopped — now waiting for StackTraceResult (the refresh cascade).
+    WaitingForStackTrace,
+}
+
+/// State for a deferred DAP tool call (the "promise").
+pub struct DeferredDapState {
+    pub kind: DeferredKind,
+    pub phase: DapDeferredPhase,
+    pub tool_call_id: String,
+    pub reply: tokio::sync::oneshot::Sender<ToolResult>,
+    pub created_at: tokio::time::Instant,
+    /// Whether this DapStart was launched with stop_on_entry=true.
+    pub stop_on_entry: bool,
+}
+
+/// Type alias for the deferred DAP reply state.
+pub type DeferredDapReply = Option<DeferredDapState>;
+
 /// Deferred MCP reply state — supports multiple concurrent deferred calls.
 /// Each entry tracks its `DeferredKind`, reply channel, and creation time.
 pub type DeferredMcpReply = Vec<(
@@ -55,8 +83,10 @@ pub struct AiEventContext<'a> {
     pub all_tools: &'a [mae_ai::ToolDefinition],
     pub permission_policy: &'a mae_ai::PermissionPolicy,
     pub deferred_ai_reply: &'a mut DeferredAiReply,
+    pub deferred_dap_reply: &'a mut DeferredDapReply,
     pub pending_interactive_event: &'a mut Option<PendingInteractiveEvent>,
     pub lsp_command_tx: &'a tokio::sync::mpsc::Sender<LspCommand>,
+    pub dap_command_tx: &'a tokio::sync::mpsc::Sender<mae_dap::DapCommand>,
     pub ai_event_tx: &'a tokio::sync::mpsc::Sender<AiEvent>,
     #[allow(dead_code)]
     pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
@@ -93,12 +123,36 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     if reply.send(result).is_err() {
                         warn!("AI tool result channel closed before reply");
                     }
+                    // Drain any DAP intents queued by immediate tools (e.g. dap_set_breakpoint)
+                    // so they take effect immediately rather than batching with the next deferred.
+                    if editor.has_pending_dap_intents() {
+                        crate::dap_bridge::drain_dap_intents(editor, ctx.dap_command_tx);
+                    }
                 }
                 ExecuteResult::Deferred { kind, .. } => {
-                    info!(?kind, "deferred AI tool — awaiting LSP response");
-                    crate::lsp_bridge::drain_lsp_intents(editor, ctx.lsp_command_tx);
-                    *ctx.deferred_ai_reply =
-                        Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
+                    if kind.is_dap() {
+                        info!(?kind, "deferred AI tool — awaiting DAP response");
+                        crate::dap_bridge::drain_dap_intents(editor, ctx.dap_command_tx);
+                        let stop_on_entry = kind == DeferredKind::DapStart
+                            && call
+                                .arguments
+                                .get("stop_on_entry")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                        *ctx.deferred_dap_reply = Some(DeferredDapState {
+                            kind,
+                            phase: DapDeferredPhase::WaitingForEvent,
+                            tool_call_id: call.id.clone(),
+                            reply,
+                            created_at: tokio::time::Instant::now(),
+                            stop_on_entry,
+                        });
+                    } else {
+                        info!(?kind, "deferred AI tool — awaiting LSP response");
+                        crate::lsp_bridge::drain_lsp_intents(editor, ctx.lsp_command_tx);
+                        *ctx.deferred_ai_reply =
+                            Some((kind, call.id.clone(), reply, tokio::time::Instant::now()));
+                    }
                 }
             }
         }
@@ -474,6 +528,9 @@ pub fn timeout_deferred_reply(editor: &mut Editor, deferred_ai_reply: &mut Defer
                     DeferredKind::LspHover => "lsp_hover",
                     DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
                     DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+                    DeferredKind::DapStart => "dap_start",
+                    DeferredKind::DapContinue => "dap_continue",
+                    DeferredKind::DapStep => "dap_step",
                 }
                 .into(),
                 success: false,
@@ -613,4 +670,316 @@ pub fn try_resolve_deferred_mcp(
         }
     }
     resolved
+}
+
+/// Result of trying to resolve a deferred DAP call.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DapResolveAction {
+    /// No deferred call pending or event didn't match.
+    None,
+    /// Transitioned from WaitingForEvent → WaitingForStackTrace.
+    /// Caller should drain DAP intents so RefreshThreadsAndStack is sent.
+    TransitionedToStackTrace,
+    /// Fully resolved — result sent back to AI session.
+    Resolved,
+}
+
+/// Check if an incoming DAP event advances or completes a deferred DAP tool call.
+///
+/// DAP has a multi-stage event cascade:
+/// - `dap_start` (stop_on_entry=false): WaitingForEvent → SessionStarted → resolve
+/// - `dap_start` (stop_on_entry=true): WaitingForEvent → SessionStarted → WaitingForStop → Stopped → WaitingForStackTrace → StackTraceResult → resolve
+/// - `dap_continue/step`: WaitingForEvent → Stopped → WaitingForStackTrace → StackTraceResult → resolve
+/// - Any: WaitingForEvent → Terminated → resolve
+///
+/// Call this BEFORE `handle_dap_event` so the phase transition happens before
+/// the event loop processes the event (which queues RefreshThreadsAndStack).
+pub fn try_resolve_deferred_dap(
+    editor: &mut Editor,
+    dap_event: &mae_dap::DapTaskEvent,
+    deferred_dap_reply: &mut DeferredDapReply,
+) -> DapResolveAction {
+    let state = match deferred_dap_reply.as_ref() {
+        Some(s) => s,
+        None => return DapResolveAction::None,
+    };
+
+    debug!(
+        kind = ?state.kind,
+        phase = ?state.phase,
+        event = ?dap_event_name(dap_event),
+        "try_resolve_deferred_dap: checking event against deferred"
+    );
+
+    match (state.kind, state.phase, dap_event) {
+        // === DapStart (stop_on_entry=true): Phase 1 — SessionStarted → WaitingForStop ===
+        (
+            DeferredKind::DapStart,
+            DapDeferredPhase::WaitingForEvent,
+            mae_dap::DapTaskEvent::SessionStarted { .. },
+        ) if state.stop_on_entry => {
+            if let Some(s) = deferred_dap_reply.as_mut() {
+                s.phase = DapDeferredPhase::WaitingForStop;
+            }
+            DapResolveAction::None
+        }
+
+        // === DapStart (stop_on_entry=true): Phase 2 — Stopped → WaitingForStackTrace ===
+        (
+            DeferredKind::DapStart,
+            DapDeferredPhase::WaitingForStop,
+            mae_dap::DapTaskEvent::Stopped { .. },
+        ) => {
+            if let Some(s) = deferred_dap_reply.as_mut() {
+                s.phase = DapDeferredPhase::WaitingForStackTrace;
+            }
+            DapResolveAction::TransitionedToStackTrace
+        }
+
+        // === DapStart (stop_on_entry=true): Phase 3 — StackTraceResult → Resolved ===
+        (
+            DeferredKind::DapStart,
+            DapDeferredPhase::WaitingForStackTrace,
+            mae_dap::DapTaskEvent::StackTraceResult { .. },
+        ) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = build_dap_stopped_response(editor, dap_event);
+            resolve_dap_deferred(editor, deferred_dap_reply, true, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        // === DapStart (stop_on_entry=false): SessionStarted → Resolved immediately ===
+        (
+            DeferredKind::DapStart,
+            DapDeferredPhase::WaitingForEvent,
+            mae_dap::DapTaskEvent::SessionStarted { adapter_id, .. },
+        ) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = serde_json::json!({
+                "status": "session_started",
+                "adapter": adapter_id,
+            })
+            .to_string();
+            resolve_dap_deferred(editor, deferred_dap_reply, true, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+        (DeferredKind::DapStart, _, mae_dap::DapTaskEvent::SessionStartFailed { error }) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = format!("Debug session failed to start: {}", error);
+            resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        // === DapContinue / DapStep: Phase 1 — Stopped event ===
+        (
+            DeferredKind::DapContinue | DeferredKind::DapStep,
+            DapDeferredPhase::WaitingForEvent,
+            mae_dap::DapTaskEvent::Stopped { .. },
+        ) => {
+            // Transition to phase 2: wait for StackTraceResult after the refresh cascade
+            if let Some(s) = deferred_dap_reply.as_mut() {
+                s.phase = DapDeferredPhase::WaitingForStackTrace;
+            }
+            DapResolveAction::TransitionedToStackTrace
+        }
+
+        // === DapContinue / DapStep: Phase 2 — StackTraceResult ===
+        (
+            DeferredKind::DapContinue | DeferredKind::DapStep,
+            DapDeferredPhase::WaitingForStackTrace,
+            mae_dap::DapTaskEvent::StackTraceResult { .. },
+        ) => {
+            let tool_call_id = state.tool_call_id.clone();
+            // Build rich response from editor.debug_state (already updated by handle_dap_event
+            // for the Stopped event; StackTraceResult will be applied after this returns)
+            let output = build_dap_stopped_response(editor, dap_event);
+            resolve_dap_deferred(editor, deferred_dap_reply, true, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        // === Terminated — resolves any pending DAP deferred ===
+        (_, _, mae_dap::DapTaskEvent::Terminated) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = serde_json::json!({"status": "terminated"}).to_string();
+            resolve_dap_deferred(editor, deferred_dap_reply, true, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        // === Error — resolves any pending DAP deferred ===
+        (_, _, mae_dap::DapTaskEvent::Error { message }) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = format!("DAP error: {}", message);
+            resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        // === AdapterExited — resolves any pending DAP deferred ===
+        (_, _, mae_dap::DapTaskEvent::AdapterExited) => {
+            let tool_call_id = state.tool_call_id.clone();
+            let output = "Debug adapter process exited".to_string();
+            resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
+            DapResolveAction::Resolved
+        }
+
+        _ => DapResolveAction::None,
+    }
+}
+
+/// Send the deferred DAP result back to the AI session and update conversation.
+fn resolve_dap_deferred(
+    editor: &mut Editor,
+    deferred_dap_reply: &mut DeferredDapReply,
+    success: bool,
+    output: &str,
+    tool_call_id: &str,
+) {
+    let state = deferred_dap_reply.take().unwrap();
+    let result = ToolResult {
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: state.kind.tool_name().into(),
+        success,
+        output: output.to_string(),
+    };
+    debug!(tool_call_id, success, "deferred DAP tool call completed");
+    if let Some(conv) = find_conversation_buffer_mut(editor) {
+        conv.complete_last_tool_call(result.success, &result.output, None);
+    }
+    if state.reply.send(result).is_err() {
+        warn!("deferred DAP tool result channel closed");
+    }
+}
+
+/// Build a rich JSON response from the current debug state after a Stopped + StackTraceResult.
+fn build_dap_stopped_response(editor: &Editor, dap_event: &mae_dap::DapTaskEvent) -> String {
+    // Extract thread_id and frames from the StackTraceResult event
+    let (thread_id, frames) = match dap_event {
+        mae_dap::DapTaskEvent::StackTraceResult { thread_id, frames } => (*thread_id, frames),
+        _ => return serde_json::json!({"status": "stopped"}).to_string(),
+    };
+
+    // Get stop reason from debug_state (already updated by apply_dap_stopped)
+    let reason = editor
+        .debug_state
+        .as_ref()
+        .and_then(|ds| ds.last_stop_reason.as_deref())
+        .unwrap_or("unknown");
+
+    // Top frame from the event data
+    let top_frame = frames.first().map(|f| {
+        let src = f
+            .source
+            .as_ref()
+            .and_then(|s| s.path.as_deref().or(s.name.as_deref()));
+        serde_json::json!({
+            "id": f.id,
+            "name": &f.name,
+            "source": src,
+            "line": f.line,
+            "column": f.column,
+        })
+    });
+
+    // Breakpoint count
+    let bp_count = editor
+        .debug_state
+        .as_ref()
+        .map(|ds| ds.breakpoints.values().map(|v| v.len()).sum::<usize>())
+        .unwrap_or(0);
+
+    serde_json::json!({
+        "status": "stopped",
+        "reason": reason,
+        "thread_id": thread_id,
+        "frame": top_frame,
+        "total_frames": frames.len(),
+        "breakpoints_set": bp_count,
+    })
+    .to_string()
+}
+
+/// Check if a deferred DAP tool call has timed out (15s).
+/// Short name for a DAP event — used only for tracing.
+fn dap_event_name(event: &mae_dap::DapTaskEvent) -> &'static str {
+    match event {
+        mae_dap::DapTaskEvent::SessionStarted { .. } => "SessionStarted",
+        mae_dap::DapTaskEvent::SessionStartFailed { .. } => "SessionStartFailed",
+        mae_dap::DapTaskEvent::Stopped { .. } => "Stopped",
+        mae_dap::DapTaskEvent::Continued { .. } => "Continued",
+        mae_dap::DapTaskEvent::ThreadEvent { .. } => "ThreadEvent",
+        mae_dap::DapTaskEvent::Output { .. } => "Output",
+        mae_dap::DapTaskEvent::Terminated => "Terminated",
+        mae_dap::DapTaskEvent::AdapterExited => "AdapterExited",
+        mae_dap::DapTaskEvent::Error { .. } => "Error",
+        mae_dap::DapTaskEvent::ThreadsResult { .. } => "ThreadsResult",
+        mae_dap::DapTaskEvent::StackTraceResult { .. } => "StackTraceResult",
+        mae_dap::DapTaskEvent::ScopesResult { .. } => "ScopesResult",
+        mae_dap::DapTaskEvent::VariablesResult { .. } => "VariablesResult",
+        mae_dap::DapTaskEvent::BreakpointsSet { .. } => "BreakpointsSet",
+        mae_dap::DapTaskEvent::EvaluateResult { .. } => "EvaluateResult",
+    }
+}
+
+pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut DeferredDapReply) {
+    if let Some(ref state) = *deferred_dap_reply {
+        if state.created_at.elapsed() > std::time::Duration::from_secs(15) {
+            let tool_call_id = state.tool_call_id.clone();
+            let kind = state.kind;
+            let phase = state.phase;
+            warn!(?kind, ?phase, %tool_call_id, "deferred DAP tool call timed out after 15s");
+
+            // Build diagnostic info from current debug state.
+            let diag = if let Some(ds) = editor.debug_state.as_ref() {
+                let thread_info = if ds.threads.is_empty() {
+                    "no threads known".to_string()
+                } else {
+                    ds.threads
+                        .iter()
+                        .map(|t| {
+                            format!(
+                                "{}({})",
+                                t.name,
+                                if t.stopped { "stopped" } else { "running" }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let bp_info = ds
+                    .breakpoints
+                    .iter()
+                    .map(|(src, bps)| {
+                        let lines: Vec<_> = bps
+                            .iter()
+                            .map(|b| {
+                                format!(
+                                    "{}:{}{}",
+                                    src,
+                                    b.line,
+                                    if b.verified { "" } else { " (unverified)" }
+                                )
+                            })
+                            .collect();
+                        lines.join(", ")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "Threads: [{}]. Breakpoints: [{}]. Active thread: {}",
+                    thread_info,
+                    if bp_info.is_empty() { "none" } else { &bp_info },
+                    ds.active_thread_id,
+                )
+            } else {
+                "No debug state (session may have ended)".to_string()
+            };
+
+            let output = format!(
+                "DAP operation timed out after 15s ({:?}, phase: {:?}). \
+                 Diagnostic: {}. \
+                 Check MAE logs (RUST_LOG=mae_dap=debug) for adapter events.",
+                kind, phase, diag
+            );
+            resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
+        }
+    }
 }

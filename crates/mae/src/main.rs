@@ -545,6 +545,7 @@ fn run_gui(
         ai_event_tx,
         ai_command_tx,
         deferred_ai_reply: None,
+        deferred_dap_reply: None,
         pending_interactive_event: None,
         deferred_mcp_reply: Vec::new(),
         last_mcp_activity: None,
@@ -669,6 +670,7 @@ struct GuiApp {
     ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     deferred_ai_reply: ai_event_handler::DeferredAiReply,
+    deferred_dap_reply: ai_event_handler::DeferredDapReply,
     pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent>,
     deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
     last_mcp_activity: Option<tokio::time::Instant>,
@@ -817,8 +819,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     all_tools: &self.all_tools,
                     permission_policy: &self.permission_policy,
                     deferred_ai_reply: &mut self.deferred_ai_reply,
+                    deferred_dap_reply: &mut self.deferred_dap_reply,
                     pending_interactive_event: &mut self.pending_interactive_event,
                     lsp_command_tx: &self.lsp_command_tx,
+                    dap_command_tx: &self.dap_command_tx,
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
                 };
@@ -842,7 +846,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             MaeEvent::DapEvent(dap_event) => {
+                // Try to resolve deferred DAP tool first (promise/await)
+                let dap_action = ai_event_handler::try_resolve_deferred_dap(
+                    &mut self.editor,
+                    &dap_event,
+                    &mut self.deferred_dap_reply,
+                );
                 dap_bridge::handle_dap_event(&mut self.editor, dap_event);
+                if dap_action == ai_event_handler::DapResolveAction::TransitionedToStackTrace {
+                    dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+                }
                 self.dirty = true;
             }
             MaeEvent::McpToolRequest(mcp_req) => {
@@ -1085,6 +1098,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         // Timeout deferred replies.
         ai_event_handler::timeout_deferred_reply(&mut self.editor, &mut self.deferred_ai_reply);
+        ai_event_handler::timeout_deferred_dap_reply(
+            &mut self.editor,
+            &mut self.deferred_dap_reply,
+        );
         ai_event_handler::timeout_deferred_mcp_reply(
             &mut self.editor,
             &mut self.deferred_mcp_reply,
@@ -1109,10 +1126,46 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             };
             let vh = self.editor.focused_window_viewport_height(total_area);
             self.editor.viewport_height = vh;
-            self.editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll(vh);
+
+            // Compute text_area_width for word-wrap cursor movement.
+            let focused_id = self.editor.window_mgr.focused_id();
+            let rects = self.editor.window_mgr.layout_rects(total_area);
+            if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+                let inner_w = win_rect.width.saturating_sub(2) as usize;
+                let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
+                let gutter_w = if self.editor.show_line_numbers {
+                    mae_renderer::gutter_width(buf.display_line_count())
+                } else {
+                    2 // marker column + padding
+                };
+                self.editor.text_area_width = inner_w.saturating_sub(gutter_w);
+            }
+
+            if self.editor.word_wrap && self.editor.text_area_width > 0 {
+                let tw = self.editor.text_area_width;
+                let bi = self.editor.break_indent;
+                let sb_w = self.editor.show_break.chars().count();
+                let buf_idx = self.editor.active_buffer_idx();
+                let rope = self.editor.buffers[buf_idx].rope().clone();
+                let line_count = rope.len_lines();
+                self.editor
+                    .window_mgr
+                    .focused_window_mut()
+                    .ensure_scroll_wrapped(vh, |line| {
+                        if line >= line_count {
+                            return 1;
+                        }
+                        let rope_line = rope.line(line);
+                        let text: String = rope_line.chars().collect();
+                        let text = text.trim_end_matches('\n');
+                        mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                    });
+            } else {
+                self.editor
+                    .window_mgr
+                    .focused_window_mut()
+                    .ensure_scroll(vh);
+            }
         }
 
         // Shell lifecycle (runs after every event batch).

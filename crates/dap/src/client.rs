@@ -86,7 +86,7 @@ impl DapClient {
             .args(&config.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to spawn debug adapter '{}': {}", config.command, e))?;
 
@@ -102,6 +102,25 @@ impl DapClient {
         let (event_tx, event_rx) = mpsc::channel(256);
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<Vec<u8>>(64);
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+
+        // Forward adapter stderr as Error events so crashes are visible.
+        if let Some(stderr) = child.stderr.take() {
+            let stderr_tx = event_tx.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                    let trimmed = line.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        let _ = stderr_tx
+                            .send(DapEventKind::Error(format!("[adapter stderr] {}", trimmed)))
+                            .await;
+                    }
+                    line.clear();
+                }
+            });
+        }
 
         spawn_reader_task(stdout, event_tx.clone(), pending.clone());
         spawn_writer_task(stdin, outgoing_rx);
@@ -164,7 +183,7 @@ impl DapClient {
         let args = InitializeRequestArguments {
             client_id: Some("mae".into()),
             client_name: Some("MAE Editor".into()),
-            adapter_id: Some(config.adapter_id.clone()),
+            adapter_id: config.adapter_id.clone(),
             lines_start_at1: true,
             columns_start_at1: true,
             supports_variable_type: true,

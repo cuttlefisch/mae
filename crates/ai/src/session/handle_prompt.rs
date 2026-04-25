@@ -416,14 +416,23 @@ impl AgentSession {
             };
 
             if !response.tool_calls.is_empty() {
-                // Signature: sorted tool names + arguments for robust comparison
-                let mut names: Vec<String> = response
+                // Signature: sorted tool names + arguments for robust comparison.
+                // Exclude pure debug_state polls from oscillation detection — repeated
+                // state reads during debugging are legitimate, not loops.
+                let sig_calls: Vec<String> = response
                     .tool_calls
                     .iter()
+                    .filter(|c| c.name != "debug_state" || response.tool_calls.len() > 1)
                     .map(|c| format!("{}:{}", c.name, c.arguments))
                     .collect();
-                names.sort();
-                let turn_sig = names.join("|");
+                let turn_sig = if sig_calls.is_empty() {
+                    // Pure debug_state poll — use a unique non-repeating signature
+                    format!("_poll_{}", self.turn_history.len())
+                } else {
+                    let mut sorted = sig_calls;
+                    sorted.sort();
+                    sorted.join("|")
+                };
 
                 // Oscillating Loop Detection: count how many times this turn signature
                 // appears in the recent history window. Catches both strict repeats
@@ -576,7 +585,7 @@ impl AgentSession {
                     }
                     // Recache tools token estimate
                     self.tools_tokens = token_estimate::estimate_tools_tokens(&self.tools);
-                    let output = if added_names.is_empty() {
+                    let mut output = if added_names.is_empty() {
                         "No new tools added (categories already enabled or not recognized).".into()
                     } else {
                         format!(
@@ -585,6 +594,17 @@ impl AgentSession {
                             added_names.join(", ")
                         )
                     };
+                    // Append workflow preambles for categories that benefit from guidance.
+                    if categories.contains(&crate::tools::ToolCategory::Dap) {
+                        output.push_str("\n\nDAP Debug Workflow:\n\
+                            1. dap_start → session active\n\
+                            2. dap_set_breakpoint → breakpoints configured\n\
+                            3. dap_continue / dap_step → blocks until stopped (returns state)\n\
+                            4. dap_list_variables / dap_inspect_variable → read variables at stopped point\n\
+                            5. dap_evaluate → evaluate expressions (check dap_output for result)\n\
+                            6. dap_disconnect → end session\n\
+                            Note: dap_start, dap_continue, and dap_step block automatically. No polling needed.");
+                    }
                     info!(categories = %categories_str, added = added_names.len(), "request_tools");
                     let _ = self
                         .event_tx

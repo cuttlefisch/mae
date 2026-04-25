@@ -108,7 +108,7 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 97,
+            tools.len() >= 98,
             "Expected at least 97 AI tools, got {}",
             tools.len()
         );

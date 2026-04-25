@@ -2067,3 +2067,19 @@ fn transcript_metadata_written() {
     let _ = std::fs::remove_file(&transcript_path);
     let _ = std::fs::remove_dir(&tmp_dir);
 }
+
+#[test]
+fn test_compact_history_empty_messages() {
+    let mut session = make_test_session_with_messages(vec![]);
+    // Should not panic with 0 messages
+    session.compact_history();
+    assert!(session.messages.is_empty());
+}
+
+#[test]
+fn test_compact_history_single_message() {
+    let mut session = make_test_session_with_messages(vec![user_msg("hello")]);
+    // Should not panic with 1 message (compact_end would be 0, range 1..0 would panic)
+    session.compact_history();
+    assert_eq!(session.messages.len(), 1);
+}

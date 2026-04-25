@@ -15,6 +15,7 @@
 //! uniform across LSP/DAP/AI.
 
 use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::client::{DapClient, DapEventKind, DapServerConfig};
 use crate::protocol::{
@@ -206,6 +207,25 @@ async fn handle_command(
     cmd: DapCommand,
     event_tx: &mpsc::Sender<DapTaskEvent>,
 ) {
+    let cmd_name = match &cmd {
+        DapCommand::StartSession { .. } => "StartSession",
+        DapCommand::SetBreakpoints { .. } => "SetBreakpoints",
+        DapCommand::Continue { thread_id } => {
+            debug!(thread_id, "DAP command: Continue");
+            "Continue"
+        }
+        DapCommand::Next { .. } => "Next",
+        DapCommand::StepIn { .. } => "StepIn",
+        DapCommand::StepOut { .. } => "StepOut",
+        DapCommand::RefreshThreadsAndStack { .. } => "RefreshThreadsAndStack",
+        DapCommand::RequestScopes { .. } => "RequestScopes",
+        DapCommand::RequestVariables { .. } => "RequestVariables",
+        DapCommand::Evaluate { .. } => "Evaluate",
+        DapCommand::Terminate => "Terminate",
+        DapCommand::Disconnect { .. } => "Disconnect",
+        DapCommand::Shutdown => "Shutdown",
+    };
+    debug!(cmd = cmd_name, "DAP task handling command");
     match cmd {
         DapCommand::StartSession {
             config,
@@ -539,6 +559,7 @@ async fn forward_adapter_event(
 ) {
     use crate::protocol::{OutputEventBody, StoppedEventBody, TerminatedEventBody};
 
+    debug!(event = %e.event, "DAP adapter event received");
     match e.event.as_str() {
         "stopped" => {
             if let Some(body) = e
@@ -615,8 +636,24 @@ async fn forward_adapter_event(
                 .and_then(|v| serde_json::from_value::<TerminatedEventBody>(v.clone()).ok());
             let _ = event_tx.send(DapTaskEvent::Terminated).await;
         }
+        "exited" => {
+            // Forward the exit code — the editor uses this as an early signal
+            // that the debuggee is done (before the "terminated" event).
+            let exit_code = e
+                .body
+                .as_ref()
+                .and_then(|v| v.get("exitCode"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1);
+            let _ = event_tx
+                .send(DapTaskEvent::Output {
+                    category: "console".into(),
+                    output: format!("Process exited with code {}\n", exit_code),
+                })
+                .await;
+        }
         _ => {
-            // Drop other events silently (exited, breakpoint, module, ...)
+            // Drop other events silently (breakpoint, module, ...)
             // — editor doesn't need them yet.
         }
     }
@@ -1143,6 +1180,29 @@ mod tests {
         }
 
         drop(cmd_tx);
+    }
+
+    #[tokio::test]
+    async fn exited_event_forwarded_as_output() {
+        let (_cmd, mut evt, adapter) = manager_with_session().await;
+        let _ = recv_with_timeout(&mut evt).await; // drain SessionStarted
+
+        adapter
+            .emit("exited", serde_json::json!({"exitCode": 42}))
+            .await;
+
+        let e = recv_with_timeout(&mut evt).await;
+        match e {
+            DapTaskEvent::Output { category, output } => {
+                assert_eq!(category, "console");
+                assert!(
+                    output.contains("42"),
+                    "exit code should appear in output: {}",
+                    output
+                );
+            }
+            other => panic!("expected Output for exited event, got: {:?}", other),
+        }
     }
 
     #[tokio::test]

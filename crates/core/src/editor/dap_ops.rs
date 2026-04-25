@@ -92,8 +92,11 @@ impl Editor {
                 adapter
             )
         })?;
-        let launch_args = default_launch_args(adapter, program, extra_args, stop_on_entry);
-        self.dap_start_session(spawn, program.to_string(), launch_args, false);
+        // Canonicalize the program path — debugpy (and some other adapters)
+        // require absolute paths for stop_on_entry and breakpoint matching.
+        let abs_program = canonicalize_source_path(program);
+        let launch_args = default_launch_args(adapter, &abs_program, extra_args, stop_on_entry);
+        self.dap_start_session(spawn, abs_program, launch_args, false);
         Ok(())
     }
 
@@ -147,6 +150,7 @@ impl Editor {
         condition: Option<String>,
         hit_condition: Option<String>,
     ) -> Vec<i64> {
+        let source_path = canonicalize_source_path(&source_path);
         let state = self
             .debug_state
             .get_or_insert_with(|| DebugState::new(DebugTarget::SelfDebug));
@@ -249,7 +253,8 @@ impl Editor {
         // Lazy-create state so breakpoints can be recorded before a session.
         self.debug_state
             .get_or_insert_with(|| DebugState::new(DebugTarget::SelfDebug));
-        self.mutate_breakpoint(source_path, line, /* ensure_present = */ true)
+        let abs_path = canonicalize_source_path(&source_path);
+        self.mutate_breakpoint(abs_path, line, /* ensure_present = */ true)
     }
 
     /// Idempotently remove the breakpoint at `(source_path, line)`.
@@ -259,7 +264,8 @@ impl Editor {
         if self.debug_state.is_none() {
             return Vec::new();
         }
-        self.mutate_breakpoint(source_path, line, /* ensure_present = */ false)
+        let abs_path = canonicalize_source_path(&source_path);
+        self.mutate_breakpoint(abs_path, line, /* ensure_present = */ false)
     }
 
     /// Shared body for `dap_set_breakpoint`/`dap_remove_breakpoint`.
@@ -409,6 +415,11 @@ impl Editor {
         self.set_status("[DAP] terminating...");
     }
 
+    /// Whether there are queued DAP intents waiting to be drained.
+    pub fn has_pending_dap_intents(&self) -> bool {
+        !self.pending_dap_intents.is_empty()
+    }
+
     /// Disconnect — kills the adapter process.
     pub fn dap_disconnect(&mut self, terminate_debuggee: bool) {
         self.pending_dap_intents
@@ -460,6 +471,7 @@ impl Editor {
             for t in state.threads.iter_mut() {
                 t.stopped = true;
             }
+            state.last_stop_reason = Some(reason.clone());
         }
         let msg = match text {
             Some(t) if !t.is_empty() => format!("[DAP] stopped: {} ({})", reason, t),
@@ -640,6 +652,24 @@ impl Editor {
     pub fn apply_dap_error(&mut self, message: String) {
         self.set_status(format!("[DAP] {}", message));
     }
+}
+
+/// Canonicalize a source path for DAP — resolve relative paths to absolute.
+/// debugpy (and some other adapters) require absolute paths for `stop_on_entry`
+/// and breakpoint matching. Falls back to the original string if resolution fails.
+fn canonicalize_source_path(path: &str) -> String {
+    // Try std::fs::canonicalize first (resolves symlinks + makes absolute).
+    // Fall back to joining with CWD if the file doesn't exist yet.
+    if let Ok(abs) = std::fs::canonicalize(path) {
+        return abs.to_string_lossy().into_owned();
+    }
+    let p = std::path::Path::new(path);
+    if p.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(p).to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
 }
 
 /// Read an env var, falling back to a default string. Keeps the adapter
@@ -1348,6 +1378,98 @@ mod tests {
                 assert_eq!(breakpoints[0].condition.as_deref(), Some("x > 0"));
             }
             other => panic!("expected SetBreakpoints, got {:?}", other),
+        }
+    }
+
+    // ---- Path canonicalization regression tests ----
+    // debugpy (and some other adapters) require absolute paths for program
+    // and breakpoint source. Relative paths cause stop_on_entry to silently
+    // fail and breakpoints to not match.
+
+    #[test]
+    fn canonicalize_absolute_path_unchanged() {
+        let abs = canonicalize_source_path("/usr/bin/python3");
+        assert!(
+            abs.starts_with('/'),
+            "absolute path should stay absolute: {}",
+            abs
+        );
+    }
+
+    #[test]
+    fn canonicalize_relative_path_becomes_absolute() {
+        let result = canonicalize_source_path("test_fixtures/dap_test.py");
+        assert!(
+            std::path::Path::new(&result).is_absolute(),
+            "relative path should become absolute: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn canonicalize_nonexistent_relative_path_still_absolute() {
+        let result = canonicalize_source_path("nonexistent/foo.py");
+        assert!(
+            std::path::Path::new(&result).is_absolute(),
+            "even nonexistent relative paths should become absolute: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn dap_set_breakpoint_stores_absolute_path() {
+        let mut ed = Editor::new();
+        ed.dap_set_breakpoint("relative/path.py".into(), 10);
+        let state = ed.debug_state.as_ref().unwrap();
+        for key in state.breakpoints.keys() {
+            assert!(
+                std::path::Path::new(key).is_absolute(),
+                "breakpoint source key should be absolute: {}",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn dap_remove_breakpoint_matches_canonical_path() {
+        let mut ed = Editor::new();
+        ed.dap_set_breakpoint("relative/path.py".into(), 10);
+        assert_eq!(ed.debug_state.as_ref().unwrap().breakpoints.len(), 1);
+        // Remove using the same relative path — should match after canonicalization
+        let remaining = ed.dap_remove_breakpoint("relative/path.py".into(), 10);
+        assert!(remaining.is_empty(), "breakpoint should be removed");
+    }
+
+    #[test]
+    fn dap_start_with_adapter_uses_absolute_program_path() {
+        let mut ed = Editor::new();
+        ed.dap_start_with_adapter("lldb", "relative/binary", &[])
+            .unwrap();
+        assert_eq!(ed.pending_dap_intents.len(), 1);
+        match &ed.pending_dap_intents[0] {
+            DapIntent::StartSession { launch_args, .. } => {
+                let program = launch_args["program"].as_str().unwrap();
+                assert!(
+                    std::path::Path::new(program).is_absolute(),
+                    "launch args program should be absolute: {}",
+                    program
+                );
+            }
+            other => panic!("expected StartSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dap_set_breakpoint_conditional_stores_absolute_path() {
+        let mut ed = Editor::new();
+        ed.dap_set_breakpoint_conditional("relative/path.py".into(), 5, Some("x > 0".into()), None);
+        let state = ed.debug_state.as_ref().unwrap();
+        for key in state.breakpoints.keys() {
+            assert!(
+                std::path::Path::new(key).is_absolute(),
+                "conditional breakpoint source key should be absolute: {}",
+                key
+            );
         }
     }
 }

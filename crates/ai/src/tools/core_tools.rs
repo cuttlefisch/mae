@@ -151,6 +151,39 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "read_messages".into(),
+            description: "Read the editor's *Messages* log buffer. Shows errors, warnings, and info from all subsystems (DAP, LSP, AI, etc.). Essential for diagnosing command failures — check this when a tool call fails or times out.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "last_n".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of recent messages to return (default: 30)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "level".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Minimum severity: error, warn, info, debug, trace (default: info)".into(),
+                            enum_values: Some(vec![
+                                "error".into(),
+                                "warn".into(),
+                                "info".into(),
+                                "debug".into(),
+                                "trace".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "window_layout".into(),
             description: "JSON of all windows with their buffer assignments and dimensions.".into(),
             parameters: ToolParameters {

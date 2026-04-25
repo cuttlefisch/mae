@@ -152,6 +152,9 @@ impl AgentSession {
             .min(tx_start);
         let mut compacted = 0;
 
+        if compact_end <= 1 {
+            return;
+        }
         for msg in &mut self.messages[1..compact_end] {
             if let MessageContent::ToolResult(ref mut r) = msg.content {
                 let token_est = token_estimate::estimate_tokens(&r.output);

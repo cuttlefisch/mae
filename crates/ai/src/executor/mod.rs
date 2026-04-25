@@ -15,7 +15,7 @@ use crate::tool_impls::lsp::{
     execute_lsp_references, execute_lsp_workspace_symbol,
 };
 
-/// What kind of deferred LSP tool call is pending.
+/// What kind of deferred tool call is pending (LSP or DAP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeferredKind {
     LspDefinition,
@@ -23,6 +23,45 @@ pub enum DeferredKind {
     LspHover,
     LspWorkspaceSymbol,
     LspDocumentSymbols,
+    DapStart,
+    DapContinue,
+    DapStep,
+}
+
+impl DeferredKind {
+    /// True for LSP-originated deferred calls.
+    pub fn is_lsp(self) -> bool {
+        matches!(
+            self,
+            DeferredKind::LspDefinition
+                | DeferredKind::LspReferences
+                | DeferredKind::LspHover
+                | DeferredKind::LspWorkspaceSymbol
+                | DeferredKind::LspDocumentSymbols
+        )
+    }
+
+    /// True for DAP-originated deferred calls.
+    pub fn is_dap(self) -> bool {
+        matches!(
+            self,
+            DeferredKind::DapStart | DeferredKind::DapContinue | DeferredKind::DapStep
+        )
+    }
+
+    /// Return the tool name string for this deferred kind.
+    pub fn tool_name(self) -> &'static str {
+        match self {
+            DeferredKind::LspDefinition => "lsp_definition",
+            DeferredKind::LspReferences => "lsp_references",
+            DeferredKind::LspHover => "lsp_hover",
+            DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+            DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+            DeferredKind::DapStart => "dap_start",
+            DeferredKind::DapContinue => "dap_continue",
+            DeferredKind::DapStep => "dap_step",
+        }
+    }
 }
 
 /// Result of executing a tool call — either immediately available or
@@ -70,18 +109,21 @@ pub fn execute_tool(
         });
     }
 
-    // 3. Check for deferred (async) tools first
+    // 3. Check for deferred (async) tools first — LSP and DAP
     let deferred_kind = match call.name.as_str() {
         "lsp_definition" => Some(DeferredKind::LspDefinition),
         "lsp_references" => Some(DeferredKind::LspReferences),
         "lsp_hover" => Some(DeferredKind::LspHover),
         "lsp_workspace_symbol" => Some(DeferredKind::LspWorkspaceSymbol),
         "lsp_document_symbols" => Some(DeferredKind::LspDocumentSymbols),
+        "dap_start" => Some(DeferredKind::DapStart),
+        "dap_continue" => Some(DeferredKind::DapContinue),
+        "dap_step" => Some(DeferredKind::DapStep),
         _ => None,
     };
 
     if let Some(kind) = deferred_kind {
-        let result = match kind {
+        let result: Result<(), String> = match kind {
             DeferredKind::LspDefinition => execute_lsp_definition(editor, &call.arguments),
             DeferredKind::LspReferences => execute_lsp_references(editor, &call.arguments),
             DeferredKind::LspHover => execute_lsp_hover(editor, &call.arguments),
@@ -90,6 +132,15 @@ pub fn execute_tool(
             }
             DeferredKind::LspDocumentSymbols => {
                 execute_lsp_document_symbols(editor, &call.arguments)
+            }
+            DeferredKind::DapStart => {
+                crate::tool_impls::execute_dap_start(editor, &call.arguments).map(|_| ())
+            }
+            DeferredKind::DapContinue => {
+                crate::tool_impls::execute_dap_continue(editor).map(|_| ())
+            }
+            DeferredKind::DapStep => {
+                crate::tool_impls::execute_dap_step(editor, &call.arguments).map(|_| ())
             }
         };
         return match result {
@@ -530,7 +581,13 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "lsp",
             "conditional": true,
-            "precondition": "Call project_info. If no root, SKIP. Open 'test_fixtures/lsp_test.rs'. Wait 3 seconds. Call lsp_diagnostics (no args). If error about no LSP server, wait 5 more seconds and retry once. Still fails → SKIP. IMPORTANT: do NOT retry any individual LSP call more than once — if it returns empty, mark FAIL and move on.",
+            "precondition_steps": [
+                "1. Call project_info — if no root, SKIP entire category.",
+                "2. Call open_file('test_fixtures/lsp_test.rs').",
+                "3. Call shell_exec('sleep 3') — rust-analyzer needs startup time.",
+                "4. Call lsp_diagnostics() — if error, call shell_exec('sleep 5') then lsp_diagnostics() once more. Still fails → SKIP.",
+                "IMPORTANT: Do NOT retry any individual LSP test more than once — if it returns empty, mark FAIL and move on."
+            ],
             "tests": [
                 {
                     "tool": "open_file",
@@ -600,22 +657,10 @@ fn build_self_test_plan(filter: &str) -> String {
             "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP entire category.",
             "tests": [
                 {
-                    "name": "dap_start",
+                    "name": "start_session",
                     "tool": "dap_start",
                     "args": {"adapter": "debugpy", "program": "test_fixtures/dap_test.py", "stop_on_entry": true},
-                    "assert": "Returns 'Starting debugpy session'. If error, SKIP remaining DAP tests."
-                },
-                {
-                    "name": "wait_for_entry_stop",
-                    "tool": "shell_exec",
-                    "args": {"command": "sleep 2", "timeout_ms": 5000},
-                    "assert": "Completes (gives debugpy time to launch and stop at entry)"
-                },
-                {
-                    "name": "verify_stopped_on_entry",
-                    "tool": "debug_state",
-                    "args": {},
-                    "assert": "Session active, at least 1 thread. If no session, FAIL and skip rest."
+                    "assert": "Blocks until session starts AND debuggee stops at entry. Returns JSON with status 'stopped', reason 'entry', thread and frame info. If error, SKIP remaining DAP tests."
                 },
                 {
                     "name": "set_breakpoint",
@@ -627,22 +672,10 @@ fn build_self_test_plan(filter: &str) -> String {
                     "name": "continue_to_breakpoint",
                     "tool": "dap_continue",
                     "args": {},
-                    "assert": "Returns 'continue'. Program will run to breakpoint asynchronously."
+                    "assert": "Blocks until debuggee stops at breakpoint. Returns JSON with status 'stopped', reason 'breakpoint', frame info with source and line. If timeout, FAIL."
                 },
                 {
-                    "name": "wait_for_breakpoint",
-                    "tool": "shell_exec",
-                    "args": {"command": "sleep 3", "timeout_ms": 5000},
-                    "assert": "Completes (gives debugpy time to hit breakpoint on line 13)"
-                },
-                {
-                    "name": "check_breakpoint_hit",
-                    "tool": "debug_state",
-                    "args": {},
-                    "assert": "Thread stopped. If stack_frames is empty, FAIL (async state not ready). Do NOT retry — mark FAIL and continue to cleanup."
-                },
-                {
-                    "name": "dap_output",
+                    "name": "check_output",
                     "tool": "dap_output",
                     "args": {"lines": 10},
                     "assert": "Returns output JSON"
@@ -657,7 +690,7 @@ fn build_self_test_plan(filter: &str) -> String {
             "cleanup": [
                 "dap_disconnect(terminate_debuggee: true) — ignore errors"
             ],
-            "CRITICAL": "NEVER retry any DAP tool call. NEVER call sleep more than the explicit waits listed above. If debug_state shows 'No active debug session' at any point, immediately skip to cleanup. Maximum 12 tool calls for this entire category."
+            "CRITICAL": "dap_start, dap_continue, dap_step BLOCK until the operation completes — do NOT call debug_state or sleep after them. If ANY DAP tool fails or times out, IMMEDIATELY call read_messages(level: 'warn', last_n: 20) to check the *Messages* log for adapter errors — the root cause is almost always logged there. Maximum 10 tool calls for this entire category."
         }));
     }
 
@@ -700,7 +733,7 @@ fn build_self_test_plan(filter: &str) -> String {
             "Step 1: Call editor_save_state to snapshot the current buffer list, window layout, and focus.",
             "Step 2: Execute each category's setup (if any), tests, and cleanup in order.",
             "Step 3: If a category has a 'setup' array, execute those steps FIRST (ignore errors — they clean up stale state from previous runs).",
-            "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP.",
+            "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
             "Step 5: After each category, execute its 'cleanup' array (if any).",
             "Step 6: Final cleanup — call editor_restore_state to automatically close test buffers and restore window layout.",
             "Step 7: Output the report. Do NOT quit the editor."
