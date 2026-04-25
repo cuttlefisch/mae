@@ -837,8 +837,9 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 ) {
                     self.last_mcp_activity = Some(tokio::time::Instant::now());
                 }
-                lsp_bridge::handle_lsp_event(&mut self.editor, &self.lsp_command_tx, lsp_event);
-                self.dirty = true;
+                if lsp_bridge::handle_lsp_event(&mut self.editor, &self.lsp_command_tx, lsp_event) {
+                    self.dirty = true;
+                }
             }
             MaeEvent::DapEvent(dap_event) => {
                 dap_bridge::handle_dap_event(&mut self.editor, dap_event);

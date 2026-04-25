@@ -255,7 +255,7 @@ impl Renderer for GuiRenderer {
         // Pre-compute screen line counts for conversation buffers.
         // Must happen while we have &mut Editor, before the immutable rebind.
         {
-            let inner_width = (cols).saturating_sub(4); // approximate; borders eat 2+2
+            let inner_width = (cols).saturating_sub(2); // border eats 1 col each side
             for buf in &mut editor.buffers {
                 if buf.kind == BufferKind::Conversation {
                     if let Some(ref mut conv) = buf.conversation {

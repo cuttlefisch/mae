@@ -354,6 +354,11 @@ impl Conversation {
         (&self.cached_screen_counts, total)
     }
 
+    /// Width used for the cached screen counts. Returns 0 if not yet computed.
+    pub fn cached_screen_width(&self) -> usize {
+        self.cached_screen_width
+    }
+
     /// Render all entries + input line into display lines.
     fn compute_rendered_lines(&self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
@@ -639,8 +644,14 @@ impl Conversation {
     }
 
     /// Jump to the top of the conversation history.
+    /// Uses screen-line total if available, falls back to rendered-line count.
     pub fn scroll_to_top(&mut self) {
-        self.scroll = self.cached_lines.len();
+        let total: usize = if self.cached_screen_counts.is_empty() {
+            self.cached_lines.len()
+        } else {
+            self.cached_screen_counts.iter().sum()
+        };
+        self.scroll = total;
     }
 }
 
@@ -1119,6 +1130,40 @@ mod tests {
         let (_, total10) = conv.ensure_screen_counts(10);
         // At width 10, the 20-char line wraps to 2 screen lines
         assert!(total10 > total80);
+    }
+
+    /// Regression: the InputPrompt must be included in screen counts so the
+    /// viewport shows it at scroll=0 (bottom). Previously a width mismatch
+    /// between pre-computation and render caused the prompt to be clipped.
+    #[test]
+    fn screen_counts_include_input_prompt() {
+        let mut conv = Conversation::new();
+        conv.push_user("test");
+        conv.push_assistant("response");
+        conv.ensure_screen_counts(80);
+
+        let rendered = conv.rendered_lines();
+        let (counts, total) = conv.screen_counts();
+        // counts must cover all rendered lines including InputPrompt
+        assert_eq!(counts.len(), rendered.len());
+        assert!(total > 0);
+        // Last rendered line should be the InputPrompt
+        assert_eq!(rendered.last().unwrap().style, LineStyle::InputPrompt,);
+        // Its screen count must be included in the total
+        assert!(*counts.last().unwrap() >= 1);
+    }
+
+    /// Regression: cached_screen_width must reflect the width used for
+    /// screen count computation, so renderers can detect mismatches.
+    #[test]
+    fn cached_screen_width_tracks_computation() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        assert_eq!(conv.cached_screen_width(), 0); // not yet computed
+        conv.ensure_screen_counts(42);
+        assert_eq!(conv.cached_screen_width(), 42);
+        conv.ensure_screen_counts(80);
+        assert_eq!(conv.cached_screen_width(), 80);
     }
 
     // ---- chars_to_display_cols tests ----

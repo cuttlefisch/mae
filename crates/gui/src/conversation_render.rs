@@ -157,20 +157,21 @@ pub fn render_conversation_window(
         let viewport_height = inner_height;
         let w = inner_width.max(1);
 
-        // Use pre-computed screen counts (populated by ensure_screen_counts before render).
+        // Use pre-computed screen counts if they match our width.
         let (screen_counts, total_screen_lines) = conv.screen_counts();
-        // Fallback if counts weren't pre-computed (e.g. width mismatch).
         let local_counts;
-        let (counts, total) = if screen_counts.len() == rendered.len() {
-            (screen_counts, total_screen_lines)
-        } else {
-            local_counts = rendered
-                .iter()
-                .map(|rl| screen_line_count(&rl.text, w))
-                .collect::<Vec<_>>();
-            let t: usize = local_counts.iter().sum();
-            (local_counts.as_slice(), t)
-        };
+        let (counts, total) =
+            if screen_counts.len() == rendered.len() && conv.cached_screen_width() == w {
+                (screen_counts, total_screen_lines)
+            } else {
+                // Width mismatch or stale — recompute locally.
+                local_counts = rendered
+                    .iter()
+                    .map(|rl| screen_line_count(&rl.text, w))
+                    .collect::<Vec<_>>();
+                let t: usize = local_counts.iter().sum();
+                (local_counts.as_slice(), t)
+            };
 
         let auto_start = total.saturating_sub(viewport_height);
         let start = auto_start.saturating_sub(conv.scroll);
