@@ -206,8 +206,8 @@ mod tests {
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 40,
-            "core tools should be < 40, got {}",
+            core_count < 50,
+            "core tools should be < 50, got {}",
             core_count
         );
         assert!(

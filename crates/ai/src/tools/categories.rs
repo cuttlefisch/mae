@@ -21,19 +21,59 @@ pub enum ToolCategory {
     Commands,
     Git,
     Web,
+    Ai,
+    Visual,
+    Debug,
 }
 
 /// Classify a tool into Core or Extended tier.
 pub fn classify_tool_tier(name: &str) -> ToolTier {
     match name {
         // Core tools — always sent
-        "buffer_read" | "buffer_write" | "cursor_info" | "open_file" | "switch_buffer"
-        | "create_file" | "close_buffer" | "list_buffers" | "editor_state" | "project_search"
-        | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
-        | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
-        | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" | "git_status"
-        | "git_diff" | "git_log" | "org_cycle" | "org_todo_cycle" | "org_open_link"
-        | "command_list" => ToolTier::Core,
+        "buffer_read"
+        | "buffer_write"
+        | "cursor_info"
+        | "open_file"
+        | "switch_buffer"
+        | "create_file"
+        | "close_buffer"
+        | "list_buffers"
+        | "editor_state"
+        | "project_search"
+        | "project_files"
+        | "project_info"
+        | "shell_exec"
+        | "get_option"
+        | "set_option"
+        | "help_open"
+        | "file_read"
+        | "self_test_suite"
+        | "introspect"
+        | "perf_stats"
+        | "perf_benchmark"
+        | "window_layout"
+        | "ai_permissions"
+        | "input_lock"
+        | "git_status"
+        | "git_diff"
+        | "git_log"
+        | "org_cycle"
+        | "org_todo_cycle"
+        | "org_open_link"
+        | "command_list"
+        | "editor_save_state"
+        | "editor_restore_state"
+        | "github_pr_status"
+        | "ask_user"
+        | "rename_file"
+        | "ai_save"
+        | "ai_load"
+        | "create_plan"
+        | "update_plan"
+        | "save_memory"
+        | "debug_state"
+        | "syntax_tree"
+        | "switch_project" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -51,10 +91,32 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::ShellMgmt)
     } else if name.starts_with("command_") {
         Some(ToolCategory::Commands)
-    } else if name.starts_with("git_") {
+    } else if name.starts_with("git_") || name.starts_with("github_") {
         Some(ToolCategory::Git)
     } else if name.starts_with("web_") {
         Some(ToolCategory::Web)
+    } else if name.starts_with("ai_") && name != "ai_permissions" {
+        // ai_set_mode, ai_set_profile, ai_set_budget, ai_save, ai_load
+        Some(ToolCategory::Ai)
+    } else if name.starts_with("visual_buffer_") {
+        Some(ToolCategory::Visual)
+    } else if matches!(
+        name,
+        "delegate"
+            | "save_memory"
+            | "create_plan"
+            | "update_plan"
+            | "ask_user"
+            | "log_activity"
+            | "read_transcript"
+            | "propose_changes"
+    ) {
+        Some(ToolCategory::Ai)
+    } else if matches!(
+        name,
+        "theme_inspect" | "mouse_event" | "render_inspect" | "event_recording" | "trigger_hook"
+    ) {
+        Some(ToolCategory::Debug)
     } else {
         None
     }
@@ -70,7 +132,11 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
             "knowledge" | "kb" => Some(ToolCategory::Knowledge),
             "shell" | "shell_mgmt" => Some(ToolCategory::ShellMgmt),
             "commands" | "command" => Some(ToolCategory::Commands),
+            "git" | "github" => Some(ToolCategory::Git),
             "web" => Some(ToolCategory::Web),
+            "ai" | "agent" => Some(ToolCategory::Ai),
+            "visual" | "canvas" => Some(ToolCategory::Visual),
+            "debug" | "profiling" => Some(ToolCategory::Debug),
             _ => None,
         })
         .collect()
@@ -80,14 +146,14 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
 pub fn request_tools_definition() -> ToolDefinition {
     ToolDefinition {
         name: "request_tools".into(),
-        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands, web. Returns tool names added.".into(),
+        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug. Returns tool names added.".into(),
         parameters: ToolParameters {
             schema_type: "object".into(),
             properties: HashMap::from([(
                 "categories".into(),
                 ToolProperty {
                     prop_type: "string".into(),
-                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, web".into(),
+                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug".into(),
                     enum_values: None,
                 },
             )]),
