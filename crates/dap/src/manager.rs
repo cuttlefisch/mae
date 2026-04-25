@@ -246,31 +246,40 @@ async fn handle_command(
                     let caps = client.capabilities.clone();
                     let mut sess = Session::new(client, adapter_id.clone());
 
-                    // DAP startup sequence:
-                    //   1. Try to get `initialized` event (some adapters send it
-                    //      right after initialize — e.g. lldb-dap).
-                    //   2. Send launch/attach.
-                    //   3. If we didn't see `initialized` yet, wait for it again
-                    //      (debugpy sends it during launch processing).
+                    // DAP startup sequence (per spec):
+                    //   1. Try to get `initialized` event (some adapters like
+                    //      lldb-dap send it right after initialize).
+                    //   2. Send launch/attach — do NOT await the response yet.
+                    //      Some adapters (debugpy) hold the launch response
+                    //      until configurationDone is sent. Awaiting here
+                    //      would deadlock.
+                    //   3. Wait for `initialized` event if not yet seen.
                     //   4. Send configurationDone.
+                    //   5. Now await the launch/attach response.
                     let mut initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
 
-                    let launch_result = if attach {
-                        sess.client.attach(launch_args).await
+                    // Fire launch/attach but don't await — response may be
+                    // held until configurationDone.
+                    let launch_rx = if attach {
+                        sess.client.attach_deferred(launch_args).await
                     } else {
-                        sess.client.launch(launch_args).await
+                        sess.client.launch_deferred(launch_args).await
                     };
-                    if let Err(e) = launch_result {
-                        let _ = event_tx
-                            .send(DapTaskEvent::SessionStartFailed {
-                                error: format!("launch/attach failed: {}", e),
-                            })
-                            .await;
-                        let _ = sess.client.disconnect(true).await;
-                        return;
-                    }
+                    let launch_rx = match launch_rx {
+                        Ok(rx) => rx,
+                        Err(e) => {
+                            let _ = event_tx
+                                .send(DapTaskEvent::SessionStartFailed {
+                                    error: format!("launch/attach send failed: {}", e),
+                                })
+                                .await;
+                            let _ = sess.client.disconnect(true).await;
+                            return;
+                        }
+                    };
 
-                    // Second chance: debugpy sends `initialized` after launch.
+                    // Wait for `initialized` event if not yet seen (debugpy
+                    // sends it after processing the launch request).
                     if !initialized_seen {
                         initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
                     }
@@ -289,6 +298,43 @@ async fn handle_command(
                             let _ = sess.client.disconnect(true).await;
                             return;
                         }
+                    }
+
+                    // Now await the launch/attach response (adapter releases
+                    // it after configurationDone).
+                    match tokio::time::timeout(std::time::Duration::from_secs(15), launch_rx).await
+                    {
+                        Ok(Ok(resp)) if !resp.success => {
+                            let _ = event_tx
+                                .send(DapTaskEvent::SessionStartFailed {
+                                    error: format!(
+                                        "launch/attach rejected: {}",
+                                        resp.message.unwrap_or_default()
+                                    ),
+                                })
+                                .await;
+                            let _ = sess.client.disconnect(true).await;
+                            return;
+                        }
+                        Ok(Err(_)) => {
+                            let _ = event_tx
+                                .send(DapTaskEvent::SessionStartFailed {
+                                    error: "launch/attach response channel closed".into(),
+                                })
+                                .await;
+                            let _ = sess.client.disconnect(true).await;
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = event_tx
+                                .send(DapTaskEvent::SessionStartFailed {
+                                    error: "launch/attach response timed out".into(),
+                                })
+                                .await;
+                            let _ = sess.client.disconnect(true).await;
+                            return;
+                        }
+                        Ok(Ok(_)) => {} // success
                     }
                     sess.client.mark_initialized();
                     let _ = event_tx
@@ -878,8 +924,13 @@ mod tests {
             // Drain the rest of the initialize handshake: wait for the
             // `initialized` event, then issue launch + configurationDone.
             let _ = wait_for_initialized(&mut sess, &evt_tx).await;
-            let _ = sess.client.launch(serde_json::json!({})).await;
+            let launch_rx = sess
+                .client
+                .launch_deferred(serde_json::json!({}))
+                .await
+                .unwrap();
             let _ = sess.client.configuration_done().await;
+            let _ = launch_rx.await;
             sess.client.mark_initialized();
             let _ = evt_tx
                 .send(DapTaskEvent::SessionStarted {
@@ -932,6 +983,114 @@ mod tests {
             DapTaskEvent::SessionStarted { adapter_id, .. } => assert_eq!(adapter_id, "mock"),
             other => panic!("expected SessionStarted, got: {:?}", other),
         }
+    }
+
+    /// Regression test: debugpy-style adapters send `initialized` AFTER the
+    /// launch request, and hold the launch *response* until `configurationDone`
+    /// is sent. The old code awaited the launch response before sending
+    /// configurationDone, causing a deadlock.
+    #[tokio::test]
+    async fn debugpy_style_deferred_launch_response() {
+        let (r, w, adapter) = spawn_mock();
+
+        // Script: initialize response immediately.
+        adapter
+            .respond(
+                "initialize",
+                serde_json::json!({
+                    "supportsConfigurationDoneRequest": true,
+                }),
+            )
+            .await;
+
+        // Script: after launch request arrives, send `initialized` event
+        // but do NOT respond to launch yet.
+        // After configurationDone arrives, respond to both.
+        //
+        // The mock auto-responds in order, so we queue:
+        //   initialized event → launch response → configurationDone response
+        // The mock sends responses when matching requests arrive.
+        adapter.emit("initialized", serde_json::json!({})).await;
+        adapter.respond_ok("launch").await;
+        adapter.respond_ok("configurationDone").await;
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<DapCommand>(16);
+        let (evt_tx, mut evt_rx) = mpsc::channel::<DapTaskEvent>(32);
+
+        let client = DapClient::from_streams(r, w, "mock-debugpy").await.unwrap();
+
+        tokio::spawn(async move {
+            let mut sess = Session::new(client, "mock-debugpy".into());
+
+            // Simulate the manager's StartSession flow with deferred launch.
+            let mut initialized_seen = wait_for_initialized(&mut sess, &evt_tx).await;
+            let launch_rx = sess
+                .client
+                .launch_deferred(serde_json::json!({}))
+                .await
+                .unwrap();
+
+            if !initialized_seen {
+                initialized_seen = wait_for_initialized(&mut sess, &evt_tx).await;
+            }
+            assert!(
+                initialized_seen,
+                "initialized event must arrive after launch"
+            );
+
+            let _ = sess.client.configuration_done().await;
+
+            // Now the launch response should arrive promptly.
+            let resp = tokio::time::timeout(std::time::Duration::from_secs(2), launch_rx)
+                .await
+                .expect("launch response timed out — deadlock regression")
+                .expect("launch response channel closed");
+            assert!(resp.success, "launch should succeed");
+
+            sess.client.mark_initialized();
+            let _ = evt_tx
+                .send(DapTaskEvent::SessionStarted {
+                    adapter_id: "mock-debugpy".into(),
+                    capabilities: sess.client.capabilities.clone(),
+                })
+                .await;
+
+            let mut session = Some(sess);
+            let mut cmd_rx = cmd_rx;
+            loop {
+                tokio::select! {
+                    biased;
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            None => break,
+                            Some(DapCommand::Shutdown) => break,
+                            Some(c) => handle_command(&mut session, c, &evt_tx).await,
+                        }
+                    }
+                    evt = async {
+                        match session.as_mut() {
+                            Some(s) => s.event_rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        if let Some(evt) = evt {
+                            handle_adapter_event(evt, &mut session, &evt_tx).await;
+                        }
+                    }
+                }
+            }
+        });
+
+        let e = recv_with_timeout(&mut evt_rx).await;
+        match e {
+            DapTaskEvent::SessionStarted { adapter_id, .. } => {
+                assert_eq!(adapter_id, "mock-debugpy")
+            }
+            other => panic!("expected SessionStarted, got: {:?}", other),
+        }
+
+        // Cleanup
+        drop(cmd_tx);
     }
 
     #[tokio::test]

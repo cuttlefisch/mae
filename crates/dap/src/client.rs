@@ -228,6 +228,28 @@ impl DapClient {
             .await
     }
 
+    /// Send `launch` without waiting for the response. Returns a receiver
+    /// that will yield the response once the adapter sends it.
+    ///
+    /// DAP spec: some adapters (debugpy) hold the launch response until
+    /// `configurationDone` is sent. Callers must send `configurationDone`
+    /// before awaiting the returned receiver to avoid deadlock.
+    pub async fn launch_deferred(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        self.send_request("launch", Some(args)).await
+    }
+
+    /// Send `attach` without waiting for the response. Same caveat as
+    /// [`launch_deferred`](Self::launch_deferred).
+    pub async fn attach_deferred(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        self.send_request("attach", Some(args)).await
+    }
+
     /// Send `attach` with adapter-specific arguments.
     pub async fn attach(&self, args: serde_json::Value) -> Result<DapResponse, String> {
         self.request("attach", Some(args), std::time::Duration::from_secs(30))
@@ -468,6 +490,36 @@ impl DapClient {
         let args = serde_json::json!({ "terminateDebuggee": terminate_debuggee });
         self.request("disconnect", Some(args), std::time::Duration::from_secs(5))
             .await
+    }
+
+    /// Send a request without waiting for the response. Returns the oneshot
+    /// receiver that will yield the response.
+    async fn send_request(
+        &self,
+        command: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(seq, tx);
+
+        let msg = DapMessage::Request(DapRequest {
+            seq,
+            command: command.to_string(),
+            arguments,
+        });
+        let bytes = match encode_message(&msg) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pending.lock().await.remove(&seq);
+                return Err(e);
+            }
+        };
+        if self.outgoing_tx.send(bytes).await.is_err() {
+            self.pending.lock().await.remove(&seq);
+            return Err("adapter writer channel closed".into());
+        }
+        Ok(rx)
     }
 
     /// Send a request and wait for the matching response via oneshot.
