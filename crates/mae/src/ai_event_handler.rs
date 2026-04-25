@@ -973,11 +973,26 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
                 "No debug state (session may have ended)".to_string()
             };
 
+            // Pull recent warn/error messages so the agent sees root cause inline.
+            let recent_warnings: Vec<String> = editor
+                .message_log
+                .entries_filtered(mae_core::MessageLevel::Warn)
+                .iter()
+                .rev()
+                .take(10)
+                .map(|e| format!("[{}] {}: {}", e.level, e.target, e.message))
+                .collect();
+            let recent_section = if recent_warnings.is_empty() {
+                String::new()
+            } else {
+                format!(" Recent warnings/errors: {}", recent_warnings.join(" | "))
+            };
+
             let output = format!(
                 "DAP operation timed out after 15s ({:?}, phase: {:?}). \
-                 Diagnostic: {}. \
+                 Diagnostic: {}.{} \
                  Check MAE logs (RUST_LOG=mae_dap=debug) for adapter events.",
-                kind, phase, diag
+                kind, phase, diag, recent_section
             );
             resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
         }

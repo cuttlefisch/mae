@@ -15,7 +15,7 @@
 //! uniform across LSP/DAP/AI.
 
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::client::{DapClient, DapEventKind, DapServerConfig};
 use crate::protocol::{
@@ -241,6 +241,7 @@ async fn handle_command(
                 return;
             }
             let adapter_id = config.adapter_id.clone();
+            info!(adapter = %adapter_id, "DAP: spawning adapter");
             match DapClient::start(config).await {
                 Ok(client) => {
                     let caps = client.capabilities.clone();
@@ -256,10 +257,13 @@ async fn handle_command(
                     //   3. Wait for `initialized` event if not yet seen.
                     //   4. Send configurationDone.
                     //   5. Now await the launch/attach response.
+                    info!("DAP: waiting for initialized event");
                     let mut initialized_seen = wait_for_initialized(&mut sess, event_tx).await;
+                    info!(initialized_seen, "DAP: initialized event check complete");
 
                     // Fire launch/attach but don't await — response may be
                     // held until configurationDone.
+                    info!(attach, "DAP: sending launch/attach (deferred)");
                     let launch_rx = if attach {
                         sess.client.attach_deferred(launch_args).await
                     } else {
@@ -289,6 +293,7 @@ async fn handle_command(
                         .map(|c| c.supports_configuration_done_request)
                         .unwrap_or(false);
                     if initialized_seen && supports_cfg_done {
+                        info!("DAP: sending configurationDone");
                         if let Err(e) = sess.client.configuration_done().await {
                             let _ = event_tx
                                 .send(DapTaskEvent::SessionStartFailed {
@@ -302,6 +307,7 @@ async fn handle_command(
 
                     // Now await the launch/attach response (adapter releases
                     // it after configurationDone).
+                    info!("DAP: awaiting launch/attach response");
                     match tokio::time::timeout(std::time::Duration::from_secs(15), launch_rx).await
                     {
                         Ok(Ok(resp)) if !resp.success => {
@@ -336,6 +342,7 @@ async fn handle_command(
                         }
                         Ok(Ok(_)) => {} // success
                     }
+                    info!("DAP: launch/attach response received, session ready");
                     sess.client.mark_initialized();
                     let _ = event_tx
                         .send(DapTaskEvent::SessionStarted {

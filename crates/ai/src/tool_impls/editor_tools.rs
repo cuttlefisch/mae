@@ -199,6 +199,7 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
                 "active_thread_id": state.active_thread_id,
+                "last_stop_reason": state.last_stop_reason,
                 "threads": threads,
                 "stack_frames": frames,
                 "scopes": state.scopes.iter().map(|s| &s.name).collect::<Vec<_>>(),

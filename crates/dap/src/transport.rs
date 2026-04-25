@@ -11,6 +11,7 @@
 //! ```
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tracing::trace;
 
 use crate::protocol::DapMessage;
 
@@ -100,12 +101,14 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> DapTransport<R, W> {
         self.reader.read_exact(&mut body).await?;
 
         let msg: DapMessage = serde_json::from_slice(&body)?;
+        trace!(length, "DAP transport: read message");
         Ok(msg)
     }
 
     /// Write one DAP message. Serializes to JSON, prepends Content-Length header.
     pub async fn write_message(&mut self, msg: &DapMessage) -> Result<(), TransportError> {
         let body = serde_json::to_vec(msg)?;
+        trace!(length = body.len(), "DAP transport: write message");
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
 
         self.writer.write_all(header.as_bytes()).await?;

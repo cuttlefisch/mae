@@ -25,6 +25,8 @@ use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+use tracing::{debug, warn};
+
 use crate::protocol::*;
 use crate::transport::{DapTransport, TransportError};
 
@@ -530,6 +532,7 @@ impl DapClient {
         timeout: std::time::Duration,
     ) -> Result<DapResponse, String> {
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
+        debug!(command, seq, "DAP request sending");
 
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(seq, tx);
@@ -552,12 +555,27 @@ impl DapClient {
         }
 
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(resp)) => Ok(resp),
+            Ok(Ok(resp)) => {
+                debug!(
+                    command,
+                    seq,
+                    success = resp.success,
+                    "DAP response received"
+                );
+                Ok(resp)
+            }
             Ok(Err(_)) => {
+                warn!(command, seq, "DAP response channel closed");
                 self.pending.lock().await.remove(&seq);
                 Err("response channel closed".into())
             }
             Err(_) => {
+                warn!(
+                    command,
+                    seq,
+                    timeout_ms = timeout.as_millis() as u64,
+                    "DAP request timed out"
+                );
                 self.pending.lock().await.remove(&seq);
                 Err(format!("request '{}' timed out", command))
             }

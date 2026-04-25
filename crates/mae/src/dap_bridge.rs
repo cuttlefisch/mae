@@ -3,7 +3,7 @@
 
 use mae_core::{DapIntent, Editor};
 use mae_dap::{DapCommand, DapServerConfig, DapTaskEvent, SourceBreakpoint};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Drain all pending DAP intents from the editor and forward them to the DAP task.
 /// Safe to call every loop iteration — the Vec is cleared in place.
@@ -125,7 +125,7 @@ pub(crate) fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
             thread_id,
             text,
         } => {
-            debug!(reason = %reason, thread_id = ?thread_id, "DAP stopped");
+            info!(reason = %reason, thread_id = ?thread_id, "DAP stopped");
             editor.apply_dap_stopped(reason, thread_id, text);
         }
         DapTaskEvent::Continued {
