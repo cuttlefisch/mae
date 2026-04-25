@@ -69,12 +69,24 @@ impl AgentSession {
         self.transaction_start_idx = self.transaction_start_idx.map(|_| safe_boundary);
 
         if self.messages.len() < original_len {
+            let removed = original_len - self.messages.len();
             let total = token_estimate::estimate_messages_tokens(&self.messages);
-            debug!(
-                messages = self.messages.len(),
+            warn!(
+                removed,
+                remaining = self.messages.len(),
                 estimated_tokens = total,
                 budget,
-                "post-trim message state"
+                "trim_messages removed messages"
+            );
+            self.log_transcript_event(
+                "trim_messages",
+                &format!(
+                    "removed={}, remaining={}, tokens={}, budget={}",
+                    removed,
+                    self.messages.len(),
+                    total,
+                    budget
+                ),
             );
         }
     }

@@ -41,11 +41,27 @@ impl AgentSession {
                 .await;
         }
 
+        // Auto-detect self-test mode from prompt content (`:self-test` sends this
+        // through the normal session, not the --self-test CLI path).
+        if !self.is_self_test
+            && prompt.contains("self_test_suite")
+            && prompt.contains("MAE Self-Test")
+        {
+            info!("auto-detected self-test prompt — enabling self-test mode");
+            self.is_self_test = true;
+            self.progress = super::progress::ProgressTracker::new(15, true);
+        }
+
         self.transaction_start_idx = Some(self.messages.len());
         // Inject current mode/profile context so the model knows its constraints
+        let workflow_ctx = if self.workflow.is_active() {
+            format!("\n{}", self.workflow.context_injection())
+        } else {
+            String::new()
+        };
         let contextualized_prompt = format!(
-            "[Context: mode={}, profile={}]\n\n{}",
-            self.current_mode, self.current_profile, prompt
+            "[Context: mode={}, profile={}]{}\n\n{}",
+            self.current_mode, self.current_profile, workflow_ctx, prompt
         );
         self.messages.push(Message {
             role: Role::User,
@@ -157,16 +173,33 @@ impl AgentSession {
             // --- Mid-Flight Context Compaction ---
             // If the active transaction has grown too large, collapse it into a reasoning summary
             // to free up tokens and prevent context overflow before the turn ends.
+            // Self-test and active workflows use a higher threshold since they need
+            // more rounds of tool results before summarization is safe.
             if let Some(start_idx) = self.transaction_start_idx {
                 let transaction_size = self.messages.len().saturating_sub(start_idx);
                 let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
                 let window_usage = current_tokens as f64 / self.context_window as f64;
+                let size_threshold = if self.is_self_test || self.workflow.is_active() {
+                    50
+                } else {
+                    20
+                };
 
-                if (transaction_size > 20 || window_usage > 0.75) && round > 0 {
-                    debug!(
+                if (transaction_size > size_threshold || window_usage > 0.75) && round > 0 {
+                    warn!(
                         transaction_size,
-                        window_usage, "mid-flight context compaction triggered"
+                        %window_usage,
+                        size_threshold,
+                        round,
+                        messages = self.messages.len(),
+                        is_self_test = self.is_self_test,
+                        workflow_active = self.workflow.is_active(),
+                        "mid-flight context compaction triggered"
                     );
+                    self.log_transcript_event("collapse_transaction", &format!(
+                        "transaction_size={}, window_usage={:.2}, threshold={}, round={}, messages={}",
+                        transaction_size, window_usage, size_threshold, round, self.messages.len()
+                    ));
                     self.collapse_transaction(start_idx);
                     // Point to the new summary message as the new transaction start,
                     // preserving continuity for the next round's pruning logic.
@@ -179,6 +212,23 @@ impl AgentSession {
                 let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
                 let budget = self.available_message_budget();
                 if current_tokens > budget * 70 / 100 && !self.is_self_test {
+                    warn!(
+                        current_tokens,
+                        budget,
+                        round,
+                        messages = self.messages.len(),
+                        "compact_history triggered"
+                    );
+                    self.log_transcript_event(
+                        "compact_history",
+                        &format!(
+                            "tokens={}, budget={}, round={}, messages={}",
+                            current_tokens,
+                            budget,
+                            round,
+                            self.messages.len()
+                        ),
+                    );
                     self.compact_history();
                 }
             }
@@ -933,6 +983,28 @@ impl AgentSession {
                 match reply_rx.await {
                     Ok(mut result) => {
                         debug!(tool = %call.name, success = result.success, "tool result received");
+
+                        // Workflow: auto-activate on first self_test_suite call,
+                        // append warning on re-calls.
+                        if call.name == "self_test_suite" {
+                            if self.workflow.plan_request_count == 0 {
+                                let steps = extract_self_test_categories(&result.output);
+                                if !steps.is_empty() {
+                                    self.workflow.start_workflow("self-test".into(), steps);
+                                    info!("workflow tracker activated for self-test");
+                                }
+                            } else {
+                                result.output.push_str(
+                                    "\n\n⚠ You have already received this plan. Check the [Workflow: ...] context in your prompt for progress. Do NOT call self_test_suite again."
+                                );
+                                warn!(
+                                    count = self.workflow.plan_request_count,
+                                    "self_test_suite re-called — appending warning"
+                                );
+                            }
+                            self.workflow.plan_request_count += 1;
+                        }
+
                         let _ = self
                             .event_tx
                             .send(AiEvent::ToolCallFinished {
@@ -982,6 +1054,9 @@ impl AgentSession {
                     .unwrap_or(false);
                 self.progress
                     .record_tool_call(&call.name, &call.arguments, success);
+
+                // --- Workflow tracking ---
+                self.handle_workflow_tool_result(call, success);
             }
             self.progress.record_round();
 
@@ -1060,6 +1135,12 @@ impl AgentSession {
                 ));
             }
 
+            // Preserve workflow progress in the collapsed summary so even
+            // reading back collapsed history shows the checkpoint.
+            if self.workflow.is_active() {
+                summary.push_str(&format!("\n\n{}", self.workflow.context_injection()));
+            }
+
             self.messages.push(Message {
                 role: Role::Assistant,
                 content: MessageContent::Text(summary),
@@ -1081,4 +1162,118 @@ impl AgentSession {
             "collapsed tool callstack"
         );
     }
+
+    /// Log a structured event to the transcript file for debugging.
+    /// Written as a JSON line so it's parseable alongside provider responses.
+    pub(super) fn log_transcript_event(&self, event: &str, detail: &str) {
+        if let Some(ref path) = self.transcript_path {
+            let entry = format!(
+                "\n--- EVENT ---\n{{\"event\": \"{}\", \"detail\": \"{}\", \"round\": {}, \"workflow\": {}}}\n",
+                event,
+                detail.replace('"', "'"),
+                self.current_round,
+                if self.workflow.is_active() {
+                    self.workflow.context_injection().replace('"', "'").replace('\n', " ")
+                } else {
+                    "inactive".to_string()
+                }
+            );
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path);
+            if let Ok(mut f) = file {
+                let _ = std::io::Write::write_all(&mut f, entry.as_bytes());
+            }
+        }
+    }
+
+    /// Process a tool result for workflow step advancement.
+    ///
+    /// For self-test workflows, detects when the agent transitions between
+    /// test categories by classifying each tool call. When >=2 tools from
+    /// the current step have been called and a tool from a different step
+    /// appears, the current step is auto-advanced.
+    fn handle_workflow_tool_result(&mut self, call: &ToolCall, _success: bool) {
+        if !self.workflow.is_active() {
+            return;
+        }
+
+        let workflow_name = match &self.workflow.workflow {
+            Some(name) => name.clone(),
+            None => return,
+        };
+
+        // Only do auto-advancement for self-test workflows
+        if workflow_name != "self-test" {
+            self.workflow.record_tool(&call.name);
+            return;
+        }
+
+        // Classify which step this tool belongs to
+        let tool_step = super::workflow::classify_tool_to_self_test_step(&call.name);
+
+        // Skip tools that don't map to a known step (log_activity, shell_exec, etc.)
+        let tool_step = match tool_step {
+            Some(s) => s,
+            None => {
+                self.workflow.record_tool(&call.name);
+                return;
+            }
+        };
+
+        let current_step_name = self.workflow.current_step_name().to_string();
+
+        // If the tool belongs to a different step than the current one,
+        // and we've called >=2 tools in the current step, auto-advance.
+        if tool_step != current_step_name && self.workflow.step_tools_called.len() >= 2 {
+            let summary = format!("{} tools called", self.workflow.step_tools_called.len());
+            info!(
+                from = %current_step_name,
+                to = %tool_step,
+                "workflow auto-advancing step"
+            );
+            self.workflow.advance(summary);
+
+            // If the new tool's step is ahead of where we are now,
+            // skip intermediate steps to catch up.
+            while self.workflow.current_step < self.workflow.steps.len() {
+                if self.workflow.current_step_name() == tool_step {
+                    break;
+                }
+                let skip_name = self.workflow.current_step_name().to_string();
+                info!(step = %skip_name, "workflow skipping intermediate step");
+                self.workflow.skip("skipped (agent jumped ahead)".into());
+            }
+        }
+
+        self.workflow.record_tool(&call.name);
+
+        // Timeout fallback: if same step has been active for >15 tool calls, auto-advance
+        if self.workflow.step_tools_called.len() > 15 {
+            warn!(
+                step = %self.workflow.current_step_name(),
+                tools = self.workflow.step_tools_called.len(),
+                "workflow step timeout — auto-advancing"
+            );
+            self.workflow.fail("timeout (>15 tool calls)".into());
+        }
+    }
+}
+
+/// Extract category names from a self_test_suite JSON result.
+/// Parses the "categories" array and returns the "name" field of each.
+fn extract_self_test_categories(output: &str) -> Vec<String> {
+    let parsed: serde_json::Value = match serde_json::from_str(output) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let categories = match parsed.get("categories").and_then(|c| c.as_array()) {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    categories
+        .iter()
+        .filter_map(|cat| cat.get("name").and_then(|n| n.as_str()).map(String::from))
+        .collect()
 }

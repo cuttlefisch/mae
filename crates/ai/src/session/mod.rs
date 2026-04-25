@@ -8,6 +8,7 @@ mod context_mgmt;
 mod handle_prompt;
 pub(crate) mod progress;
 mod run_loop;
+pub(crate) mod workflow;
 
 /// Degradation level for context pressure management.
 /// One-way within a session: Normal → ToolsShed → Minimal.
@@ -106,6 +107,8 @@ pub struct AgentSession {
     pub(super) turn_history: std::collections::VecDeque<String>,
     /// Progress checkpoint tracker for semantic stagnation detection.
     pub(super) progress: progress::ProgressTracker,
+    /// Workflow tracker for multi-step task progress (survives compaction).
+    pub(super) workflow: workflow::WorkflowTracker,
     /// Current degradation level for context pressure management.
     pub(super) degradation_level: DegradationLevel,
     /// Original system prompt (preserved for reference after truncation).
@@ -194,6 +197,7 @@ impl AgentSession {
             last_tool_calls: None,
             turn_history: std::collections::VecDeque::with_capacity(6),
             progress: progress::ProgressTracker::new(10, false),
+            workflow: workflow::WorkflowTracker::default(),
             degradation_level: DegradationLevel::Normal,
             original_system_prompt,
             is_self_test: false,

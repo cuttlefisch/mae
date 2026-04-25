@@ -32,9 +32,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "project_files" | "project_info" | "shell_exec" | "get_option" | "set_option"
         | "help_open" | "file_read" | "self_test_suite" | "introspect" | "perf_stats"
         | "perf_benchmark" | "window_layout" | "ai_permissions" | "input_lock" | "git_status"
-        | "git_diff" | "git_log" | "org_cycle" | "org_todo_cycle" | "org_open_link" => {
-            ToolTier::Core
-        }
+        | "git_diff" | "git_log" | "org_cycle" | "org_todo_cycle" | "org_open_link"
+        | "command_list" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
