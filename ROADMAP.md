@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,580+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,590+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
 
 ---
 
@@ -33,6 +33,10 @@ Agent reliability improvements from crash log analysis and self-test failures.
 - [x] **Graceful Degradation**: Auto-reduce tool set when approaching context limits rather than hard-failing. One-way degradation: Normal → ToolsShed (>85%) → Minimal (>92%) (v0.5.0).
 - [x] **ANSI-Only Themes**: `light-ansi` and `dark-ansi` themes for terminal environments where RGB hex doesn't map well (v0.5.0).
 - [x] **XDG Transcript Logging**: Session transcripts saved to `~/.local/share/mae/transcripts/` (XDG-compliant) instead of project-local `.mae/` (v0.5.0).
+- [x] **Tool Tier System**: Core (~43 tools, always sent) vs Extended (on-demand via `request_tools` meta-tool). 10 categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug (v0.5.0).
+- [x] **Editor State Save/Restore**: `editor_save_state`/`editor_restore_state` tools for deterministic session state capture (v0.5.0).
+- [x] **Tool Visibility Fix**: All 107 tools reachable — 27 previously invisible tools added to Core tier or categories (v0.5.0).
+- [x] **Conversation Buffer Compaction**: Skip separators between consecutive tool entries, merge ToolCall+ToolResult display (v0.5.0).
 
 ---
 
@@ -56,12 +60,12 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [ ] **Session Record/Replay with DAP**: Full session recording with DAP introspection for post-hoc debugging of agent behavior.
 
 ### Git Workflow
-- [ ] **Git Stash Tools**: `git stash push`, `git stash pop` exposed to AI.
-- [ ] **Branch Management Tools**: Create, switch, delete, merge branches via AI tools.
+- [x] **Git Stash Tools**: `git_stash_push`, `git_stash_pop`, `git_stash_list` (v0.5.0).
+- [x] **Branch Management Tools**: `git_checkout`, `git_branch_list`, `git_branch_delete`, `git_merge`, `git_pull`, `git_push` (v0.5.0).
 - [ ] **PR Comment Summaries**: When amending an open PR with new commits, auto-summarize changes in a comment.
 
 ### Vim Parity
-- [ ] **C-e / C-y**: Single-line scroll down/up (evil-mode parity).
+- [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
 - [ ] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15).
 
 ### Setup & Onboarding
@@ -80,7 +84,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,580 tests)
+### What We Have (1,590+ tests)
 
 | Category | Features |
 |----------|----------|
@@ -96,13 +100,13 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard |
+| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard, tool tiers (Core/Extended), 10 tool categories, `request_tools`, editor state save/restore, 107 AI tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
 | **Themes** | 9 bundled (incl. light-ansi, dark-ansi), TOML-based, hot-switchable |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
-| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 15 AI debug tools |
+| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 13 AI debug tools |
 | **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
 | **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
 | **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
