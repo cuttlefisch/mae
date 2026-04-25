@@ -530,7 +530,7 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "lsp",
             "conditional": true,
-            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'crates/mae/src/main.rs' (relative to project root) to trigger LSP didOpen. Wait a moment, then call lsp_diagnostics with scope 'all'. If it returns an error about no LSP server, SKIP this entire category.",
+            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'crates/mae/src/main.rs' (relative to project root) to trigger LSP didOpen. Wait 3-5 seconds for rust-analyzer to initialize (cold start can take 10+ seconds), then call lsp_diagnostics with scope 'all'. If it returns an error about no LSP server, wait 5 more seconds and retry lsp_diagnostics once. If it still fails, SKIP this entire category.",
             "tests": [
                 {
                     "tool": "open_file",

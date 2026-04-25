@@ -174,6 +174,22 @@ These findings from analyzing the Emacs git repo at `~/src/emacs` motivated our 
 - **Emacs 31 direction:** VC/git (1,048 commits = 16%), completions, TTY child frames, newcomer presets, `elisp-scope.el` (static analysis). QoL is the frontier.
 - **Development velocity peaked in 2022 (9,647 commits) and declined to ~3,356 in 2024.** The 2025 pace is even lower. Whether this is stabilization or contributor burnout is unclear.
 
+## Development Dependencies
+
+Required for full self-test coverage (DAP and LSP categories):
+
+| Package | Purpose | Install |
+|---------|---------|---------|
+| `lldb` | DAP adapter for C/C++/Rust (provides `lldb-dap`) | `sudo dnf install lldb` (Fedora), `sudo apt install lldb` (Debian/Ubuntu), `brew install llvm` (macOS) |
+| `rust-analyzer` | LSP server for Rust | `rustup component add rust-analyzer` |
+| `debugpy` | DAP adapter for Python | `pip install debugpy` |
+
+Quick setup: `make setup-dev` (auto-detects package manager).
+
+Environment variable overrides for adapter/server paths:
+- **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
+- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`
+
 ## Related Resources
 
 - **Full architecture spec:** `README.org` (symlink to org-roam node)
