@@ -530,26 +530,41 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "lsp",
             "conditional": true,
-            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'crates/mae/src/main.rs' (relative to project root) to trigger LSP didOpen. Wait 3-5 seconds for rust-analyzer to initialize (cold start can take 10+ seconds), then call lsp_diagnostics with scope 'all'. If it returns an error about no LSP server, wait 5 more seconds and retry lsp_diagnostics once. If it still fails, SKIP this entire category.",
+            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'test_fixtures/lsp_test.rs' (relative to project root) to trigger LSP didOpen. Wait 3-5 seconds for rust-analyzer to initialize (cold start can take 10+ seconds), then call lsp_diagnostics (no args — uses active buffer). If it returns an error about no LSP server, wait 5 more seconds and retry lsp_diagnostics once. If it still fails, SKIP this entire category.",
             "tests": [
                 {
                     "tool": "open_file",
-                    "args": {"path": "crates/mae/src/main.rs"},
-                    "assert": "Buffer opened (triggers LSP didOpen)"
+                    "args": {"path": "test_fixtures/lsp_test.rs"},
+                    "assert": "Buffer opened (triggers LSP didOpen for a known Rust file)"
                 },
                 {
                     "tool": "lsp_diagnostics",
-                    "args": {"scope": "all"},
-                    "assert": "Returns JSON (may be empty diagnostics)"
+                    "args": {},
+                    "assert": "Returns JSON diagnostics (may be empty — 0 errors means LSP parsed OK)"
                 },
                 {
                     "tool": "lsp_document_symbols",
                     "args": {},
-                    "assert": "Returns symbol list or error"
+                    "assert": "Returns symbols including 'Counter' struct, 'new'/'increment'/'get' methods, 'count_to' function, 'tests' module"
+                },
+                {
+                    "tool": "lsp_hover",
+                    "args": {"line": 12, "character": 11},
+                    "assert": "Returns hover info for 'Counter' struct (line 12, col 11 = struct name)"
+                },
+                {
+                    "tool": "lsp_definition",
+                    "args": {"line": 37, "character": 22},
+                    "assert": "Jumps to Counter::new definition (line 37 col 22 = 'Counter::new(0)', should resolve to line 19)"
+                },
+                {
+                    "tool": "lsp_references",
+                    "args": {"line": 12, "character": 11},
+                    "assert": "Returns references to Counter — at least 3 (struct def, impl block, new() return, count_to usage, tests)"
                 }
             ],
             "cleanup": [
-                "Close the main.rs buffer with close_buffer (name: 'main.rs')",
+                "Close the lsp_test.rs buffer with close_buffer (name: 'lsp_test.rs', force: true)",
                 "Switch back to *AI* buffer"
             ]
         }));
@@ -583,25 +598,51 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "dap",
             "conditional": true,
-            "precondition": "Call debug_state first. If it returns 'No active debug session', run dap_start with adapter='lldb' and program='/bin/ls' (or skip if lldb unavailable). If dap_start fails, SKIP this entire category.",
+            "precondition": "First call project_info to get the project root. Then check for debugpy: call shell_exec with command 'python3 -c \"import debugpy\"'. If that fails, SKIP this entire category. Then call dap_start with adapter='debugpy' and program='<project_root>/test_fixtures/dap_test.py'. If dap_start fails, SKIP.",
+            "important": "STOP CONDITION: After dap_start, wait 2-3 seconds. If debug_state shows 'no active debug session' or 'exited', the debuggee exited — call dap_disconnect and stop. Do NOT retry dap_start or loop. The DAP test is pass/fail on the first attempt.",
             "setup": [
-                "Call command_ debug-stop to clean up any stale debug session (ignore errors)."
+                "Call dap_disconnect (ignore errors) to clean up any stale session before starting."
             ],
             "tests": [
                 {
-                    "tool": "debug_state",
-                    "args": {},
-                    "assert": "Returns JSON with 'target' and 'active_thread_id' fields (or 'No active debug session' before start)"
+                    "tool": "dap_start",
+                    "args": {"adapter": "debugpy", "program": "test_fixtures/dap_test.py"},
+                    "assert": "Session starts without error. Wait 2 seconds after this call."
                 },
                 {
                     "tool": "dap_set_breakpoint",
-                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
-                    "assert": "Returns JSON with 'all_lines_for_source' containing [1]"
+                    "args": {"source": "test_fixtures/dap_test.py", "line": 13},
+                    "assert": "Returns JSON with breakpoint set on line 13 (inside greet function)"
+                },
+                {
+                    "tool": "dap_continue",
+                    "args": {},
+                    "assert": "Returns 'continued' or similar. Wait 1-2 seconds for breakpoint to hit."
+                },
+                {
+                    "tool": "debug_state",
+                    "args": {},
+                    "assert": "Shows stopped state with at least 1 thread. If 'exited' or 'no session', report FAIL and skip remaining DAP tests."
                 },
                 {
                     "tool": "dap_list_variables",
                     "args": {},
-                    "assert": "Returns JSON object (may be empty scopes if not stopped at breakpoint)"
+                    "assert": "Returns variables including 'name' with value '\"MAE\"' (first loop iteration)"
+                },
+                {
+                    "tool": "dap_inspect_variable",
+                    "args": {"name": "name"},
+                    "assert": "Returns variable details for 'name' parameter"
+                },
+                {
+                    "tool": "dap_step",
+                    "args": {"kind": "over"},
+                    "assert": "Steps to next line (line 14). Wait 1 second."
+                },
+                {
+                    "tool": "dap_list_variables",
+                    "args": {},
+                    "assert": "Returns variables including 'greeting' with value containing 'Hello, MAE!'"
                 },
                 {
                     "tool": "dap_output",
@@ -610,17 +651,22 @@ fn build_self_test_plan(filter: &str) -> String {
                 },
                 {
                     "tool": "dap_remove_breakpoint",
-                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
-                    "assert": "Returns JSON with 'remaining_lines' as empty array"
+                    "args": {"source": "test_fixtures/dap_test.py", "line": 13},
+                    "assert": "Returns JSON with breakpoint removed"
                 },
                 {
                     "tool": "dap_continue",
                     "args": {},
-                    "assert": "Returns 'continue' or error 'not stopped' (both acceptable)"
+                    "assert": "Program runs to completion (no more breakpoints). Wait 1-2 seconds."
+                },
+                {
+                    "tool": "dap_disconnect",
+                    "args": {},
+                    "assert": "Session disconnected cleanly"
                 }
             ],
             "cleanup": [
-                "Call command_ debug-stop to tear down the session",
+                "Call dap_disconnect (ignore errors) to ensure session is torn down",
                 "Switch back to *AI* buffer"
             ]
         }));
