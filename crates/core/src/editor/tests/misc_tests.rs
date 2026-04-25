@@ -281,5 +281,67 @@ fn switch_buffer_recomputes_search_matches() {
 }
 
 // ---------------------------------------------------------------------------
+// State stack (push/pop) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn save_and_restore_state_basic() {
+    let mut editor = Editor::new();
+    assert!(editor.state_stack.is_empty());
+
+    // Save state with 1 buffer
+    let depth = editor.save_state();
+    assert_eq!(depth, 1);
+    assert_eq!(editor.buffers.len(), 1);
+
+    // Open a new buffer
+    let mut buf = Buffer::new();
+    buf.name = "test.txt".into();
+    editor.buffers.push(buf);
+    assert_eq!(editor.buffers.len(), 2);
+
+    // Restore should close the new buffer
+    let result = editor.restore_state();
+    assert!(result.is_ok());
+    let msg = result.unwrap();
+    assert!(msg.contains("closed 1 buffer"));
+    assert_eq!(editor.buffers.len(), 1);
+    assert!(editor.state_stack.is_empty());
+}
+
+#[test]
+fn restore_state_empty_stack() {
+    let mut editor = Editor::new();
+    let result = editor.restore_state();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("empty"));
+}
+
+#[test]
+fn save_and_restore_preserves_original_buffers() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI*".into();
+
+    let mut buf2 = Buffer::new();
+    buf2.name = "existing.rs".into();
+    editor.buffers.push(buf2);
+
+    editor.save_state();
+
+    // Open test buffers
+    for name in &["test1.txt", "test2.txt", "*Help*"] {
+        let mut b = Buffer::new();
+        b.name = name.to_string();
+        editor.buffers.push(b);
+    }
+    assert_eq!(editor.buffers.len(), 5);
+
+    editor.restore_state().unwrap();
+    assert_eq!(editor.buffers.len(), 2);
+    assert_eq!(editor.buffers[0].name, "*AI*");
+    assert_eq!(editor.buffers[1].name, "existing.rs");
+}
+
+// ---------------------------------------------------------------------------
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

@@ -90,6 +90,24 @@ pub enum InputLock {
     McpBusy,
 }
 
+/// Snapshot of editor state for save/restore (push/pop state stack).
+/// Captures the buffer list, window layout, focus, and mode so tools
+/// can restore the editor to a known state after temporary operations.
+#[derive(Clone)]
+pub struct EditorStateSnapshot {
+    /// Buffer names that were open (ordered).
+    pub buffer_names: Vec<String>,
+    /// The focused window's buffer name.
+    pub focused_buffer: String,
+    /// Cloned window manager state: all windows + layout tree + focus.
+    pub windows: std::collections::HashMap<crate::window::WindowId, crate::window::Window>,
+    pub layout: crate::window::LayoutNode,
+    pub focused_id: crate::window::WindowId,
+    pub next_window_id: crate::window::WindowId,
+    /// Editor mode at snapshot time.
+    pub mode: Mode,
+}
+
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -422,6 +440,9 @@ pub struct Editor {
     pub watchdog_stall_recovery: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Input event recorder for reproducible debugging.
     pub event_recorder: crate::event_record::EventRecorder,
+    /// State stack for save/restore (push/pop) during temporary operations
+    /// like self-test. AI tools call `editor_save_state` / `editor_restore_state`.
+    pub state_stack: Vec<EditorStateSnapshot>,
 }
 
 impl Default for Editor {
@@ -566,6 +587,7 @@ impl Editor {
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
+            state_stack: Vec::new(),
         }
     }
 
@@ -716,6 +738,7 @@ impl Editor {
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
+            state_stack: Vec::new(),
         }
     }
 
@@ -1119,6 +1142,95 @@ impl Editor {
             self.buffers.len()
         );
         &mut self.buffers[idx]
+    }
+
+    /// Save current editor state (buffer list, window layout, focus, mode)
+    /// onto the state stack. Returns the stack depth after push.
+    pub fn save_state(&mut self) -> usize {
+        let buffer_names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+        let focused_buffer = self.active_buffer().name.clone();
+        let (windows, layout, focused_id, next_id) = self.window_mgr.snapshot();
+        self.state_stack.push(EditorStateSnapshot {
+            buffer_names,
+            focused_buffer,
+            windows,
+            layout,
+            focused_id,
+            next_window_id: next_id,
+            mode: self.mode,
+        });
+        self.state_stack.len()
+    }
+
+    /// Restore editor state from the state stack. Closes buffers that weren't
+    /// in the snapshot, restores window layout and focus. Returns a summary
+    /// of what was restored, or an error if the stack is empty.
+    pub fn restore_state(&mut self) -> Result<String, String> {
+        let snapshot = self
+            .state_stack
+            .pop()
+            .ok_or_else(|| "State stack is empty — nothing to restore".to_string())?;
+
+        // 1. Close buffers that weren't in the snapshot (reverse order to keep indices stable)
+        let mut closed = Vec::new();
+        let mut i = self.buffers.len();
+        while i > 0 {
+            i -= 1;
+            if !snapshot.buffer_names.contains(&self.buffers[i].name) {
+                closed.push(self.buffers[i].name.clone());
+                self.buffers.remove(i);
+            }
+        }
+
+        // 2. Remap window buffer_idx values: snapshot had indices into the old buffer list,
+        //    but buffers may have shifted. Remap by name.
+        let mut restored_windows = snapshot.windows;
+        for win in restored_windows.values_mut() {
+            // Find the buffer name this window was pointing to
+            let old_name = snapshot
+                .buffer_names
+                .get(win.buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            // Find new index for that buffer
+            if let Some(new_idx) = self.buffers.iter().position(|b| b.name == old_name) {
+                win.buffer_idx = new_idx;
+            } else {
+                // Buffer no longer exists — point to buffer 0
+                win.buffer_idx = 0;
+            }
+        }
+
+        // 3. Restore window manager
+        self.window_mgr.restore(
+            restored_windows,
+            snapshot.layout,
+            snapshot.focused_id,
+            snapshot.next_window_id,
+        );
+
+        // 4. Restore mode
+        self.mode = snapshot.mode;
+
+        // 5. Focus the originally focused buffer
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == snapshot.focused_buffer)
+        {
+            self.window_mgr.focused_window_mut().buffer_idx = idx;
+        }
+
+        let summary = if closed.is_empty() {
+            "State restored (no buffers closed)".to_string()
+        } else {
+            format!(
+                "State restored, closed {} buffer(s): {}",
+                closed.len(),
+                closed.join(", ")
+            )
+        };
+        Ok(summary)
     }
 
     /// Find a buffer index by name. Returns None if not found.

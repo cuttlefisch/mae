@@ -662,20 +662,18 @@ fn build_self_test_plan(filter: &str) -> String {
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
         "instructions": [
             "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
-            "Step 1: Call list_buffers and window_layout to capture the current state BEFORE testing.",
+            "Step 1: Call editor_save_state to snapshot the current buffer list, window layout, and focus.",
             "Step 2: Execute each category's setup (if any), tests, and cleanup in order.",
             "Step 3: If a category has a 'setup' array, execute those steps FIRST (ignore errors — they clean up stale state from previous runs).",
             "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP.",
             "Step 5: After each category, execute its 'cleanup' array (if any).",
-            "Step 6: Final cleanup — close any buffers you opened that were NOT open at Step 1. Switch back to *AI*.",
+            "Step 6: Final cleanup — call editor_restore_state to automatically close test buffers and restore window layout.",
             "Step 7: Output the report. Do NOT quit the editor."
         ],
         "cleanup": [
             "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
-            "IMPORTANT: Close ALL buffers you opened during testing that were NOT in the Step 1 list. Use close_buffer with force=true for each one. Common test-opened buffers: mae-self-test-editing.txt, main.rs, *Help*. Compare the current list_buffers output with Step 1 and close any extras.",
-            "Switch back to *AI* buffer (switch_buffer) so the user sees the report",
-            "Do NOT quit the editor",
-            "Do NOT close the *AI* buffer or any buffer that was present in Step 1"
+            "Call editor_restore_state to restore the editor to its pre-test state (closes test buffers, restores window layout and focus).",
+            "Do NOT quit the editor"
         ],
         "categories": categories
     });

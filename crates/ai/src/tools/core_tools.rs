@@ -1004,5 +1004,26 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- State stack tools ---
+        ToolDefinition {
+            name: "editor_save_state".into(),
+            description: "Save current editor state (buffer list, window layout, focus, mode) onto a stack. Call before temporary operations like self-test to enable clean restore later.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "editor_restore_state".into(),
+            description: "Restore editor state from the stack: closes buffers opened since the save, restores window layout, focus, and mode. Inverse of editor_save_state.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }

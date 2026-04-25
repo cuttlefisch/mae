@@ -664,3 +664,19 @@ pub fn execute_visual_buffer_clear(editor: &mut Editor) -> Result<String, String
         Err("Active buffer is not a visual buffer".into())
     }
 }
+
+pub fn execute_editor_save_state(editor: &mut Editor) -> Result<String, String> {
+    let depth = editor.save_state();
+    let buf_names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+    let info = serde_json::json!({
+        "stack_depth": depth,
+        "saved_buffers": buf_names,
+        "window_count": editor.window_mgr.window_count(),
+        "focused_buffer": editor.active_buffer().name,
+    });
+    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+}
+
+pub fn execute_editor_restore_state(editor: &mut Editor) -> Result<String, String> {
+    editor.restore_state()
+}

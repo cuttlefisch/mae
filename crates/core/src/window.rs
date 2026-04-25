@@ -8,6 +8,7 @@ pub type WindowId = u32;
 /// Emacs lesson: Emacs got this right from day one — point (cursor) is per-window,
 /// not per-buffer. Two windows can view the same buffer at different positions.
 /// Neovim's win_T does the same. We follow suit.
+#[derive(Clone)]
 pub struct Window {
     pub id: WindowId,
     pub buffer_idx: usize,
@@ -372,7 +373,7 @@ pub enum Direction {
 ///
 /// Emacs uses the same model: a frame's window tree is a binary tree of
 /// horizontal and vertical splits, with leaves being actual windows.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LayoutNode {
     Leaf(WindowId),
     Split {
@@ -751,6 +752,30 @@ impl WindowManager {
             LayoutNode::Leaf(id) => *id,
             LayoutNode::Split { first, .. } => self.first_leaf_id(first),
         }
+    }
+
+    /// Take a snapshot of the window manager state (layout, windows, focus).
+    pub fn snapshot(&self) -> (HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId) {
+        (
+            self.windows.clone(),
+            self.layout.clone(),
+            self.focused,
+            self.next_id,
+        )
+    }
+
+    /// Restore window manager state from a snapshot.
+    pub fn restore(
+        &mut self,
+        windows: HashMap<WindowId, Window>,
+        layout: LayoutNode,
+        focused: WindowId,
+        next_id: WindowId,
+    ) {
+        self.windows = windows;
+        self.layout = layout;
+        self.focused = focused;
+        self.next_id = next_id;
     }
 }
 
