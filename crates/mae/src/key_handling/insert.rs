@@ -145,6 +145,7 @@ pub(super) fn handle_insert_mode(
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             editor.insert_mode_oneshot_normal = true;
             editor.set_mode(mae_core::Mode::Normal);
+            editor.set_status("-- (insert) -- C-o: one normal command, then back to insert");
             return;
         }
         _ => {}

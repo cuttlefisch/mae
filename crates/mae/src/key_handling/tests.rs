@@ -96,3 +96,64 @@ fn splash_not_active_on_non_dashboard() {
     // j in normal mode on non-dashboard should not change splash_selection
     assert_eq!(editor.splash_selection, sel_before);
 }
+
+fn make_ctrl(ch: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+}
+
+#[test]
+fn ctrl_o_in_insert_mode_executes_one_normal_command_then_returns() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+
+    // Enter insert mode
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    assert_eq!(editor.mode, Mode::Insert);
+
+    // Type some text so we have content
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('h')));
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+
+    // C-o: switch to normal for one command
+    dispatch(&mut editor, &mut scheme, make_ctrl('o'));
+    assert_eq!(editor.mode, Mode::Normal);
+    assert!(editor.insert_mode_oneshot_normal);
+
+    // Execute one normal command (e.g. '0' = move to line start)
+    // Note: '0' with no count_prefix is move-to-line-start, not a digit
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('0')));
+
+    // Should be back in insert mode
+    assert_eq!(editor.mode, Mode::Insert);
+    assert!(!editor.insert_mode_oneshot_normal);
+}
+
+#[test]
+fn ctrl_o_with_motion_returns_to_insert() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+
+    // Insert a few lines so j has somewhere to go
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Enter));
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Enter));
+
+    // Move to top: Esc, then gg
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Esc));
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('g')));
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('g')));
+
+    // Enter insert mode again
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    assert_eq!(editor.mode, Mode::Insert);
+
+    // C-o, then j (move down one line)
+    dispatch(&mut editor, &mut scheme, make_ctrl('o'));
+    assert_eq!(editor.mode, Mode::Normal);
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('j')));
+    assert_eq!(
+        editor.mode,
+        Mode::Insert,
+        "should return to insert after C-o j"
+    );
+}

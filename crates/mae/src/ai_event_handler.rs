@@ -991,7 +991,7 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
             let output = format!(
                 "DAP operation timed out after 15s ({:?}, phase: {:?}). \
                  Diagnostic: {}.{} \
-                 Check MAE logs (RUST_LOG=mae_dap=debug) for adapter events.",
+                 Check MAE logs (MAE_LOG=mae_dap=debug) for adapter events.",
                 kind, phase, diag, recent_section
             );
             resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
