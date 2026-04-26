@@ -85,15 +85,67 @@ fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
     let state_home = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    let dir = state_home.join("mae");
+    let dir = state_home.join("mae").join("logs");
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("mae.log");
+
+    // Timestamped log file per session — no cross-session contamination.
+    // Use libc gmtime_r for UTC formatting without adding a crate dependency.
+    let filename = {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::gmtime_r(&secs, &mut tm) };
+        format!(
+            "mae_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.log",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec,
+        )
+    };
+    let path = dir.join(&filename);
+
+    // Symlink mae.log → current session for easy `tail -f`.
+    let symlink = dir.parent()?.join("mae.log");
+    let _ = std::fs::remove_file(&symlink);
+    let _ = std::os::unix::fs::symlink(&path, &symlink);
+
+    // Prune old logs — keep the 10 most recent.
+    prune_old_logs(&dir, 10);
+
     let file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&path)
         .ok()?;
     Some((path, Mutex::new(file)))
+}
+
+fn prune_old_logs(dir: &std::path::Path, keep: usize) {
+    let mut logs: Vec<_> = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "log")
+                .unwrap_or(false)
+        })
+        .collect();
+    if logs.len() <= keep {
+        return;
+    }
+    logs.sort_by_key(|e| e.file_name());
+    for old in &logs[..logs.len() - keep] {
+        let _ = std::fs::remove_file(old.path());
+    }
 }
 
 /// Resolve the history file path (~/.local/state/mae/history.scm).
@@ -342,6 +394,13 @@ pub fn setup_ai(
             cmd_rx,
         )
         .with_budget(model, budget);
+
+        // Self-test mode: wider checkpoint interval, higher stagnation tolerance
+        let session = if std::env::args().any(|a| a == "--self-test") {
+            session.with_self_test_mode()
+        } else {
+            session
+        };
 
         spawn_ai_session(session);
 

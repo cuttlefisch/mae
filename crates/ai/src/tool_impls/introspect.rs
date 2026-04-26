@@ -139,6 +139,19 @@ fn build_shell_section(editor: &Editor) -> serde_json::Value {
 
 fn build_ai_section(editor: &Editor) -> serde_json::Value {
     let conv_entries = editor.conversation().map(|c| c.entries.len()).unwrap_or(0);
+    let context_usage_pct = if editor.ai_context_window > 0 {
+        (editor.ai_context_used_tokens as f64 / editor.ai_context_window as f64 * 100.0) as u64
+    } else {
+        0
+    };
+    let cache_hit_pct = {
+        let total = editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+        if total > 0 {
+            (editor.ai_cache_read_tokens as f64 / total as f64 * 100.0) as u64
+        } else {
+            0
+        }
+    };
     json!({
         "mode": editor.ai_mode,
         "profile": editor.ai_profile,
@@ -150,5 +163,11 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
         "session_cost_usd": editor.ai_session_cost_usd,
         "session_tokens_in": editor.ai_session_tokens_in,
         "session_tokens_out": editor.ai_session_tokens_out,
+        "cache_read_tokens": editor.ai_cache_read_tokens,
+        "cache_creation_tokens": editor.ai_cache_creation_tokens,
+        "cache_hit_pct": cache_hit_pct,
+        "context_window": editor.ai_context_window,
+        "context_used_tokens": editor.ai_context_used_tokens,
+        "context_usage_pct": context_usage_pct,
     })
 }

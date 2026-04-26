@@ -70,7 +70,7 @@ impl Editor {
 
     /// Shared plumbing for named-register writes: uppercase = append,
     /// `+`/`*` = system clipboard + local mirror, lowercase = replace.
-    fn write_named_register(&mut self, ch: char, text: &str) {
+    pub(super) fn write_named_register(&mut self, ch: char, text: &str) {
         if matches!(ch, '+' | '*') {
             if let Err(e) = crate::clipboard::copy(text) {
                 self.set_status(format!("Clipboard copy failed: {}", e));

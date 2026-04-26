@@ -83,6 +83,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
   AI security (blocklist, circuit breaker, backpressure), error handling audited
 - Registers & clipboard, vim-surround, Scheme REPL, AI prompt UX, command palette
 - **v0.4.1**: Second modularization pass — 6 god files split into module directories (key_handling, main, tools, executor, session), 12 code smell fixes, model-agnostic system prompt (1,590 tests)
+- **v0.5.0**: Agent reliability — progress checkpoint system (semantic stagnation detection), softened oscillation detector (warn-then-abort), self-test mode, watchdog recovery (cancel AI on prolonged stall), prompt caching (Claude cache_control), token budget dashboard (cache hit rate, context utilization), context compaction (extractive summarization before hard trimming), graceful degradation (auto-shed tools at >85%/92% context pressure), web_fetch tool, ANSI-only themes (light-ansi, dark-ansi), XDG-compliant transcript logging, DAP observability (enriched timeouts, protocol tracing, failure guidance) (1,641 tests)
 
 ### Phase 4: LSP + DAP + Syntax + KB — COMPLETE (M1-M4 each)
 - LSP client: connection, navigation (gd/gr/K), diagnostics, completion popup ✅
@@ -112,7 +113,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M4 COMPLETE (1,484 tests)
+### Phase 8: GUI Rendering Backend — M1-M4.5 COMPLETE (1,484+ tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -149,7 +150,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Doom-style init.scm: 8 sections, all 14 options, hooks, keybindings, AI config ✅
 - Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
 - `--check-config` CLI flag + CI E2E validation step ✅
-- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Variable-height lines (8 M5)**
+- **Next: Magit-style status buffer (6 M5), Org core interactivity (9 M1), Emacs display patterns (8 M5), Variable-height lines (8 M6)**
 
 ## Key Design Decisions Already Made
 
@@ -172,6 +173,22 @@ These findings from analyzing the Emacs git repo at `~/src/emacs` motivated our 
 - **~10% of all commits are platform support** — separate `*term.c` files per platform. We delegate to crossterm/wgpu.
 - **Emacs 31 direction:** VC/git (1,048 commits = 16%), completions, TTY child frames, newcomer presets, `elisp-scope.el` (static analysis). QoL is the frontier.
 - **Development velocity peaked in 2022 (9,647 commits) and declined to ~3,356 in 2024.** The 2025 pace is even lower. Whether this is stabilization or contributor burnout is unclear.
+
+## Development Dependencies
+
+Required for full self-test coverage (DAP and LSP categories):
+
+| Package | Purpose | Install |
+|---------|---------|---------|
+| `lldb` | DAP adapter for C/C++/Rust (provides `lldb-dap`) | `sudo dnf install lldb` (Fedora), `sudo apt install lldb` (Debian/Ubuntu), `brew install llvm` (macOS) |
+| `rust-analyzer` | LSP server for Rust | `rustup component add rust-analyzer` |
+| `debugpy` | DAP adapter for Python | `pip install debugpy` |
+
+Quick setup: `make setup-dev` (auto-detects package manager).
+
+Environment variable overrides for adapter/server paths:
+- **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
+- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`
 
 ## Related Resources
 

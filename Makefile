@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks self-test check-config help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config help
 
 # Default target: release build
 all: build
@@ -130,15 +130,19 @@ clippy:
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test, excludes mae-gui)
 ci: fmt-check
-	$(CARGO) clippy --workspace --all-targets --exclude mae-gui -- -D warnings
-	$(CARGO) check --workspace --all-targets --exclude mae-gui
-	$(CARGO) test --workspace --exclude mae-gui
+	$(CARGO) clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
+	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
+	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
 	@echo "CI passed ✓"
 
 ## setup-hooks: configure git to use version-controlled hooks
 setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks configured to use .githooks/"
+
+## setup-dev: install development dependencies for full self-test coverage
+setup-dev:
+	@scripts/setup-dev.sh
 
 ## check-config: validate init.scm + config.toml without launching the editor
 check-config: build-tui

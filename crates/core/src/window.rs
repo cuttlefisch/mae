@@ -8,6 +8,7 @@ pub type WindowId = u32;
 /// Emacs lesson: Emacs got this right from day one — point (cursor) is per-window,
 /// not per-buffer. Two windows can view the same buffer at different positions.
 /// Neovim's win_T does the same. We follow suit.
+#[derive(Clone)]
 pub struct Window {
     pub id: WindowId,
     pub buffer_idx: usize,
@@ -273,6 +274,31 @@ impl Window {
         }
     }
 
+    /// Scroll up one line (C-y). Cursor stays on screen.
+    pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        // If cursor scrolled below the viewport, pull it up to the bottom visible line.
+        if viewport_height > 0 {
+            let bottom = self.scroll_offset + viewport_height - 1;
+            if self.cursor_row > bottom {
+                self.cursor_row = bottom;
+                self.clamp_cursor(buf);
+            }
+        }
+    }
+
+    /// Scroll down one line (C-e). Cursor stays on screen.
+    pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
+        let max_row = buf.display_line_count().saturating_sub(1);
+        self.scroll_offset = (self.scroll_offset + 1).min(max_row);
+        // If cursor scrolled above the viewport, push it down to the top visible line.
+        if self.cursor_row < self.scroll_offset {
+            self.cursor_row = self.scroll_offset;
+            self.clamp_cursor(buf);
+        }
+        let _ = viewport_height; // used by scroll_up_line for symmetry
+    }
+
     // --- Screen-relative cursor ---
 
     /// Move cursor to top visible line (H).
@@ -312,6 +338,57 @@ impl Window {
         }
     }
 
+    /// Word-wrap-aware scroll adjustment. Counts visual rows consumed by
+    /// wrapped lines between `scroll_offset` and `cursor_row`, and adjusts
+    /// `scroll_offset` upward until the cursor's wrapped line fits in the
+    /// viewport.
+    ///
+    /// `line_visual_rows` returns how many visual rows a given buffer line
+    /// occupies (>= 1). For non-wrapped buffers, always returns 1.
+    pub fn ensure_scroll_wrapped<F>(&mut self, viewport_height: usize, line_visual_rows: F)
+    where
+        F: Fn(usize) -> usize,
+    {
+        if viewport_height == 0 {
+            return;
+        }
+
+        // Cursor above viewport — scroll up.
+        if self.cursor_row < self.scroll_offset {
+            self.scroll_offset = self.cursor_row;
+        }
+
+        // Cursor below viewport — scroll down until it fits.
+        loop {
+            let mut visual = 0;
+            let mut cursor_visible = false;
+            for line in self.scroll_offset.. {
+                let rows = line_visual_rows(line);
+                if line == self.cursor_row {
+                    if visual + rows <= viewport_height {
+                        cursor_visible = true;
+                    }
+                    break;
+                }
+                visual += rows;
+                if visual >= viewport_height {
+                    break;
+                }
+            }
+            if cursor_visible {
+                break;
+            }
+            self.scroll_offset += 1;
+            // Safety: if cursor_row == scroll_offset, the cursor is on the
+            // first visible line and always visible (even if it wraps past
+            // the viewport — we can't do better without horizontal scrolling).
+            if self.scroll_offset >= self.cursor_row {
+                self.scroll_offset = self.cursor_row;
+                break;
+            }
+        }
+    }
+
     /// Adjust horizontal scroll so the cursor column stays visible.
     /// `viewport_width` is the number of text columns available (after gutter).
     pub fn ensure_scroll_horizontal(&mut self, viewport_width: usize) {
@@ -347,7 +424,7 @@ pub enum Direction {
 ///
 /// Emacs uses the same model: a frame's window tree is a binary tree of
 /// horizontal and vertical splits, with leaves being actual windows.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LayoutNode {
     Leaf(WindowId),
     Split {
@@ -727,6 +804,30 @@ impl WindowManager {
             LayoutNode::Split { first, .. } => self.first_leaf_id(first),
         }
     }
+
+    /// Take a snapshot of the window manager state (layout, windows, focus).
+    pub fn snapshot(&self) -> (HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId) {
+        (
+            self.windows.clone(),
+            self.layout.clone(),
+            self.focused,
+            self.next_id,
+        )
+    }
+
+    /// Restore window manager state from a snapshot.
+    pub fn restore(
+        &mut self,
+        windows: HashMap<WindowId, Window>,
+        layout: LayoutNode,
+        focused: WindowId,
+        next_id: WindowId,
+    ) {
+        self.windows = windows;
+        self.layout = layout;
+        self.focused = focused;
+        self.next_id = next_id;
+    }
 }
 
 #[cfg(test)]
@@ -1069,6 +1170,52 @@ mod tests {
         win.scroll_half_up(20);
         assert_eq!(win.cursor_row, 0);
         assert_eq!(win.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_down_line_clamps_cursor_to_viewport() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 0;
+        win.scroll_offset = 0;
+        // Scroll viewport down 5 lines — cursor at row 0 is now above viewport.
+        for _ in 0..5 {
+            win.scroll_down_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 5);
+        // Cursor must have been pushed to the top of the viewport.
+        assert_eq!(win.cursor_row, 5);
+    }
+
+    #[test]
+    fn scroll_up_line_clamps_cursor_to_viewport() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 50;
+        win.scroll_offset = 40;
+        // Scroll viewport up 15 lines — cursor at row 50 would go below viewport.
+        for _ in 0..15 {
+            win.scroll_up_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 25);
+        // Cursor must have been pulled to bottom visible line (25 + 19 = 44).
+        assert_eq!(win.cursor_row, 44);
+    }
+
+    #[test]
+    fn scroll_down_line_continues_past_cursor() {
+        // Regression: C-e used to stop when cursor hit viewport bottom.
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 10;
+        win.scroll_offset = 0;
+        // Scroll 30 lines — well past the cursor's original position.
+        for _ in 0..30 {
+            win.scroll_down_line(&buf, 20);
+        }
+        assert_eq!(win.scroll_offset, 30);
+        // Cursor should be at top of viewport.
+        assert_eq!(win.cursor_row, 30);
     }
 
     // --- WindowManager tests ---

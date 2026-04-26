@@ -99,12 +99,23 @@ pub struct DiagnosticStore {
 impl DiagnosticStore {
     /// Replace the diagnostics for a single URI. Empty `diagnostics` clears
     /// the entry entirely so the file shows "clean" in the UI.
-    pub fn set(&mut self, uri: String, diagnostics: Vec<Diagnostic>) {
+    /// Returns `true` if the stored diagnostics actually changed.
+    pub fn set(&mut self, uri: String, diagnostics: Vec<Diagnostic>) -> bool {
         if diagnostics.is_empty() {
-            self.map.remove(&uri);
-        } else {
-            self.map.insert(uri, diagnostics);
+            return self.map.remove(&uri).is_some();
         }
+        // Check if identical to avoid unnecessary redraws.
+        if let Some(existing) = self.map.get(&uri) {
+            if existing.len() == diagnostics.len()
+                && existing.iter().zip(&diagnostics).all(|(a, b)| {
+                    a.line == b.line && a.message == b.message && a.severity == b.severity
+                })
+            {
+                return false;
+            }
+        }
+        self.map.insert(uri, diagnostics);
+        true
     }
 
     pub fn get(&self, uri: &str) -> Option<&Vec<Diagnostic>> {
@@ -330,9 +341,26 @@ mod tests {
             "file:///a.rs".into(),
             vec![diag(0, 0, DiagnosticSeverity::Error, "bad")],
         );
-        store.set("file:///a.rs".into(), vec![]);
+        assert!(store.set("file:///a.rs".into(), vec![]));
         assert_eq!(store.total(), 0);
         assert!(store.get("file:///a.rs").is_none());
+    }
+
+    /// Regression: identical diagnostics should not trigger a redraw.
+    /// LSP servers republish unchanged diagnostics frequently.
+    #[test]
+    fn store_set_returns_changed() {
+        let mut store = DiagnosticStore::default();
+        let d = vec![diag(0, 0, DiagnosticSeverity::Error, "bad")];
+        // First set: changed
+        assert!(store.set("file:///a.rs".into(), d.clone()));
+        // Same diagnostics: not changed
+        assert!(!store.set("file:///a.rs".into(), d.clone()));
+        // Different message: changed
+        let d2 = vec![diag(0, 0, DiagnosticSeverity::Error, "worse")];
+        assert!(store.set("file:///a.rs".into(), d2));
+        // Clear non-existent: not changed
+        assert!(!store.set("file:///b.rs".into(), vec![]));
     }
 
     #[test]

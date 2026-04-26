@@ -13,3 +13,4 @@ winit = "0.30"
 skia-safe = "0.93"
 softbuffer = "0.4"
 tracing = { workspace = true }
+unicode-width = "0.2"

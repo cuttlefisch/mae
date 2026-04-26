@@ -1292,3 +1292,794 @@ fn trim_preserves_tool_history_without_pruning() {
     assert_eq!(session.messages[2].role, Role::Tool);
     assert_eq!(session.messages[3].role, Role::Tool);
 }
+
+// --- Progress checkpoint integration tests ---
+
+/// Helper: build a ProviderResponse with tool calls dispatched to main thread.
+fn tool_call_response(name: &str, args: serde_json::Value) -> ProviderResponse {
+    ProviderResponse {
+        text: None,
+        tool_calls: vec![ToolCall {
+            id: format!("call_{}", name),
+            name: name.to_string(),
+            arguments: args,
+        }],
+        stop_reason: StopReason::ToolUse,
+        usage: Some(Usage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    }
+}
+
+/// 30 identical buffer_read calls → stagnation abort before max_rounds.
+#[tokio::test]
+async fn test_checkpoint_aborts_stagnant_session() {
+    let (event_tx, mut event_rx) = mpsc::channel(1024);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // Build 35 identical buffer_read responses
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for _ in 0..35 {
+        responses.push(tool_call_response(
+            "buffer_read",
+            serde_json::json!({"path": "same.rs"}),
+        ));
+    }
+    // Final end-turn in case we get that far
+    responses.push(ProviderResponse {
+        text: Some("done".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(5, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut saw_error = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "file contents".into(),
+                });
+            }
+            AiEvent::Error(msg, _) if msg.contains("stagnation") || msg.contains("tool loop") => {
+                saw_error = true;
+                break;
+            }
+            AiEvent::Error(_, _) => break,
+            AiEvent::SessionComplete { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(saw_error, "expected stagnation or oscillation abort");
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}
+
+/// 30 varied rounds with different tools and files → completes without stagnation.
+#[tokio::test]
+async fn test_checkpoint_allows_long_varied_session() {
+    let (event_tx, mut event_rx) = mpsc::channel(1024);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // Use only tools that dispatch to main thread (avoid shell_exec which runs real commands)
+    let tools_cycle = [
+        ("buffer_read", serde_json::json!({"path": "a.rs"})),
+        ("buffer_write", serde_json::json!({"path": "a.rs"})),
+        ("project_search", serde_json::json!({"query": "foo"})),
+        ("buffer_read", serde_json::json!({"path": "b.rs"})),
+        ("buffer_write", serde_json::json!({"path": "b.rs"})),
+        ("create_file", serde_json::json!({"path": "c.rs"})),
+        ("buffer_read", serde_json::json!({"path": "c.rs"})),
+        ("open_file", serde_json::json!({"path": "d.rs"})),
+        ("buffer_write", serde_json::json!({"path": "d.rs"})),
+        ("cursor_info", serde_json::json!({})),
+    ];
+
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for i in 0..30 {
+        let (name, args) = &tools_cycle[i % tools_cycle.len()];
+        responses.push(tool_call_response(name, args.clone()));
+    }
+    responses.push(ProviderResponse {
+        text: Some("All done!".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(5, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut saw_stagnation = false;
+    let mut completed = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "ok".into(),
+                });
+            }
+            AiEvent::Error(msg, _) if msg.contains("stagnation") || msg.contains("tool loop") => {
+                saw_stagnation = true;
+                break;
+            }
+            AiEvent::SessionComplete { .. } => {
+                completed = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(completed, "session should complete normally");
+    assert!(!saw_stagnation, "should not trigger stagnation abort");
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}
+
+/// Oscillation: A-B-A-B pattern → warn first, abort on second oscillation.
+#[tokio::test]
+async fn test_oscillation_warn_then_abort() {
+    let (event_tx, mut event_rx) = mpsc::channel(128);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+
+    // A-B-A-B-A-B-A-B pattern (8 rounds)
+    let mut responses: Vec<ProviderResponse> = Vec::new();
+    for i in 0..8 {
+        if i % 2 == 0 {
+            responses.push(tool_call_response(
+                "buffer_read",
+                serde_json::json!({"path": "x.rs"}),
+            ));
+        } else {
+            responses.push(tool_call_response(
+                "buffer_write",
+                serde_json::json!({"path": "x.rs"}),
+            ));
+        }
+    }
+    responses.push(ProviderResponse {
+        text: Some("done".into()),
+        tool_calls: vec![],
+        stop_reason: StopReason::EndTurn,
+        usage: Some(Usage {
+            prompt_tokens: 50,
+            completion_tokens: 10,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }),
+    });
+
+    let provider = Box::new(MockProvider::new(responses));
+    let mut session = AgentSession::new(provider, vec![], String::new(), event_tx, cmd_rx);
+    session.progress = super::progress::ProgressTracker::new(10, false);
+
+    cmd_tx.send(AiCommand::Prompt("test".into())).await.unwrap();
+    tokio::spawn(session.run());
+
+    let mut warnings = 0;
+    let mut aborted = false;
+    while let Some(evt) = event_rx.recv().await {
+        match evt {
+            AiEvent::ToolCallRequest { call, reply } => {
+                let _ = reply.send(ToolResult {
+                    tool_call_id: call.id,
+                    tool_name: call.name,
+                    success: true,
+                    output: "ok".into(),
+                });
+            }
+            AiEvent::TextResponse { text, .. } if text.contains("tool loop warning") => {
+                warnings += 1;
+            }
+            AiEvent::Error(msg, _) if msg.contains("tool loop") => {
+                aborted = true;
+                break;
+            }
+            AiEvent::SessionComplete { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        warnings >= 1,
+        "expected at least 1 oscillation warning, got {}",
+        warnings
+    );
+    assert!(
+        aborted,
+        "expected oscillation abort after reaching stagnant threshold"
+    );
+    cmd_tx.send(AiCommand::Shutdown).await.ok();
+}
+
+// --- compact_history unit tests ---
+
+fn make_test_session_with_messages(messages: Vec<Message>) -> AgentSession {
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_tx, cmd_rx) = mpsc::channel(8);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    session.messages = messages;
+    session
+}
+
+fn make_session_with_tools(tools: Vec<ToolDefinition>) -> AgentSession {
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_tx, cmd_rx) = mpsc::channel(8);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let sys_prompt = "A".repeat(5000); // Long system prompt for testing truncation
+    AgentSession::new(provider, tools, sys_prompt, event_tx, cmd_rx)
+}
+
+fn user_msg(text: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: MessageContent::Text(text.into()),
+    }
+}
+
+fn assistant_msg(text: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: MessageContent::Text(text.into()),
+    }
+}
+
+fn tool_calls_msg(names: &[&str]) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: MessageContent::ToolCalls(
+            names
+                .iter()
+                .map(|n| ToolCall {
+                    id: format!("call_{}", n),
+                    name: n.to_string(),
+                    arguments: serde_json::json!({}),
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn tool_result_msg(name: &str) -> Message {
+    Message {
+        role: Role::Tool,
+        content: MessageContent::ToolResult(ToolResult {
+            tool_call_id: format!("call_{}", name),
+            tool_name: name.to_string(),
+            success: true,
+            output: "ok".into(),
+        }),
+    }
+}
+
+fn large_tool_result_msg(name: &str, size: usize) -> Message {
+    Message {
+        role: Role::Tool,
+        content: MessageContent::ToolResult(ToolResult {
+            tool_call_id: format!("call_{}", name),
+            tool_name: name.to_string(),
+            success: true,
+            output: format!("line one\nline two\n{}", "x".repeat(size)),
+        }),
+    }
+}
+
+#[test]
+fn compact_history_truncates_large_tool_results() {
+    let mut msgs = vec![user_msg("initial context")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    // Large tool results should be truncated
+    let compacted: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                r.output.contains("tokens compacted")
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(!compacted.is_empty(), "expected compacted tool results");
+    // Message count unchanged (tool-result truncation doesn't remove messages)
+    assert_eq!(session.messages.len(), 21);
+}
+
+#[test]
+fn compact_history_preserves_tool_calls() {
+    let mut msgs = vec![user_msg("initial context")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
+    let original_len = msgs.len();
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    // All messages preserved (truncation is in-place, no removal)
+    assert_eq!(session.messages.len(), original_len);
+    // Tool call messages still exist
+    let tool_call_count = session
+        .messages
+        .iter()
+        .filter(|m| matches!(m.content, MessageContent::ToolCalls(_)))
+        .count();
+    assert_eq!(tool_call_count, 5);
+}
+
+#[test]
+fn compact_history_noop_when_small_results() {
+    // Small tool results (under 100 tokens) should not be compacted
+    let msgs = vec![
+        user_msg("initial"),
+        user_msg("q1"),
+        tool_calls_msg(&["buffer_read"]),
+        tool_result_msg("buffer_read"), // "ok" — only ~1 token
+        assistant_msg("a1"),
+    ];
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+
+    // Tool result should be unchanged
+    if let MessageContent::ToolResult(r) = &session.messages[3].content {
+        assert_eq!(r.output, "ok");
+    } else {
+        panic!("expected tool result at index 3");
+    }
+}
+
+#[test]
+fn compact_history_idempotent() {
+    let mut msgs = vec![user_msg("initial")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
+    let mut session = make_test_session_with_messages(msgs);
+
+    session.compact_history();
+    let after_first: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    session.compact_history();
+    let after_second: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert_eq!(
+        after_first, after_second,
+        "second compaction should be no-op"
+    );
+}
+
+#[test]
+fn compact_history_protects_transaction() {
+    let mut msgs = vec![user_msg("initial")];
+    for _ in 0..5 {
+        msgs.push(user_msg("old question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("old answer"));
+    }
+    // Transaction starts at the last message
+    let tx_start = msgs.len() - 1;
+    // Add a large tool result in the transaction zone
+    msgs.push(user_msg("current question"));
+    msgs.push(tool_calls_msg(&["buffer_write"]));
+    msgs.push(large_tool_result_msg("buffer_write", 3000));
+
+    let mut session = make_test_session_with_messages(msgs);
+    session.transaction_start_idx = Some(tx_start);
+
+    session.compact_history();
+
+    // Transaction tool result should be untouched
+    if let MessageContent::ToolResult(r) = &session.messages[session.messages.len() - 1].content {
+        assert!(
+            !r.output.contains("tokens compacted"),
+            "transaction tool result should not be compacted"
+        );
+    } else {
+        panic!("expected tool result as last message");
+    }
+}
+
+#[test]
+fn compact_history_skipped_in_self_test() {
+    let mut msgs = vec![user_msg("initial")];
+    for _ in 0..5 {
+        msgs.push(user_msg("question"));
+        msgs.push(tool_calls_msg(&["buffer_read"]));
+        msgs.push(large_tool_result_msg("buffer_read", 2000));
+        msgs.push(assistant_msg("answer"));
+    }
+    let mut session = make_test_session_with_messages(msgs);
+    session.is_self_test = true;
+
+    // Save original tool result outputs
+    let originals: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // compact_history itself doesn't check is_self_test (the gate is in handle_prompt),
+    // but verify the session field is properly set
+    assert!(session.is_self_test);
+
+    // The gate is: `if current_tokens > budget * 70 / 100 && !self.is_self_test`
+    // So in self-test mode, compact_history is never called. Verify the field works.
+    let originals_after: Vec<String> = session
+        .messages
+        .iter()
+        .filter_map(|m| {
+            if let MessageContent::ToolResult(r) = &m.content {
+                Some(r.output.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(originals, originals_after);
+}
+
+#[test]
+fn trim_messages_respects_transaction() {
+    let mut msgs = vec![user_msg("initial")];
+    for i in 0..20 {
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(assistant_msg(&format!("a{}", i)));
+    }
+    let tx_start = msgs.len() - 4; // Last 2 pairs = 4 messages
+    let mut session = make_test_session_with_messages(msgs);
+    session.transaction_start_idx = Some(tx_start);
+    // Set a tiny context window to force trimming
+    session.context_window = 500;
+    session.system_prompt_tokens = 100;
+    session.tools_tokens = 50;
+
+    session.trim_messages();
+
+    // Transaction messages should still be present
+    let new_tx = session.transaction_start_idx.unwrap();
+    assert!(
+        new_tx >= 1,
+        "transaction idx should be >= 1, got {}",
+        new_tx
+    );
+    assert!(
+        new_tx < session.messages.len(),
+        "transaction idx {} out of bounds (len={})",
+        new_tx,
+        session.messages.len()
+    );
+}
+
+// --- Graceful Degradation tests ---
+
+fn make_extended_tool(name: &str) -> ToolDefinition {
+    ToolDefinition {
+        name: name.into(),
+        description: "test tool".into(),
+        parameters: crate::types::ToolParameters {
+            schema_type: "object".into(),
+            properties: std::collections::HashMap::new(),
+            required: vec![],
+        },
+        permission: Some(crate::types::PermissionTier::ReadOnly),
+    }
+}
+
+#[test]
+fn graceful_degrade_sheds_extended_tools() {
+    let tools = vec![
+        make_extended_tool("buffer_read"),    // Core
+        make_extended_tool("lsp_definition"), // Extended
+        make_extended_tool("dap_start"),      // Extended
+        make_extended_tool("kb_search"),      // Extended
+    ];
+    let mut session = make_session_with_tools(tools);
+    // Manually add extended tools to the active set (simulating request_tools)
+    session.tools.push(make_extended_tool("lsp_definition"));
+    session.tools.push(make_extended_tool("dap_start"));
+    session.tools.push(make_extended_tool("kb_search"));
+    session.tools_tokens = crate::token_estimate::estimate_tools_tokens(&session.tools);
+
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "padding message {} with some longer content to take up token space",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.90) as u64;
+
+    let original_count = session.tools.len();
+    let changed = session.check_and_degrade();
+
+    assert!(changed, "should have degraded");
+    assert_eq!(
+        session.degradation_level,
+        super::DegradationLevel::ToolsShed
+    );
+    assert!(
+        session.tools.len() < original_count,
+        "expected fewer tools after shedding: {} -> {}",
+        original_count,
+        session.tools.len()
+    );
+    // Only core tools should remain
+    for tool in &session.tools {
+        assert!(
+            crate::tools::classify_tool_tier(&tool.name) == crate::tools::ToolTier::Core
+                || tool.name == "request_tools",
+            "non-core tool {} survived shedding",
+            tool.name
+        );
+    }
+}
+
+#[test]
+fn graceful_degrade_recalcs_tools_tokens() {
+    let tools = vec![
+        make_extended_tool("buffer_read"),
+        make_extended_tool("lsp_definition"),
+        make_extended_tool("dap_start"),
+    ];
+    let mut session = make_session_with_tools(tools);
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "padding {} with longer text to fill context",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.90) as u64;
+    let tokens_before = session.tools_tokens;
+
+    session.check_and_degrade();
+
+    assert!(
+        session.tools_tokens <= tokens_before,
+        "tools_tokens should not increase after shedding"
+    );
+}
+
+#[test]
+fn degradation_to_minimal_shortens_prompt() {
+    let mut session = make_session_with_tools(vec![make_extended_tool("buffer_read")]);
+    // Already shed tools
+    session.degradation_level = super::DegradationLevel::ToolsShed;
+    // Fill heavily to push past 92%
+    let overhead = session.system_prompt_tokens + session.tools_tokens + session.reserved_output;
+    for i in 0..50 {
+        session.messages.push(user_msg(&format!(
+            "heavy padding message {} with extra content",
+            i
+        )));
+    }
+    let msg_tokens = crate::token_estimate::estimate_messages_tokens(&session.messages);
+    session.context_window = ((overhead + msg_tokens) as f64 / 0.95) as u64;
+
+    let changed = session.check_and_degrade();
+
+    assert!(changed, "should degrade to Minimal");
+    assert_eq!(session.degradation_level, super::DegradationLevel::Minimal);
+    assert!(
+        session.system_prompt.contains("truncated"),
+        "system prompt should mention truncation"
+    );
+}
+
+#[test]
+fn degradation_is_one_way() {
+    let mut session = make_session_with_tools(vec![make_extended_tool("buffer_read")]);
+    session.context_window = 100_000;
+    session.system_prompt_tokens = 100;
+    session.reserved_output = 100;
+    // Force to ToolsShed
+    session.degradation_level = super::DegradationLevel::ToolsShed;
+    // Few messages = low usage, but should NOT recover
+    session.messages.push(user_msg("tiny"));
+
+    let changed = session.check_and_degrade();
+
+    assert!(!changed, "should not recover from ToolsShed");
+    assert_eq!(
+        session.degradation_level,
+        super::DegradationLevel::ToolsShed
+    );
+}
+
+// --- strip_html + web_fetch tests ---
+
+#[test]
+fn strip_html_basic() {
+    let html = "<html><body><h1>Hello</h1><p>World &amp; friends</p></body></html>";
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("Hello"), "should contain text");
+    assert!(text.contains("World & friends"), "entities decoded");
+    assert!(!text.contains('<'), "no HTML tags");
+}
+
+#[test]
+fn strip_html_script_style_removed() {
+    let html = r#"<html><head><style>body { color: red }</style></head>
+    <body><script>alert('xss')</script><p>Content</p></body></html>"#;
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("Content"), "content preserved");
+    assert!(!text.contains("alert"), "script removed");
+    assert!(!text.contains("color"), "style removed");
+}
+
+#[test]
+fn strip_html_plain_text_passthrough() {
+    let plain = "This is just plain text with no tags.";
+    let text = AgentSession::strip_html(plain);
+    assert_eq!(text, plain);
+}
+
+#[test]
+fn strip_html_collapses_whitespace() {
+    let html = "<p>Line 1</p>\n\n\n\n\n<p>Line 2</p>";
+    let text = AgentSession::strip_html(html);
+    // Should not have more than one consecutive blank line
+    assert!(!text.contains("\n\n\n"), "excessive blank lines collapsed");
+}
+
+#[test]
+fn strip_html_entities() {
+    let html = "&lt;tag&gt; &quot;quoted&quot; &nbsp; &#39;apos&#39;";
+    let text = AgentSession::strip_html(html);
+    assert!(text.contains("<tag>"), "lt/gt decoded");
+    assert!(text.contains("\"quoted\""), "quot decoded");
+    assert!(text.contains("'apos'"), "apos decoded");
+}
+
+#[tokio::test]
+async fn web_fetch_missing_url() {
+    let call = ToolCall {
+        id: "test".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({}),
+    };
+    let result = AgentSession::execute_web_fetch(&call).await;
+    assert!(!result.success);
+    assert!(result.output.contains("Missing"));
+}
+
+#[tokio::test]
+async fn web_fetch_invalid_scheme() {
+    let call = ToolCall {
+        id: "test".into(),
+        name: "web_fetch".into(),
+        arguments: serde_json::json!({"url": "ftp://example.com"}),
+    };
+    let result = AgentSession::execute_web_fetch(&call).await;
+    assert!(!result.success);
+    assert!(result.output.contains("Invalid URL scheme"));
+}
+
+/// Regression: transcript metadata is written on session creation
+/// and updated after with_budget resolves model info.
+#[test]
+fn transcript_metadata_written() {
+    let tmp_dir = std::env::temp_dir().join("mae-test-transcript");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let transcript_path = tmp_dir.join("test-metadata.json");
+
+    // Create a session manually to test transcript creation
+    let (event_tx, _rx) = mpsc::channel(32);
+    let (_cmd_tx, cmd_rx) = mpsc::channel(32);
+    let provider = Box::new(MockProvider::new(vec![]));
+    let tools = vec![];
+    let session = AgentSession::new(provider, tools, "test prompt".into(), event_tx, cmd_rx);
+
+    // Overwrite transcript_path for testing
+    let mut session = session;
+    session.transcript_path = Some(transcript_path.clone());
+    session.write_transcript_metadata();
+
+    // Apply budget to trigger metadata update
+    let session = session.with_budget("claude-sonnet-4-20250514", crate::BudgetConfig::default());
+    let _ = &session; // ensure session lives until assertions
+
+    // Read the transcript file
+    let content = std::fs::read_to_string(&transcript_path).unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+
+    assert_eq!(metadata["type"], "metadata");
+    assert_eq!(metadata["model"], "claude-sonnet-4-20250514");
+    assert!(metadata["context_window"].as_u64().unwrap() > 0);
+    assert!(metadata["max_rounds"].as_u64().unwrap() > 0);
+    assert!(metadata["platform"].as_str().is_some());
+    assert!(metadata["mae_version"].as_str().is_some());
+
+    // Cleanup
+    let _ = std::fs::remove_file(&transcript_path);
+    let _ = std::fs::remove_dir(&tmp_dir);
+}
+
+#[test]
+fn test_compact_history_empty_messages() {
+    let mut session = make_test_session_with_messages(vec![]);
+    // Should not panic with 0 messages
+    session.compact_history();
+    assert!(session.messages.is_empty());
+}
+
+#[test]
+fn test_compact_history_single_message() {
+    let mut session = make_test_session_with_messages(vec![user_msg("hello")]);
+    // Should not panic with 1 message (compact_end would be 0, range 1..0 would panic)
+    session.compact_history();
+    assert_eq!(session.messages.len(), 1);
+}

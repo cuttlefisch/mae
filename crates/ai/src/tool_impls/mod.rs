@@ -22,9 +22,10 @@ pub use dap::{
     execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_state, execute_event_recording,
-    execute_get_option, execute_mouse_event, execute_org_cycle, execute_org_open_link,
-    execute_org_todo_cycle, execute_render_inspect, execute_set_option, execute_shell_scrollback,
+    execute_command_list, execute_debug_state, execute_editor_restore_state,
+    execute_editor_save_state, execute_editor_state, execute_event_recording, execute_get_option,
+    execute_mouse_event, execute_org_cycle, execute_org_open_link, execute_org_todo_cycle,
+    execute_read_messages, execute_render_inspect, execute_set_option, execute_shell_scrollback,
     execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
     execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
     execute_visual_buffer_clear, execute_window_layout,
@@ -34,9 +35,10 @@ pub use file::{
     execute_rename_file, execute_switch_buffer,
 };
 pub use git::{
-    execute_git_checkout, execute_git_commit, execute_git_diff, execute_git_log, execute_git_pull,
-    execute_git_push, execute_git_stage, execute_git_status, execute_git_unstage,
-    execute_github_pr_create, execute_github_pr_status,
+    execute_git_branch_delete, execute_git_branch_list, execute_git_checkout, execute_git_commit,
+    execute_git_diff, execute_git_log, execute_git_merge, execute_git_pull, execute_git_push,
+    execute_git_stage, execute_git_stash_list, execute_git_stash_pop, execute_git_stash_push,
+    execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
 };
 pub use help::execute_help_open;
 pub use introspect::execute_introspect;

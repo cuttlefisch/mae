@@ -90,6 +90,24 @@ pub enum InputLock {
     McpBusy,
 }
 
+/// Snapshot of editor state for save/restore (push/pop state stack).
+/// Captures the buffer list, window layout, focus, and mode so tools
+/// can restore the editor to a known state after temporary operations.
+#[derive(Clone)]
+pub struct EditorStateSnapshot {
+    /// Buffer names that were open (ordered).
+    pub buffer_names: Vec<String>,
+    /// The focused window's buffer name.
+    pub focused_buffer: String,
+    /// Cloned window manager state: all windows + layout tree + focus.
+    pub windows: std::collections::HashMap<crate::window::WindowId, crate::window::Window>,
+    pub layout: crate::window::LayoutNode,
+    pub focused_id: crate::window::WindowId,
+    pub next_window_id: crate::window::WindowId,
+    /// Editor mode at snapshot time.
+    pub mode: Mode,
+}
+
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -133,6 +151,8 @@ pub struct Editor {
     /// char selects a register whose contents will be inserted at the
     /// cursor. Cleared on resolution or Escape.
     pub pending_insert_register: bool,
+    /// C-o in insert mode: execute one normal command then return to insert.
+    pub insert_mode_oneshot_normal: bool,
     /// First delimiter captured during a `cs<from><to>` sequence. Set
     /// after `cs` + the first char, consumed when the second char
     /// arrives.
@@ -308,6 +328,14 @@ pub struct Editor {
     pub ai_session_tokens_in: u64,
     /// Cumulative completion tokens this session (all providers).
     pub ai_session_tokens_out: u64,
+    /// Cumulative cache read tokens (prompt cache hits).
+    pub ai_cache_read_tokens: u64,
+    /// Cumulative cache creation tokens.
+    pub ai_cache_creation_tokens: u64,
+    /// Model's context window size in tokens.
+    pub ai_context_window: u64,
+    /// Estimated tokens currently used in context.
+    pub ai_context_used_tokens: u64,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -407,8 +435,14 @@ pub struct Editor {
     /// Consecutive stall count from the watchdog (0 = healthy). Read-only
     /// for introspection / debug overlay.
     pub watchdog_stall_count: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Set by watchdog after prolonged stall (>10s). Main loop checks this
+    /// to cancel pending AI work and force a redraw.
+    pub watchdog_stall_recovery: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Input event recorder for reproducible debugging.
     pub event_recorder: crate::event_record::EventRecorder,
+    /// State stack for save/restore (push/pop) during temporary operations
+    /// like self-test. AI tools call `editor_save_state` / `editor_restore_state`.
+    pub state_stack: Vec<EditorStateSnapshot>,
 }
 
 impl Default for Editor {
@@ -440,6 +474,7 @@ impl Editor {
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
+            insert_mode_oneshot_normal: false,
             pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
@@ -506,6 +541,10 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            ai_cache_read_tokens: 0,
+            ai_cache_creation_tokens: 0,
+            ai_context_window: 0,
+            ai_context_used_tokens: 0,
             bell_until: None,
             project: None,
             git_branch: None,
@@ -546,7 +585,9 @@ impl Editor {
             restore_session: false,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
+            state_stack: Vec::new(),
         }
     }
 
@@ -573,6 +614,7 @@ impl Editor {
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
+            insert_mode_oneshot_normal: false,
             pending_surround_from: None,
             search_state: SearchState::default(),
             search_input: String::new(),
@@ -650,6 +692,10 @@ impl Editor {
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
+            ai_cache_read_tokens: 0,
+            ai_cache_creation_tokens: 0,
+            ai_context_window: 0,
+            ai_context_used_tokens: 0,
             bell_until: None,
             project: None,
             git_branch: None,
@@ -690,7 +736,9 @@ impl Editor {
             restore_session: false,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
+            state_stack: Vec::new(),
         }
     }
 
@@ -1096,6 +1144,95 @@ impl Editor {
         &mut self.buffers[idx]
     }
 
+    /// Save current editor state (buffer list, window layout, focus, mode)
+    /// onto the state stack. Returns the stack depth after push.
+    pub fn save_state(&mut self) -> usize {
+        let buffer_names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+        let focused_buffer = self.active_buffer().name.clone();
+        let (windows, layout, focused_id, next_id) = self.window_mgr.snapshot();
+        self.state_stack.push(EditorStateSnapshot {
+            buffer_names,
+            focused_buffer,
+            windows,
+            layout,
+            focused_id,
+            next_window_id: next_id,
+            mode: self.mode,
+        });
+        self.state_stack.len()
+    }
+
+    /// Restore editor state from the state stack. Closes buffers that weren't
+    /// in the snapshot, restores window layout and focus. Returns a summary
+    /// of what was restored, or an error if the stack is empty.
+    pub fn restore_state(&mut self) -> Result<String, String> {
+        let snapshot = self
+            .state_stack
+            .pop()
+            .ok_or_else(|| "State stack is empty — nothing to restore".to_string())?;
+
+        // 1. Close buffers that weren't in the snapshot (reverse order to keep indices stable)
+        let mut closed = Vec::new();
+        let mut i = self.buffers.len();
+        while i > 0 {
+            i -= 1;
+            if !snapshot.buffer_names.contains(&self.buffers[i].name) {
+                closed.push(self.buffers[i].name.clone());
+                self.buffers.remove(i);
+            }
+        }
+
+        // 2. Remap window buffer_idx values: snapshot had indices into the old buffer list,
+        //    but buffers may have shifted. Remap by name.
+        let mut restored_windows = snapshot.windows;
+        for win in restored_windows.values_mut() {
+            // Find the buffer name this window was pointing to
+            let old_name = snapshot
+                .buffer_names
+                .get(win.buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            // Find new index for that buffer
+            if let Some(new_idx) = self.buffers.iter().position(|b| b.name == old_name) {
+                win.buffer_idx = new_idx;
+            } else {
+                // Buffer no longer exists — point to buffer 0
+                win.buffer_idx = 0;
+            }
+        }
+
+        // 3. Restore window manager
+        self.window_mgr.restore(
+            restored_windows,
+            snapshot.layout,
+            snapshot.focused_id,
+            snapshot.next_window_id,
+        );
+
+        // 4. Restore mode
+        self.mode = snapshot.mode;
+
+        // 5. Focus the originally focused buffer
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == snapshot.focused_buffer)
+        {
+            self.window_mgr.focused_window_mut().buffer_idx = idx;
+        }
+
+        let summary = if closed.is_empty() {
+            "State restored (no buffers closed)".to_string()
+        } else {
+            format!(
+                "State restored, closed {} buffer(s): {}",
+                closed.len(),
+                closed.join(", ")
+            )
+        };
+        Ok(summary)
+    }
+
     /// Find a buffer index by name. Returns None if not found.
     pub fn find_buffer_by_name(&self, name: &str) -> Option<usize> {
         self.buffers.iter().position(|b| b.name == name)
@@ -1212,6 +1349,19 @@ impl Editor {
     ///
     /// If the focused window shows a conversation buffer, the new buffer is
     /// routed to another window (or a new split is created). This keeps `*AI*`
+    /// Adjust `ai_target_buffer_idx` after a buffer at `removed_idx` was removed.
+    /// Must be called after every `buffers.remove()` to prevent stale indices.
+    pub fn adjust_ai_target_after_remove(&mut self, removed_idx: usize) {
+        if let Some(ref mut target) = self.ai_target_buffer_idx {
+            if *target == removed_idx {
+                // The target buffer was removed — clear it
+                self.ai_target_buffer_idx = None;
+            } else if *target > removed_idx {
+                *target -= 1;
+            }
+        }
+    }
+
     /// visible during AI tool calls that open/switch files.
     pub fn switch_to_buffer_non_conversation(&mut self, idx: usize) -> bool {
         if idx >= self.buffers.len() {
@@ -1336,6 +1486,22 @@ impl Editor {
             conv.push_system("[AI Session Reset]");
         }
         self.input_lock = crate::InputLock::None;
+    }
+
+    /// Shutdown hook — called before `running = false`. Persists message log.
+    pub fn on_quit(&mut self) {
+        if !self.message_log.is_empty() {
+            match self.save_message_log() {
+                Ok(path) => {
+                    // Log to message_log itself (won't be visible since we're quitting,
+                    // but will appear in the saved file if written before the flush).
+                    tracing::info!("Messages saved to {}", path.display());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to save message log: {}", e);
+                }
+            }
+        }
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
@@ -1528,11 +1694,15 @@ impl Editor {
 
         match kind {
             crate::BufferKind::Conversation => {
-                let win = self.window_mgr.focused_window_mut();
-                if delta > 0 {
-                    win.scroll_offset = win.scroll_offset.saturating_add(lines * scroll_speed);
-                } else {
-                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
+                    let amount = lines * scroll_speed;
+                    if delta > 0 {
+                        // Scroll wheel up = show older content = increase scroll
+                        conv.scroll_up(amount);
+                    } else {
+                        // Scroll wheel down = show newer content = decrease scroll
+                        conv.scroll_down(amount);
+                    }
                 }
             }
             crate::BufferKind::Shell => {

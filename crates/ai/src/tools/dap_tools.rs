@@ -7,7 +7,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "dap_start".into(),
-            description: "Start a debug session against a program using an adapter preset. Pair with `dap_set_breakpoint` and `dap_continue`/`dap_step` to drive execution. Use `debug_state` to see threads/frames/variables.".into(),
+            description: "Start a debug session. Blocks until the session is ready and the debuggee stops (if stop_on_entry=true) or starts running. Returns JSON with session state including threads and stack frames. Requires: adapter binary on PATH.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -48,6 +48,14 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
                         ToolProperty {
                             prop_type: "integer".into(),
                             description: "Process ID to attach to (required when mode='attach')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "stop_on_entry".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Pause at program entry point before running (default: false). Use true when you need to set breakpoints before the program starts.".into(),
                             enum_values: None,
                         },
                     ),
@@ -111,7 +119,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_continue".into(),
-            description: "Resume execution on the active thread. Errors if no debug session is active.".into(),
+            description: "Resume execution. Blocks until the debuggee stops (breakpoint, exception) or terminates. Returns JSON with stopped state including thread, frame, and location. No need to call debug_state after this. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
@@ -121,7 +129,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_step".into(),
-            description: "Step execution on the active thread. `direction`: 'over' (next line, skip calls), 'in' (step into calls), 'out' (step out of current frame). Errors if no session is active.".into(),
+            description: "Step execution. Blocks until the step completes and debuggee stops. Returns JSON with new stopped state including thread, frame, and location. `direction`: 'over' (next line), 'in' (step into calls), 'out' (step out of frame). Requires: active debug session, stopped state.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -138,7 +146,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_inspect_variable".into(),
-            description: "Look up a single variable by name in the stopped frame's scopes. Returns JSON with name/value/type/scope/variables_reference. Use `debug_state` for the full variable tree. `variables_reference` > 0 means expandable children.".into(),
+            description: "Look up a single variable by name in the stopped frame's scopes. Returns JSON with name/value/type/scope/variables_reference. `variables_reference` > 0 means expandable children. Requires: active debug session, stopped state.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -165,7 +173,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_remove_breakpoint".into(),
-            description: "Remove a breakpoint at source:line. Returns remaining lines for that source.".into(),
+            description: "Remove a breakpoint at source:line. Returns remaining lines for that source. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -192,7 +200,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_list_variables".into(),
-            description: "List all variables in the current frame's scopes. Returns JSON mapping scope names to variable arrays with name/value/type/variables_reference.".into(),
+            description: "List all variables in the current frame's scopes. Returns JSON mapping scope names to variable arrays with name/value/type/variables_reference. Requires: active debug session, stopped state.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
@@ -202,7 +210,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_expand_variable".into(),
-            description: "Request children of a nested variable. Queues a DAP request; call debug_state or dap_list_variables after to see results.".into(),
+            description: "Request children of a nested variable by variables_reference. Call dap_list_variables after to see expanded results. Requires: active debug session, stopped state.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -229,7 +237,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_select_frame".into(),
-            description: "Switch to a different stack frame by id. Queues a scopes request for the new frame.".into(),
+            description: "Switch to a different stack frame by id. Queues a scopes request for the new frame. Requires: active debug session, stopped state.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -246,7 +254,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_select_thread".into(),
-            description: "Switch the active thread. Triggers a stack trace refresh for the new thread.".into(),
+            description: "Switch the active thread. Triggers a stack trace refresh for the new thread. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -263,7 +271,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_output".into(),
-            description: "Read recent debug output log lines. Returns JSON with output array and total line count.".into(),
+            description: "Read recent debug output log lines. Returns JSON with output array and total line count. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -280,7 +288,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_evaluate".into(),
-            description: "Evaluate an expression in the debuggee's context. Result arrives asynchronously — call `dap_output` or `debug_state` after to see it. The result is also shown in the status bar and appended to the debug output log.".into(),
+            description: "Evaluate an expression in the debuggee's context. Result arrives asynchronously — call dap_output after to see it. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -315,7 +323,7 @@ pub(super) fn dap_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "dap_disconnect".into(),
-            description: "Disconnect from the debug adapter. Optionally terminate the debuggee process.".into(),
+            description: "Disconnect from the debug adapter. Optionally terminate the debuggee process. Requires: active debug session.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(

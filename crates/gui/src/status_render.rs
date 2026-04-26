@@ -2,6 +2,7 @@
 
 use mae_core::{Editor, Mode, SearchDirection, VisualType};
 use skia_safe::Color4f;
+use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
@@ -98,7 +99,7 @@ pub fn render_status_bar(
     canvas.draw_rect_fill(row, 0, cols, 1, sl_bg);
 
     // Mode label with its own bg.
-    let mode_len = mode_str.len();
+    let mode_len = UnicodeWidthStr::width(mode_str);
     canvas.draw_rect_fill(row, 0, mode_len, 1, mode_bg);
     canvas.draw_text_at(row, 0, mode_str, mode_fg);
 
@@ -137,7 +138,22 @@ pub fn render_status_bar(
     };
 
     let total_lines = buf.line_count();
-    let pct = if total_lines <= 1 {
+    let pct = if buf.kind == mae_core::BufferKind::Conversation {
+        if let Some(ref conv) = buf.conversation {
+            let total = conv.line_count();
+            if total <= 1 {
+                "All".to_string()
+            } else if conv.scroll == 0 {
+                "Bot".to_string()
+            } else if conv.scroll >= total {
+                "Top".to_string()
+            } else {
+                format!("{}%", (total.saturating_sub(conv.scroll)) * 100 / total)
+            }
+        } else {
+            "All".to_string()
+        }
+    } else if total_lines <= 1 {
         "All".to_string()
     } else if win.cursor_row == 0 {
         "Top".to_string()
@@ -159,10 +175,16 @@ pub fn render_status_bar(
             format_tokens(editor.ai_session_tokens_in),
             format_tokens(editor.ai_session_tokens_out),
         );
+        let cache_str =
+            format_cache_hit_rate(editor.ai_cache_read_tokens, editor.ai_session_tokens_in);
+        let ctx_str = format_context_usage(editor.ai_context_used_tokens, editor.ai_context_window);
         if editor.ai_session_cost_usd > 0.0 {
-            format!(" ${:.2} {} ", editor.ai_session_cost_usd, tokens)
+            format!(
+                " ${:.2} {}{}{}",
+                editor.ai_session_cost_usd, tokens, cache_str, ctx_str
+            )
         } else {
-            format!(" {} ", tokens)
+            format!(" {}{}{}", tokens, cache_str, ctx_str)
         }
     };
 
@@ -192,7 +214,7 @@ pub fn render_status_bar(
         file_type_str, pct, tier_str, debug_info, fps_info, ai_info
     );
     let right_with_pos = format!("{}{}", right_text, position);
-    let right_col = cols.saturating_sub(right_with_pos.len());
+    let right_col = cols.saturating_sub(UnicodeWidthStr::width(right_with_pos.as_str()));
     canvas.draw_text_at(row, right_col, &right_with_pos, sl_fg);
 }
 
@@ -204,6 +226,22 @@ fn format_tokens(n: u64) -> String {
     } else {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     }
+}
+
+fn format_cache_hit_rate(cache_read: u64, total_in: u64) -> String {
+    if cache_read == 0 || total_in == 0 {
+        return String::new();
+    }
+    let pct = (cache_read as f64 / total_in as f64 * 100.0).min(100.0);
+    format!(" C:{:.0}%", pct)
+}
+
+fn format_context_usage(used: u64, window: u64) -> String {
+    if window == 0 {
+        return String::new();
+    }
+    let pct = (used as f64 / window as f64 * 100.0).min(100.0);
+    format!(" [{:.0}%]", pct)
 }
 
 /// Render the command/message line at the given screen row.
@@ -247,5 +285,25 @@ mod tests {
     #[test]
     fn format_tokens_millions() {
         assert_eq!(format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn cache_hit_rate_zero() {
+        assert_eq!(format_cache_hit_rate(0, 1000), "");
+    }
+
+    #[test]
+    fn cache_hit_rate_some() {
+        assert_eq!(format_cache_hit_rate(850, 1000), " C:85%");
+    }
+
+    #[test]
+    fn context_usage_normal() {
+        assert_eq!(format_context_usage(72000, 100000), " [72%]");
+    }
+
+    #[test]
+    fn context_usage_zero_window() {
+        assert_eq!(format_context_usage(5000, 0), "");
     }
 }

@@ -160,6 +160,10 @@ pub enum AiEvent {
         last_call_usd: f64,
         tokens_in: u64,
         tokens_out: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+        context_window: u64,
+        context_used_tokens: u64,
     },
     /// Fired once the first time cumulative session cost crosses the
     /// configured warning threshold. The editor posts this to

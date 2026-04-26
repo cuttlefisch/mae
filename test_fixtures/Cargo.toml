@@ -1,0 +1,13 @@
+[package]
+name = "mae-test-fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# This crate exists solely so rust-analyzer indexes the LSP test fixture.
+# It has no runtime dependencies and is excluded from CI.
+
+[lib]
+name = "mae_test_fixtures"
+path = "lsp_test.rs"

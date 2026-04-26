@@ -27,11 +27,14 @@ impl ClaudeProvider {
     }
 
     /// Convert canonical ToolDefinition to Claude's tool format.
+    /// The last tool gets a `cache_control` breakpoint for prompt caching.
     pub fn serialize_tools(tools: &[ToolDefinition]) -> serde_json::Value {
+        let len = tools.len();
         tools
             .iter()
-            .map(|t| {
-                json!({
+            .enumerate()
+            .map(|(i, t)| {
+                let mut tool = json!({
                     "name": t.name,
                     "description": t.description,
                     "input_schema": {
@@ -44,9 +47,25 @@ impl ClaudeProvider {
                         }).collect::<serde_json::Map<String, serde_json::Value>>(),
                         "required": t.parameters.required,
                     }
-                })
+                });
+                // Cache breakpoint on the last tool definition
+                if i == len - 1 {
+                    tool["cache_control"] = json!({"type": "ephemeral"});
+                }
+                tool
             })
             .collect()
+    }
+
+    /// Format system prompt as a cacheable content block array.
+    /// Claude's prompt caching requires the system field to be an array
+    /// of content blocks with `cache_control` on the last block.
+    fn serialize_system_prompt(system_prompt: &str) -> serde_json::Value {
+        json!([{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"}
+        }])
     }
 
     /// Convert canonical Messages to Claude's message format.
@@ -222,7 +241,7 @@ impl AgentProvider for ClaudeProvider {
         let mut body = json!({
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
-            "system": system_prompt,
+            "system": Self::serialize_system_prompt(system_prompt),
             "messages": Self::serialize_messages(messages),
         });
 
@@ -242,6 +261,7 @@ impl AgentProvider for ClaudeProvider {
             .post(url)
             .header("x-api-key", self.config.api_key.as_deref().unwrap_or(""))
             .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "prompt-caching-2024-07-31")
             .header("content-type", "application/json")
             .json(&body)
             .send()
@@ -334,6 +354,42 @@ mod tests {
         assert_eq!(tool["input_schema"]["type"], "object");
         assert!(tool["input_schema"]["properties"]["start_line"].is_object());
         assert_eq!(tool["input_schema"]["required"][0], "start_line");
+        // Last tool gets cache_control for prompt caching
+        assert_eq!(tool["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn serialize_tools_cache_control_on_last_only() {
+        let tools = vec![
+            sample_tools().remove(0),
+            ToolDefinition {
+                name: "cursor_info".into(),
+                description: "Get cursor".into(),
+                parameters: ToolParameters {
+                    schema_type: "object".into(),
+                    properties: HashMap::new(),
+                    required: vec![],
+                },
+                permission: Some(PermissionTier::ReadOnly),
+            },
+        ];
+        let json = ClaudeProvider::serialize_tools(&tools);
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        // First tool: no cache_control
+        assert!(arr[0].get("cache_control").is_none());
+        // Last tool: has cache_control
+        assert_eq!(arr[1]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn serialize_system_prompt_cacheable() {
+        let sys = ClaudeProvider::serialize_system_prompt("You are an editor.");
+        let arr = sys.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "You are an editor.");
+        assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
@@ -432,5 +488,26 @@ mod tests {
         });
         let resp = ClaudeProvider::parse_response(&body).unwrap();
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    #[test]
+    fn parse_response_with_cache_tokens() {
+        let body = json!({
+            "content": [{"type": "text", "text": "cached response"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 8000,
+                "cache_creation_input_tokens": 0,
+            },
+        });
+        let resp = ClaudeProvider::parse_response(&body).unwrap();
+        let usage = resp.usage.unwrap();
+        // prompt_tokens = input_tokens + cache_read + cache_creation = 100 + 8000 + 0
+        assert_eq!(usage.prompt_tokens, 8100);
+        assert_eq!(usage.completion_tokens, 50);
+        assert_eq!(usage.cache_read_tokens, 8000);
+        assert_eq!(usage.cache_creation_tokens, 0);
     }
 }

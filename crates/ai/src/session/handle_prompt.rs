@@ -41,11 +41,27 @@ impl AgentSession {
                 .await;
         }
 
+        // Auto-detect self-test mode from prompt content (`:self-test` sends this
+        // through the normal session, not the --self-test CLI path).
+        if !self.is_self_test
+            && prompt.contains("self_test_suite")
+            && prompt.contains("MAE Self-Test")
+        {
+            info!("auto-detected self-test prompt — enabling self-test mode");
+            self.is_self_test = true;
+            self.progress = super::progress::ProgressTracker::new(15, true);
+        }
+
         self.transaction_start_idx = Some(self.messages.len());
         // Inject current mode/profile context so the model knows its constraints
+        let workflow_ctx = if self.workflow.is_active() {
+            format!("\n{}", self.workflow.context_injection())
+        } else {
+            String::new()
+        };
         let contextualized_prompt = format!(
-            "[Context: mode={}, profile={}]\n\n{}",
-            self.current_mode, self.current_profile, prompt
+            "[Context: mode={}, profile={}]{}\n\n{}",
+            self.current_mode, self.current_profile, workflow_ctx, prompt
         );
         self.messages.push(Message {
             role: Role::User,
@@ -116,6 +132,35 @@ impl AgentSession {
                 return;
             }
 
+            // Progress checkpoint evaluation
+            if round > 0 && round % self.progress.checkpoint_interval == 0 {
+                use super::progress::CheckpointVerdict;
+                match self.progress.evaluate() {
+                    CheckpointVerdict::Continue => {
+                        debug!(round, "progress checkpoint: good progress");
+                    }
+                    CheckpointVerdict::Warn { message } => {
+                        warn!(round, %message, "progress checkpoint warning");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::TextResponse {
+                                text: format!("[{}]", message),
+                                target_buffer: self.target_buffer.clone(),
+                            })
+                            .await;
+                    }
+                    CheckpointVerdict::Abort { message } => {
+                        warn!(round, %message, "progress checkpoint abort");
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(message, self.transcript_path_str.clone()))
+                            .await;
+                        self.finalize_transaction();
+                        return;
+                    }
+                }
+            }
+
             self.current_round = round;
             let _ = self
                 .event_tx
@@ -128,21 +173,95 @@ impl AgentSession {
             // --- Mid-Flight Context Compaction ---
             // If the active transaction has grown too large, collapse it into a reasoning summary
             // to free up tokens and prevent context overflow before the turn ends.
+            // Self-test and active workflows use a higher threshold since they need
+            // more rounds of tool results before summarization is safe.
             if let Some(start_idx) = self.transaction_start_idx {
                 let transaction_size = self.messages.len().saturating_sub(start_idx);
                 let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
                 let window_usage = current_tokens as f64 / self.context_window as f64;
+                let size_threshold = if self.is_self_test || self.workflow.is_active() {
+                    50
+                } else {
+                    20
+                };
 
-                if (transaction_size > 20 || window_usage > 0.75) && round > 0 {
-                    debug!(
+                // Skip collapse when the workflow is complete — the agent just
+                // needs to emit its final summary, and collapsing now would
+                // erase the test results it needs to report on.
+                let workflow_done = self.workflow.is_active() && self.workflow.is_complete();
+                if (transaction_size > size_threshold || window_usage > 0.75)
+                    && round > 0
+                    && !workflow_done
+                {
+                    warn!(
                         transaction_size,
-                        window_usage, "mid-flight context compaction triggered"
+                        %window_usage,
+                        size_threshold,
+                        round,
+                        messages = self.messages.len(),
+                        is_self_test = self.is_self_test,
+                        workflow_active = self.workflow.is_active(),
+                        "mid-flight context compaction triggered"
                     );
+                    self.log_transcript_event("collapse_transaction", &format!(
+                        "transaction_size={}, window_usage={:.2}, threshold={}, round={}, messages={}",
+                        transaction_size, window_usage, size_threshold, round, self.messages.len()
+                    ));
                     self.collapse_transaction(start_idx);
                     // Point to the new summary message as the new transaction start,
                     // preserving continuity for the next round's pruning logic.
                     self.transaction_start_idx = Some(self.messages.len().saturating_sub(1));
                 }
+            }
+
+            // History compaction: summarize old turns before hard trimming
+            {
+                let current_tokens = token_estimate::estimate_messages_tokens(&self.messages);
+                let budget = self.available_message_budget();
+                if current_tokens > budget * 70 / 100 && !self.is_self_test {
+                    warn!(
+                        current_tokens,
+                        budget,
+                        round,
+                        messages = self.messages.len(),
+                        "compact_history triggered"
+                    );
+                    self.log_transcript_event(
+                        "compact_history",
+                        &format!(
+                            "tokens={}, budget={}, round={}, messages={}",
+                            current_tokens,
+                            budget,
+                            round,
+                            self.messages.len()
+                        ),
+                    );
+                    self.compact_history();
+                }
+            }
+
+            // Graceful degradation: shed tools/prompt under context pressure
+            if self.check_and_degrade() {
+                let warning = match self.degradation_level {
+                    super::DegradationLevel::ToolsShed => {
+                        "[Context pressure: extended tools disabled. Use core tools only.]"
+                    }
+                    super::DegradationLevel::Minimal => {
+                        "[Context pressure: minimal mode. System prompt shortened.]"
+                    }
+                    super::DegradationLevel::Normal => unreachable!(),
+                };
+                self.messages.push(Message {
+                    role: Role::User,
+                    content: MessageContent::Text(warning.to_string()),
+                });
+                let _ = self
+                    .event_tx
+                    .send(AiEvent::TextResponse {
+                        text: warning.to_string(),
+                        target_buffer: self.target_buffer.clone(),
+                    })
+                    .await;
             }
 
             debug!(round, "AI provider send");
@@ -297,34 +416,63 @@ impl AgentSession {
             };
 
             if !response.tool_calls.is_empty() {
-                // Signature: sorted tool names + arguments for robust comparison
-                let mut names: Vec<String> = response
+                // Signature: sorted tool names + arguments for robust comparison.
+                // Exclude pure debug_state polls from oscillation detection — repeated
+                // state reads during debugging are legitimate, not loops.
+                let sig_calls: Vec<String> = response
                     .tool_calls
                     .iter()
+                    .filter(|c| c.name != "debug_state" || response.tool_calls.len() > 1)
                     .map(|c| format!("{}:{}", c.name, c.arguments))
                     .collect();
-                names.sort();
-                let turn_sig = names.join("|");
+                let turn_sig = if sig_calls.is_empty() {
+                    // Pure debug_state poll — use a unique non-repeating signature
+                    format!("_poll_{}", self.turn_history.len())
+                } else {
+                    let mut sorted = sig_calls;
+                    sorted.sort();
+                    sorted.join("|")
+                };
 
                 // Oscillating Loop Detection: count how many times this turn signature
                 // appears in the recent history window. Catches both strict repeats
                 // (A->A->A) and oscillating patterns (A->B->A->B).
+                // Softened: first detection is a warning; abort only after stagnant threshold.
                 let repeat_count = self.turn_history.iter().filter(|s| *s == &turn_sig).count();
                 if repeat_count >= 2 {
+                    self.progress.increment_stagnant();
+                    if self.progress.should_abort_stagnant() {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::Error(
+                                format!(
+                                    "AI got stuck in a tool loop (same pattern seen {} times in last {} turns, stagnant {}/{}) — aborting",
+                                    repeat_count + 1,
+                                    self.turn_history.len(),
+                                    self.progress.stagnant_count(),
+                                    self.progress.max_stagnant(),
+                                ),
+                                self.transcript_path_str.clone(),
+                            ))
+                            .await;
+                        self.finalize_transaction();
+                        return;
+                    }
+                    // Warning: oscillation detected but not yet at abort threshold
+                    let msg = format!(
+                        "AI tool loop warning: same pattern seen {} times (stagnant {}/{})",
+                        repeat_count + 1,
+                        self.progress.stagnant_count(),
+                        self.progress.max_stagnant(),
+                    );
+                    warn!(%msg, "oscillation detected");
                     let _ = self
                         .event_tx
-                        .send(AiEvent::Error(
-                            format!(
-                                "AI got stuck in a tool loop (same pattern seen {} times in last {} turns) — aborting",
-                                repeat_count + 1,
-                                self.turn_history.len()
-                            ),
-                            self.transcript_path_str.clone(),
-                        ))
+                        .send(AiEvent::TextResponse {
+                            text: format!("[{}]", msg),
+                            target_buffer: self.target_buffer.clone(),
+                        })
                         .await;
-
-                    self.finalize_transaction();
-                    return;
                 }
 
                 if self.turn_history.len() >= 6 {
@@ -437,7 +585,7 @@ impl AgentSession {
                     }
                     // Recache tools token estimate
                     self.tools_tokens = token_estimate::estimate_tools_tokens(&self.tools);
-                    let output = if added_names.is_empty() {
+                    let mut output = if added_names.is_empty() {
                         "No new tools added (categories already enabled or not recognized).".into()
                     } else {
                         format!(
@@ -446,6 +594,17 @@ impl AgentSession {
                             added_names.join(", ")
                         )
                     };
+                    // Append workflow preambles for categories that benefit from guidance.
+                    if categories.contains(&crate::tools::ToolCategory::Dap) {
+                        output.push_str("\n\nDAP Debug Workflow:\n\
+                            1. dap_start → session active\n\
+                            2. dap_set_breakpoint → breakpoints configured\n\
+                            3. dap_continue / dap_step → blocks until stopped (returns state)\n\
+                            4. dap_list_variables / dap_inspect_variable → read variables at stopped point\n\
+                            5. dap_evaluate → evaluate expressions (check dap_output for result)\n\
+                            6. dap_disconnect → end session\n\
+                            Note: dap_start, dap_continue, and dap_step block automatically. No polling needed.");
+                    }
                     info!(categories = %categories_str, added = added_names.len(), "request_tools");
                     let _ = self
                         .event_tx
@@ -511,6 +670,28 @@ impl AgentSession {
                         .send(AiEvent::ToolCallFinished {
                             success: result.success,
                             output: result.output.clone(),
+                        })
+                        .await;
+                    self.truncate_tool_result(&mut result);
+                    self.messages.push(Message {
+                        role: Role::Tool,
+                        content: MessageContent::ToolResult(result),
+                    });
+                    continue;
+                }
+
+                // web_fetch runs async on this task — no need to cross to main thread
+                if call.name == "web_fetch" {
+                    let mut result = Self::execute_web_fetch(call).await;
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::ToolCallFinished {
+                            success: result.success,
+                            output: if result.output.len() > 200 {
+                                format!("{}...", &result.output[..200])
+                            } else {
+                                result.output.clone()
+                            },
                         })
                         .await;
                     self.truncate_tool_result(&mut result);
@@ -829,6 +1010,49 @@ impl AgentSession {
                 match reply_rx.await {
                     Ok(mut result) => {
                         debug!(tool = %call.name, success = result.success, "tool result received");
+
+                        // Workflow: auto-activate on first self_test_suite call,
+                        // hard-block re-calls (return error instead of plan).
+                        if call.name == "self_test_suite" {
+                            if self.workflow.plan_request_count == 0 {
+                                let steps = extract_self_test_categories(&result.output);
+                                if !steps.is_empty() {
+                                    self.workflow.start_workflow("self-test".into(), steps);
+                                    info!("workflow tracker activated for self-test");
+                                }
+                            } else {
+                                // Hard-block: replace the result with an error.
+                                // Must be unmistakable — small models misread subtle messages.
+                                result.success = false;
+                                let wf = self.workflow.context_injection();
+                                let directive = if self.workflow.is_complete() {
+                                    "ALL TESTS ARE ALREADY COMPLETE. Do NOT re-run any tests. \
+                                     Output the final === MAE Self-Test Report === now."
+                                        .to_string()
+                                } else {
+                                    format!(
+                                        "Continue testing from the CURRENT step. Do NOT restart from the beginning. \
+                                         Next step: '{}'",
+                                        self.workflow.current_step_name()
+                                    )
+                                };
+                                result.output = format!(
+                                    "BLOCKED: self_test_suite cannot be called again (called {} times already).\n\
+                                     {}\n\n\
+                                     ACTION REQUIRED: {}\n\
+                                     Do NOT call self_test_suite again. It will always return this error.",
+                                    self.workflow.plan_request_count,
+                                    wf,
+                                    directive
+                                );
+                                warn!(
+                                    count = self.workflow.plan_request_count,
+                                    "self_test_suite re-called — hard-blocked"
+                                );
+                            }
+                            self.workflow.plan_request_count += 1;
+                        }
+
                         let _ = self
                             .event_tx
                             .send(AiEvent::ToolCallFinished {
@@ -860,6 +1084,30 @@ impl AgentSession {
                     }
                 }
             }
+            // Record tool calls for progress tracking
+            for call in &deduplicated_calls {
+                // Check the last Tool message for this call's success status
+                let success = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find_map(|m| {
+                        if let MessageContent::ToolResult(r) = &m.content {
+                            if r.tool_name == call.name {
+                                return Some(r.success);
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(false);
+                self.progress
+                    .record_tool_call(&call.name, &call.arguments, success);
+
+                // --- Workflow tracking ---
+                self.handle_workflow_tool_result(call, success);
+            }
+            self.progress.record_round();
+
             // Loop: provider sees tool results and may issue more calls
             round += 1;
         }
@@ -935,6 +1183,26 @@ impl AgentSession {
                 ));
             }
 
+            // Preserve workflow progress in the collapsed summary so even
+            // reading back collapsed history shows the checkpoint.
+            if self.workflow.is_active() {
+                let next = self.workflow.current_step_name();
+                let next_directive = if next.is_empty() {
+                    "All steps complete. Produce your final summary report.".to_string()
+                } else {
+                    format!(
+                        "Your next action: execute the '{}' test category. \
+                         Do NOT call self_test_suite — you already have the plan.",
+                        next
+                    )
+                };
+                summary.push_str(&format!(
+                    "\n\n{}\n\n{}",
+                    self.workflow.context_injection(),
+                    next_directive
+                ));
+            }
+
             self.messages.push(Message {
                 role: Role::Assistant,
                 content: MessageContent::Text(summary),
@@ -956,4 +1224,118 @@ impl AgentSession {
             "collapsed tool callstack"
         );
     }
+
+    /// Log a structured event to the transcript file for debugging.
+    /// Written as a JSON line so it's parseable alongside provider responses.
+    pub(super) fn log_transcript_event(&self, event: &str, detail: &str) {
+        if let Some(ref path) = self.transcript_path {
+            let entry = format!(
+                "\n--- EVENT ---\n{{\"event\": \"{}\", \"detail\": \"{}\", \"round\": {}, \"workflow\": {}}}\n",
+                event,
+                detail.replace('"', "'"),
+                self.current_round,
+                if self.workflow.is_active() {
+                    self.workflow.context_injection().replace('"', "'").replace('\n', " ")
+                } else {
+                    "inactive".to_string()
+                }
+            );
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path);
+            if let Ok(mut f) = file {
+                let _ = std::io::Write::write_all(&mut f, entry.as_bytes());
+            }
+        }
+    }
+
+    /// Process a tool result for workflow step advancement.
+    ///
+    /// For self-test workflows, detects when the agent transitions between
+    /// test categories by classifying each tool call. When >=2 tools from
+    /// the current step have been called and a tool from a different step
+    /// appears, the current step is auto-advanced.
+    fn handle_workflow_tool_result(&mut self, call: &ToolCall, _success: bool) {
+        if !self.workflow.is_active() {
+            return;
+        }
+
+        let workflow_name = match &self.workflow.workflow {
+            Some(name) => name.clone(),
+            None => return,
+        };
+
+        // Only do auto-advancement for self-test workflows
+        if workflow_name != "self-test" {
+            self.workflow.record_tool(&call.name);
+            return;
+        }
+
+        // Classify which step this tool belongs to
+        let tool_step = super::workflow::classify_tool_to_self_test_step(&call.name);
+
+        // Skip tools that don't map to a known step (log_activity, shell_exec, etc.)
+        let tool_step = match tool_step {
+            Some(s) => s,
+            None => {
+                self.workflow.record_tool(&call.name);
+                return;
+            }
+        };
+
+        let current_step_name = self.workflow.current_step_name().to_string();
+
+        // If the tool belongs to a different step than the current one,
+        // and we've called >=2 tools in the current step, auto-advance.
+        if tool_step != current_step_name && self.workflow.step_tools_called.len() >= 2 {
+            let summary = format!("{} tools called", self.workflow.step_tools_called.len());
+            info!(
+                from = %current_step_name,
+                to = %tool_step,
+                "workflow auto-advancing step"
+            );
+            self.workflow.advance(summary);
+
+            // If the new tool's step is ahead of where we are now,
+            // skip intermediate steps to catch up.
+            while self.workflow.current_step < self.workflow.steps.len() {
+                if self.workflow.current_step_name() == tool_step {
+                    break;
+                }
+                let skip_name = self.workflow.current_step_name().to_string();
+                info!(step = %skip_name, "workflow skipping intermediate step");
+                self.workflow.skip("skipped (agent jumped ahead)".into());
+            }
+        }
+
+        self.workflow.record_tool(&call.name);
+
+        // Timeout fallback: if same step has been active for >15 tool calls, auto-advance
+        if self.workflow.step_tools_called.len() > 15 {
+            warn!(
+                step = %self.workflow.current_step_name(),
+                tools = self.workflow.step_tools_called.len(),
+                "workflow step timeout — auto-advancing"
+            );
+            self.workflow.fail("timeout (>15 tool calls)".into());
+        }
+    }
+}
+
+/// Extract category names from a self_test_suite JSON result.
+/// Parses the "categories" array and returns the "name" field of each.
+fn extract_self_test_categories(output: &str) -> Vec<String> {
+    let parsed: serde_json::Value = match serde_json::from_str(output) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let categories = match parsed.get("categories").and_then(|c| c.as_array()) {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+    categories
+        .iter()
+        .filter_map(|cat| cat.get("name").and_then(|n| n.as_str()).map(String::from))
+        .collect()
 }

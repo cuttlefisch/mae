@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.1 (1,590 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.4.1 modularization complete.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,590+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
 
 ---
 
@@ -9,10 +9,10 @@ Current state: Phases 1-6 complete, Phase 8 M1-M4 COMPLETE, v0.4.1 (1,590 tests)
 Identified gaps in MAE's AI peer capabilities compared to industry standards (Claude Code, Gemini, Cursor).
 
 - [ ] **Memory Synthesis**: Sub-agent pattern to read and synthesize persistent memory into concise context.
-- [ ] **Context Compaction**: Automated summarization of conversation history to preserve token budget.
+- [x] **Context Compaction**: Automated summarization of conversation history to preserve token budget (v0.5.0).
 - [ ] **Dynamic Tool Discovery (MCP Search)**: Enhanced `request_tools` with fuzzy search across all registered MCP servers.
 - [ ] **Semantic Code Search**: Integration with vector embeddings for "meaning-based" codebase navigation.
-- [ ] **Web Fetch**: Tool for reading raw code/docs from URLs (GitHub, documentation sites).
+- [x] **Web Fetch**: Tool for reading raw code/docs from URLs (GitHub, documentation sites) (v0.5.0).
 - [ ] **Verification Specialist**: Dedicated sub-agent/tool for isolated test execution and PASS/FAIL verdicts.
 - [x] **Tool-Level Defenses**: Explicit anti-looping and boundary guardrails in tool descriptions (v0.4.0).
 - [x] **UX Mode Cycling**: Shift-Tab to cycle between `manual`, `auto-accept`, and `plan` modes (v0.4.0).
@@ -20,9 +20,71 @@ Identified gaps in MAE's AI peer capabilities compared to industry standards (Cl
 
 ---
 
+## AI UX & Reliability (v0.5.0)
+
+Agent reliability improvements from crash log analysis and self-test failures.
+
+- [x] **Progress Checkpoint System**: Semantic progress evaluation every N rounds (score 0-6) replaces blunt max_rounds as primary stagnation detection. Catches runaway loops without killing complex legitimate tasks (v0.5.0).
+- [x] **Softened Oscillation Detector**: A-B-A-B patterns now warn first, abort only after reaching stagnant threshold (was: immediate abort on 2+ repeats) (v0.5.0).
+- [x] **Self-Test Mode**: Wider checkpoint interval (15) and higher tolerance (4 stagnant) for `--self-test` runs (v0.5.0).
+- [x] **Watchdog Recovery**: Prolonged stalls (>10s) now set a recovery flag; main loop checks on wake and cancels pending AI work + forces redraw (was: log-only) (v0.5.0).
+- [x] **Prompt Caching**: Leverage provider-specific prompt caching (Claude cache_control, OpenAI cached_prompt_tokens) for system prompt + tool definitions to reduce costs (v0.5.0).
+- [x] **Token Budget Dashboard**: Real-time context window usage visualization in status bar — cache hit rate, color-coded context utilization (v0.5.0).
+- [x] **Graceful Degradation**: Auto-reduce tool set when approaching context limits rather than hard-failing. One-way degradation: Normal → ToolsShed (>85%) → Minimal (>92%) (v0.5.0).
+- [x] **ANSI-Only Themes**: `light-ansi` and `dark-ansi` themes for terminal environments where RGB hex doesn't map well (v0.5.0).
+- [x] **XDG Transcript Logging**: Session transcripts saved to `~/.local/share/mae/transcripts/` (XDG-compliant) instead of project-local `.mae/` (v0.5.0).
+- [x] **Tool Tier System**: Core (~43 tools, always sent) vs Extended (on-demand via `request_tools` meta-tool). 10 categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug (v0.5.0).
+- [x] **Editor State Save/Restore**: `editor_save_state`/`editor_restore_state` tools for deterministic session state capture (v0.5.0).
+- [x] **Tool Visibility Fix**: All 107 tools reachable — 27 previously invisible tools added to Core tier or categories (v0.5.0).
+- [x] **Conversation Buffer Compaction**: Skip separators between consecutive tool entries, merge ToolCall+ToolResult display (v0.5.0).
+
+---
+
+## AI UX & Editing (v0.6.0)
+
+User-facing AI interaction quality — from org-roam exploration notes (2026-04-23).
+
+### Editing UX
+- [ ] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. Must inherit from theme (no raw ANSI escape codes). Used for both "preview changes" and "changes made" display.
+- [ ] **Clickable Links in Output**: File paths in AI/shell output open in editor on click/Enter. User-configurable: open in current window or new split.
+- [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
+- [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
+
+### Agent Quality
+- [ ] **Prompt Reliability**: Favor small introspection tools (list available commands) over hardcoded command args in prompts. Tool context cleanup: fetch response, clear extra tool-call context, keep only response info.
+- [ ] **KB Prompt Integration**: AI reads prompts from KB as source of truth. Prompt library with forking, testing, selection of active prompts. Versioned KB nodes for user modifications.
+- [ ] **Network Status Command**: Diagnose connectivity issues — no network, API unreachable, agent communication error. Surface in status bar or `:ai-status`.
+
+### Tool Inspection
+- [ ] **Step Through Command Execution**: Inspect each tool call's stdin/stdout/stderr and command args. Debug view for AI actions.
+- [ ] **Session Record/Replay with DAP**: Full session recording with DAP introspection for post-hoc debugging of agent behavior.
+
+### Git Workflow
+- [x] **Git Stash Tools**: `git_stash_push`, `git_stash_pop`, `git_stash_list` (v0.5.0).
+- [x] **Branch Management Tools**: `git_checkout`, `git_branch_list`, `git_branch_delete`, `git_merge`, `git_pull`, `git_push` (v0.5.0).
+- [ ] **PR Comment Summaries**: When amending an open PR with new commits, auto-summarize changes in a comment.
+
+### Vim Parity
+- [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
+- [x] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15) (v0.5.0).
+
+### Setup & Onboarding
+- [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
+
+### Project Navigation
+- [ ] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, follow-focus, git status markers, eye icon for files in AI context.
+
+### Org Mode
+- [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
+
+### Test Infrastructure
+- [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
+
+---
+
 ## Comprehensive Feature Checklist
 
-### What We Have (1,484 tests)
+### What We Have (1,641 tests)
 
 | Category | Features |
 |----------|----------|
@@ -38,13 +100,13 @@ Identified gaps in MAE's AI peer capabilities compared to industry standards (Cl
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
 | **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
-| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools |
+| **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard, tool tiers (Core/Extended), 10 tool categories, `request_tools`, editor state save/restore, 107 AI tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
-| **Themes** | 7 bundled, TOML-based, hot-switchable |
+| **Themes** | 9 bundled (incl. light-ansi, dark-ansi), TOML-based, hot-switchable |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
-| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 15 AI debug tools |
+| **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 13 AI debug tools |
 | **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
 | **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
 | **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
@@ -203,7 +265,7 @@ Second round of architecture splits — 6 god files broken into module directori
 - [x] Model-agnostic system prompt: works across Claude, OpenAI, Gemini, DeepSeek
 
 ### Deferred Items
-- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M5+)
+- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M6+)
 - [ ] **Packaging readiness** — audit mae-dap, mae-lsp, mae-kb for crates.io publishability (→ Phase 10)
 
 ---
@@ -986,24 +1048,40 @@ Replaced the `pump_app_events` polling loop with winit's `run_app` + typed `Even
 - [x] `get_option` AI tool: read current option values (name, value, type, default, doc) — symmetric with `set_option`
 - [x] `set_option` auto-generated from `OptionRegistry` — no more hardcoded enum drift (was missing `clipboard`)
 
-### M5: Variable-Height Lines & Mixed Fonts
+### M4.5: Display Optimization — COMPLETE
+Emacs-inspired display patterns and CJK correctness.
+- [x] Command line layout fix — row calculation prevents partial bottom row clipping
+- [x] Input-pending pattern (Emacs `dispnew.c:3254`) — keyboard/scroll bypasses 60fps frame cap for immediate feedback
+- [x] `last_render` timing fix — measured after render completes, not before
+- [x] CJK/wide-character correctness — `unicode-width` in wrap, buffer_render, status_render (GUI + terminal)
+- [x] `draw_styled_at` display-width-aware column tracking for CJK text rendering
+- [x] Regression tests: row layout (7 heights x 5 cell sizes), CJK wrap/break/width (6 tests)
+
+### M5: Emacs Display Patterns (Future)
+Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
+- [ ] Glyph matrix hashing — hash visible lines, skip unchanged rows on redraw (`dispnew.c:1262`)
+- [ ] Line-level dirty tracking — per-line content hash, only re-render changed rows (`dispnew.c:4263`)
+- [ ] Scroll region blit — Skia surface copy for scroll optimization (`dispnew.c:5107`)
+- [ ] Idle deferred work — defer syntax highlighting and LSP requests to idle periods (`xdisp.c:4531`)
+
+### M6: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
 - [ ] Headings rendered at larger font sizes
 - [ ] Code blocks rendered in monospace, prose in proportional
 - [ ] Bold/italic/underline/strikethrough font decorations
 - [ ] Line-height varies per line type (heading, code, prose)
 
-### M6: Inline Images
+### M7: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
 - [ ] Org-mode `[[file:image.png]]` auto-preview
 - [ ] Image scaling to fit viewport width
 
-### M7: PDF Preview
+### M8: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
 - [ ] `:pdf <file>` opens a PDF preview buffer
 - [ ] Scroll through pages, zoom in/out
 
-### M8: Mouse & Selection
+### M9: Mouse & Selection
 - [x] Click to place cursor (done in M3)
 - [x] Click-drag to select text (mouse press/drag/release → visual selection)
 - [ ] Scrollbar (vertical)
@@ -1122,7 +1200,9 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm done, module system next
     │
-    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M3 remaining items
+    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M4.5 (display opt) ✅
+    │       │
+    │       └─→ M5 (Emacs display patterns) → M6 (variable-height) → M7+ (images, PDF)
     │
     ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
     │
@@ -1132,14 +1212,15 @@ Phase 3e (editor essentials) ✅ COMPLETE
 **Next priority order:**
 1. **Phase 8 M3 remaining** (GUI polish) — vertical line color bug in insert mode
 2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
-3. **Phase 8 M5** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
-4. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M5+)
-5. **Phase 8 M6-M8** (GUI) — inline images, PDF, mouse drag-select
-6. **Phase 4c M3 remaining** — variable hover, watch expressions
-7. **LSP packaging review** — multi-language defaults, user-configurable server selection
-8. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
-9. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-10. **Phase 9** (Org-Mode Editing) — full org-mode environment
+3. **Phase 8 M5** (Emacs display patterns) — glyph matrix hashing, line-level dirty tracking, scroll region blit, idle deferred work
+4. **Phase 8 M6** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
+5. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M6+)
+6. **Phase 8 M7-M9** (GUI) — inline images, PDF, mouse drag-select
+7. **Phase 4c M3 remaining** — variable hover, watch expressions
+8. **LSP packaging review** — multi-language defaults, user-configurable server selection
+9. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
+10. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+11. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 
@@ -1160,4 +1241,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M2  | 40 ✅ | self-test suite, input lock, AI tool parity, LSP AI tools, agent bootstrap |
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
 | v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
-| **Total** | **1,590** | All passing, 0 failures |
+| v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
+| **Total** | **1,641** | All passing, 0 failures |

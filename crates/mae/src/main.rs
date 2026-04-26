@@ -207,6 +207,7 @@ fn main() -> io::Result<()> {
     let watchdog_state = watchdog::spawn_watchdog();
     editor.heartbeat = watchdog_state.heartbeat.clone();
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
+    editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
     // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
     if editor.project.is_none() {
@@ -544,6 +545,7 @@ fn run_gui(
         ai_event_tx,
         ai_command_tx,
         deferred_ai_reply: None,
+        deferred_dap_reply: None,
         pending_interactive_event: None,
         deferred_mcp_reply: Vec::new(),
         last_mcp_activity: None,
@@ -563,6 +565,7 @@ fn run_gui(
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
+        input_dirty: false,
         bell_sent: false,
         last_theme_name,
         shell_active,
@@ -667,6 +670,7 @@ struct GuiApp {
     ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
     ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
     deferred_ai_reply: ai_event_handler::DeferredAiReply,
+    deferred_dap_reply: ai_event_handler::DeferredDapReply,
     pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent>,
     deferred_mcp_reply: ai_event_handler::DeferredMcpReply,
     last_mcp_activity: Option<tokio::time::Instant>,
@@ -694,8 +698,11 @@ struct GuiApp {
     // Shell generation tracking (dirty-check optimisation — TUI parity)
     shell_generations: std::collections::HashMap<usize, u64>,
 
-    // Frame cap (60fps)
+    // Frame cap (60fps) + input-pending bypass (Emacs dispnew.c:3254 pattern)
     last_render: std::time::Instant,
+    /// Keyboard/mouse input needs immediate visual feedback.
+    /// Bypasses the 60fps frame cap so scroll/movement is never delayed.
+    input_dirty: bool,
 
     // Bell urgency state
     bell_sent: bool,
@@ -812,8 +819,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     all_tools: &self.all_tools,
                     permission_policy: &self.permission_policy,
                     deferred_ai_reply: &mut self.deferred_ai_reply,
+                    deferred_dap_reply: &mut self.deferred_dap_reply,
                     pending_interactive_event: &mut self.pending_interactive_event,
                     lsp_command_tx: &self.lsp_command_tx,
+                    dap_command_tx: &self.dap_command_tx,
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
                 };
@@ -832,11 +841,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 ) {
                     self.last_mcp_activity = Some(tokio::time::Instant::now());
                 }
-                lsp_bridge::handle_lsp_event(&mut self.editor, &self.lsp_command_tx, lsp_event);
-                self.dirty = true;
+                if lsp_bridge::handle_lsp_event(&mut self.editor, &self.lsp_command_tx, lsp_event) {
+                    self.dirty = true;
+                }
             }
             MaeEvent::DapEvent(dap_event) => {
+                // Try to resolve deferred DAP tool first (promise/await)
+                let dap_action = ai_event_handler::try_resolve_deferred_dap(
+                    &mut self.editor,
+                    &dap_event,
+                    &mut self.deferred_dap_reply,
+                );
                 dap_bridge::handle_dap_event(&mut self.editor, dap_event);
+                if dap_action == ai_event_handler::DapResolveAction::TransitionedToStackTrace {
+                    dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+                }
                 self.dirty = true;
             }
             MaeEvent::McpToolRequest(mcp_req) => {
@@ -917,6 +936,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 if event.state == winit::event::ElementState::Pressed =>
             {
                 self.dirty = true;
+                self.input_dirty = true;
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1050,17 +1070,19 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 if lines != 0 {
                     self.editor.handle_mouse_scroll(lines);
                     self.dirty = true;
+                    self.input_dirty = true;
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.last_render = std::time::Instant::now();
+                let render_start = std::time::Instant::now();
                 if let Err(e) = self
                     .renderer
                     .render(&mut self.editor, &self.shell_terminals)
                 {
                     warn!(error = %e, "GUI render error");
                 }
-                let frame_elapsed = self.last_render.elapsed().as_micros() as u64;
+                self.last_render = std::time::Instant::now();
+                let frame_elapsed = render_start.elapsed().as_micros() as u64;
                 self.editor.perf_stats.record_frame(frame_elapsed);
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
@@ -1076,6 +1098,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
         // Timeout deferred replies.
         ai_event_handler::timeout_deferred_reply(&mut self.editor, &mut self.deferred_ai_reply);
+        ai_event_handler::timeout_deferred_dap_reply(
+            &mut self.editor,
+            &mut self.deferred_dap_reply,
+        );
         ai_event_handler::timeout_deferred_mcp_reply(
             &mut self.editor,
             &mut self.deferred_mcp_reply,
@@ -1100,10 +1126,46 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             };
             let vh = self.editor.focused_window_viewport_height(total_area);
             self.editor.viewport_height = vh;
-            self.editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll(vh);
+
+            // Compute text_area_width for word-wrap cursor movement.
+            let focused_id = self.editor.window_mgr.focused_id();
+            let rects = self.editor.window_mgr.layout_rects(total_area);
+            if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+                let inner_w = win_rect.width.saturating_sub(2) as usize;
+                let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
+                let gutter_w = if self.editor.show_line_numbers {
+                    mae_renderer::gutter_width(buf.display_line_count())
+                } else {
+                    2 // marker column + padding
+                };
+                self.editor.text_area_width = inner_w.saturating_sub(gutter_w);
+            }
+
+            if self.editor.word_wrap && self.editor.text_area_width > 0 {
+                let tw = self.editor.text_area_width;
+                let bi = self.editor.break_indent;
+                let sb_w = self.editor.show_break.chars().count();
+                let buf_idx = self.editor.active_buffer_idx();
+                let rope = self.editor.buffers[buf_idx].rope().clone();
+                let line_count = rope.len_lines();
+                self.editor
+                    .window_mgr
+                    .focused_window_mut()
+                    .ensure_scroll_wrapped(vh, |line| {
+                        if line >= line_count {
+                            return 1;
+                        }
+                        let rope_line = rope.line(line);
+                        let text: String = rope_line.chars().collect();
+                        let text = text.trim_end_matches('\n');
+                        mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                    });
+            } else {
+                self.editor
+                    .window_mgr
+                    .focused_window_mut()
+                    .ensure_scroll(vh);
+            }
         }
 
         // Shell lifecycle (runs after every event batch).
@@ -1130,11 +1192,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         }
 
         // Frame-capped redraw (60fps = 16.667ms).
+        // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
+        // so keyboard/scroll never waits for the next frame boundary.
         if self.dirty {
             let elapsed = self.last_render.elapsed();
             let frame_budget = std::time::Duration::from_micros(16_667);
-            if elapsed >= frame_budget {
+            if self.input_dirty || elapsed >= frame_budget {
                 self.renderer.request_redraw();
+                self.input_dirty = false;
             } else {
                 // Schedule wakeup for remaining budget.
                 event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(

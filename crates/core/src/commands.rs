@@ -178,6 +178,8 @@ impl CommandRegistry {
         reg.register_builtin("scroll-center", "Center cursor line on screen (zz)");
         reg.register_builtin("scroll-top", "Scroll cursor line to top (zt)");
         reg.register_builtin("scroll-bottom", "Scroll cursor line to bottom (zb)");
+        reg.register_builtin("scroll-down-line", "Scroll one line down (C-e)");
+        reg.register_builtin("scroll-up-line", "Scroll one line up (C-y)");
 
         // Screen-relative cursor
         reg.register_builtin("move-screen-top", "Move cursor to top visible line (H)");

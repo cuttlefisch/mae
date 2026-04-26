@@ -45,20 +45,36 @@ pub fn execute_window_layout(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&windows).map_err(|e| e.to_string())
 }
 
-pub fn execute_command_list(editor: &Editor) -> Result<String, String> {
-    let commands: Vec<serde_json::Value> = editor
-        .commands
-        .list_commands()
-        .iter()
-        .map(|cmd| {
-            serde_json::json!({
-                "name": cmd.name,
-                "doc": cmd.doc,
-                "source": format!("{:?}", cmd.source),
+pub fn execute_command_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let format = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("full");
+
+    if format == "names" {
+        // Compact output: just command names, one per line
+        let names: Vec<&str> = editor
+            .commands
+            .list_commands()
+            .iter()
+            .map(|cmd| cmd.name.as_str())
+            .collect();
+        Ok(format!("{} commands:\n{}", names.len(), names.join("\n")))
+    } else {
+        let commands: Vec<serde_json::Value> = editor
+            .commands
+            .list_commands()
+            .iter()
+            .map(|cmd| {
+                serde_json::json!({
+                    "name": cmd.name,
+                    "doc": cmd.doc,
+                    "source": format!("{:?}", cmd.source),
+                })
             })
-        })
-        .collect();
-    serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
+            .collect();
+        serde_json::to_string_pretty(&commands).map_err(|e| e.to_string())
+    }
 }
 
 pub fn execute_get_option(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -183,6 +199,7 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
                 "active_thread_id": state.active_thread_id,
+                "last_stop_reason": state.last_stop_reason,
                 "threads": threads,
                 "stack_frames": frames,
                 "scopes": state.scopes.iter().map(|s| &s.name).collect::<Vec<_>>(),
@@ -647,4 +664,42 @@ pub fn execute_visual_buffer_clear(editor: &mut Editor) -> Result<String, String
     } else {
         Err("Active buffer is not a visual buffer".into())
     }
+}
+
+pub fn execute_read_messages(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let last_n = args.get("last_n").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
+    let min_level = match args.get("level").and_then(|v| v.as_str()).unwrap_or("info") {
+        "error" => mae_core::MessageLevel::Error,
+        "warn" => mae_core::MessageLevel::Warn,
+        "debug" => mae_core::MessageLevel::Debug,
+        "trace" => mae_core::MessageLevel::Trace,
+        _ => mae_core::MessageLevel::Info,
+    };
+    let entries = editor.message_log.entries_filtered(min_level);
+    let start = entries.len().saturating_sub(last_n);
+    let lines: Vec<String> = entries[start..]
+        .iter()
+        .map(|e| format!("[{}] [{}] {}", e.level, e.target, e.message))
+        .collect();
+    if lines.is_empty() {
+        Ok("(no messages)".into())
+    } else {
+        Ok(lines.join("\n"))
+    }
+}
+
+pub fn execute_editor_save_state(editor: &mut Editor) -> Result<String, String> {
+    let depth = editor.save_state();
+    let buf_names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+    let info = serde_json::json!({
+        "stack_depth": depth,
+        "saved_buffers": buf_names,
+        "window_count": editor.window_mgr.window_count(),
+        "focused_buffer": editor.active_buffer().name,
+    });
+    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+}
+
+pub fn execute_editor_restore_state(editor: &mut Editor) -> Result<String, String> {
+    editor.restore_state()
 }

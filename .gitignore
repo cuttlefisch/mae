@@ -1,15 +1,31 @@
 /target
 **/*.rs.bk
-**/*/.mae/transcripts
-**/*/.mae/
-.mae
 Cargo.lock
+
+# Editor temp files
 *.swp
 *.swo
 *~
 .DS_Store
+
+# Environment / direnv
 .envrc
+
+# Symlinked org-roam node (user-local)
 README.org
-.mcp.json
-.gemini/
+
+# MAE runtime state (project-local, user-specific)
+.mae/
+**/.mae/
+
+# AI agent configs (user-local settings, not project config)
 .claude/
+**/.claude/
+.gemini/
+**/.gemini/
+.cursorrules
+.cursor/
+**/.cursor/
+
+# MCP server config (user-local)
+.mcp.json

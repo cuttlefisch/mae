@@ -2,7 +2,7 @@
 
 use mae_core::{Editor, Window};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::theme_convert::ts;
 
@@ -32,18 +32,25 @@ pub(crate) fn render_messages_window(
 
     let entries = editor.message_log.entries();
     let viewport_height = inner.height as usize;
+    let inner_width = inner.width as usize;
 
     let total = entries.len();
-    let start = if win.scroll_offset > 0 {
-        win.scroll_offset.min(total)
-    } else {
-        total.saturating_sub(viewport_height)
-    };
+    let start = win.scroll_offset.min(total);
 
     let target_style = ts(editor, "diagnostic.target");
 
+    // When word wrapping, a single entry may span multiple visual rows.
+    // Over-fetch entries and let ratatui's Paragraph + Wrap clip at the
+    // widget boundary. We also accumulate visual rows so scrolling stays
+    // correct — stop once we've filled the viewport.
+    let wrap_enabled = editor.word_wrap && inner_width > 0;
+
     let mut lines: Vec<Line> = Vec::new();
-    for entry in entries.iter().skip(start).take(viewport_height) {
+    let mut visual_rows = 0usize;
+    for entry in entries.iter().skip(start) {
+        if visual_rows >= viewport_height {
+            break;
+        }
         let level_style = match entry.level {
             mae_core::MessageLevel::Error => ts(editor, "diagnostic.error"),
             mae_core::MessageLevel::Warn => ts(editor, "diagnostic.warn"),
@@ -59,6 +66,16 @@ pub(crate) fn render_messages_window(
             mae_core::MessageLevel::Debug => "DEBUG",
             mae_core::MessageLevel::Trace => "TRACE",
         };
+
+        // Approximate prefix width: "[ERROR] [target] "
+        let prefix_len = 2 + level_tag.len() + 3 + entry.target.len() + 2;
+        let line_chars = prefix_len + entry.message.len();
+        let rows = if wrap_enabled && inner_width > 0 {
+            line_chars.div_ceil(inner_width)
+        } else {
+            1
+        };
+        visual_rows += rows;
 
         lines.push(Line::from(vec![
             Span::styled(format!("[{}]", level_tag), level_style),
@@ -76,6 +93,9 @@ pub(crate) fn render_messages_window(
         )));
     }
 
-    let paragraph = Paragraph::new(lines);
+    let mut paragraph = Paragraph::new(lines);
+    if wrap_enabled {
+        paragraph = paragraph.wrap(Wrap { trim: false });
+    }
     frame.render_widget(paragraph, inner);
 }

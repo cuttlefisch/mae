@@ -151,6 +151,39 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "read_messages".into(),
+            description: "Read the editor's *Messages* log buffer. Shows errors, warnings, and info from all subsystems (DAP, LSP, AI, etc.). Essential for diagnosing command failures — check this when a tool call fails or times out.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "last_n".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Number of recent messages to return (default: 30)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "level".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Minimum severity: error, warn, info, debug, trace (default: info)".into(),
+                            enum_values: Some(vec![
+                                "error".into(),
+                                "warn".into(),
+                                "info".into(),
+                                "debug".into(),
+                                "trace".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "window_layout".into(),
             description: "JSON of all windows with their buffer assignments and dimensions.".into(),
             parameters: ToolParameters {
@@ -162,10 +195,17 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "command_list".into(),
-            description: "List all available editor commands with their documentation and sources (builtin/scheme).".into(),
+            description: "List all available editor commands. Use format='names' for a compact list of just command names (recommended). Default returns full JSON with docs and sources.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::new(),
+                properties: HashMap::from([(
+                    "format".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Output format: 'names' for compact name-only list, 'full' for JSON with docs (default: 'full')".into(),
+                        enum_values: None,
+                    },
+                )]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
@@ -996,6 +1036,27 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                 required: vec!["action".into()],
             },
             permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- State stack tools ---
+        ToolDefinition {
+            name: "editor_save_state".into(),
+            description: "Save current editor state (buffer list, window layout, focus, mode) onto a stack. Call before temporary operations like self-test to enable clean restore later.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "editor_restore_state".into(),
+            description: "Restore editor state from the stack: closes buffers opened since the save, restores window layout, focus, and mode. Inverse of editor_save_state.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
         },
     ]
 }

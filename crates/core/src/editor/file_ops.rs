@@ -53,7 +53,7 @@ impl Editor {
 
     /// Open the *Messages* buffer showing the in-editor log.
     /// Uses `BufferKind::Messages` — the renderer reads live from `editor.message_log`.
-    /// No rope copy needed; the buffer is just a view marker.
+    /// The rope is also synced so standard vim operations (yank, visual, search) work.
     pub fn open_messages_buffer(&mut self) {
         let existing_idx = self
             .buffers
@@ -67,8 +67,85 @@ impl Editor {
             let new_idx = self.buffers.len() - 1;
             self.window_mgr.focused_window_mut().buffer_idx = new_idx;
         }
-        let count = self.message_log.len();
-        self.set_status(format!("{} log entries", count));
+        self.sync_messages_rope();
+        // Scroll to bottom so newest entries are visible.
+        // scroll_offset = first visible entry index.
+        let total = self.message_log.len();
+        let vh = self.viewport_height;
+        self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
+        // Also position cursor at the last line so yank etc. work from the bottom.
+        let buf_idx = self.active_buffer_idx();
+        let last_line = self.buffers[buf_idx].line_count().saturating_sub(1);
+        self.window_mgr.focused_window_mut().cursor_row = last_line;
+        self.window_mgr.focused_window_mut().cursor_col = 0;
+        self.set_status(format!("{} log entries", total));
+    }
+
+    /// Sync message_log entries into the *Messages* buffer's rope.
+    /// This enables standard vim operations (yank, visual select, search)
+    /// on the messages content while the renderer still uses message_log
+    /// directly for styled output.
+    pub fn sync_messages_rope(&mut self) {
+        let buf_idx = match self
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Messages)
+        {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let entries = self.message_log.entries();
+        let text: String = entries
+            .iter()
+            .map(|e| format!("[{}] [{}] {}", e.level, e.target, e.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Temporarily clear read_only to allow rope replacement.
+        self.buffers[buf_idx].read_only = false;
+        self.buffers[buf_idx].replace_contents(&text);
+        self.buffers[buf_idx].read_only = true;
+    }
+
+    /// Save the message log to an XDG-compliant path.
+    /// Called on editor exit when messages exist.
+    /// Path: `$XDG_DATA_HOME/mae/messages/` (default: `~/.local/share/mae/messages/`)
+    pub fn save_message_log(&self) -> Result<std::path::PathBuf, String> {
+        let entries = self.message_log.entries();
+        if entries.is_empty() {
+            return Err("No messages to save".into());
+        }
+
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| {
+                std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            })
+            .map_err(|_| "Cannot determine data directory")?;
+
+        let dir = base.join("mae").join("messages");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let path = dir.join(format!("messages-{}.log", epoch));
+
+        let mut content = String::new();
+        for e in &entries {
+            content.push_str(&format!(
+                "[{}] [{}] {}: {}\n",
+                e.seq, e.level, e.target, e.message
+            ));
+        }
+
+        std::fs::write(&path, &content)
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
+
+        Ok(path)
     }
 
     /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.

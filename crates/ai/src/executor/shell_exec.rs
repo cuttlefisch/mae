@@ -1,11 +1,12 @@
 use mae_core::Editor;
 
 use crate::tool_impls::{
-    execute_git_checkout, execute_git_commit, execute_git_diff, execute_git_log, execute_git_pull,
-    execute_git_push, execute_git_stage, execute_git_status, execute_git_unstage,
-    execute_github_pr_create, execute_github_pr_status, execute_shell_list,
-    execute_shell_read_output, execute_shell_scrollback, execute_shell_send_input,
-    execute_terminal_spawn,
+    execute_git_branch_delete, execute_git_branch_list, execute_git_checkout, execute_git_commit,
+    execute_git_diff, execute_git_log, execute_git_merge, execute_git_pull, execute_git_push,
+    execute_git_stage, execute_git_stash_list, execute_git_stash_pop, execute_git_stash_push,
+    execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
+    execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
+    execute_shell_send_input, execute_terminal_spawn,
 };
 use crate::types::ToolCall;
 
@@ -34,6 +35,12 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "git_push" => execute_git_push(editor, &call.arguments),
         "git_pull" => execute_git_pull(editor, &call.arguments),
         "git_checkout" => execute_git_checkout(editor, &call.arguments),
+        "git_stash_push" => execute_git_stash_push(editor, &call.arguments),
+        "git_stash_pop" => execute_git_stash_pop(editor),
+        "git_stash_list" => execute_git_stash_list(editor),
+        "git_branch_list" => execute_git_branch_list(editor),
+        "git_branch_delete" => execute_git_branch_delete(editor, &call.arguments),
+        "git_merge" => execute_git_merge(editor, &call.arguments),
 
         _ => return None,
     };

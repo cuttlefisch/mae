@@ -71,8 +71,9 @@ const TABLE: &[(&str, u64, usize)] = &[
     ("gemini-2.5-flash", 1_000_000, 50),
     // ---- DeepSeek ----
     // DeepSeek is often used for heavy reasoning/tool-chains.
-    ("deepseek-reasoner", 64_000, 25),
-    ("deepseek-chat", 64_000, 25),
+    // 50 rounds matches Claude/Gemini — 25 was too low for self-test (~35 calls).
+    ("deepseek-reasoner", 64_000, 50),
+    ("deepseek-chat", 64_000, 50),
 ];
 
 #[cfg(test)]
@@ -90,7 +91,7 @@ mod tests {
     fn deepseek_chat_limits() {
         let l = lookup("deepseek-chat");
         assert_eq!(l.context_window, 64_000);
-        assert_eq!(l.max_rounds, 25);
+        assert_eq!(l.max_rounds, 50);
     }
 
     #[test]

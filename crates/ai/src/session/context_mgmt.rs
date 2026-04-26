@@ -69,12 +69,24 @@ impl AgentSession {
         self.transaction_start_idx = self.transaction_start_idx.map(|_| safe_boundary);
 
         if self.messages.len() < original_len {
+            let removed = original_len - self.messages.len();
             let total = token_estimate::estimate_messages_tokens(&self.messages);
-            debug!(
-                messages = self.messages.len(),
+            warn!(
+                removed,
+                remaining = self.messages.len(),
                 estimated_tokens = total,
                 budget,
-                "post-trim message state"
+                "trim_messages removed messages"
+            );
+            self.log_transcript_event(
+                "trim_messages",
+                &format!(
+                    "removed={}, remaining={}, tokens={}, budget={}",
+                    removed,
+                    self.messages.len(),
+                    total,
+                    budget
+                ),
             );
         }
     }
@@ -120,6 +132,49 @@ impl AgentSession {
         );
     }
 
+    /// Compact conversation history by truncating old tool results.
+    ///
+    /// Strategy: keep all messages (preserving conversation structure and progress
+    /// context), but replace large tool result outputs with a short summary.
+    /// This is idempotent — already-compacted results stay compacted.
+    ///
+    /// Protected zones (untouched):
+    /// - `messages[0]` (initial context)
+    /// - Current transaction (`transaction_start_idx..`)
+    /// - Last 4 messages (recent context)
+    pub(super) fn compact_history(&mut self) {
+        let tx_start = self.transaction_start_idx.unwrap_or(self.messages.len());
+        let protect_tail = 4;
+        let compact_end = self
+            .messages
+            .len()
+            .saturating_sub(protect_tail)
+            .min(tx_start);
+        let mut compacted = 0;
+
+        if compact_end <= 1 {
+            return;
+        }
+        for msg in &mut self.messages[1..compact_end] {
+            if let MessageContent::ToolResult(ref mut r) = msg.content {
+                let token_est = token_estimate::estimate_tokens(&r.output);
+                if token_est > 100 {
+                    let first_lines: String =
+                        r.output.lines().take(2).collect::<Vec<_>>().join("\n");
+                    let status = if r.success { "✓" } else { "✗" };
+                    r.output = format!(
+                        "[{} {} — {} tokens compacted]\n{}",
+                        status, r.tool_name, token_est, first_lines
+                    );
+                    compacted += 1;
+                }
+            }
+        }
+        if compacted > 0 {
+            debug!(compacted, "compact_history: truncated old tool results");
+        }
+    }
+
     /// Truncate a tool result if it exceeds 25% of available message budget.
     pub(super) fn truncate_tool_result(&self, result: &mut ToolResult) {
         let budget = self.available_message_budget();
@@ -143,6 +198,69 @@ impl AgentSession {
                 original_tokens,
                 truncated_to = max_result_tokens,
                 "truncated oversized tool result"
+            );
+        }
+    }
+
+    /// Check context pressure and degrade capabilities if needed.
+    /// Returns true if degradation level changed.
+    /// One-way: Normal → ToolsShed → Minimal (never recovers within a session).
+    pub(super) fn check_and_degrade(&mut self) -> bool {
+        use super::DegradationLevel;
+
+        let total_used = self.system_prompt_tokens
+            + self.tools_tokens
+            + token_estimate::estimate_messages_tokens(&self.messages)
+            + self.reserved_output;
+        let usage_pct = total_used as f64 / self.context_window as f64;
+
+        match self.degradation_level {
+            DegradationLevel::Normal if usage_pct > 0.85 => {
+                self.shed_extended_tools();
+                self.degradation_level = DegradationLevel::ToolsShed;
+                true
+            }
+            DegradationLevel::ToolsShed if usage_pct > 0.92 => {
+                self.simplify_system_prompt();
+                self.degradation_level = DegradationLevel::Minimal;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Remove all extended tools, keeping only core tools.
+    fn shed_extended_tools(&mut self) {
+        self.tools
+            .retain(|t| crate::tools::classify_tool_tier(&t.name) == crate::tools::ToolTier::Core);
+        // Re-add request_tools so the model knows it lost tools
+        if !self.tools.iter().any(|t| t.name == "request_tools") {
+            self.tools.push(crate::tools::request_tools_definition());
+        }
+        self.tools_tokens = token_estimate::estimate_tools_tokens(&self.tools);
+        self.enabled_categories.clear();
+        warn!(
+            tool_count = self.tools.len(),
+            tools_tokens = self.tools_tokens,
+            "shed extended tools due to context pressure"
+        );
+    }
+
+    /// Truncate the system prompt to reduce token usage.
+    fn simplify_system_prompt(&mut self) {
+        const MAX_CHARS: usize = 2000;
+        if self.system_prompt.len() > MAX_CHARS {
+            let truncated =
+                &self.system_prompt[..self.system_prompt.floor_char_boundary(MAX_CHARS)];
+            self.system_prompt = format!(
+                "{}\n\n[System prompt truncated due to context pressure. \
+                 Focus on completing the current task with available tools.]",
+                truncated
+            );
+            self.system_prompt_tokens = token_estimate::estimate_tokens(&self.system_prompt);
+            warn!(
+                system_prompt_tokens = self.system_prompt_tokens,
+                "simplified system prompt due to context pressure"
             );
         }
     }

@@ -110,6 +110,192 @@ impl AgentSession {
         }
     }
 
+    /// Execute web_fetch tool asynchronously on the AI task thread.
+    pub(super) async fn execute_web_fetch(call: &ToolCall) -> ToolResult {
+        let url = call
+            .arguments
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if url.is_empty() {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: "Missing 'url' argument".into(),
+            };
+        }
+
+        // Validate URL scheme
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: format!(
+                    "Invalid URL scheme: only http:// and https:// are supported, got: {}",
+                    url
+                ),
+            };
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("MAE/0.5.0")
+            .build();
+
+        let client = match client {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolResult {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    success: false,
+                    output: format!("Failed to create HTTP client: {}", e),
+                };
+            }
+        };
+
+        match client.get(url).send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let content_type = response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let is_html = content_type.contains("html");
+
+                match response.text().await {
+                    Ok(body) => {
+                        let text = if is_html {
+                            Self::strip_html(&body)
+                        } else {
+                            body
+                        };
+                        // Truncate to 32KB
+                        let text = if text.len() > 32_768 {
+                            let boundary = text.floor_char_boundary(32_768);
+                            format!("{}...\n[truncated at 32KB]", &text[..boundary])
+                        } else {
+                            text
+                        };
+                        ToolResult {
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                            success: true,
+                            output: format!("HTTP {} ({})\n\n{}", status, content_type, text),
+                        }
+                    }
+                    Err(e) => ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: false,
+                        output: format!("Failed to read response body: {}", e),
+                    },
+                }
+            }
+            Err(e) => ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: if e.is_timeout() {
+                    "Request timed out after 30 seconds".into()
+                } else {
+                    format!("HTTP request failed: {}", e)
+                },
+            },
+        }
+    }
+
+    /// Strip HTML tags, script/style blocks, and decode common entities.
+    pub(super) fn strip_html(html: &str) -> String {
+        let mut result = String::with_capacity(html.len() / 2);
+        let mut in_tag = false;
+        let mut in_script = false;
+        let mut in_style = false;
+        let mut chars = html.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '<' {
+                // Check for script/style open/close tags
+                let rest: String = chars.clone().take(20).collect();
+                let rest_lower = rest.to_ascii_lowercase();
+                if rest_lower.starts_with("script") {
+                    in_script = true;
+                } else if rest_lower.starts_with("/script") {
+                    in_script = false;
+                } else if rest_lower.starts_with("style") {
+                    in_style = true;
+                } else if rest_lower.starts_with("/style") {
+                    in_style = false;
+                }
+                in_tag = true;
+                continue;
+            }
+            if ch == '>' {
+                in_tag = false;
+                continue;
+            }
+            if in_tag || in_script || in_style {
+                continue;
+            }
+            // Decode HTML entities
+            if ch == '&' {
+                let entity: String = chars
+                    .clone()
+                    .take_while(|c| *c != ';' && *c != ' ' && *c != '<')
+                    .collect();
+                if entity.len() < 10 {
+                    let decoded = match entity.as_str() {
+                        "amp" => Some('&'),
+                        "lt" => Some('<'),
+                        "gt" => Some('>'),
+                        "quot" => Some('"'),
+                        "nbsp" => Some(' '),
+                        "#39" | "apos" => Some('\''),
+                        _ => None,
+                    };
+                    if let Some(decoded_char) = decoded {
+                        result.push(decoded_char);
+                        // Advance past entity + semicolon
+                        for _ in 0..entity.len() {
+                            chars.next();
+                        }
+                        if chars.peek() == Some(&';') {
+                            chars.next();
+                        }
+                        continue;
+                    }
+                }
+                result.push('&');
+                continue;
+            }
+            result.push(ch);
+        }
+
+        // Collapse excessive whitespace
+        let mut collapsed = String::with_capacity(result.len());
+        let mut blank_lines = 0;
+        for line in result.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                blank_lines += 1;
+                if blank_lines <= 1 {
+                    collapsed.push('\n');
+                }
+            } else {
+                blank_lines = 0;
+                collapsed.push_str(trimmed);
+                collapsed.push('\n');
+            }
+        }
+
+        collapsed.trim().to_string()
+    }
+
     /// Main loop: wait for prompts, run agentic loop, send results.
     pub async fn run(mut self) {
         info!("AI session started, waiting for prompts");
@@ -143,6 +329,8 @@ impl AgentSession {
         let Some(usage) = response.usage else { return };
         self.session_tokens_in += usage.prompt_tokens;
         self.session_tokens_out += usage.completion_tokens;
+        self.session_cache_read += usage.cache_read_tokens;
+        self.session_cache_creation += usage.cache_creation_tokens;
         let last_call_usd = match self.price {
             Some(price) => {
                 let c = price.cost_usd(&usage);
@@ -151,6 +339,10 @@ impl AgentSession {
             }
             None => 0.0,
         };
+        // Estimate current context usage for the dashboard
+        let messages_tokens = crate::token_estimate::estimate_messages_tokens(&self.messages);
+        let context_used_tokens =
+            messages_tokens + self.system_prompt_tokens + self.tools_tokens + self.reserved_output;
         let _ = self
             .event_tx
             .send(AiEvent::CostUpdate {
@@ -158,6 +350,10 @@ impl AgentSession {
                 last_call_usd,
                 tokens_in: self.session_tokens_in,
                 tokens_out: self.session_tokens_out,
+                cache_read_tokens: self.session_cache_read,
+                cache_creation_tokens: self.session_cache_creation,
+                context_window: self.context_window,
+                context_used_tokens,
             })
             .await;
         if !self.warned {

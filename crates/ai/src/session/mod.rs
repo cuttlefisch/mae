@@ -6,7 +6,21 @@ use tokio::sync::mpsc;
 
 mod context_mgmt;
 mod handle_prompt;
+pub(crate) mod progress;
 mod run_loop;
+pub(crate) mod workflow;
+
+/// Degradation level for context pressure management.
+/// One-way within a session: Normal → ToolsShed → Minimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DegradationLevel {
+    /// All tools, full system prompt.
+    Normal,
+    /// Extended tools removed, core only.
+    ToolsShed,
+    /// System prompt shortened + tools shed.
+    Minimal,
+}
 
 #[cfg(test)]
 mod tests;
@@ -51,6 +65,10 @@ pub struct AgentSession {
     /// (the latter matters for Ollama/unpriced models).
     pub(super) session_tokens_in: u64,
     pub(super) session_tokens_out: u64,
+    /// Cumulative cache read tokens (prompt cache hits).
+    pub(super) session_cache_read: u64,
+    /// Cumulative cache creation tokens.
+    pub(super) session_cache_creation: u64,
     /// One-shot flag so `BudgetWarning` is emitted at most once per
     /// session. Users don't want a warn per round after crossing the
     /// threshold.
@@ -87,6 +105,18 @@ pub struct AgentSession {
     pub(super) last_tool_calls: Option<Vec<ToolCall>>,
     /// History of tool call signatures (name:args) for oscillating loop detection.
     pub(super) turn_history: std::collections::VecDeque<String>,
+    /// Progress checkpoint tracker for semantic stagnation detection.
+    pub(super) progress: progress::ProgressTracker,
+    /// Workflow tracker for multi-step task progress (survives compaction).
+    pub(super) workflow: workflow::WorkflowTracker,
+    /// Current degradation level for context pressure management.
+    pub(super) degradation_level: DegradationLevel,
+    /// Original system prompt (preserved for reference after truncation).
+    #[allow(dead_code)]
+    pub(super) original_system_prompt: String,
+    /// Self-test mode flag: disables context compaction to prevent
+    /// progress loss that causes the agent to loop.
+    pub(super) is_self_test: bool,
     /// Path to the session's auto-saved transcript log.
     pub(super) transcript_path: Option<PathBuf>,
     /// Cached string representation of transcript_path (computed once).
@@ -112,18 +142,44 @@ impl AgentSession {
         let system_prompt_tokens = token_estimate::estimate_tokens(&system_prompt);
         let tools_tokens = token_estimate::estimate_tools_tokens(&core_tools);
 
-        // Setup transcript logging
-        let transcript_path = if let Ok(mut p) = std::env::current_dir() {
-            p.push(".mae");
-            p.push("transcripts");
-            let _ = std::fs::create_dir_all(&p);
-            let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
-            p.push(filename);
-            Some(p)
-        } else {
-            None
+        // Setup transcript logging — XDG-compliant path:
+        //   $XDG_DATA_HOME/mae/transcripts/ (default: ~/.local/share/mae/transcripts/)
+        // Falls back to $HOME/.local/share/mae/transcripts/ if XDG is unset.
+        let transcript_path = {
+            let base = std::env::var("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+                .ok();
+            if let Some(mut p) = base {
+                p.push("mae");
+                p.push("transcripts");
+                let _ = std::fs::create_dir_all(&p);
+                let filename = format!("{}.json", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+                p.push(filename);
+                Some(p)
+            } else {
+                None
+            }
         };
 
+        // Write initial metadata block to transcript (JSONL format).
+        if let Some(ref path) = transcript_path {
+            let metadata = serde_json::json!({
+                "type": "metadata",
+                "mae_version": env!("CARGO_PKG_VERSION"),
+                "model": "",
+                "context_window": 0,
+                "max_rounds": 0,
+                "is_self_test": false,
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "git_commit": option_env!("MAE_GIT_HASH").unwrap_or("dev"),
+                "platform": std::env::consts::OS,
+            });
+            let line = format!("{}\n", serde_json::to_string(&metadata).unwrap_or_default());
+            let _ = std::fs::write(path, &line);
+        }
+
+        let original_system_prompt = system_prompt.clone();
         AgentSession {
             provider,
             all_tools: tools,
@@ -140,6 +196,8 @@ impl AgentSession {
             session_cost_usd: 0.0,
             session_tokens_in: 0,
             session_tokens_out: 0,
+            session_cache_read: 0,
+            session_cache_creation: 0,
             warned: false,
             context_window: crate::context_limits::DEFAULT_CONTEXT_WINDOW,
             system_prompt_tokens,
@@ -155,6 +213,11 @@ impl AgentSession {
             current_profile: "pair-programmer".into(),
             last_tool_calls: None,
             turn_history: std::collections::VecDeque::with_capacity(6),
+            progress: progress::ProgressTracker::new(10, false),
+            workflow: workflow::WorkflowTracker::default(),
+            degradation_level: DegradationLevel::Normal,
+            original_system_prompt,
+            is_self_test: false,
             transcript_path_str: transcript_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
@@ -164,6 +227,14 @@ impl AgentSession {
 
     pub fn with_target_buffer(mut self, name: String) -> Self {
         self.target_buffer = Some(name);
+        self
+    }
+
+    /// Configure for self-test mode: wider checkpoint interval, higher stagnation tolerance.
+    pub fn with_self_test_mode(mut self) -> Self {
+        self.progress = progress::ProgressTracker::new(15, true);
+        self.max_rounds = 75;
+        self.is_self_test = true;
         self
     }
 
@@ -183,6 +254,29 @@ impl AgentSession {
         self.max_rounds = limits.max_rounds;
         self.model_name = model_str.to_string();
         self.budget = budget;
+        // Update transcript metadata with resolved model info
+        self.write_transcript_metadata();
         self
+    }
+
+    /// Write/update the metadata header line in the transcript file.
+    fn write_transcript_metadata(&self) {
+        if let Some(ref path) = self.transcript_path {
+            let metadata = serde_json::json!({
+                "type": "metadata",
+                "mae_version": env!("CARGO_PKG_VERSION"),
+                "model": self.model_name,
+                "context_window": self.context_window,
+                "max_rounds": self.max_rounds,
+                "reserved_output": self.reserved_output,
+                "max_messages": self.max_messages,
+                "is_self_test": self.is_self_test,
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "git_commit": option_env!("MAE_GIT_HASH").unwrap_or("dev"),
+                "platform": std::env::consts::OS,
+            });
+            let line = format!("{}\n", serde_json::to_string(&metadata).unwrap_or_default());
+            let _ = std::fs::write(path, &line);
+        }
     }
 }

@@ -30,6 +30,11 @@ pub struct SkiaCanvas {
     height: u32,
     /// softbuffer surface for blitting raster pixels to the OS window.
     sb_surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    /// Precomputed glyph coverage for ASCII chars 0..128 in the primary font.
+    /// `true` means the char has a glyph and can be batched into text runs.
+    ascii_in_font: [bool; 128],
+    /// Reusable pixel buffer for `end_frame()` — avoids ~4MB alloc per frame.
+    pixel_buf: Vec<u8>,
 }
 
 impl SkiaCanvas {
@@ -115,6 +120,8 @@ impl SkiaCanvas {
             )
             .map_err(|e| io::Error::other(e.to_string()))?;
 
+        let ascii_in_font = build_ascii_table(&font);
+
         Ok(SkiaCanvas {
             surface,
             font,
@@ -126,6 +133,8 @@ impl SkiaCanvas {
             width,
             height,
             sb_surface,
+            ascii_in_font,
+            pixel_buf: Vec::new(),
         })
     }
 
@@ -145,6 +154,7 @@ impl SkiaCanvas {
         self.cell_height = self.font.spacing();
         let (_, metrics) = self.font.metrics();
         self.ascent = (-metrics.ascent).max(size * 0.8);
+        self.ascii_in_font = build_ascii_table(&self.font);
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -360,16 +370,32 @@ impl SkiaCanvas {
     }
 
     /// Draw text at a specific (row, col) cell position with given fg color.
+    /// ASCII-only strings use a single `draw_text_run`; mixed/CJK falls back per-char.
     pub fn draw_text_at(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
-        for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, false, false, 1.0);
+        if text.is_ascii() {
+            self.draw_text_run(row, col, text, fg, false, false, 1.0);
+            return;
+        }
+        use unicode_width::UnicodeWidthChar;
+        let mut c = col;
+        for ch in text.chars() {
+            self.draw_char(row, c, ch, fg, false, false, 1.0);
+            c += ch.width().unwrap_or(1);
         }
     }
 
     /// Draw text at a specific (row, col) with bold font.
+    /// ASCII-only strings use a single `draw_text_run`; mixed/CJK falls back per-char.
     pub fn draw_text_bold(&mut self, row: usize, col: usize, text: &str, fg: Color4f) {
-        for (i, ch) in text.chars().enumerate() {
-            self.draw_char(row, col + i, ch, fg, true, false, 1.0);
+        if text.is_ascii() {
+            self.draw_text_run(row, col, text, fg, true, false, 1.0);
+            return;
+        }
+        use unicode_width::UnicodeWidthChar;
+        let mut c = col;
+        for ch in text.chars() {
+            self.draw_char(row, c, ch, fg, true, false, 1.0);
+            c += ch.width().unwrap_or(1);
         }
     }
 
@@ -420,7 +446,90 @@ impl SkiaCanvas {
         self.draw_text_at(row, 0, text, status_fg);
     }
 
+    /// Return the precomputed ASCII glyph coverage table.
+    pub fn ascii_in_font(&self) -> &[bool; 128] {
+        &self.ascii_in_font
+    }
+
+    /// Draw an entire text run in a single Skia `draw_str` call.
+    ///
+    /// The caller guarantees all chars in `text` are covered by the primary
+    /// (or bold) font — no per-glyph fallback. This eliminates per-char
+    /// `String` alloc, `Font::clone`, `font.metrics()`, and `unichar_to_glyph`.
+    pub fn draw_text_run(
+        &mut self,
+        row: usize,
+        col: usize,
+        text: &str,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let font = if bold { &self.bold_font } else { &self.font };
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+
+        if scale != 1.0 {
+            let mut scaled = font.clone();
+            scaled.set_size(font.size() * scale);
+            let (_, m) = scaled.metrics();
+            let baseline = y - m.ascent;
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface
+                    .canvas()
+                    .draw_str(text, (0, 0), &scaled, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (x, baseline), &scaled, &paint);
+            }
+            return;
+        }
+
+        let baseline = y + self.ascent;
+        if italic {
+            self.surface.canvas().save();
+            let mut skew = skia_safe::Matrix::new_identity();
+            skew.pre_skew((-0.2, 0.0), None);
+            self.surface.canvas().translate((x, baseline));
+            self.surface.canvas().concat(&skew);
+            self.surface.canvas().draw_str(text, (0, 0), font, &paint);
+            self.surface.canvas().restore();
+        } else {
+            self.surface
+                .canvas()
+                .draw_str(text, (x, baseline), font, &paint);
+        }
+    }
+
+    /// Draw a horizontal underline spanning `count` cells.
+    pub fn draw_underline_span(&mut self, row: usize, col: usize, count: usize, color: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let y = row as f32 * self.cell_height;
+        let underline_y = y + self.ascent + 1.0;
+        let width = count as f32 * self.cell_width;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((x, underline_y), (x + width, underline_y), &paint);
+    }
+
     /// Draw a horizontal line exactly under a cell (for underlining).
+    #[allow(dead_code)]
     pub fn draw_hline_exact(&mut self, row: usize, col: usize, color: Color4f) {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
@@ -442,9 +551,10 @@ impl SkiaCanvas {
         let image_info = self.surface.image_info();
         let row_bytes = image_info.min_row_bytes();
         let total_bytes = row_bytes * self.height as usize;
-        let mut pixels = vec![0u8; total_bytes];
+        // Reuse pixel buffer across frames — avoids ~4MB allocation per frame.
+        self.pixel_buf.resize(total_bytes, 0);
         self.surface
-            .read_pixels(&image_info, &mut pixels, row_bytes, (0, 0));
+            .read_pixels(&image_info, &mut self.pixel_buf, row_bytes, (0, 0));
 
         // softbuffer wants u32 pixels in 0x00RRGGBB format.
         let Ok(mut buffer) = self.sb_surface.buffer_mut() else {
@@ -452,17 +562,14 @@ impl SkiaCanvas {
         };
 
         let pixel_count = (self.width * self.height) as usize;
-        for i in 0..pixel_count.min(buffer.len()) {
-            let offset = i * 4;
-            if offset + 3 >= pixels.len() {
-                break;
-            }
-            // Skia raster_n32_premul on little-endian is BGRA byte order.
-            let b = pixels[offset] as u32;
-            let g = pixels[offset + 1] as u32;
-            let r = pixels[offset + 2] as u32;
-            // softbuffer format: 0x00RRGGBB
-            buffer[i] = (r << 16) | (g << 8) | b;
+        // Process as u32 slice: on little-endian, BGRA bytes → u32 = 0xAARRGGBB.
+        // Masking off alpha gives 0x00RRGGBB — exactly what softbuffer wants.
+        let u32_count = self.pixel_buf.len() / 4;
+        let pixels_u32 =
+            unsafe { std::slice::from_raw_parts(self.pixel_buf.as_ptr() as *const u32, u32_count) };
+        let count = pixel_count.min(buffer.len()).min(u32_count);
+        for i in 0..count {
+            buffer[i] = pixels_u32[i] & 0x00FF_FFFF;
         }
 
         let _ = buffer.present();
@@ -497,6 +604,17 @@ impl CellRect {
             height: self.height.saturating_sub(2),
         }
     }
+}
+
+/// Build a lookup table of which ASCII codepoints have glyphs in `font`.
+fn build_ascii_table(font: &Font) -> [bool; 128] {
+    let mut table = [false; 128];
+    for i in 0..128u8 {
+        table[i as usize] = font.unichar_to_glyph(i as i32) != 0;
+    }
+    // Space always counts as "in font" for run batching purposes.
+    table[b' ' as usize] = true;
+    table
 }
 
 #[cfg(test)]

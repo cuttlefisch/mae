@@ -113,6 +113,8 @@ pub struct DebugState {
     pub breakpoints: HashMap<String, Vec<Breakpoint>>,
     /// Current stopped location (source, line), if stopped.
     pub stopped_location: Option<(String, i64)>,
+    /// The reason for the last stop event (e.g. "breakpoint", "step", "entry", "exception").
+    pub last_stop_reason: Option<String>,
     /// Debug output / console log lines.
     pub output_log: Vec<String>,
     /// Scheme eval errors (self-debug only, but included for uniformity).
@@ -134,6 +136,7 @@ impl DebugState {
             variables: HashMap::new(),
             breakpoints: HashMap::new(),
             stopped_location: None,
+            last_stop_reason: None,
             output_log: Vec::new(),
             scheme_errors: Vec::new(),
             next_bp_id: 1,

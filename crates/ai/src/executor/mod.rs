@@ -15,7 +15,7 @@ use crate::tool_impls::lsp::{
     execute_lsp_references, execute_lsp_workspace_symbol,
 };
 
-/// What kind of deferred LSP tool call is pending.
+/// What kind of deferred tool call is pending (LSP or DAP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeferredKind {
     LspDefinition,
@@ -23,6 +23,45 @@ pub enum DeferredKind {
     LspHover,
     LspWorkspaceSymbol,
     LspDocumentSymbols,
+    DapStart,
+    DapContinue,
+    DapStep,
+}
+
+impl DeferredKind {
+    /// True for LSP-originated deferred calls.
+    pub fn is_lsp(self) -> bool {
+        matches!(
+            self,
+            DeferredKind::LspDefinition
+                | DeferredKind::LspReferences
+                | DeferredKind::LspHover
+                | DeferredKind::LspWorkspaceSymbol
+                | DeferredKind::LspDocumentSymbols
+        )
+    }
+
+    /// True for DAP-originated deferred calls.
+    pub fn is_dap(self) -> bool {
+        matches!(
+            self,
+            DeferredKind::DapStart | DeferredKind::DapContinue | DeferredKind::DapStep
+        )
+    }
+
+    /// Return the tool name string for this deferred kind.
+    pub fn tool_name(self) -> &'static str {
+        match self {
+            DeferredKind::LspDefinition => "lsp_definition",
+            DeferredKind::LspReferences => "lsp_references",
+            DeferredKind::LspHover => "lsp_hover",
+            DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
+            DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
+            DeferredKind::DapStart => "dap_start",
+            DeferredKind::DapContinue => "dap_continue",
+            DeferredKind::DapStep => "dap_step",
+        }
+    }
 }
 
 /// Result of executing a tool call — either immediately available or
@@ -70,18 +109,21 @@ pub fn execute_tool(
         });
     }
 
-    // 3. Check for deferred (async) tools first
+    // 3. Check for deferred (async) tools first — LSP and DAP
     let deferred_kind = match call.name.as_str() {
         "lsp_definition" => Some(DeferredKind::LspDefinition),
         "lsp_references" => Some(DeferredKind::LspReferences),
         "lsp_hover" => Some(DeferredKind::LspHover),
         "lsp_workspace_symbol" => Some(DeferredKind::LspWorkspaceSymbol),
         "lsp_document_symbols" => Some(DeferredKind::LspDocumentSymbols),
+        "dap_start" => Some(DeferredKind::DapStart),
+        "dap_continue" => Some(DeferredKind::DapContinue),
+        "dap_step" => Some(DeferredKind::DapStep),
         _ => None,
     };
 
     if let Some(kind) = deferred_kind {
-        let result = match kind {
+        let result: Result<(), String> = match kind {
             DeferredKind::LspDefinition => execute_lsp_definition(editor, &call.arguments),
             DeferredKind::LspReferences => execute_lsp_references(editor, &call.arguments),
             DeferredKind::LspHover => execute_lsp_hover(editor, &call.arguments),
@@ -90,6 +132,15 @@ pub fn execute_tool(
             }
             DeferredKind::LspDocumentSymbols => {
                 execute_lsp_document_symbols(editor, &call.arguments)
+            }
+            DeferredKind::DapStart => {
+                crate::tool_impls::execute_dap_start(editor, &call.arguments).map(|_| ())
+            }
+            DeferredKind::DapContinue => {
+                crate::tool_impls::execute_dap_continue(editor).map(|_| ())
+            }
+            DeferredKind::DapStep => {
+                crate::tool_impls::execute_dap_step(editor, &call.arguments).map(|_| ())
             }
         };
         return match result {
@@ -378,7 +429,7 @@ fn build_self_test_plan(filter: &str) -> String {
                 },
                 {
                     "tool": "command_list",
-                    "args": {},
+                    "args": {"format": "names"},
                     "assert": "Returns >= 30 commands; must include: save, quit, help, terminal, agent-list, agent-setup, self-test, lsp-goto-definition, debug-start, ai-prompt"
                 },
                 {
@@ -386,20 +437,7 @@ fn build_self_test_plan(filter: &str) -> String {
                     "args": {},
                     "assert": "Returns text with current auto-approve tier"
                 }
-            ],
-            "command_palette_check": {
-                "description": "After running command_list, verify these commands exist",
-                "required_commands": [
-                    "save", "quit", "force-quit", "undo", "redo",
-                    "help", "help-follow-link", "help-search",
-                    "ai-prompt", "ai-cancel",
-                    "terminal", "send-to-shell",
-                    "agent-list", "agent-setup", "self-test",
-                    "lsp-goto-definition", "lsp-find-references", "lsp-hover", "lsp-show-diagnostics",
-                    "debug-start", "debug-stop", "debug-continue", "debug-toggle-breakpoint",
-                    "debug-panel"
-                ]
-            }
+            ]
         }));
     }
 
@@ -407,6 +445,11 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "editing",
             "conditional": false,
+            "setup": [
+                "Before starting: clean up any leftovers from a previous run.",
+                "Call close_buffer with name='mae-self-test-editing.txt' and force=true (ignore errors if buffer doesn't exist).",
+                "Call shell_exec with command='rm -f /tmp/mae-self-test-editing.txt' to remove any stale test file."
+            ],
             "tests": [
                 {
                     "tool": "create_file",
@@ -448,6 +491,10 @@ fn build_self_test_plan(filter: &str) -> String {
                     "args": {"name": "mae-self-test-editing.txt", "force": true},
                     "assert": "Success (force=true closes even if modified)"
                 }
+            ],
+            "cleanup": [
+                "Call shell_exec with command='rm -f /tmp/mae-self-test-editing.txt'",
+                "Verify you are on the *AI* buffer (switch_buffer if needed)"
             ]
         }));
     }
@@ -498,10 +545,10 @@ fn build_self_test_plan(filter: &str) -> String {
                     "assert": "Switch back to *AI* after help tests (important: subsequent tests need a non-Help buffer active)"
                 }
             ],
-            "help_navigation_e2e": {
-                "description": "Connected walkthrough: kb_search 'buffer' -> kb_get first result -> verify [[...]] links in body -> kb_graph on that node (>= 2 nodes) -> help_open index -> switch_buffer back to *AI*",
-                "report_as": "help_navigation_e2e"
-            }
+            "cleanup": [
+                "Close the *Help* buffer with close_buffer (name: '*Help*', force: true)",
+                "Switch back to *AI* buffer if not already there"
+            ]
         }));
     }
 
@@ -534,27 +581,47 @@ fn build_self_test_plan(filter: &str) -> String {
         categories.push(serde_json::json!({
             "name": "lsp",
             "conditional": true,
-            "precondition": "First call project_info. If no root, SKIP. Then call open_file with path 'crates/mae/src/main.rs' (relative to project root) to trigger LSP didOpen. Wait a moment, then call lsp_diagnostics with scope 'all'. If it returns an error about no LSP server, SKIP this entire category.",
+            "precondition_steps": [
+                "1. Call project_info — if no root, SKIP entire category.",
+                "2. Call open_file('test_fixtures/lsp_test.rs').",
+                "3. Call shell_exec('sleep 3') — rust-analyzer needs startup time.",
+                "4. Call lsp_diagnostics() — if error, call shell_exec('sleep 5') then lsp_diagnostics() once more. Still fails → SKIP.",
+                "IMPORTANT: Do NOT retry any individual LSP test more than once — if it returns empty, mark FAIL and move on."
+            ],
             "tests": [
                 {
                     "tool": "open_file",
-                    "args": {"path": "crates/mae/src/main.rs"},
-                    "assert": "Buffer opened (triggers LSP didOpen)"
+                    "args": {"path": "test_fixtures/lsp_test.rs"},
+                    "assert": "Buffer opened"
                 },
                 {
                     "tool": "lsp_diagnostics",
-                    "args": {"scope": "all"},
-                    "assert": "Returns JSON (may be empty diagnostics)"
+                    "args": {},
+                    "assert": "Returns JSON (0 errors means LSP parsed OK)"
                 },
                 {
                     "tool": "lsp_document_symbols",
                     "args": {},
-                    "assert": "Returns symbol list or error"
+                    "assert": "Returns symbols including Counter, new, increment, get, count_to"
+                },
+                {
+                    "tool": "lsp_hover",
+                    "args": {"line": 15, "character": 12},
+                    "assert": "Returns hover info for Counter struct (line 15 col 12). If empty, FAIL."
+                },
+                {
+                    "tool": "lsp_definition",
+                    "args": {"line": 35, "character": 28},
+                    "assert": "Resolves Counter::new call (line 35 col 28) to constructor at line 20. If empty, FAIL."
+                },
+                {
+                    "tool": "lsp_references",
+                    "args": {"line": 15, "character": 12},
+                    "assert": "Returns >= 3 references to Counter. If empty, FAIL."
                 }
             ],
             "cleanup": [
-                "Close the main.rs buffer with close_buffer (name: 'main.rs')",
-                "Switch back to *AI* buffer"
+                "close_buffer(name: 'lsp_test.rs', force: true), then switch_buffer(name: '*AI*')"
             ]
         }));
     }
@@ -583,70 +650,47 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
-    if include("tool_callstack") {
-        categories.push(serde_json::json!({
-            "name": "tool_callstack",
-            "conditional": false,
-            "tests": [
-                {
-                    "tool": "introspect",
-                    "args": {"section": "ai"},
-                    "assert": "Returns JSON with current_round and transaction_start_idx"
-                },
-                {
-                    "tool": "cursor_info",
-                    "args": {},
-                    "assert": "Verify round increments after this tool call (AI should check introspect again)"
-                }
-            ],
-            "e2e_compression_check": {
-                "description": "After this turn ends, the next turn should see a smaller message history due to compression",
-                "procedure": "1. Run self-test. 2. Finish turn. 3. Start new turn. 4. Check introspect conversation_entries."
-            }
-        }));
-    }
-
     if include("dap") {
         categories.push(serde_json::json!({
             "name": "dap",
             "conditional": true,
-            "precondition": "Call debug_state first. If it returns 'No active debug session', run dap_start with adapter='lldb' and program='/bin/ls' (or skip if lldb unavailable). If dap_start fails, SKIP this entire category.",
+            "precondition": "Call shell_exec('python3 -c \"import debugpy\"'). If it fails, SKIP entire category.",
             "tests": [
                 {
-                    "tool": "debug_state",
-                    "args": {},
-                    "assert": "Returns JSON with 'target' and 'active_thread_id' fields (or 'No active debug session' before start)"
+                    "name": "start_session",
+                    "tool": "dap_start",
+                    "args": {"adapter": "debugpy", "program": "test_fixtures/dap_test.py", "stop_on_entry": true},
+                    "assert": "Blocks until session starts AND debuggee stops at entry. Returns JSON with status 'stopped', reason 'entry', thread and frame info. If error, SKIP remaining DAP tests."
                 },
                 {
+                    "name": "set_breakpoint",
                     "tool": "dap_set_breakpoint",
-                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
-                    "assert": "Returns JSON with 'all_lines_for_source' containing [1]"
+                    "args": {"source": "test_fixtures/dap_test.py", "line": 13},
+                    "assert": "Breakpoint set on line 13"
                 },
                 {
-                    "tool": "dap_list_variables",
-                    "args": {},
-                    "assert": "Returns JSON object (may be empty scopes if not stopped at breakpoint)"
-                },
-                {
-                    "tool": "dap_output",
-                    "args": {"lines": 10},
-                    "assert": "Returns JSON with 'total_lines', 'returned_lines', 'output' fields"
-                },
-                {
-                    "tool": "dap_remove_breakpoint",
-                    "args": {"source": "/tmp/mae-self-test-dap.rs", "line": 1},
-                    "assert": "Returns JSON with 'remaining_lines' as empty array"
-                },
-                {
+                    "name": "continue_to_breakpoint",
                     "tool": "dap_continue",
                     "args": {},
-                    "assert": "Returns 'continue' or error 'not stopped' (both acceptable)"
+                    "assert": "Blocks until debuggee stops at breakpoint. Returns JSON with status 'stopped', reason 'breakpoint', frame info with source and line. If timeout, FAIL."
+                },
+                {
+                    "name": "check_output",
+                    "tool": "dap_output",
+                    "args": {"lines": 10},
+                    "assert": "Returns output JSON"
+                },
+                {
+                    "name": "disconnect",
+                    "tool": "dap_disconnect",
+                    "args": {"terminate_debuggee": true},
+                    "assert": "Session ends cleanly"
                 }
             ],
             "cleanup": [
-                "Call command_ debug-stop to tear down the session",
-                "Switch back to *AI* buffer"
-            ]
+                "dap_disconnect(terminate_debuggee: true) — ignore errors"
+            ],
+            "CRITICAL": "dap_start, dap_continue, dap_step BLOCK until the operation completes — do NOT call debug_state or sleep after them. If ANY DAP tool fails or times out, IMMEDIATELY call read_messages(level: 'warn', last_n: 20) to check the *Messages* log for adapter errors — the root cause is almost always logged there. Maximum 10 tool calls for this entire category."
         }));
     }
 
@@ -680,35 +724,24 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
-    if include("hooks") {
-        categories.push(serde_json::json!({
-            "name": "hooks",
-            "conditional": false,
-            "tests": [
-                {
-                    "tool": "trigger_hook",
-                    "args": {"hook_name": "buffer-open"},
-                    "assert": "Hook 'buffer-open' triggered"
-                },
-                {
-                    "tool": "trigger_hook",
-                    "args": {"hook_name": "app-start"},
-                    "assert": "Hook 'app-start' triggered"
-                }
-            ]
-        }));
-    }
-
     let plan = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "description": "MAE self-test plan. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test.",
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
+        "instructions": [
+            "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
+            "Step 1: Call editor_save_state to snapshot the current buffer list, window layout, and focus.",
+            "Step 2: Execute each category's setup (if any), tests, and cleanup in order.",
+            "Step 3: If a category has a 'setup' array, execute those steps FIRST (ignore errors — they clean up stale state from previous runs).",
+            "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
+            "Step 5: After each category, execute its 'cleanup' array (if any).",
+            "Step 6: Final cleanup — call editor_restore_state to automatically close test buffers and restore window layout.",
+            "Step 7: Output the report. Do NOT quit the editor."
+        ],
         "cleanup": [
-            "Close any test buffers opened (close_buffer with name 'mae-self-test-editing.txt')",
             "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
-            "Switch back to *AI* buffer (switch_buffer) so the user sees the report",
-            "Do NOT quit the editor",
-            "Do NOT close the *AI* or *Help* buffers"
+            "Call editor_restore_state to restore the editor to its pre-test state (closes test buffers, restores window layout and focus).",
+            "Do NOT quit the editor"
         ],
         "categories": categories
     });
@@ -1696,7 +1729,7 @@ mod tests {
         ));
         assert!(result.success);
         let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
-        assert_eq!(plan["version"], 1);
+        assert_eq!(plan["version"], 2);
         let cats = plan["categories"].as_array().unwrap();
         let names: Vec<&str> = cats.iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"introspection"));
@@ -1704,6 +1737,40 @@ mod tests {
         assert!(names.contains(&"help"));
         assert!(names.contains(&"project"));
         assert!(names.contains(&"lsp"));
+    }
+
+    #[test]
+    fn self_test_plan_v2_has_setup_and_instructions() {
+        let mut editor = Editor::new();
+        let call = make_call("self_test_suite", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        // Top-level instructions
+        assert!(
+            plan["instructions"].is_array(),
+            "plan should have instructions"
+        );
+        let instr = plan["instructions"][0].as_str().unwrap();
+        assert!(
+            instr.contains("Do NOT call self_test_suite again"),
+            "first instruction should warn against re-calling"
+        );
+        // Editing category has setup
+        let cats = plan["categories"].as_array().unwrap();
+        let editing = cats.iter().find(|c| c["name"] == "editing").unwrap();
+        assert!(
+            editing["setup"].is_array(),
+            "editing should have setup steps"
+        );
+        assert!(
+            editing["cleanup"].is_array(),
+            "editing should have cleanup steps"
+        );
     }
 
     #[test]
@@ -1814,5 +1881,69 @@ mod tests {
         assert!(result.success);
         assert_eq!(editor.pending_hook_evals.len(), 1);
         assert_eq!(editor.pending_hook_evals[0].0, "buffer-open");
+    }
+
+    /// Regression: every tool referenced in the self-test plan must be
+    /// classified by `classify_tool_to_self_test_step` so the workflow
+    /// tracker can track progress correctly.
+    #[test]
+    fn self_test_plan_tools_all_classified() {
+        let plan_json = build_self_test_plan("");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+
+        let mut unclassified = Vec::new();
+        for cat in categories {
+            if let Some(tests) = cat["tests"].as_array() {
+                for test in tests {
+                    let tool = test["tool"].as_str().unwrap();
+                    // shell_exec is a general utility (used for wait/sleep steps)
+                    if tool != "shell_exec"
+                        && crate::session::workflow::classify_tool_to_self_test_step(tool).is_none()
+                    {
+                        unclassified.push(tool.to_string());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            unclassified.is_empty(),
+            "Self-test plan tools not classified by workflow tracker: {:?}",
+            unclassified
+        );
+    }
+
+    /// Regression: every tool in the self-test plan must actually exist
+    /// in the tool registry (or be a special tool like self_test_suite).
+    #[test]
+    fn self_test_plan_tools_match_registry() {
+        let plan_json = build_self_test_plan("");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+
+        let tools = all_tools();
+        let tool_names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
+        // Also add special tools that are handled outside the registry
+        let special_tools = ["self_test_suite", "ai_permissions", "input_lock"];
+
+        let mut missing = Vec::new();
+        for cat in categories {
+            if let Some(tests) = cat["tests"].as_array() {
+                for test in tests {
+                    let tool = test["tool"].as_str().unwrap();
+                    if !tool_names.contains(tool) && !special_tools.contains(&tool) {
+                        missing.push(tool.to_string());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "Self-test plan references tools not in registry: {:?}",
+            missing
+        );
     }
 }

@@ -25,6 +25,8 @@ use std::sync::Arc;
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+use tracing::{debug, warn};
+
 use crate::protocol::*;
 use crate::transport::{DapTransport, TransportError};
 
@@ -86,7 +88,7 @@ impl DapClient {
             .args(&config.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to spawn debug adapter '{}': {}", config.command, e))?;
 
@@ -102,6 +104,25 @@ impl DapClient {
         let (event_tx, event_rx) = mpsc::channel(256);
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<Vec<u8>>(64);
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+
+        // Forward adapter stderr as Error events so crashes are visible.
+        if let Some(stderr) = child.stderr.take() {
+            let stderr_tx = event_tx.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut reader = BufReader::new(stderr);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                    let trimmed = line.trim_end().to_string();
+                    if !trimmed.is_empty() {
+                        let _ = stderr_tx
+                            .send(DapEventKind::Error(format!("[adapter stderr] {}", trimmed)))
+                            .await;
+                    }
+                    line.clear();
+                }
+            });
+        }
 
         spawn_reader_task(stdout, event_tx.clone(), pending.clone());
         spawn_writer_task(stdin, outgoing_rx);
@@ -164,7 +185,7 @@ impl DapClient {
         let args = InitializeRequestArguments {
             client_id: Some("mae".into()),
             client_name: Some("MAE Editor".into()),
-            adapter_id: Some(config.adapter_id.clone()),
+            adapter_id: config.adapter_id.clone(),
             lines_start_at1: true,
             columns_start_at1: true,
             supports_variable_type: true,
@@ -207,6 +228,28 @@ impl DapClient {
     pub async fn launch(&self, args: serde_json::Value) -> Result<DapResponse, String> {
         self.request("launch", Some(args), std::time::Duration::from_secs(30))
             .await
+    }
+
+    /// Send `launch` without waiting for the response. Returns a receiver
+    /// that will yield the response once the adapter sends it.
+    ///
+    /// DAP spec: some adapters (debugpy) hold the launch response until
+    /// `configurationDone` is sent. Callers must send `configurationDone`
+    /// before awaiting the returned receiver to avoid deadlock.
+    pub async fn launch_deferred(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        self.send_request("launch", Some(args)).await
+    }
+
+    /// Send `attach` without waiting for the response. Same caveat as
+    /// [`launch_deferred`](Self::launch_deferred).
+    pub async fn attach_deferred(
+        &self,
+        args: serde_json::Value,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        self.send_request("attach", Some(args)).await
     }
 
     /// Send `attach` with adapter-specific arguments.
@@ -451,6 +494,36 @@ impl DapClient {
             .await
     }
 
+    /// Send a request without waiting for the response. Returns the oneshot
+    /// receiver that will yield the response.
+    async fn send_request(
+        &self,
+        command: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<oneshot::Receiver<DapResponse>, String> {
+        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(seq, tx);
+
+        let msg = DapMessage::Request(DapRequest {
+            seq,
+            command: command.to_string(),
+            arguments,
+        });
+        let bytes = match encode_message(&msg) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pending.lock().await.remove(&seq);
+                return Err(e);
+            }
+        };
+        if self.outgoing_tx.send(bytes).await.is_err() {
+            self.pending.lock().await.remove(&seq);
+            return Err("adapter writer channel closed".into());
+        }
+        Ok(rx)
+    }
+
     /// Send a request and wait for the matching response via oneshot.
     pub async fn request(
         &self,
@@ -459,6 +532,7 @@ impl DapClient {
         timeout: std::time::Duration,
     ) -> Result<DapResponse, String> {
         let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
+        debug!(command, seq, "DAP request sending");
 
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(seq, tx);
@@ -481,12 +555,27 @@ impl DapClient {
         }
 
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(resp)) => Ok(resp),
+            Ok(Ok(resp)) => {
+                debug!(
+                    command,
+                    seq,
+                    success = resp.success,
+                    "DAP response received"
+                );
+                Ok(resp)
+            }
             Ok(Err(_)) => {
+                warn!(command, seq, "DAP response channel closed");
                 self.pending.lock().await.remove(&seq);
                 Err("response channel closed".into())
             }
             Err(_) => {
+                warn!(
+                    command,
+                    seq,
+                    timeout_ms = timeout.as_millis() as u64,
+                    "DAP request timed out"
+                );
                 self.pending.lock().await.remove(&seq);
                 Err(format!("request '{}' timed out", command))
             }

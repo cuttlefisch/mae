@@ -120,23 +120,27 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
 }
 
 /// Handle an event from the LSP task — update editor state or open a new buffer.
+/// Handle an LSP event. Returns `true` if the display needs a redraw.
 pub(crate) fn handle_lsp_event(
     editor: &mut Editor,
     lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>,
     event: LspTaskEvent,
-) {
+) -> bool {
     match event {
         LspTaskEvent::ServerStarted { language_id } => {
             info!(language = %language_id, "LSP server started");
             editor.set_status(format!("[LSP] {} server started", language_id));
+            true
         }
         LspTaskEvent::ServerStartFailed { language_id, error } => {
             warn!(language = %language_id, error = %error, "LSP server failed to start");
             editor.set_status(format!("[LSP] {}: {}", language_id, error));
+            true
         }
         LspTaskEvent::ServerExited { language_id } => {
             warn!(language = %language_id, "LSP server exited");
             editor.set_status(format!("[LSP] {} server exited", language_id));
+            true
         }
         LspTaskEvent::DefinitionResult { uri: _, locations } => {
             let core_locs: Vec<LspLocation> = locations
@@ -152,9 +156,9 @@ pub(crate) fn handle_lsp_event(
                 })
                 .collect();
             if let Some(other_file_loc) = editor.apply_definition_result(core_locs) {
-                // Different file — open it and jump.
                 open_location(editor, lsp_tx, other_file_loc);
             }
+            true
         }
         LspTaskEvent::ReferencesResult { uri: _, locations } => {
             let core_locs: Vec<LspLocation> = locations
@@ -170,22 +174,25 @@ pub(crate) fn handle_lsp_event(
                 })
                 .collect();
             editor.apply_references_result(core_locs);
+            true
         }
         LspTaskEvent::HoverResult { contents, .. } => {
             editor.apply_hover_result(contents);
+            true
         }
         LspTaskEvent::DiagnosticsPublished { uri, diagnostics } => {
             let count = diagnostics.len();
             let core_diags: Vec<CoreDiagnostic> =
                 diagnostics.into_iter().map(lsp_diag_to_core).collect();
-            editor.diagnostics.set(uri.clone(), core_diags);
+            let changed = editor.diagnostics.set(uri.clone(), core_diags);
             debug!(uri = %uri, count, "diagnostics published");
-            // Surface a summary in the status line so users notice new
-            // problems without having to open the diagnostics buffer.
-            let (e, w, _, _) = editor.diagnostics.severity_counts();
-            if e + w > 0 {
-                editor.set_status(format!("[LSP] {} errors, {} warnings", e, w));
+            if changed {
+                let (e, w, _, _) = editor.diagnostics.severity_counts();
+                if e + w > 0 {
+                    editor.set_status(format!("[LSP] {} errors, {} warnings", e, w));
+                }
             }
+            changed
         }
         LspTaskEvent::ServerNotification {
             language_id,
@@ -196,6 +203,7 @@ pub(crate) fn handle_lsp_event(
                 method = %notification.method,
                 "LSP server notification"
             );
+            false
         }
         LspTaskEvent::CompletionResult { uri: _, items, .. } => {
             let core_items: Vec<CoreCompletionItem> = items
@@ -208,15 +216,17 @@ pub(crate) fn handle_lsp_event(
                 })
                 .collect();
             editor.apply_completion_result(core_items);
+            true
         }
         // Workspace/document symbol results are only consumed by the deferred
         // AI tool flow (try_complete_deferred). If no deferred call is pending
-        // they are silently dropped here.
-        LspTaskEvent::WorkspaceSymbolResult { .. } => {}
-        LspTaskEvent::DocumentSymbolResult { .. } => {}
+        // they are silently dropped here — no redraw needed.
+        LspTaskEvent::WorkspaceSymbolResult { .. } => false,
+        LspTaskEvent::DocumentSymbolResult { .. } => false,
         LspTaskEvent::Error { message } => {
             warn!(error = %message, "LSP error");
             editor.set_status(format!("[LSP] {}", message));
+            true
         }
     }
 }
@@ -341,16 +351,9 @@ pub(crate) fn try_complete_deferred(
             })
         }
         // Also handle LSP errors while a deferred call is pending
-        (_, LspTaskEvent::Error { message }) => Some(ToolResult {
+        (_, LspTaskEvent::Error { message }) if kind.is_lsp() => Some(ToolResult {
             tool_call_id: tool_call_id.to_string(),
-            tool_name: match kind {
-                DeferredKind::LspDefinition => "lsp_definition",
-                DeferredKind::LspReferences => "lsp_references",
-                DeferredKind::LspHover => "lsp_hover",
-                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
-                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
-            }
-            .into(),
+            tool_name: kind.tool_name().into(),
             success: false,
             output: format!("LSP error: {}", message),
         }),

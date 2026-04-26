@@ -66,10 +66,17 @@ pub fn execute_dap_start(editor: &mut Editor, args: &Value) -> Result<String, St
         })
         .unwrap_or_default();
 
+    let stop_on_entry = args
+        .get("stop_on_entry")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // Preconditions (unknown adapter, already-active session) live in
-    // `dap_start_with_adapter` so this tool and `:debug-start` agree.
-    editor.dap_start_with_adapter(adapter, program, &extra_args)?;
-    Ok(format!("Starting {} session against {}", adapter, program))
+    // `dap_start_with_adapter_opts` so this tool and `:debug-start` agree.
+    editor.dap_start_with_adapter_opts(adapter, program, &extra_args, stop_on_entry)?;
+    // Return Ok(()) — actual result comes from deferred resolution when
+    // the SessionStarted event arrives from the DAP adapter.
+    Ok(String::new())
 }
 
 /// Set a breakpoint at `source:line`. Idempotent — no-op if already set.
@@ -129,10 +136,12 @@ pub fn execute_dap_set_breakpoint(editor: &mut Editor, args: &Value) -> Result<S
 /// Errors if no session is active (helps the AI catch stale state).
 pub fn execute_dap_continue(editor: &mut Editor) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     editor.dap_continue();
-    Ok("continue".into())
+    // Return Ok(()) — actual result comes from deferred resolution when
+    // the debuggee stops (breakpoint, exception) or terminates.
+    Ok(String::new())
 }
 
 /// Step on the active thread.
@@ -141,7 +150,7 @@ pub fn execute_dap_continue(editor: &mut Editor) -> Result<String, String> {
 /// - `direction` (string, required): `"over"`, `"in"`, or `"out"`.
 pub fn execute_dap_step(editor: &mut Editor, args: &Value) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     let direction = args
         .get("direction")
@@ -154,7 +163,9 @@ pub fn execute_dap_step(editor: &mut Editor, args: &Value) -> Result<String, Str
         )
     })?;
     editor.dap_step(kind);
-    Ok(format!("step {}", kind.as_str()))
+    // Return Ok(()) — actual result comes from deferred resolution when
+    // the debuggee stops after the step completes.
+    Ok(String::new())
 }
 
 /// Look up a variable by name across all scopes of the active stop.
@@ -171,7 +182,7 @@ pub fn execute_dap_inspect_variable(editor: &Editor, args: &Value) -> Result<Str
     let state = editor
         .debug_state
         .as_ref()
-        .ok_or("No active debug session")?;
+        .ok_or("No active debug session. Call dap_start first.")?;
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -232,7 +243,7 @@ pub fn execute_dap_list_variables(editor: &Editor) -> Result<String, String> {
     let state = editor
         .debug_state
         .as_ref()
-        .ok_or("No active debug session")?;
+        .ok_or("No active debug session. Call dap_start first.")?;
 
     // Grab child_variables from the debug view (if the panel is open).
     let child_vars = editor
@@ -293,7 +304,7 @@ fn render_variable_json(
 /// `debug_state` or `dap_list_variables` after a moment to see results.
 pub fn execute_dap_expand_variable(editor: &mut Editor, args: &Value) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     let var_ref = args
         .get("variables_reference")
@@ -319,7 +330,7 @@ pub fn execute_dap_expand_variable(editor: &mut Editor, args: &Value) -> Result<
 /// Queues a scopes request for the new frame.
 pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     let frame_id = args
         .get("frame_id")
@@ -359,7 +370,7 @@ pub fn execute_dap_select_thread(editor: &mut Editor, args: &Value) -> Result<St
     let state = editor
         .debug_state
         .as_mut()
-        .ok_or("No active debug session")?;
+        .ok_or("No active debug session. Call dap_start first.")?;
     let thread_id = args
         .get("thread_id")
         .and_then(|v| v.as_i64())
@@ -382,7 +393,7 @@ pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, Strin
     let state = editor
         .debug_state
         .as_ref()
-        .ok_or("No active debug session")?;
+        .ok_or("No active debug session. Call dap_start first.")?;
 
     let max_lines = args.get("lines").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
@@ -413,7 +424,7 @@ pub fn execute_dap_output(editor: &Editor, args: &Value) -> Result<String, Strin
 /// or `dap_output` after a moment to see the result.
 pub fn execute_dap_evaluate(editor: &mut Editor, args: &Value) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     let expression = args
         .get("expression")
@@ -436,7 +447,7 @@ pub fn execute_dap_evaluate(editor: &mut Editor, args: &Value) -> Result<String,
 ///   the debugged process. Default: false (detach only).
 pub fn execute_dap_disconnect(editor: &mut Editor, args: &Value) -> Result<String, String> {
     if editor.debug_state.is_none() {
-        return Err("No active debug session".into());
+        return Err("No active debug session. Call dap_start first.".into());
     }
     let terminate = args
         .get("terminate_debuggee")
@@ -473,9 +484,9 @@ mod tests {
     #[test]
     fn dap_start_queues_intent() {
         let mut ed = Editor::new();
-        let out =
+        // dap_start now returns empty string (deferred — result comes from event loop)
+        let _out =
             execute_dap_start(&mut ed, &json!({"adapter": "lldb", "program": "/bin/ls"})).unwrap();
-        assert!(out.contains("Starting lldb"));
         assert_eq!(ed.pending_dap_intents.len(), 1);
         assert!(ed.debug_state.is_some());
     }
@@ -483,7 +494,7 @@ mod tests {
     #[test]
     fn dap_start_with_program_args() {
         let mut ed = Editor::new();
-        let out = execute_dap_start(
+        let _out = execute_dap_start(
             &mut ed,
             &json!({
                 "adapter": "lldb",
@@ -492,7 +503,6 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(out.contains("Starting"));
         assert_eq!(ed.pending_dap_intents.len(), 1);
     }
 

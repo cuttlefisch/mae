@@ -213,6 +213,83 @@ pub fn execute_git_checkout(editor: &Editor, args: &serde_json::Value) -> Result
     Ok(stdout)
 }
 
+pub fn execute_git_stash_push(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let mut git_args = vec!["stash", "push"];
+    if let Some(msg) = args.get("message").and_then(|v| v.as_str()) {
+        git_args.push("-m");
+        git_args.push(msg);
+    }
+
+    let (ok, stdout, stderr) = run_git(editor, &git_args);
+    if !ok {
+        return Err(format!("git stash push failed: {}", stderr));
+    }
+    Ok(if stdout.is_empty() {
+        "No local changes to save".into()
+    } else {
+        stdout
+    })
+}
+
+pub fn execute_git_stash_pop(editor: &Editor) -> Result<String, String> {
+    let (ok, stdout, stderr) = run_git(editor, &["stash", "pop"]);
+    if !ok {
+        return Err(format!("git stash pop failed: {}", stderr));
+    }
+    Ok(stdout)
+}
+
+pub fn execute_git_stash_list(editor: &Editor) -> Result<String, String> {
+    let (ok, stdout, stderr) = run_git(editor, &["stash", "list"]);
+    if !ok {
+        return Err(format!("git stash list failed: {}", stderr));
+    }
+    Ok(if stdout.is_empty() {
+        "No stashes".into()
+    } else {
+        stdout
+    })
+}
+
+pub fn execute_git_branch_list(editor: &Editor) -> Result<String, String> {
+    let (ok, stdout, stderr) = run_git(editor, &["branch", "-a", "--no-color"]);
+    if !ok {
+        return Err(format!("git branch failed: {}", stderr));
+    }
+    Ok(stdout)
+}
+
+pub fn execute_git_branch_delete(
+    editor: &Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let branch = args
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'branch' argument")?;
+    let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let flag = if force { "-D" } else { "-d" };
+    let (ok, stdout, stderr) = run_git(editor, &["branch", flag, branch]);
+    if !ok {
+        return Err(format!("git branch delete failed: {}", stderr));
+    }
+    Ok(stdout)
+}
+
+pub fn execute_git_merge(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let branch = args
+        .get("branch")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'branch' argument")?;
+
+    let (ok, stdout, stderr) = run_git(editor, &["merge", branch]);
+    if !ok {
+        return Err(format!("git merge failed: {}", stderr));
+    }
+    Ok(stdout)
+}
+
 pub fn execute_github_pr_status(editor: &Editor) -> Result<String, String> {
     let (ok1, stdout1, stderr1) = run_gh(editor, &["pr", "status"]);
     let (ok2, stdout2, stderr2) = run_gh(editor, &["pr", "checks"]);

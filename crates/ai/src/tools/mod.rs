@@ -5,6 +5,7 @@ mod dap_tools;
 mod kb_tools;
 mod lsp_tools;
 mod shell_tools;
+mod web_tools;
 
 use std::collections::HashMap;
 
@@ -56,6 +57,7 @@ pub fn ai_specific_tools(registry: &OptionRegistry) -> Vec<ToolDefinition> {
     tools.extend(dap_tools::dap_tool_definitions());
     tools.extend(kb_tools::kb_tool_definitions());
     tools.extend(shell_tools::shell_tool_definitions());
+    tools.extend(web_tools::web_tool_definitions());
     tools
 }
 
@@ -106,11 +108,12 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 90,
-            "Expected at least 90 AI tools, got {}",
+            tools.len() >= 98,
+            "Expected at least 97 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"web_fetch"));
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));
         assert!(names.contains(&"ask_user"));
@@ -203,8 +206,8 @@ mod tests {
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 40,
-            "core tools should be < 40, got {}",
+            core_count < 50,
+            "core tools should be < 50, got {}",
             core_count
         );
         assert!(

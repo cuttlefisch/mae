@@ -42,16 +42,19 @@ pub fn render_messages_window(
 
     let entries = editor.message_log.entries();
     let total = entries.len();
-    let start = if win.scroll_offset > 0 {
-        win.scroll_offset.min(total)
-    } else {
-        total.saturating_sub(inner_height)
-    };
+    let start = win.scroll_offset.min(total);
 
     let target_fg = theme::ts_fg(editor, "diagnostic.target");
     let text_fg = theme::ts_fg(editor, "ui.text");
 
-    for (i, entry) in entries.iter().skip(start).take(inner_height).enumerate() {
+    let wrap_enabled = editor.word_wrap && inner_width > 0;
+    let mut visual_row = 0usize;
+
+    for entry in entries.iter().skip(start) {
+        if visual_row >= inner_height {
+            break;
+        }
+
         let level_fg = match entry.level {
             mae_core::MessageLevel::Error => theme::ts_fg(editor, "diagnostic.error"),
             mae_core::MessageLevel::Warn => theme::ts_fg(editor, "diagnostic.warn"),
@@ -68,19 +71,59 @@ pub fn render_messages_window(
             mae_core::MessageLevel::Trace => "TRACE",
         };
 
-        let row = inner_row + i;
-        let col = inner_col;
+        let prefix = format!("[{}] [{}] ", level_tag, entry.target);
+        let prefix_len = prefix.len();
 
-        canvas.draw_text_at(row, col, &format!("[{}]", level_tag), level_fg);
-        let offset = level_tag.len() + 3;
-        canvas.draw_text_at(row, col + offset, &format!("[{}]", entry.target), target_fg);
-        let offset2 = offset + entry.target.len() + 3;
-        let remaining: String = entry
-            .message
-            .chars()
-            .take(inner_width.saturating_sub(offset2))
-            .collect();
-        canvas.draw_text_at(row, col + offset2, &remaining, text_fg);
+        if !wrap_enabled {
+            let row = inner_row + visual_row;
+            let col = inner_col;
+            canvas.draw_text_at(row, col, &format!("[{}]", level_tag), level_fg);
+            let offset = level_tag.len() + 3;
+            canvas.draw_text_at(row, col + offset, &format!("[{}]", entry.target), target_fg);
+            let offset2 = offset + entry.target.len() + 3;
+            let remaining: String = entry
+                .message
+                .chars()
+                .take(inner_width.saturating_sub(offset2))
+                .collect();
+            canvas.draw_text_at(row, col + offset2, &remaining, text_fg);
+            visual_row += 1;
+        } else {
+            // Word-wrap: render prefix on first line, then wrap message text
+            let full_line = format!("{}{}", prefix, entry.message);
+            let chars: Vec<char> = full_line.chars().collect();
+            let mut pos = 0;
+            let mut first = true;
+            while pos < chars.len() && visual_row < inner_height {
+                let row = inner_row + visual_row;
+                let chunk_len = inner_width.min(chars.len() - pos);
+                let chunk: String = chars[pos..pos + chunk_len].iter().collect();
+
+                if first {
+                    // Draw with colored prefix
+                    canvas.draw_text_at(row, inner_col, &format!("[{}]", level_tag), level_fg);
+                    let offset = level_tag.len() + 3;
+                    canvas.draw_text_at(
+                        row,
+                        inner_col + offset,
+                        &format!("[{}]", entry.target),
+                        target_fg,
+                    );
+                    let offset2 = offset + entry.target.len() + 3;
+                    let msg_chunk: String = chars[pos + prefix_len.min(chunk_len)..pos + chunk_len]
+                        .iter()
+                        .collect();
+                    canvas.draw_text_at(row, inner_col + offset2, &msg_chunk, text_fg);
+                    first = false;
+                } else {
+                    // Continuation lines: just message text
+                    canvas.draw_text_at(row, inner_col, &chunk, text_fg);
+                }
+
+                pos += chunk_len;
+                visual_row += 1;
+            }
+        }
     }
 
     if entries.is_empty() {

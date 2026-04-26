@@ -93,6 +93,12 @@ pub(crate) fn render_conversation_window(
                 mae_core::conversation::LineStyle::ToolResultText => {
                     ts(editor, "conversation.tool.result")
                 }
+                mae_core::conversation::LineStyle::ToolRunning => ts(editor, "conversation.tool"),
+                mae_core::conversation::LineStyle::ToolPending => Style::default(),
+                mae_core::conversation::LineStyle::ToolSuccess => {
+                    ts(editor, "conversation.tool.result")
+                }
+                mae_core::conversation::LineStyle::ToolError => ts(editor, "diagnostic.error"),
                 mae_core::conversation::LineStyle::SystemText => ts(editor, "conversation.system"),
                 mae_core::conversation::LineStyle::Separator => Style::default(),
                 mae_core::conversation::LineStyle::InputPrompt => {

@@ -4,7 +4,7 @@ use std::io;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use mae_ai::{execute_tool, AiCommand, AiEvent, DeferredKind, ExecuteResult, ToolResult};
+use mae_ai::{execute_tool, AiCommand, AiEvent, ExecuteResult, ToolResult};
 use mae_core::{Editor, KeyPress, Mode};
 use mae_dap::DapCommand;
 use mae_lsp::{LspCommand, LspTaskEvent};
@@ -44,6 +44,7 @@ pub(crate) async fn run_terminal_loop(
     let mut pending_keys: Vec<KeyPress> = Vec::new();
 
     let mut deferred_ai_reply: ai_event_handler::DeferredAiReply = None;
+    let mut deferred_dap_reply: ai_event_handler::DeferredDapReply = None;
     let mut pending_interactive_event: Option<ai_event_handler::PendingInteractiveEvent> = None;
     let mut deferred_mcp_reply: ai_event_handler::DeferredMcpReply = Vec::new();
     let mut last_mcp_activity: Option<tokio::time::Instant> = None;
@@ -73,6 +74,20 @@ pub(crate) async fn run_terminal_loop(
             .heartbeat
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        // Watchdog recovery: cancel pending AI work after prolonged stall (>10s).
+        if editor
+            .watchdog_stall_recovery
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!("watchdog recovery: cancelling pending AI work after stall");
+            if let Some(ref tx) = ai_command_tx {
+                let _ = tx.try_send(AiCommand::Cancel);
+            }
+            deferred_ai_reply = None;
+            deferred_dap_reply = None;
+            render_pending = true;
+        }
+
         if last_health_check.elapsed() > std::time::Duration::from_secs(30) {
             shell_lifecycle::health_check(
                 editor,
@@ -94,12 +109,7 @@ pub(crate) async fn run_terminal_loop(
         };
         let viewport_height = editor.focused_window_viewport_height(total_window_area);
         editor.viewport_height = viewport_height;
-        editor
-            .window_mgr
-            .focused_window_mut()
-            .ensure_scroll(viewport_height);
-
-        // Horizontal scroll
+        // Horizontal scroll + text_area_width
         {
             let (term_w, term_h) = renderer.size()?;
             let window_area = mae_core::WinRect {
@@ -127,6 +137,32 @@ pub(crate) async fn run_terminal_loop(
                         .ensure_scroll_horizontal(text_w);
                 }
             }
+        }
+
+        if editor.word_wrap && editor.text_area_width > 0 {
+            let tw = editor.text_area_width;
+            let bi = editor.break_indent;
+            let sb_w = editor.show_break.chars().count();
+            let buf_idx = editor.active_buffer_idx();
+            let rope = editor.buffers[buf_idx].rope().clone();
+            let line_count = rope.len_lines();
+            editor
+                .window_mgr
+                .focused_window_mut()
+                .ensure_scroll_wrapped(viewport_height, |line| {
+                    if line >= line_count {
+                        return 1;
+                    }
+                    let rope_line = rope.line(line);
+                    let text: String = rope_line.chars().collect();
+                    let text = text.trim_end_matches('\n');
+                    mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                });
+        } else {
+            editor
+                .window_mgr
+                .focused_window_mut()
+                .ensure_scroll(viewport_height);
         }
 
         if tui_dirty {
@@ -237,6 +273,7 @@ pub(crate) async fn run_terminal_loop(
         };
 
         ai_event_handler::timeout_deferred_reply(editor, &mut deferred_ai_reply);
+        ai_event_handler::timeout_deferred_dap_reply(editor, &mut deferred_dap_reply);
         ai_event_handler::timeout_deferred_mcp_reply(editor, &mut deferred_mcp_reply);
 
         let mcp_idle_tick = async {
@@ -320,8 +357,10 @@ pub(crate) async fn run_terminal_loop(
                     all_tools,
                     permission_policy,
                     deferred_ai_reply: &mut deferred_ai_reply,
+                    deferred_dap_reply: &mut deferred_dap_reply,
                     pending_interactive_event: &mut pending_interactive_event,
                     lsp_command_tx,
+                    dap_command_tx,
                     ai_event_tx,
                     ai_command_tx,
                 };
@@ -337,7 +376,17 @@ pub(crate) async fn run_terminal_loop(
             }
             Some(dap_event) = dap_event_rx.recv() => {
                 tui_dirty = true;
+                // Try to resolve deferred DAP tool first (promise/await)
+                let dap_action = ai_event_handler::try_resolve_deferred_dap(
+                    editor, &dap_event, &mut deferred_dap_reply,
+                );
+                // Always process the event for editor state updates
                 handle_dap_event(editor, dap_event);
+                // After handle_dap_event queues RefreshThreadsAndStack,
+                // drain intents immediately so the DAP task gets it
+                if dap_action == ai_event_handler::DapResolveAction::TransitionedToStackTrace {
+                    drain_dap_intents(editor, dap_command_tx);
+                }
             }
             _ = shell_tick => {
                 // Shell tick — only mark dirty when a shell has new output
@@ -478,21 +527,15 @@ pub(crate) async fn run_headless_self_test(
                         }
                     }
                     ExecuteResult::Deferred { tool_call_id, kind } => {
-                        // For headless mode, drain LSP intents and wait for
-                        // the result synchronously. This is a simplification —
-                        // deferred tools (LSP) may not resolve without a running
-                        // LSP server, but that's expected in headless mode.
-                        drain_lsp_intents(editor, lsp_command_tx);
+                        // For headless mode, drain LSP intents but can't resolve
+                        // deferred tools (LSP/DAP) without running servers.
+                        if kind.is_lsp() {
+                            drain_lsp_intents(editor, lsp_command_tx);
+                        }
+                        // DAP intents: no dap_command_tx in headless mode
                         let result = ToolResult {
                             tool_call_id,
-                            tool_name: match kind {
-                                DeferredKind::LspDefinition => "lsp_definition",
-                                DeferredKind::LspReferences => "lsp_references",
-                                DeferredKind::LspHover => "lsp_hover",
-                                DeferredKind::LspWorkspaceSymbol => "lsp_workspace_symbol",
-                                DeferredKind::LspDocumentSymbols => "lsp_document_symbols",
-                            }
-                            .into(),
+                            tool_name: kind.tool_name().into(),
                             success: false,
                             output: format!(
                                 "Deferred tool ({:?}) not supported in headless mode",

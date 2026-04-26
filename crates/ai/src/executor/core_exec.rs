@@ -2,11 +2,11 @@ use mae_core::Editor;
 
 use crate::tool_impls::{
     execute_buffer_read, execute_buffer_write, execute_close_buffer, execute_command_list,
-    execute_create_file, execute_cursor_info, execute_debug_state, execute_editor_state,
-    execute_file_read, execute_get_option, execute_list_buffers, execute_open_file,
-    execute_project_files, execute_project_info, execute_project_search, execute_rename_file,
-    execute_set_option, execute_switch_buffer, execute_switch_project, execute_syntax_tree,
-    execute_window_layout,
+    execute_create_file, execute_cursor_info, execute_debug_state, execute_editor_restore_state,
+    execute_editor_save_state, execute_editor_state, execute_file_read, execute_get_option,
+    execute_list_buffers, execute_open_file, execute_project_files, execute_project_info,
+    execute_project_search, execute_read_messages, execute_rename_file, execute_set_option,
+    execute_switch_buffer, execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 use crate::types::ToolCall;
 
@@ -20,8 +20,9 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "file_read" => execute_file_read(&call.arguments),
         "list_buffers" => execute_list_buffers(editor),
         "editor_state" => execute_editor_state(editor),
+        "read_messages" => execute_read_messages(editor, &call.arguments),
         "window_layout" => execute_window_layout(editor),
-        "command_list" => execute_command_list(editor),
+        "command_list" => execute_command_list(editor, &call.arguments),
         "debug_state" => execute_debug_state(editor),
         "open_file" => execute_open_file(editor, &call.arguments),
         "switch_buffer" => execute_switch_buffer(editor, &call.arguments),
@@ -35,6 +36,8 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "get_option" => execute_get_option(editor, &call.arguments),
         "set_option" => execute_set_option(editor, &call.arguments),
         "rename_file" => execute_rename_file(editor, &call.arguments),
+        "editor_save_state" => execute_editor_save_state(editor),
+        "editor_restore_state" => execute_editor_restore_state(editor),
         _ => return None,
     };
     Some(result)

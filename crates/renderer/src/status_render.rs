@@ -3,6 +3,7 @@
 use mae_core::{Editor, Mode, VisualType};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme_convert::ts;
 
@@ -104,15 +105,32 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         format!(" {} ", file_type)
     };
 
-    let total_lines = buf.line_count();
-    let pct = if total_lines <= 1 {
-        "All".to_string()
-    } else if win.cursor_row == 0 {
-        "Top".to_string()
-    } else if win.cursor_row + 1 >= total_lines {
-        "Bot".to_string()
+    let pct = if buf.kind == mae_core::BufferKind::Conversation {
+        if let Some(ref conv) = buf.conversation {
+            let total = conv.line_count();
+            if total <= 1 {
+                "All".to_string()
+            } else if conv.scroll == 0 {
+                "Bot".to_string()
+            } else if conv.scroll >= total {
+                "Top".to_string()
+            } else {
+                format!("{}%", (total.saturating_sub(conv.scroll)) * 100 / total)
+            }
+        } else {
+            "All".to_string()
+        }
     } else {
-        format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+        let total_lines = buf.line_count();
+        if total_lines <= 1 {
+            "All".to_string()
+        } else if win.cursor_row == 0 {
+            "Top".to_string()
+        } else if win.cursor_row + 1 >= total_lines {
+            "Bot".to_string()
+        } else {
+            format!("{}%", (win.cursor_row + 1) * 100 / total_lines)
+        }
     };
 
     let tier_str = format!(" [AI:{}|{}]", editor.ai_mode, editor.ai_permission_tier);
@@ -139,10 +157,16 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
             format_tokens(editor.ai_session_tokens_in),
             format_tokens(editor.ai_session_tokens_out),
         );
+        let cache_str =
+            format_cache_hit_rate(editor.ai_cache_read_tokens, editor.ai_session_tokens_in);
+        let ctx_str = format_context_usage(editor.ai_context_used_tokens, editor.ai_context_window);
         if editor.ai_session_cost_usd > 0.0 {
-            format!(" ${:.2} · {} ", editor.ai_session_cost_usd, tokens)
+            format!(
+                " ${:.2} {}{}{}",
+                editor.ai_session_cost_usd, tokens, cache_str, ctx_str
+            )
         } else {
-            format!(" {} ", tokens)
+            format!(" {}{}{}", tokens, cache_str, ctx_str)
         }
     };
 
@@ -150,12 +174,12 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
     let right_extra = format!("{}{}{}", file_type_str, pct, tier_str);
 
     let remaining = (area.width as usize)
-        .saturating_sub(mode_str.len())
-        .saturating_sub(left_text.len())
-        .saturating_sub(debug_info.len())
-        .saturating_sub(ai_info.len())
-        .saturating_sub(right_extra.len())
-        .saturating_sub(position.len());
+        .saturating_sub(UnicodeWidthStr::width(mode_str))
+        .saturating_sub(UnicodeWidthStr::width(left_text.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(debug_info.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(ai_info.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(right_extra.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(position.as_str()));
 
     let status_line = Line::from(vec![
         Span::styled(mode_str, mode_style),
@@ -181,6 +205,22 @@ fn format_tokens(n: u64) -> String {
     }
 }
 
+fn format_cache_hit_rate(cache_read: u64, total_in: u64) -> String {
+    if cache_read == 0 || total_in == 0 {
+        return String::new();
+    }
+    let pct = (cache_read as f64 / total_in as f64 * 100.0).min(100.0);
+    format!(" C:{:.0}%", pct)
+}
+
+fn format_context_usage(used: u64, window: u64) -> String {
+    if window == 0 {
+        return String::new();
+    }
+    let pct = (used as f64 / window as f64 * 100.0).min(100.0);
+    format!(" [{:.0}%]", pct)
+}
+
 pub(crate) fn render_command_line(frame: &mut Frame, area: Rect, editor: &Editor) {
     let text = if editor.mode == Mode::Command {
         format!(":{}", editor.command_line)
@@ -200,4 +240,54 @@ pub(crate) fn render_command_line(frame: &mut Frame, area: Rect, editor: &Editor
     let style = ts(editor, "ui.commandline");
     let paragraph = Paragraph::new(Span::styled(text, style));
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_tokens_small() {
+        assert_eq!(format_tokens(500), "500");
+    }
+
+    #[test]
+    fn format_tokens_thousands() {
+        assert_eq!(format_tokens(1500), "1.5k");
+    }
+
+    #[test]
+    fn format_tokens_millions() {
+        assert_eq!(format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn cache_hit_rate_zero() {
+        assert_eq!(format_cache_hit_rate(0, 1000), "");
+    }
+
+    #[test]
+    fn cache_hit_rate_some() {
+        assert_eq!(format_cache_hit_rate(850, 1000), " C:85%");
+    }
+
+    #[test]
+    fn cache_hit_rate_no_input() {
+        assert_eq!(format_cache_hit_rate(100, 0), "");
+    }
+
+    #[test]
+    fn context_usage_zero_window() {
+        assert_eq!(format_context_usage(5000, 0), "");
+    }
+
+    #[test]
+    fn context_usage_normal() {
+        assert_eq!(format_context_usage(72000, 100000), " [72%]");
+    }
+
+    #[test]
+    fn context_usage_full() {
+        assert_eq!(format_context_usage(100000, 100000), " [100%]");
+    }
 }

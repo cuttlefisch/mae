@@ -2,9 +2,9 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C590%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-1%2C641%20passing-brightgreen.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
-[![Lines of Code](https://img.shields.io/badge/lines-~76k-informational.svg)](#)
+[![Lines of Code](https://img.shields.io/badge/lines-~82k-informational.svg)](#)
 
 > [!CAUTION]
 > **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
@@ -206,27 +206,52 @@ The binary's `select!` loop multiplexes:
 
 ## Getting Started
 
+### Prerequisites
+
+- **Rust stable** (1.75+) via [rustup](https://rustup.rs)
+- **System deps for GUI:** `fontconfig-devel`, `freetype-devel` (Fedora) / `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode Command Line Tools (macOS)
+- **Optional:** An AI provider API key (Anthropic, OpenAI, Google, or DeepSeek)
+- **Optional:** `make setup-dev` installs `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+
+### Build & Run
+
 ```sh
-# Build with GUI (default)
-make build
-
-# Install with desktop launcher (GNOME, sway, etc.)
-make install
-
-# Run GUI
-mae --gui path/to/file.rs
-
-# Terminal mode
-mae path/to/file.rs
-
-# Terminal-only build (no skia dependency)
-make build-tui
-
-# Open with AI (requires API key)
-ANTHROPIC_API_KEY=sk-... mae file.rs
-# or
-OPENAI_API_KEY=sk-... mae file.rs
+git clone git@github.com:cuttlefisch/mae.git && cd mae
+make build                      # GUI build (default)
+make install                    # install binary + desktop launcher
+mae --gui file.rs               # launch GUI
+mae file.rs                     # terminal mode
+make build-tui                  # terminal-only build (no skia dependency)
 ```
+
+### AI Setup
+
+Set one of these environment variables:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...    # Claude
+export OPENAI_API_KEY=sk-...           # OpenAI
+export GEMINI_API_KEY=...              # Gemini
+export DEEPSEEK_API_KEY=...            # DeepSeek
+```
+
+Or configure in `~/.config/mae/config.toml`:
+
+```toml
+[ai]
+provider = "claude"
+model = "claude-sonnet-4-20250514"
+```
+
+### First Steps
+
+1. `:tutor` — start the built-in tutorial (12 interactive lessons)
+2. `SPC SPC` — command palette (fuzzy search all commands)
+3. `SPC f f` — find file in project
+4. `SPC h h` — help index (knowledge base)
+5. `SPC a p` — start an AI conversation
+6. `SPC a a` — launch AI agent in embedded shell
+7. `:self-test` — verify AI integration works
 
 ### Configuration
 

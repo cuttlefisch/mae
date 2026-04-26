@@ -83,16 +83,44 @@ pub fn handle_command_mode(
                 return;
             }
 
-            // :ai-status — show AI configuration
+            // :ai-status — show AI configuration + session metrics
             if cmd == "ai-status" {
                 let config = load_ai_config(editor);
                 if let Some(ref cfg) = config {
-                    editor.set_status(format!(
+                    let connected = ai_tx.is_some();
+                    let mut parts = vec![format!(
                         "AI: provider={}, model={}, connected={}",
-                        cfg.provider_type,
-                        cfg.model,
-                        ai_tx.is_some()
-                    ));
+                        cfg.provider_type, cfg.model, connected
+                    )];
+                    if connected {
+                        if editor.ai_session_cost_usd > 0.0 {
+                            parts.push(format!("${:.4}", editor.ai_session_cost_usd));
+                        }
+                        if editor.ai_session_tokens_in > 0 || editor.ai_session_tokens_out > 0 {
+                            parts.push(format!(
+                                "tokens: {}in/{}out",
+                                editor.ai_session_tokens_in, editor.ai_session_tokens_out
+                            ));
+                        }
+                        if editor.ai_context_window > 0 && editor.ai_context_used_tokens > 0 {
+                            let pct = (editor.ai_context_used_tokens as f64
+                                / editor.ai_context_window as f64
+                                * 100.0) as u64;
+                            parts.push(format!("ctx: {}%", pct));
+                        }
+                        if editor.ai_cache_read_tokens > 0 {
+                            let total_cache =
+                                editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+                            let hit_pct = if total_cache > 0 {
+                                (editor.ai_cache_read_tokens as f64 / total_cache as f64 * 100.0)
+                                    as u64
+                            } else {
+                                0
+                            };
+                            parts.push(format!("cache: {}%", hit_pct));
+                        }
+                    }
+                    editor.set_status(parts.join(" | "));
                 } else {
                     editor.set_status(
                         "AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var.",

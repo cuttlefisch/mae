@@ -63,12 +63,12 @@ pub struct DapEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequestArguments {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clientID", default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_id: Option<String>,
+    #[serde(rename = "adapterID")]
+    pub adapter_id: String,
     #[serde(default)]
     pub lines_start_at1: bool,
     #[serde(default)]
@@ -512,7 +512,7 @@ mod tests {
         let args = InitializeRequestArguments {
             client_id: Some("mae".into()),
             client_name: Some("MAE Editor".into()),
-            adapter_id: None,
+            adapter_id: "test".into(),
             lines_start_at1: true,
             columns_start_at1: true,
             supports_variable_type: true,
@@ -523,8 +523,12 @@ mod tests {
             supports_invalidated_event: false,
         };
         let json = serde_json::to_string(&args).unwrap();
-        assert!(json.contains("clientId"));
+        assert!(json.contains("clientID"));
         assert!(json.contains("clientName"));
+        assert!(
+            json.contains("adapterID"),
+            "adapterID must use DAP spec casing"
+        );
         assert!(json.contains("linesStartAt1"));
         assert!(json.contains("columnsStartAt1"));
         assert!(json.contains("supportsVariableType"));

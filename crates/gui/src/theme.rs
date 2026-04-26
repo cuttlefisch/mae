@@ -136,6 +136,21 @@ pub fn contrast_fg(r: u8, g: u8, b: u8) -> Color4f {
     }
 }
 
+/// Fast equality check for Color4f (avoids per-field comparison noise at call sites).
+pub(crate) fn color4f_eq(a: Color4f, b: Color4f) -> bool {
+    a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+}
+
+/// Fast equality check for Option<Color4f>.
+#[allow(dead_code)]
+pub(crate) fn option_color4f_eq(a: Option<Color4f>, b: Option<Color4f>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => color4f_eq(a, b),
+        _ => false,
+    }
+}
+
 // Default fallback colors.
 pub const DEFAULT_FG: Color4f = Color4f {
     r: 0.9,
