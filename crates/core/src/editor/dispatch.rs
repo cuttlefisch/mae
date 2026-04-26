@@ -1418,7 +1418,7 @@ impl Editor {
                         "debug-step-over" => self.dap_step(crate::StepKind::Over),
                         "debug-step-into" => self.dap_step(crate::StepKind::In),
                         "debug-step-out" => self.dap_step(crate::StepKind::Out),
-                        _ => unreachable!(),
+                        _ => unreachable!("unhandled debug command: {name}"),
                     }
                 }
             }
@@ -1469,25 +1469,42 @@ impl Editor {
             // Visual mode
             "enter-visual-char" => match self.mode {
                 Mode::Visual(VisualType::Char) => self.set_mode(Mode::Normal),
-                Mode::Visual(VisualType::Line) => self.set_mode(Mode::Visual(VisualType::Char)),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Char)),
                 _ => self.enter_visual_mode(VisualType::Char),
             },
             "enter-visual-line" => match self.mode {
                 Mode::Visual(VisualType::Line) => self.set_mode(Mode::Normal),
-                Mode::Visual(VisualType::Char) => self.set_mode(Mode::Visual(VisualType::Line)),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Line)),
                 _ => self.enter_visual_mode(VisualType::Line),
+            },
+            "enter-visual-block" => match self.mode {
+                Mode::Visual(VisualType::Block) => self.set_mode(Mode::Normal),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Block)),
+                _ => self.enter_visual_mode(VisualType::Block),
             },
             "visual-delete" => {
                 self.save_visual_state();
-                self.visual_delete();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_delete();
+                } else {
+                    self.visual_delete();
+                }
             }
             "visual-yank" => {
                 self.save_visual_state();
-                self.visual_yank();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_yank();
+                } else {
+                    self.visual_yank();
+                }
             }
             "visual-change" => {
                 self.save_visual_state();
-                self.visual_change();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_change();
+                } else {
+                    self.visual_change();
+                }
             }
             "visual-indent" => self.visual_indent(),
             "visual-dedent" => self.visual_dedent(),

@@ -614,6 +614,11 @@ impl Editor {
                     }
                     return true;
                 }
+                // Global commands: :g/pattern/cmd and :v/pattern/cmd
+                if cmd.starts_with("g/") || cmd.starts_with("v/") {
+                    self.execute_global_command(cmd);
+                    return true;
+                }
                 // Check for substitute commands: s/.../.../  or %s/.../.../
                 if cmd.starts_with("s/") || cmd.starts_with("%s/") {
                     self.execute_substitute_command(cmd);

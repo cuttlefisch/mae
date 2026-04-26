@@ -14,6 +14,12 @@ Review proposed changes for correctness, style, and edge cases.
 - git_diff: see proposed changes
 - buffer_read, file_read: read context around changes
 
+## Documentation &amp; Help
+When reviewing changes related to MAE features, check KB for context:
+1. Use kb_search(query) to find relevant help topics.
+2. Use kb_get(id) to read documentation on affected commands/concepts.
+Node ID patterns: cmd:&lt;name&gt;, concept:&lt;topic&gt;, key:normal-mode, key:leader-keys, lesson:&lt;topic&gt;.
+
 ## Rules
 1. Check imports and type compatibility.
 2. Look for edge cases the author missed.

@@ -5,6 +5,19 @@ use crate::search::{self, SearchDirection};
 use super::Editor;
 
 impl Editor {
+    /// Apply ignorecase/smartcase logic to a search pattern.
+    fn apply_case_sensitivity(&self, pattern: &str) -> String {
+        if self.ignorecase {
+            if self.smartcase && pattern.chars().any(|c| c.is_uppercase()) {
+                pattern.to_string()
+            } else {
+                format!("(?i){}", pattern)
+            }
+        } else {
+            pattern.to_string()
+        }
+    }
+
     /// Compile the search pattern, cache all matches, and jump to the first result.
     pub fn execute_search(&mut self) {
         let pattern = self.search_input.clone();
@@ -12,7 +25,8 @@ impl Editor {
             return;
         }
 
-        match Regex::new(&pattern) {
+        let effective = self.apply_case_sensitivity(&pattern);
+        match Regex::new(&effective) {
             Ok(re) => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let matches = search::find_all(buf.rope(), &re);
@@ -150,7 +164,8 @@ impl Editor {
         if let Some(pattern) = search::word_at_offset(buf.rope(), char_offset) {
             self.search_input = pattern.clone();
             self.search_state.direction = SearchDirection::Forward;
-            match Regex::new(&pattern) {
+            let effective = self.apply_case_sensitivity(&pattern);
+            match Regex::new(&effective) {
                 Ok(re) => {
                     let matches = search::find_all(buf.rope(), &re);
                     self.search_state.pattern = pattern;
@@ -177,7 +192,8 @@ impl Editor {
         if let Some(pattern) = search::word_at_offset(buf.rope(), char_offset) {
             self.search_input = pattern.clone();
             self.search_state.direction = SearchDirection::Backward;
-            match Regex::new(&pattern) {
+            let effective = self.apply_case_sensitivity(&pattern);
+            match Regex::new(&effective) {
                 Ok(re) => {
                     let matches = search::find_all(buf.rope(), &re);
                     self.search_state.pattern = pattern;
@@ -192,6 +208,150 @@ impl Editor {
             }
         } else {
             self.set_status("No word under cursor");
+        }
+    }
+
+    /// Execute a global command (`:g/pattern/cmd` or `:v/pattern/cmd`).
+    ///
+    /// `:g/pattern/cmd` runs `cmd` on every line matching `pattern`.
+    /// `:v/pattern/cmd` runs `cmd` on every line NOT matching `pattern`.
+    ///
+    /// Supported subcommands: `d` (delete), `s/…/…/` (substitute),
+    /// `normal …` (execute normal-mode keys).
+    pub(crate) fn execute_global_command(&mut self, cmd: &str) {
+        let invert = cmd.starts_with("v/");
+        let rest = &cmd[2..];
+
+        // Parse: pattern/subcmd
+        let (pattern, subcmd) = match rest.find('/') {
+            Some(pos) => (&rest[..pos], rest[pos + 1..].trim()),
+            None => {
+                self.set_status("Usage: :g/pattern/cmd or :v/pattern/cmd");
+                return;
+            }
+        };
+
+        if pattern.is_empty() {
+            self.set_status("Empty pattern");
+            return;
+        }
+
+        let effective = self.apply_case_sensitivity(pattern);
+        let re = match Regex::new(&effective) {
+            Ok(r) => r,
+            Err(e) => {
+                self.set_status(format!("Invalid pattern: {}", e));
+                return;
+            }
+        };
+
+        let idx = self.active_buffer_idx();
+        let line_count = self.buffers[idx].line_count();
+
+        // Collect matching line indices.
+        let mut matching_lines: Vec<usize> = Vec::new();
+        for line_idx in 0..line_count {
+            let line_text = self.buffers[idx].line_text(line_idx);
+            let matches = re.is_match(line_text.trim_end_matches('\n'));
+            if matches != invert {
+                matching_lines.push(line_idx);
+            }
+        }
+
+        if matching_lines.is_empty() {
+            self.set_status("Pattern not found");
+            self.ring_bell();
+            return;
+        }
+
+        let match_count = matching_lines.len();
+
+        if subcmd == "d" {
+            // Delete matching lines (iterate in reverse for stable indices).
+            for &line_idx in matching_lines.iter().rev() {
+                let line_start = self.buffers[idx].rope().line_to_char(line_idx);
+                let line_end = if line_idx + 1 < self.buffers[idx].line_count() {
+                    self.buffers[idx].rope().line_to_char(line_idx + 1)
+                } else {
+                    self.buffers[idx].rope().len_chars()
+                };
+                if line_start < line_end {
+                    self.buffers[idx].delete_range(line_start, line_end);
+                }
+            }
+            self.set_status(format!("{} lines deleted", match_count));
+            let win = self.window_mgr.focused_window_mut();
+            win.clamp_cursor(&self.buffers[idx]);
+        } else if subcmd.starts_with("s/") {
+            // Per-line substitute on matching lines.
+            let sub = match search::parse_substitute(subcmd) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.set_status(format!("Substitute error: {}", e));
+                    return;
+                }
+            };
+            let sub_re = match Regex::new(&sub.pattern) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.set_status(format!("Invalid substitute pattern: {}", e));
+                    return;
+                }
+            };
+            let mut total_subs = 0;
+            let mut lines_changed = 0;
+            // Process in reverse for stable offsets.
+            for &line_idx in matching_lines.iter().rev() {
+                let line_start = self.buffers[idx].rope().line_to_char(line_idx);
+                let line_text = self.buffers[idx].line_text(line_idx);
+                let line_content = line_text.trim_end_matches('\n');
+                let (new_text, count) =
+                    search::substitute_line(line_content, &sub_re, &sub.replacement, sub.global);
+                if count > 0 {
+                    total_subs += count;
+                    lines_changed += 1;
+                    let end_offset = line_start + line_content.chars().count();
+                    self.buffers[idx].delete_range(line_start, end_offset);
+                    self.buffers[idx].insert_text_at(line_start, &new_text);
+                }
+            }
+            if total_subs > 0 {
+                self.set_status(format!(
+                    "{} substitution{} on {} line{}",
+                    total_subs,
+                    if total_subs == 1 { "" } else { "s" },
+                    lines_changed,
+                    if lines_changed == 1 { "" } else { "s" }
+                ));
+            } else {
+                self.set_status("No substitutions made");
+            }
+        } else if let Some(normal_keys) = subcmd.strip_prefix("normal ") {
+            // Execute normal-mode key sequence on each matching line.
+            // We position the cursor on each line, then dispatch each key as a command.
+            // For simplicity, we process in reverse to keep line indices stable.
+            for &line_idx in matching_lines.iter().rev() {
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = line_idx.min(self.buffers[idx].line_count().saturating_sub(1));
+                win.cursor_col = 0;
+                // Dispatch each char as a normal-mode command name.
+                for ch in normal_keys.chars() {
+                    let cmd_name = match ch {
+                        'd' => "delete-line",
+                        'x' => "delete-char",
+                        'A' => "append-end-of-line",
+                        'I' => "insert-beginning-of-line",
+                        '0' => "move-line-start",
+                        '$' => "move-line-end",
+                        'J' => "join-lines",
+                        _ => continue,
+                    };
+                    self.dispatch_builtin(cmd_name);
+                }
+            }
+            self.set_status(format!("{} lines processed", match_count));
+        } else {
+            self.set_status(format!("Unsupported :g subcommand: {}", subcmd));
         }
     }
 

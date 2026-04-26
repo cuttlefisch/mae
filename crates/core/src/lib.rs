@@ -42,7 +42,7 @@ pub use debug::{
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
     CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor, InputLock,
-    LspLocation, LspRange,
+    LspLocation, LspRange, LspServerStatus,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
@@ -71,6 +71,7 @@ pub use window::{
 pub enum VisualType {
     Char,
     Line,
+    Block,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

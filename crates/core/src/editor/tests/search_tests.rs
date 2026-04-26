@@ -143,5 +143,184 @@ fn noh_clears_highlights() {
 }
 
 // -----------------------------------------------------------------------
+// ignorecase / smartcase tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn ignorecase_matches_case_insensitively() {
+    let mut editor = editor_with_text("Hello world HELLO");
+    editor.ignorecase = true;
+    editor.search_input = "hello".to_string();
+    editor.search_state.direction = crate::search::SearchDirection::Forward;
+    editor.execute_search();
+    assert!(editor.search_state.highlight_active);
+    assert_eq!(editor.search_state.matches.len(), 2);
+}
+
+#[test]
+fn smartcase_with_uppercase_is_case_sensitive() {
+    let mut editor = editor_with_text("Hello world hello HELLO");
+    editor.ignorecase = true;
+    editor.smartcase = true;
+    editor.search_input = "Hello".to_string();
+    editor.search_state.direction = crate::search::SearchDirection::Forward;
+    editor.execute_search();
+    assert!(editor.search_state.highlight_active);
+    // Only "Hello" at position 0 should match (not "hello" or "HELLO").
+    assert_eq!(editor.search_state.matches.len(), 1);
+}
+
+#[test]
+fn smartcase_all_lowercase_is_case_insensitive() {
+    let mut editor = editor_with_text("Hello world hello HELLO");
+    editor.ignorecase = true;
+    editor.smartcase = true;
+    editor.search_input = "hello".to_string();
+    editor.search_state.direction = crate::search::SearchDirection::Forward;
+    editor.execute_search();
+    assert!(editor.search_state.highlight_active);
+    assert_eq!(editor.search_state.matches.len(), 3);
+}
+
+// -----------------------------------------------------------------------
+// :g / :v global command tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn global_delete_matching_lines() {
+    let mut editor = editor_with_text("foo\nbar\nfoo baz\nqux\n");
+    editor.execute_global_command("g/foo/d");
+    let text = editor.buffers[0].text();
+    assert!(!text.contains("foo"));
+    assert!(text.contains("bar"));
+    assert!(text.contains("qux"));
+}
+
+#[test]
+fn global_invert_deletes_non_matching() {
+    let mut editor = editor_with_text("foo\nbar\nfoo baz\nqux\n");
+    editor.execute_global_command("v/foo/d");
+    let text = editor.buffers[0].text();
+    // Only lines with "foo" should remain.
+    assert!(text.contains("foo"));
+    assert!(!text.contains("bar"));
+    assert!(!text.contains("qux"));
+}
+
+#[test]
+fn global_substitute_on_matching_lines() {
+    let mut editor = editor_with_text("foo bar\nbaz qux\nfoo end\n");
+    editor.execute_global_command("g/foo/s/foo/replaced/");
+    let text = editor.buffers[0].text();
+    assert!(text.contains("replaced bar"));
+    assert!(text.contains("replaced end"));
+    assert!(text.contains("baz qux")); // Non-matching line untouched.
+}
+
+// -----------------------------------------------------------------------
+// Block visual mode tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn enter_visual_block_mode() {
+    let mut editor = editor_with_text("hello\nworld\nfoo\n");
+    editor.dispatch_builtin("enter-visual-block");
+    assert_eq!(editor.mode, Mode::Visual(crate::VisualType::Block));
+}
+
+#[test]
+fn visual_block_toggle() {
+    let mut editor = editor_with_text("hello\nworld\n");
+    // C-v enters block, pressing again exits to normal.
+    editor.dispatch_builtin("enter-visual-block");
+    assert_eq!(editor.mode, Mode::Visual(crate::VisualType::Block));
+    editor.dispatch_builtin("enter-visual-block");
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn visual_block_switch_types() {
+    let mut editor = editor_with_text("hello\n");
+    editor.dispatch_builtin("enter-visual-char");
+    assert_eq!(editor.mode, Mode::Visual(crate::VisualType::Char));
+    // Switch to block.
+    editor.dispatch_builtin("enter-visual-block");
+    assert_eq!(editor.mode, Mode::Visual(crate::VisualType::Block));
+    // Switch to line.
+    editor.dispatch_builtin("enter-visual-line");
+    assert_eq!(editor.mode, Mode::Visual(crate::VisualType::Line));
+}
+
+#[test]
+fn block_visual_delete_removes_column() {
+    let mut editor = editor_with_text("abcde\nfghij\nklmno\n");
+    // Select block: rows 0-1, cols 1-2
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 1;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    win.cursor_col = 2;
+    editor.block_visual_delete();
+    let text = editor.buffers[0].text();
+    assert!(text.starts_with("ade\n"));
+    assert!(text.contains("fij\n"));
+}
+
+#[test]
+fn block_visual_yank_captures_columns() {
+    let mut editor = editor_with_text("abcde\nfghij\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 1;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    win.cursor_col = 2;
+    editor.block_visual_yank();
+    let yanked = editor.registers.get(&'"').cloned().unwrap_or_default();
+    assert_eq!(yanked, "bc\ngh");
+}
+
+#[test]
+fn block_visual_insert_on_all_lines() {
+    let mut editor = editor_with_text("abc\ndef\nghi\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 1;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 1;
+    editor.block_visual_insert("XX");
+    let text = editor.buffers[0].text();
+    assert!(text.starts_with("aXXbc\n"));
+    assert!(text.contains("dXXef\n"));
+    assert!(text.contains("gXXhi\n"));
+}
+
+// -----------------------------------------------------------------------
+// Option tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn insert_ctrl_d_option_values() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.insert_ctrl_d, "dedent");
+    assert!(editor.set_option("insert_ctrl_d", "delete-forward").is_ok());
+    assert_eq!(editor.insert_ctrl_d, "delete-forward");
+    assert!(editor.set_option("insert_ctrl_d", "invalid").is_err());
+}
+
+#[test]
+fn ignorecase_smartcase_options() {
+    let mut editor = Editor::new();
+    assert!(!editor.ignorecase);
+    assert!(!editor.smartcase);
+    assert!(editor.set_option("ignorecase", "true").is_ok());
+    assert!(editor.ignorecase);
+    assert!(editor.set_option("smartcase", "true").is_ok());
+    assert!(editor.smartcase);
+}
+
+// -----------------------------------------------------------------------
 // Visual mode tests
 // -----------------------------------------------------------------------

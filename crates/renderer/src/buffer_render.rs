@@ -69,10 +69,16 @@ pub(crate) fn render_buffer(
     let highlight_search =
         editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
     let highlight_selection = matches!(editor.mode, Mode::Visual(_));
-    let (sel_start, sel_end) = if highlight_selection {
+    let is_block_visual = matches!(editor.mode, Mode::Visual(mae_core::VisualType::Block));
+    let (sel_start, sel_end) = if highlight_selection && !is_block_visual {
         editor.visual_selection_range()
     } else {
         (0, 0)
+    };
+    let block_rect = if is_block_visual {
+        Some(editor.block_selection_rect())
+    } else {
+        None
     };
     let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
     // Cursorline: subtle background on the cursor's line (Emacs hl-line-mode).
@@ -233,7 +239,16 @@ pub(crate) fn render_buffer(
             }
 
             // Apply selection highlight (overrides syntax).
-            if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
+            if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
+                if line_idx >= br_min && line_idx <= br_max {
+                    let s = bc_min.min(full_count);
+                    let e = (bc_max + 1).min(full_count);
+                    for style in styles[s..e].iter_mut() {
+                        *style = selection_style;
+                    }
+                }
+            } else if highlight_selection && sel_start < line_char_end && sel_end > line_char_start
+            {
                 let s = sel_start.saturating_sub(line_char_start);
                 let e = (sel_end - line_char_start).min(full_count);
                 for style in styles[s..e].iter_mut() {

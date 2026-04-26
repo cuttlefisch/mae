@@ -157,3 +157,115 @@ fn ctrl_o_with_motion_returns_to_insert() {
         "should return to insert after C-o j"
     );
 }
+
+// -----------------------------------------------------------------------
+// E2E: Insert-mode C-t indent / C-d dedent
+// -----------------------------------------------------------------------
+
+#[test]
+fn insert_ctrl_t_indents_line() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+    editor.buffers[0].insert_text_at(0, "hello");
+    // Enter insert mode.
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    assert_eq!(editor.mode, Mode::Insert);
+    // C-t indents the current line.
+    dispatch(&mut editor, &mut scheme, make_ctrl('t'));
+    assert!(editor.buffers[0].text().starts_with("    hello"));
+}
+
+#[test]
+fn insert_ctrl_d_dedents_line() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+    editor.buffers[0].insert_text_at(0, "    hello");
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    // C-d with default "dedent" mode removes indentation.
+    dispatch(&mut editor, &mut scheme, make_ctrl('d'));
+    assert_eq!(editor.buffers[0].text(), "hello");
+}
+
+#[test]
+fn insert_ctrl_d_delete_forward_mode() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+    editor.insert_ctrl_d = "delete-forward".to_string();
+    editor.buffers[0].insert_text_at(0, "hello");
+    dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('i')));
+    // With delete-forward mode, C-d should delete the char under cursor.
+    dispatch(&mut editor, &mut scheme, make_ctrl('d'));
+    assert_eq!(editor.buffers[0].text(), "ello");
+}
+
+// -----------------------------------------------------------------------
+// E2E: Block visual mode via Ctrl-V
+// -----------------------------------------------------------------------
+
+#[test]
+fn ctrl_v_enters_block_visual() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+    editor.buffers[0].insert_text_at(0, "abc\ndef\n");
+    dispatch(&mut editor, &mut scheme, make_ctrl('v'));
+    assert_eq!(editor.mode, Mode::Visual(mae_core::VisualType::Block));
+}
+
+#[test]
+fn ctrl_v_toggle_exits_block_visual() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+    editor.buffers[0].insert_text_at(0, "abc\ndef\n");
+    dispatch(&mut editor, &mut scheme, make_ctrl('v'));
+    assert_eq!(editor.mode, Mode::Visual(mae_core::VisualType::Block));
+    dispatch(&mut editor, &mut scheme, make_ctrl('v'));
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+// -----------------------------------------------------------------------
+// Regression: ConversationInput mode should not cause ghost cursor
+// -----------------------------------------------------------------------
+
+#[test]
+fn conversation_input_mode_excluded_from_gui_cursor() {
+    // Verify that ConversationInput is NOT ShellInsert — the GUI cursor guard
+    // now excludes both. This test verifies the mode enum values are distinct
+    // and both are handled.
+    assert_ne!(Mode::ConversationInput, Mode::ShellInsert);
+    assert_ne!(Mode::ConversationInput, Mode::Normal);
+    // The actual ghost cursor fix is in crates/gui/src/lib.rs:
+    // render_gui_cursor is skipped for both ShellInsert and ConversationInput.
+    // We can't render in tests, but we verify the mode distinction.
+}
+
+// -----------------------------------------------------------------------
+// E2E: ignorecase/smartcase through :set
+// -----------------------------------------------------------------------
+
+#[test]
+fn set_ignorecase_via_command() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "Hello world hello");
+    // Set ignorecase via command mode.
+    editor.execute_command("set ignorecase true");
+    assert!(editor.ignorecase);
+    // Search should now be case-insensitive.
+    editor.search_input = "hello".to_string();
+    editor.search_state.direction = mae_core::SearchDirection::Forward;
+    editor.execute_search();
+    assert_eq!(editor.search_state.matches.len(), 2);
+}
+
+// -----------------------------------------------------------------------
+// E2E: :g command through command line
+// -----------------------------------------------------------------------
+
+#[test]
+fn global_command_via_ex_mode() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "TODO: first\nDone: second\nTODO: third\n");
+    editor.execute_command("g/TODO/d");
+    let text = editor.buffers[0].text();
+    assert!(!text.contains("TODO"));
+    assert!(text.contains("Done"));
+}

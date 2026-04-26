@@ -369,7 +369,9 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
 
             // Cursor (not for shell buffers — they render their own).
-            if editor.mode != mae_core::Mode::ShellInsert {
+            if editor.mode != mae_core::Mode::ShellInsert
+                && editor.mode != mae_core::Mode::ConversationInput
+            {
                 render_gui_cursor(canvas, editor, cols, window_height, status_row, cmd_row);
             }
 
@@ -774,16 +776,8 @@ fn render_gui_cursor(
             let col = 1 + editor.search_input.len();
             cursor::render_cursor(canvas, editor, cmd_row, col);
         } else if let Some(pos) = cursor::compute_cursor_position(editor, inner, gutter_w) {
-            match editor.mode {
-                mae_core::Mode::ConversationInput => {
-                    let (r, c) = pos;
-                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
-                }
-                _ => {
-                    let (r, c) = pos;
-                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
-                }
-            }
+            let (r, c) = pos;
+            cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
         }
     }
 }

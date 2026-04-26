@@ -41,10 +41,16 @@ pub fn render_buffer_content(
     let highlight_search =
         editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
     let highlight_selection = matches!(editor.mode, Mode::Visual(_));
-    let (sel_start, sel_end) = if highlight_selection {
+    let is_block_visual = matches!(editor.mode, Mode::Visual(mae_core::VisualType::Block));
+    let (sel_start, sel_end) = if highlight_selection && !is_block_visual {
         editor.visual_selection_range()
     } else {
         (0, 0)
+    };
+    let block_rect = if is_block_visual {
+        Some(editor.block_selection_rect())
+    } else {
+        None
     };
     let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
     let show_cursorline = focused && !highlight_selection && cursorline_style.bg.is_some();
@@ -191,7 +197,22 @@ pub fn render_buffer_content(
             }
 
             // Layer 4: Visual selection.
-            if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
+            if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
+                // Block visual: highlight column range on rows within the rectangle.
+                if line_idx >= br_min && line_idx <= br_max {
+                    let s = bc_min.min(full_count);
+                    let e = (bc_max + 1).min(full_count);
+                    let sel_fg = theme::color_or(selection_style.fg, text_fg);
+                    let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
+                    for cs in char_styles[s..e].iter_mut() {
+                        cs.fg = sel_fg;
+                        if let Some(bg) = sel_bg {
+                            cs.bg = Some(bg);
+                        }
+                    }
+                }
+            } else if highlight_selection && sel_start < line_char_end && sel_end > line_char_start
+            {
                 let s = sel_start.saturating_sub(line_char_start);
                 let e = (sel_end - line_char_start).min(full_count);
                 let sel_fg = theme::color_or(selection_style.fg, text_fg);

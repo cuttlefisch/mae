@@ -22,6 +22,12 @@ Draft a step-by-step implementation plan for the requested objective.
 - create_plan, update_plan: write the plan document
 - save_memory: record findings for the parent agent
 
+## Documentation &amp; Help
+When planning work on MAE features, check KB for existing docs:
+1. Use kb_search(query) to find relevant help topics and existing commands.
+2. Use kb_get(id) to read full documentation.
+Node ID patterns: cmd:&lt;name&gt;, concept:&lt;topic&gt;, key:normal-mode, key:leader-keys, lesson:&lt;topic&gt;.
+
 ## Rules
 1. Verify assumptions by reading code before planning.
 2. Be specific — name files, functions, line numbers.
