@@ -75,11 +75,10 @@ jobs:
       - name: Update Cargo.toml versions
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # Update version in all workspace crate Cargo.toml files
-          for toml in crates/*/Cargo.toml; do
-            sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" "$toml"
-            echo "Updated $toml to $VERSION"
-          done
+          # Update the workspace version in the root Cargo.toml.
+          # Crates use version.workspace = true, so only the root needs updating.
+          sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" Cargo.toml
+          echo "Updated Cargo.toml to $VERSION"
 
       - name: Generate changelog
         run: |
@@ -89,9 +88,13 @@ jobs:
 
       - name: Commit and tag
         run: |
+          VERSION="v${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION CHANGELOG.md crates/*/Cargo.toml
+          git add VERSION CHANGELOG.md Cargo.toml
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-          git tag "v${{ steps.version.outputs.version }}"
+          # Delete existing tag if present (handles re-runs after partial failure)
+          git tag -d "$VERSION" 2>/dev/null || true
+          git push origin ":refs/tags/$VERSION" 2>/dev/null || true
+          git tag "$VERSION"
           git push origin main --tags
