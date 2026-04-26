@@ -18,6 +18,9 @@ README.org
 .mae/
 **/.mae/
 
+# Test artifacts
+test_sandbox/
+
 # AI agent configs (user-local settings, not project config)
 .claude/
 **/.claude/

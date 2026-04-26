@@ -139,26 +139,32 @@ pub fn config_path() -> PathBuf {
 
 /// Load the config file, returning `Config::default()` if it doesn't exist or
 /// is unreadable. Parse errors are logged (not fatal).
-pub fn load_config() -> Config {
+///
+/// Returns `(Config, Option<String>)` where the second element is a
+/// human-readable error message when the config was malformed or unreadable.
+/// Callers can surface this in the status bar at startup.
+pub fn load_config() -> (Config, Option<String>) {
     let path = config_path();
     match fs::read_to_string(&path) {
         Ok(contents) => match toml::from_str::<Config>(&contents) {
             Ok(cfg) => {
                 debug!(path = %path.display(), "loaded config");
-                cfg
+                (cfg, None)
             }
             Err(e) => {
+                let msg = format!("Config parse error: {}; using defaults", e);
                 warn!(path = %path.display(), error = %e, "config parse failed, using defaults");
-                Config::default()
+                (Config::default(), Some(msg))
             }
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             debug!(path = %path.display(), "no config file, using defaults");
-            Config::default()
+            (Config::default(), None)
         }
         Err(e) => {
+            let msg = format!("Config read error: {}; using defaults", e);
             warn!(path = %path.display(), error = %e, "config read failed, using defaults");
-            Config::default()
+            (Config::default(), Some(msg))
         }
     }
 }
@@ -402,7 +408,7 @@ pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
 /// Update a single editor preference in the config file (load → modify → save).
 /// Silently logs on failure — preference persistence is best-effort.
 pub fn persist_editor_preference(key: &str, value: &str) {
-    let mut cfg = load_config();
+    let (mut cfg, _) = load_config();
     match key {
         "theme" => cfg.editor.theme = Some(value.to_string()),
         "splash_art" => cfg.editor.splash_art = Some(value.to_string()),

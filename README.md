@@ -11,7 +11,7 @@
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,590 tests. GPL-3.0-or-later.
+runtime. 1,673 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 

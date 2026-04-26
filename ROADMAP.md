@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,590+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.1 (1,673 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
 
 ---
 
@@ -84,7 +84,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,641 tests)
+### What We Have (1,673 tests)
 
 | Category | Features |
 |----------|----------|
@@ -1028,7 +1028,7 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] Line numbers and gutter in GUI (`gutter.rs`: relative/absolute, breakpoint/diagnostic markers)
 - [x] Syntax highlighting colors in GUI (tree-sitter spans → theme keys → per-char style)
 - [x] Visual mode selection highlighting in GUI (charwise + linewise, multi-line clipping)
-- [ ] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — investigate color attribute leak during insert-mode rendering
+- [x] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — fixed (v0.5.1)
 
 ### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
 
@@ -1242,4 +1242,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
 | v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
 | v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
-| **Total** | **1,641** | All passing, 0 failures |
+| v0.5.1 vim parity + fixes | 32 ✅ | ghost cursor, status bar, block visual, ignorecase, :g/:v, C-t/C-d |
+| **Total** | **1,673** | All passing, 0 failures |

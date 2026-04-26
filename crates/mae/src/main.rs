@@ -150,7 +150,7 @@ fn main() -> io::Result<()> {
     // Useful in CI to validate that init.scm parses and evaluates cleanly.
     if args.iter().any(|a| a == "--check-config") {
         let mut editor = Editor::new();
-        let app_config = config::load_config();
+        let (app_config, _) = config::load_config();
         if let Some(ref theme) = app_config.editor.theme {
             editor.set_theme_by_name(theme);
         }
@@ -223,7 +223,10 @@ fn main() -> io::Result<()> {
     editor.refresh_git_branch();
 
     // Apply editor preferences from config file.
-    let app_config = config::load_config();
+    let (app_config, config_error) = config::load_config();
+    if let Some(ref err_msg) = config_error {
+        editor.status_msg = err_msg.clone();
+    }
     if let Some(ref theme) = app_config.editor.theme {
         editor.set_theme_by_name(theme);
     }

@@ -276,10 +276,10 @@ impl Editor {
         line: i64,
         ensure_present: bool,
     ) -> Vec<i64> {
-        let state = self
-            .debug_state
-            .as_mut()
-            .expect("mutate_breakpoint called without debug_state");
+        let Some(state) = self.debug_state.as_mut() else {
+            tracing::warn!("mutate_breakpoint called without active debug session");
+            return Vec::new();
+        };
         let current: Vec<i64> = state
             .breakpoints
             .get(&source_path)

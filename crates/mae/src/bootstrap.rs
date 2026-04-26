@@ -419,7 +419,7 @@ pub fn spawn_ai_session(session: AgentSession) {
 ///   env vars > Scheme (init.scm) > TOML (config.toml) > defaults.
 /// See `config.rs` for the full precedence details.
 pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
-    let file = crate::config::load_config();
+    let (file, _) = crate::config::load_config();
     let scheme = crate::config::SchemeAiOverrides::from_editor(editor);
     crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
