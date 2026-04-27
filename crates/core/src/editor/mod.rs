@@ -415,6 +415,8 @@ pub struct Editor {
     pub renderer_name: String,
     /// GUI font size in points. Default 14.0. Set via config.toml `[editor] font_size`.
     pub gui_font_size: f32,
+    /// User-configured font size (from config.toml). Used by reset-font-size.
+    pub gui_font_size_default: f32,
     /// GUI primary font family. Default "". Set via config.toml `[editor] font_family`.
     pub gui_font_family: String,
     /// GUI icon font family (fallback). Default "". Set via config.toml `[editor] icon_font_family`.
@@ -600,6 +602,7 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_size_default: 14.0,
             gui_font_family: String::new(),
             gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
@@ -758,6 +761,7 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_size_default: 14.0,
             gui_font_family: String::new(),
             gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),

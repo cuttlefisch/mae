@@ -474,7 +474,14 @@ pub fn render_buffer_content(
                     canvas.draw_text_at_y(pixel_y, area_col, &padding, gutter_fg, 1.0);
                 }
 
-                let avail = if is_first { text_width } else { cont_text_w };
+                let base_avail = if is_first { text_width } else { cont_text_w };
+                // Scale down available width for heading lines so scaled glyphs
+                // don't overflow into adjacent split windows.
+                let avail = if seg_scale > 1.0 {
+                    (base_avail as f32 / seg_scale).floor() as usize
+                } else {
+                    base_avail
+                };
                 let end = find_wrap_break(&full_chars, pos, avail);
                 let chunk_chars = &full_chars[pos..end];
                 let chunk_styles = &char_styles[pos..end];
@@ -557,12 +564,19 @@ pub fn render_buffer_content(
             }
 
             let visible_start = col_offset.min(full_count);
+            // Scale down available width for heading lines so scaled glyphs
+            // don't overflow into adjacent split windows.
+            let effective_width = if org_heading_scale > 1.0 {
+                (text_width as f32 / org_heading_scale).floor() as usize
+            } else {
+                text_width
+            };
             // Walk from visible_start accumulating display width to find visible_end.
             let mut vis_width = 0;
             let mut visible_end = visible_start;
             for &ch in &full_chars[visible_start..] {
                 let w = char_width(ch);
-                if vis_width + w > text_width {
+                if vis_width + w > effective_width {
                     break;
                 }
                 vis_width += w;
@@ -937,5 +951,74 @@ mod tests {
         };
         assert!(!cs.bold);
         assert!(cs.bg.is_none());
+    }
+
+    // --- Pixel-Y / variable-height regression tests ---
+
+    #[test]
+    fn pixel_y_map_lookup_basic() {
+        let map = PixelYMap {
+            entries: vec![0.0, 20.0, 40.0, 70.0], // row 3 is taller (heading)
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.pixel_y_for_row(0), 0.0);
+        assert_eq!(map.pixel_y_for_row(1), 20.0);
+        assert_eq!(map.pixel_y_for_row(2), 40.0);
+        assert_eq!(map.pixel_y_for_row(3), 70.0);
+    }
+
+    #[test]
+    fn pixel_y_map_fallback_for_missing_row() {
+        let map = PixelYMap {
+            entries: vec![0.0, 20.0],
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        // Row 5 is not in the map — falls back to row * cell_height.
+        assert_eq!(map.pixel_y_for_row(5), 100.0);
+    }
+
+    #[test]
+    fn pixel_y_map_with_base_row_offset() {
+        let map = PixelYMap {
+            entries: vec![100.0, 120.0, 140.0],
+            base_row: 5,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.pixel_y_for_row(5), 100.0);
+        assert_eq!(map.pixel_y_for_row(6), 120.0);
+        assert_eq!(map.pixel_y_for_row(7), 140.0);
+    }
+
+    #[test]
+    fn pixel_y_map_line_height() {
+        let map = PixelYMap {
+            entries: vec![0.0, 30.0, 50.0], // first line is 30px (heading), second is 20px
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.line_height_for_row(0), 30.0);
+        assert_eq!(map.line_height_for_row(1), 20.0);
+        // Last row falls back to cell_height.
+        assert_eq!(map.line_height_for_row(2), 20.0);
+    }
+
+    #[test]
+    fn org_heading_scale_levels() {
+        assert_eq!(org_heading_scale_for_level(1), 1.5);
+        assert_eq!(org_heading_scale_for_level(2), 1.3);
+        assert_eq!(org_heading_scale_for_level(3), 1.15);
+        assert_eq!(org_heading_scale_for_level(4), 1.0);
+        assert_eq!(org_heading_scale_for_level(0), 1.0);
+        assert_eq!(org_heading_scale_for_level(255), 1.0);
+    }
+
+    #[test]
+    fn extra_rows_for_scale_values() {
+        assert_eq!(extra_rows_for_scale(1.0), 0);
+        assert_eq!(extra_rows_for_scale(1.15), 1);
+        assert_eq!(extra_rows_for_scale(1.3), 1);
+        assert_eq!(extra_rows_for_scale(1.5), 1);
     }
 }

@@ -243,6 +243,7 @@ fn main() -> io::Result<()> {
     // Apply font settings from config early (init.scm can override).
     if let Some(size) = app_config.editor.font_size {
         editor.gui_font_size = size;
+        editor.gui_font_size_default = size;
     }
     if let Some(ref family) = app_config.editor.font_family {
         editor.gui_font_family = family.clone();

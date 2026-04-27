@@ -725,7 +725,10 @@ impl CommandRegistry {
         // Font zoom (GUI)
         reg.register_builtin("increase-font-size", "Increase GUI font size by 1pt");
         reg.register_builtin("decrease-font-size", "Decrease GUI font size by 1pt");
-        reg.register_builtin("reset-font-size", "Reset GUI font size to default (14pt)");
+        reg.register_builtin(
+            "reset-font-size",
+            "Reset GUI font size to configured default",
+        );
         reg.register_builtin("debug-path", "Show current PATH environment variable");
 
         // AI agent launcher

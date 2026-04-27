@@ -39,6 +39,18 @@ pub struct ThemeStyle {
     pub underline: bool,
 }
 
+/// Internal unresolved style — stores color name strings, not resolved colors.
+/// This is the source of truth; resolved colors are cached separately.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UnresolvedStyle {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    pub bold: bool,
+    pub italic: bool,
+    pub dim: bool,
+    pub underline: bool,
+}
+
 /// A complete editor theme.
 ///
 /// Themes use a palette of named colors and a map of semantic style keys.
@@ -47,11 +59,16 @@ pub struct ThemeStyle {
 ///
 /// Follows the Helix editor convention: TOML format, palette system,
 /// theme inheritance via `inherits`.
+///
+/// Colors are stored as name strings (source of truth) and resolved against
+/// the palette into a cache. The cache is rebuilt on theme load, palette
+/// mutation, and style mutation — never on every `style()` call.
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub name: String,
     pub palette: HashMap<String, ThemeColor>,
-    pub styles: HashMap<String, ThemeStyle>,
+    unresolved: HashMap<String, UnresolvedStyle>,
+    resolved_cache: HashMap<String, ThemeStyle>,
 }
 
 /// Errors that can occur during theme loading.
@@ -191,18 +208,21 @@ impl Theme {
             }
         }
 
-        let mut styles = HashMap::new();
+        let mut unresolved = HashMap::new();
         if let Some(toml::Value::Table(sty)) = table.get("styles") {
             for (key, val) in sty {
-                styles.insert(key.clone(), parse_style_value(val, &palette)?);
+                unresolved.insert(key.clone(), parse_unresolved_style(val)?);
             }
         }
 
-        Ok(Theme {
+        let mut theme = Theme {
             name: name.to_string(),
             palette,
-            styles,
-        })
+            unresolved,
+            resolved_cache: HashMap::new(),
+        };
+        theme.rebuild_cache();
+        Ok(theme)
     }
 
     /// Load a theme with inheritance support.
@@ -232,21 +252,48 @@ impl Theme {
 
         let mut theme = Theme::from_toml(name, &toml_str)?;
 
-        // Merge: parent palette/styles are the base, child overrides
+        // Merge: parent palette/unresolved are the base, child overrides.
+        // Then rebuild cache against the merged palette so inherited styles
+        // pick up the child's palette colors.
         if let Some(parent) = parent {
             let mut merged_palette = parent.palette;
             for (k, v) in theme.palette {
                 merged_palette.insert(k, v);
             }
-            let mut merged_styles = parent.styles;
-            for (k, v) in theme.styles {
-                merged_styles.insert(k, v);
+            let mut merged_unresolved = parent.unresolved;
+            for (k, v) in theme.unresolved {
+                merged_unresolved.insert(k, v);
             }
             theme.palette = merged_palette;
-            theme.styles = merged_styles;
+            theme.unresolved = merged_unresolved;
+            theme.rebuild_cache();
         }
 
         Ok(theme)
+    }
+
+    /// Rebuild the resolved style cache from unresolved styles + palette.
+    fn rebuild_cache(&mut self) {
+        self.resolved_cache.clear();
+        for (key, us) in &self.unresolved {
+            self.resolved_cache.insert(
+                key.clone(),
+                ThemeStyle {
+                    fg: us
+                        .fg
+                        .as_ref()
+                        .and_then(|s| resolve_color_value_ok(s, &self.palette)),
+                    bg: us
+                        .bg
+                        .as_ref()
+                        .and_then(|s| resolve_color_value_ok(s, &self.palette)),
+                    bold: us.bold,
+                    italic: us.italic,
+                    dim: us.dim,
+                    underline: us.underline,
+                },
+            );
+        }
     }
 
     /// Look up a style by semantic key.
@@ -255,7 +302,7 @@ impl Theme {
     pub fn style(&self, key: &str) -> ThemeStyle {
         let mut lookup = key.to_string();
         loop {
-            if let Some(style) = self.styles.get(&lookup) {
+            if let Some(style) = self.resolved_cache.get(&lookup) {
                 return style.clone();
             }
             // Strip last component
@@ -267,7 +314,7 @@ impl Theme {
         }
         // Final fallback: "ui.text" for ui keys, default otherwise
         if key.starts_with("ui.") {
-            if let Some(style) = self.styles.get("ui.text") {
+            if let Some(style) = self.resolved_cache.get("ui.text") {
                 return style.clone();
             }
         }
@@ -359,13 +406,26 @@ impl Theme {
 
     /// List all available style keys in this theme (sorted).
     pub fn style_keys(&self) -> Vec<&str> {
-        let mut keys: Vec<&str> = self.styles.keys().map(|s| s.as_str()).collect();
+        let mut keys: Vec<&str> = self.resolved_cache.keys().map(|s| s.as_str()).collect();
         keys.sort();
         keys
     }
+
+    /// Mutate a palette color and rebuild the resolved cache.
+    /// For Scheme runtime palette mutation.
+    pub fn set_palette_color(&mut self, name: &str, color: ThemeColor) {
+        self.palette.insert(name.to_string(), color);
+        self.rebuild_cache();
+    }
+
+    /// Set or update an unresolved style and rebuild the resolved cache.
+    /// For Scheme runtime style mutation.
+    pub fn set_style(&mut self, key: &str, style: UnresolvedStyle) {
+        self.unresolved.insert(key.to_string(), style);
+        self.rebuild_cache();
+    }
 }
 
-/// Resolve a color string: could be a hex color, ANSI name, or palette reference.
 /// Resolve a color string: could be a hex color, palette reference, or ANSI name.
 /// Palette entries take priority over ANSI names — a palette entry named "red"
 /// overrides the ANSI color "red".
@@ -387,33 +447,21 @@ fn resolve_color_value(
     }
 }
 
-/// Parse a TOML value into a ThemeStyle.
-/// Supports:
-/// - String: just fg color → `{ fg = "color" }`
-/// - Table: `{ fg = "color", bg = "color", bold = true, ... }`
-fn parse_style_value(
-    val: &toml::Value,
-    palette: &HashMap<String, ThemeColor>,
-) -> Result<ThemeStyle, ThemeError> {
+/// Like resolve_color_value but returns Option instead of Result (for cache building).
+fn resolve_color_value_ok(s: &str, palette: &HashMap<String, ThemeColor>) -> Option<ThemeColor> {
+    resolve_color_value(s, palette).ok()
+}
+
+/// Parse a TOML value into an UnresolvedStyle (color name strings, not resolved).
+fn parse_unresolved_style(val: &toml::Value) -> Result<UnresolvedStyle, ThemeError> {
     match val {
-        toml::Value::String(color_str) => {
-            let fg = resolve_color_value(color_str, palette)?;
-            Ok(ThemeStyle {
-                fg: Some(fg),
-                ..Default::default()
-            })
-        }
+        toml::Value::String(color_str) => Ok(UnresolvedStyle {
+            fg: Some(color_str.clone()),
+            ..Default::default()
+        }),
         toml::Value::Table(tbl) => {
-            let fg = if let Some(toml::Value::String(s)) = tbl.get("fg") {
-                Some(resolve_color_value(s, palette)?)
-            } else {
-                None
-            };
-            let bg = if let Some(toml::Value::String(s)) = tbl.get("bg") {
-                Some(resolve_color_value(s, palette)?)
-            } else {
-                None
-            };
+            let fg = tbl.get("fg").and_then(|v| v.as_str()).map(String::from);
+            let bg = tbl.get("bg").and_then(|v| v.as_str()).map(String::from);
             let bold = tbl.get("bold").and_then(|v| v.as_bool()).unwrap_or(false);
             let italic = tbl.get("italic").and_then(|v| v.as_bool()).unwrap_or(false);
             let dim = tbl.get("dim").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -421,7 +469,7 @@ fn parse_style_value(
                 .get("underline")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            Ok(ThemeStyle {
+            Ok(UnresolvedStyle {
                 fg,
                 bg,
                 bold,
@@ -598,11 +646,170 @@ red = "#cc0000"
         assert_eq!(theme.palette["red"], ThemeColor::Rgb(204, 0, 0));
         // Child overrides ui.text
         assert_eq!(theme.style("ui.text").fg, Some(ThemeColor::Rgb(204, 0, 0)));
-        // Parent's ui.gutter is inherited
+        // Parent's ui.gutter is inherited — but blue is NOT overridden,
+        // so it stays as the parent's blue.
         assert_eq!(
             theme.style("ui.gutter").fg,
             Some(ThemeColor::Rgb(0, 0, 255))
         );
+    }
+
+    #[test]
+    fn inherited_styles_re_resolve_against_child_palette() {
+        // Parent defines "markup.heading" with fg = "yellow" but no palette
+        // entry for yellow — resolves to Named(Yellow).
+        // Child overrides yellow in palette → inherited style should pick up
+        // the child's yellow, not the ANSI fallback.
+        let parent_toml = r#"
+[palette]
+
+[styles]
+"markup.heading" = { fg = "yellow", bold = true }
+"#;
+        let child_toml = r##"
+inherits = "parent"
+
+[palette]
+yellow = "#e5c07b"
+
+[styles]
+"##;
+
+        struct Resolver {
+            parent: String,
+            child: String,
+        }
+        impl ThemeResolver for Resolver {
+            fn resolve(&self, name: &str) -> Option<String> {
+                match name {
+                    "parent" => Some(self.parent.clone()),
+                    "child" => Some(self.child.clone()),
+                    _ => None,
+                }
+            }
+        }
+
+        let resolver = Resolver {
+            parent: parent_toml.to_string(),
+            child: child_toml.to_string(),
+        };
+
+        let theme = Theme::load("child", &resolver).unwrap();
+        let heading = theme.style("markup.heading");
+        // Should be the child's palette yellow, not Named(Yellow).
+        assert_eq!(heading.fg, Some(ThemeColor::Rgb(229, 192, 123)));
+        assert!(heading.bold);
+    }
+
+    #[test]
+    fn inherited_style_uses_child_palette_rgb() {
+        // Parent defines markup.heading with fg = "yellow" AND has a palette
+        // entry for yellow (RGB). Child overrides yellow with different RGB.
+        // The old code baked parent's RGB at parse time — this test verifies
+        // the child's palette yellow is used instead.
+        let parent_toml = r##"
+[palette]
+yellow = "#d79921"
+
+[styles]
+"markup.heading" = { fg = "yellow", bold = true }
+"##;
+        let child_toml = r##"
+inherits = "parent"
+
+[palette]
+yellow = "#e5c07b"
+
+[styles]
+"##;
+
+        struct Resolver {
+            parent: String,
+            child: String,
+        }
+        impl ThemeResolver for Resolver {
+            fn resolve(&self, name: &str) -> Option<String> {
+                match name {
+                    "parent" => Some(self.parent.clone()),
+                    "child" => Some(self.child.clone()),
+                    _ => None,
+                }
+            }
+        }
+
+        let resolver = Resolver {
+            parent: parent_toml.to_string(),
+            child: child_toml.to_string(),
+        };
+
+        let theme = Theme::load("child", &resolver).unwrap();
+        let heading = theme.style("markup.heading");
+        // Must be child's yellow (#e5c07b), NOT parent's (#d79921)
+        assert_eq!(heading.fg, Some(ThemeColor::Rgb(0xe5, 0xc0, 0x7b)));
+        assert!(heading.bold);
+    }
+
+    #[test]
+    fn markup_heading_differs_across_themes() {
+        let resolver = BundledResolver;
+        let default = Theme::load("default", &resolver).unwrap();
+        let one_dark = Theme::load("one-dark", &resolver).unwrap();
+        let default_heading = default.style("markup.heading");
+        let one_dark_heading = one_dark.style("markup.heading");
+        // Both should have a heading fg, but with different colors
+        assert!(default_heading.fg.is_some());
+        assert!(one_dark_heading.fg.is_some());
+        assert_ne!(
+            default_heading.fg, one_dark_heading.fg,
+            "markup.heading fg should differ between default and one-dark themes"
+        );
+    }
+
+    #[test]
+    fn palette_mutation_rebuilds_cache() {
+        let toml = r##"
+[palette]
+red = "#ff0000"
+
+[styles]
+"keyword" = { fg = "red" }
+"##;
+        let mut theme = Theme::from_toml("test", toml).unwrap();
+        assert_eq!(theme.style("keyword").fg, Some(ThemeColor::Rgb(255, 0, 0)));
+
+        // Mutate palette
+        theme.set_palette_color("red", ThemeColor::Rgb(0, 255, 0));
+        assert_eq!(
+            theme.style("keyword").fg,
+            Some(ThemeColor::Rgb(0, 255, 0)),
+            "style should reflect new palette color after mutation"
+        );
+    }
+
+    #[test]
+    fn set_style_rebuilds_cache() {
+        let toml = r#"
+[styles]
+"keyword" = { fg = "red" }
+"#;
+        let mut theme = Theme::from_toml("test", toml).unwrap();
+        assert_eq!(
+            theme.style("keyword").fg,
+            Some(ThemeColor::Named(NamedColor::Red))
+        );
+
+        // Set a new style
+        theme.set_style(
+            "keyword",
+            UnresolvedStyle {
+                fg: Some("blue".into()),
+                bold: true,
+                ..Default::default()
+            },
+        );
+        let s = theme.style("keyword");
+        assert_eq!(s.fg, Some(ThemeColor::Named(NamedColor::Blue)));
+        assert!(s.bold);
     }
 
     #[test]

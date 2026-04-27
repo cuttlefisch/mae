@@ -65,7 +65,7 @@ pub fn render_gutter_line_at_y(
     cursor_row: usize,
     is_cursor_line: bool,
     line_height: f32,
-    scale: f32,
+    _scale: f32,
     breakpoint_lines: &HashSet<u32>,
     stopped_line: Option<u32>,
     line_severities: &HashMap<u32, DiagnosticSeverity>,
@@ -82,7 +82,7 @@ pub fn render_gutter_line_at_y(
         canvas.draw_rect_at_y(pixel_y, screen_col_offset, gutter_w, line_height, bg);
     }
 
-    // Line number (scaled to match heading text).
+    // Line number (always at 1.0 scale — gutter stays fixed width).
     let line_num = if !editor.show_line_numbers {
         " ".to_string()
     } else if editor.relative_line_numbers && line_idx != cursor_row {
@@ -91,7 +91,7 @@ pub fn render_gutter_line_at_y(
     } else {
         format!("{:>width$}", line_idx + 1, width = gutter_w - 1)
     };
-    canvas.draw_text_at_y(pixel_y, screen_col_offset, &line_num, gutter_fg, scale);
+    canvas.draw_text_at_y(pixel_y, screen_col_offset, &line_num, gutter_fg, 1.0);
 
     // Marker column (last char of gutter).
     let line_idx_u32 = line_idx as u32;
@@ -109,7 +109,7 @@ pub fn render_gutter_line_at_y(
             marker_fg,
             false,
             false,
-            scale,
+            1.0,
         );
     }
 }

@@ -2355,8 +2355,11 @@ impl Editor {
                 self.set_status(format!("Font size: {}", new_size));
             }
             "reset-font-size" => {
-                self.gui_font_size = 14.0;
-                self.set_status("Font size: 14 (default)");
+                self.gui_font_size = self.gui_font_size_default;
+                self.set_status(format!(
+                    "Font size: {} (default)",
+                    self.gui_font_size_default
+                ));
             }
             "debug-path" => {
                 let path = std::env::var("PATH").unwrap_or_else(|_| "not set".to_string());
