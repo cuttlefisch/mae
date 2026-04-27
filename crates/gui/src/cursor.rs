@@ -148,17 +148,33 @@ pub fn render_cursor(canvas: &mut SkiaCanvas, editor: &Editor, abs_row: usize, a
             // Filled block.
             canvas.draw_pixel_rect(abs_col as f32 * cw, abs_row as f32 * ch, cw, ch, cursor_bg);
             // Draw the character under the cursor with inverted color.
-            let win = editor.window_mgr.focused_window();
-            let buf = &editor.buffers[win.buffer_idx];
-            if win.cursor_row < buf.line_count() {
-                let line = buf.rope().line(win.cursor_row);
-                let line_str: String = line.chars().collect();
-                let chars: Vec<char> = line_str.trim_end_matches('\n').chars().collect();
-                if let Some(&ch_under) = chars.get(win.cursor_col) {
-                    let cursor_fg =
-                        theme::color_or(cursor_style.fg, Color4f::new(0.1, 0.1, 0.1, 1.0));
-                    canvas.draw_text_at(abs_row, abs_col, &ch_under.to_string(), cursor_fg);
+            let cursor_fg = theme::color_or(cursor_style.fg, Color4f::new(0.1, 0.1, 0.1, 1.0));
+            // Draw the character under the cursor with inverted color.
+            // In command/search modes, read from the input line, not the buffer.
+            let ch_under = match editor.mode {
+                Mode::Command => {
+                    let chars: Vec<char> = editor.command_line.chars().collect();
+                    chars.get(editor.command_cursor).copied()
                 }
+                Mode::Search => {
+                    // Search cursor is always at the end; no char under it.
+                    None
+                }
+                _ => {
+                    let win = editor.window_mgr.focused_window();
+                    let buf = &editor.buffers[win.buffer_idx];
+                    if win.cursor_row < buf.line_count() {
+                        let line = buf.rope().line(win.cursor_row);
+                        let line_str: String = line.chars().collect();
+                        let chars: Vec<char> = line_str.trim_end_matches('\n').chars().collect();
+                        chars.get(win.cursor_col).copied()
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(ch) = ch_under {
+                canvas.draw_text_at(abs_row, abs_col, &ch.to_string(), cursor_fg);
             }
         }
         CursorShape::Bar => {

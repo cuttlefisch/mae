@@ -247,6 +247,30 @@ impl OptionRegistry {
                     default_value: "false",
                     config_key: Some("editor.restore_session"),
                 },
+                OptionDef {
+                    name: "insert_ctrl_d",
+                    aliases: &["insert-ctrl-d"],
+                    doc: "Insert-mode C-d behavior: \"dedent\" (vim, default) or \"delete-forward\" (Emacs)",
+                    kind: OptionKind::String,
+                    default_value: "dedent",
+                    config_key: Some("editor.insert_ctrl_d"),
+                },
+                OptionDef {
+                    name: "ignorecase",
+                    aliases: &[],
+                    doc: "Case-insensitive search (like vim :set ignorecase)",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.ignorecase"),
+                },
+                OptionDef {
+                    name: "smartcase",
+                    aliases: &[],
+                    doc: "When ignorecase is on and pattern contains uppercase, search case-sensitively",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.smartcase"),
+                },
             ],
         }
     }
@@ -261,6 +285,11 @@ impl OptionRegistry {
     /// List all registered options.
     pub fn list(&self) -> &[OptionDef] {
         &self.options
+    }
+
+    /// Return all canonical option names (for tab completion).
+    pub fn all_names(&self) -> Vec<String> {
+        self.options.iter().map(|o| o.name.to_string()).collect()
     }
 }
 

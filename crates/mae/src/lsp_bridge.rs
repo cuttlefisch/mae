@@ -129,16 +129,25 @@ pub(crate) fn handle_lsp_event(
     match event {
         LspTaskEvent::ServerStarted { language_id } => {
             info!(language = %language_id, "LSP server started");
+            editor
+                .lsp_servers
+                .insert(language_id.clone(), mae_core::LspServerStatus::Connected);
             editor.set_status(format!("[LSP] {} server started", language_id));
             true
         }
         LspTaskEvent::ServerStartFailed { language_id, error } => {
             warn!(language = %language_id, error = %error, "LSP server failed to start");
+            editor
+                .lsp_servers
+                .insert(language_id.clone(), mae_core::LspServerStatus::Failed);
             editor.set_status(format!("[LSP] {}: {}", language_id, error));
             true
         }
         LspTaskEvent::ServerExited { language_id } => {
             warn!(language = %language_id, "LSP server exited");
+            editor
+                .lsp_servers
+                .insert(language_id.clone(), mae_core::LspServerStatus::Exited);
             editor.set_status(format!("[LSP] {} server exited", language_id));
             true
         }

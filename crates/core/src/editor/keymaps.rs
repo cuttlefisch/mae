@@ -357,6 +357,7 @@ impl Editor {
         // Visual mode: v/V enter from normal
         normal.bind(parse_key_seq("v"), "enter-visual-char");
         normal.bind(parse_key_seq("V"), "enter-visual-line");
+        normal.bind(vec![KeyPress::ctrl('v')], "enter-visual-block");
 
         // Visual keymap: all normal movements plus operators
         let mut visual = Keymap::new("visual");
@@ -429,12 +430,15 @@ impl Editor {
         visual.bind(parse_key_seq("\""), "prompt-register");
         // Surround visual selection: `S<char>`.
         visual.bind(parse_key_seq("S"), "surround-visual-await");
+        // Block visual insert (I inserts at left edge on all rows)
+        visual.bind(parse_key_seq("I"), "block-visual-insert");
         // Text objects in visual mode
         visual.bind(parse_key_seq("i"), "visual-inner-object");
         visual.bind(parse_key_seq("a"), "visual-around-object");
         // Mode switches
         visual.bind(parse_key_seq("v"), "enter-visual-char");
         visual.bind(parse_key_seq("V"), "enter-visual-line");
+        visual.bind(vec![KeyPress::ctrl('v')], "enter-visual-block");
         visual.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
         // Tree-sitter structural expansion (Phase 4b M3)
         visual.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");

@@ -57,6 +57,8 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, ch);
+            // Invalidate cached search match offsets (they shift on every edit).
+            editor.search_state.matches.clear();
             // Trigger completion after word characters.
             if ch.is_alphanumeric() || ch == '_' {
                 editor.lsp_request_completion();
@@ -133,11 +135,21 @@ pub(super) fn handle_insert_mode(
             editor.lsp_dismiss_completion();
             return;
         }
-        // C-d: delete char forward
+        // C-t: indent current line (vim insert-mode indent)
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            editor.dispatch_builtin("indent-line");
+            editor.lsp_dismiss_completion();
+            return;
+        }
+        // C-d: dedent (vim, default) or delete-char-forward (Emacs), configurable
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let idx = editor.active_buffer_idx();
-            let win = editor.window_mgr.focused_window_mut();
-            editor.buffers[idx].delete_char_forward(win);
+            if editor.insert_ctrl_d == "delete-forward" {
+                let idx = editor.active_buffer_idx();
+                let win = editor.window_mgr.focused_window_mut();
+                editor.buffers[idx].delete_char_forward(win);
+            } else {
+                editor.dispatch_builtin("dedent-line");
+            }
             editor.lsp_dismiss_completion();
             return;
         }

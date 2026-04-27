@@ -31,6 +31,21 @@ impl Editor {
                 };
                 (start, end)
             }
+            Mode::Visual(VisualType::Block) => {
+                // For block mode, return the bounding char range covering the whole rect.
+                // This is a rough approximation used for selection size; block operators
+                // use block_selection_rect() directly.
+                let (min_row, max_row, min_col, max_col) = self.block_selection_rect();
+                let start = buf.char_offset_at(min_row, min_col);
+                let end_row_col = (max_col + 1).min(
+                    buf.line_text(max_row)
+                        .trim_end_matches('\n')
+                        .chars()
+                        .count(),
+                );
+                let end = buf.char_offset_at(max_row, end_row_col);
+                (start, end.max(start))
+            }
             _ => {
                 // Charwise
                 let anchor = buf.char_offset_at(self.visual_anchor_row, self.visual_anchor_col);
@@ -292,6 +307,129 @@ impl Editor {
         self.buffers[idx].delete_range(start, end);
         self.buffers[idx].insert_text_at(start, &upper);
         self.set_mode(Mode::Normal);
+    }
+
+    /// Compute visual selection size: (lines, chars).
+    pub fn visual_selection_size(&self) -> (usize, usize) {
+        let win = self.window_mgr.focused_window();
+        let min_row = self.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let lines = max_row - min_row + 1;
+        let (start, end) = self.visual_selection_range();
+        let chars = end.saturating_sub(start);
+        (lines, chars)
+    }
+
+    /// Compute the rectangular region for block visual mode:
+    /// (min_row, max_row, min_col, max_col).
+    pub fn block_selection_rect(&self) -> (usize, usize, usize, usize) {
+        let win = self.window_mgr.focused_window();
+        let min_row = self.visual_anchor_row.min(win.cursor_row);
+        let max_row = self.visual_anchor_row.max(win.cursor_row);
+        let min_col = self.visual_anchor_col.min(win.cursor_col);
+        let max_col = self.visual_anchor_col.max(win.cursor_col);
+        (min_row, max_row, min_col, max_col)
+    }
+
+    /// Delete the rectangular block selection (column range on each row).
+    pub fn block_visual_delete(&mut self) {
+        self.save_visual_state();
+        let (min_row, max_row, min_col, max_col) = self.block_selection_rect();
+        let idx = self.active_buffer_idx();
+        let mut yanked = String::new();
+
+        self.buffers[idx].begin_undo_group();
+        // Process in reverse for stable offsets.
+        for row in (min_row..=max_row).rev() {
+            let line_start = self.buffers[idx].rope().line_to_char(row);
+            let line_text = self.buffers[idx].line_text(row);
+            let line_chars: Vec<char> = line_text.trim_end_matches('\n').chars().collect();
+            let start = min_col.min(line_chars.len());
+            let end = (max_col + 1).min(line_chars.len());
+            if start < end {
+                let deleted: String = line_chars[start..end].iter().collect();
+                yanked = format!("{}\n{}", deleted, yanked);
+                self.buffers[idx].delete_range(line_start + start, line_start + end);
+            }
+        }
+        self.buffers[idx].end_undo_group();
+        if yanked.ends_with('\n') {
+            yanked.pop();
+        }
+        self.save_delete(yanked);
+
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = min_row;
+        win.cursor_col = min_col;
+        win.clamp_cursor(&self.buffers[idx]);
+        self.set_mode(Mode::Normal);
+    }
+
+    /// Yank the rectangular block selection without deleting.
+    pub fn block_visual_yank(&mut self) {
+        self.save_visual_state();
+        let (min_row, max_row, min_col, max_col) = self.block_selection_rect();
+        let idx = self.active_buffer_idx();
+        let mut yanked = String::new();
+
+        for row in min_row..=max_row {
+            let line_text = self.buffers[idx].line_text(row);
+            let line_chars: Vec<char> = line_text.trim_end_matches('\n').chars().collect();
+            let start = min_col.min(line_chars.len());
+            let end = (max_col + 1).min(line_chars.len());
+            if start < end {
+                let selected: String = line_chars[start..end].iter().collect();
+                yanked.push_str(&selected);
+            }
+            if row < max_row {
+                yanked.push('\n');
+            }
+        }
+        self.save_yank(yanked);
+
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = min_row;
+        win.cursor_col = min_col;
+        self.set_mode(Mode::Normal);
+    }
+
+    /// Insert text at the left edge of the block on all rows.
+    /// Called from `I` in block visual: enters insert mode on the first row at
+    /// min_col, and when insert exits, the typed text is replicated to all rows.
+    /// For simplicity, we capture the text now from the pending insert register
+    /// or a given string. This initial implementation prompts with a status
+    /// message; the full "type then replicate" UX requires insert-mode exit hooks.
+    pub fn block_visual_insert(&mut self, text: &str) {
+        if text.is_empty() {
+            self.set_mode(Mode::Normal);
+            return;
+        }
+        let (min_row, max_row, min_col, _max_col) = self.block_selection_rect();
+        let idx = self.active_buffer_idx();
+        self.buffers[idx].begin_undo_group();
+        // Insert in reverse so offsets stay stable.
+        for row in (min_row..=max_row).rev() {
+            let line_start = self.buffers[idx].rope().line_to_char(row);
+            let line_len = self.buffers[idx]
+                .line_text(row)
+                .trim_end_matches('\n')
+                .chars()
+                .count();
+            let col = min_col.min(line_len);
+            self.buffers[idx].insert_text_at(line_start + col, text);
+        }
+        self.buffers[idx].end_undo_group();
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = min_row;
+        win.cursor_col = min_col;
+        win.clamp_cursor(&self.buffers[idx]);
+        self.set_mode(Mode::Normal);
+    }
+
+    /// Change the block selection: delete it then enter insert mode.
+    pub fn block_visual_change(&mut self) {
+        self.block_visual_delete();
+        self.set_mode(Mode::Insert);
     }
 
     /// Lowercase the visual selection text.

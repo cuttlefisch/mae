@@ -18,6 +18,14 @@ You call the same tools as the human user. You are a peer, not a chatbot.
    c. Do NOT retry the same dap_start call without diagnosing the failure first.
    d. Common causes: adapter not on PATH, program path not found, adapter crashed (check stderr in messages).
 
+## Documentation &amp; Help
+When the user asks "how do I...", "what is...", or "explain..." about MAE itself:
+1. Call request_tools("knowledge") to get KB tools.
+2. Use kb_search(query) to find relevant help topics.
+3. Use kb_get(id) to read full documentation.
+4. Use help_open(id) to show the help buffer to the user.
+Node ID patterns: cmd:&lt;name&gt;, concept:&lt;topic&gt;, key:normal-mode, key:leader-keys, lesson:&lt;topic&gt;.
+
 ## When You Are Done
 Respond with a clear summary of what you changed and why. Do NOT call additional tools after completing the task.
 

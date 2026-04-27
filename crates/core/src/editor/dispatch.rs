@@ -944,6 +944,36 @@ impl Editor {
                 if self.mode == Mode::Insert {
                     // Finalize dot-repeat record before adjusting cursor
                     self.finalize_insert_for_repeat();
+
+                    // Block-visual insert replication: if we just exited an `I`
+                    // in block visual, replicate the typed text to all other rows.
+                    if let Some((min_row, max_row, col)) = self.pending_block_insert.take() {
+                        if let Some(ref edit) = self.last_edit {
+                            if let Some(ref text) = edit.inserted_text {
+                                if !text.is_empty() {
+                                    let idx = self.active_buffer_idx();
+                                    self.buffers[idx].begin_undo_group();
+                                    // Replicate to rows below the first (first row already has the text).
+                                    for row in (min_row + 1..=max_row).rev() {
+                                        if row < self.buffers[idx].line_count() {
+                                            let line_start =
+                                                self.buffers[idx].rope().line_to_char(row);
+                                            let line_len = self.buffers[idx]
+                                                .line_text(row)
+                                                .trim_end_matches('\n')
+                                                .chars()
+                                                .count();
+                                            let ins_col = col.min(line_len);
+                                            self.buffers[idx]
+                                                .insert_text_at(line_start + ins_col, text);
+                                        }
+                                    }
+                                    self.buffers[idx].end_undo_group();
+                                }
+                            }
+                        }
+                    }
+
                     let win = self.window_mgr.focused_window_mut();
                     if win.cursor_col > 0 {
                         win.cursor_col -= 1;
@@ -1418,7 +1448,7 @@ impl Editor {
                         "debug-step-over" => self.dap_step(crate::StepKind::Over),
                         "debug-step-into" => self.dap_step(crate::StepKind::In),
                         "debug-step-out" => self.dap_step(crate::StepKind::Out),
-                        _ => unreachable!(),
+                        _ => unreachable!("unhandled debug command: {name}"),
                     }
                 }
             }
@@ -1469,25 +1499,62 @@ impl Editor {
             // Visual mode
             "enter-visual-char" => match self.mode {
                 Mode::Visual(VisualType::Char) => self.set_mode(Mode::Normal),
-                Mode::Visual(VisualType::Line) => self.set_mode(Mode::Visual(VisualType::Char)),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Char)),
                 _ => self.enter_visual_mode(VisualType::Char),
             },
             "enter-visual-line" => match self.mode {
                 Mode::Visual(VisualType::Line) => self.set_mode(Mode::Normal),
-                Mode::Visual(VisualType::Char) => self.set_mode(Mode::Visual(VisualType::Line)),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Line)),
                 _ => self.enter_visual_mode(VisualType::Line),
+            },
+            "enter-visual-block" => match self.mode {
+                Mode::Visual(VisualType::Block) => self.set_mode(Mode::Normal),
+                Mode::Visual(_) => self.set_mode(Mode::Visual(VisualType::Block)),
+                _ => self.enter_visual_mode(VisualType::Block),
             },
             "visual-delete" => {
                 self.save_visual_state();
-                self.visual_delete();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_delete();
+                } else {
+                    self.visual_delete();
+                }
             }
             "visual-yank" => {
                 self.save_visual_state();
-                self.visual_yank();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_yank();
+                } else {
+                    self.visual_yank();
+                }
             }
             "visual-change" => {
                 self.save_visual_state();
-                self.visual_change();
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    self.block_visual_change();
+                } else {
+                    self.visual_change();
+                }
+            }
+            "block-visual-insert" => {
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    let (min_row, max_row, min_col, _max_col) = self.block_selection_rect();
+                    self.save_visual_state();
+                    self.pending_block_insert = Some((min_row, max_row, min_col));
+                    // Clear search highlights so stale match offsets don't render
+                    // as a sliding highlight while typing.
+                    self.search_state.highlight_active = false;
+                    // Position cursor at the top-left of the block.
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = min_row;
+                    win.cursor_col = min_col;
+                    // Record insert start offset for capturing typed text.
+                    let idx = self.active_buffer_idx();
+                    self.insert_start_offset =
+                        Some(self.buffers[idx].char_offset_at(min_row, min_col));
+                    self.insert_initiated_by = Some("block-visual-insert".to_string());
+                    self.set_mode(Mode::Insert);
+                }
             }
             "visual-indent" => self.visual_indent(),
             "visual-dedent" => self.visual_dedent(),
