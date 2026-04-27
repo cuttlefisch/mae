@@ -159,7 +159,13 @@ impl OpenAiProvider {
                         let func = call.get("function")?;
                         let name = func.get("name")?.as_str()?.to_string();
                         let args_str = func.get("arguments")?.as_str()?;
-                        let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
+                        let arguments = match serde_json::from_str(args_str) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                warn!(tool = %name, error = %e, "OpenAI tool call arguments parse failed, defaulting to {{}}");
+                                json!({})
+                            }
+                        };
                         Some(ToolCall {
                             id,
                             name,

@@ -178,7 +178,13 @@ impl GeminiProvider {
                     .and_then(|n| n.as_str())
                     .unwrap_or("")
                     .to_string();
-                let arguments = fc.get("args").cloned().unwrap_or(json!({}));
+                let arguments = match fc.get("args").cloned() {
+                    Some(v) => v,
+                    None => {
+                        warn!(tool = %name, "Gemini function_call missing 'args' field, defaulting to {{}}");
+                        json!({})
+                    }
+                };
                 // Gemini doesn't provide unique IDs for tool calls in the same way Claude does.
                 // We'll generate one or use the index.
                 let id = format!("call_{}_{}", name, i);

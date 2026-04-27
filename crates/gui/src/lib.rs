@@ -250,7 +250,8 @@ impl Renderer for GuiRenderer {
         canvas.begin_frame(&editor.theme);
 
         // Pre-compute syntax-highlight spans for every visible text buffer.
-        let syntax_spans = compute_visible_syntax_spans(editor);
+        // Uses stale spans during typing; deferred reparse happens in the event loop.
+        let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
 
         // Pre-compute screen line counts for conversation buffers.
         // Must happen while we have &mut Editor, before the immutable rebind.
@@ -355,7 +356,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            render_window_area(
+            let pixel_y_map = render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -369,13 +370,32 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
 
             // Cursor (not for shell buffers — they render their own).
-            if editor.mode != mae_core::Mode::ShellInsert {
-                render_gui_cursor(canvas, editor, cols, window_height, status_row, cmd_row);
+            if editor.mode != mae_core::Mode::ShellInsert
+                && editor.mode != mae_core::Mode::ConversationInput
+            {
+                render_gui_cursor(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    status_row,
+                    cmd_row,
+                    &syntax_spans,
+                    pixel_y_map.as_ref(),
+                );
             }
 
             // Completion popup.
             if !editor.completion_items.is_empty() {
-                popup_render::render_completion_popup(canvas, editor, 0, 0, cols, window_height);
+                popup_render::render_completion_popup(
+                    canvas,
+                    editor,
+                    0,
+                    0,
+                    cols,
+                    window_height,
+                    &syntax_spans,
+                );
             }
         }
 
@@ -400,46 +420,7 @@ impl Renderer for GuiRenderer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Syntax span computation (same as terminal renderer)
-// ---------------------------------------------------------------------------
-
-fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
-    let mut out = HashMap::new();
-
-    // First pass: collect cached spans without any String allocation.
-    let mut need_reparse: Vec<usize> = Vec::new();
-    for win in editor.window_mgr.iter_windows() {
-        let idx = win.buffer_idx;
-        if out.contains_key(&idx) || need_reparse.contains(&idx) {
-            continue;
-        }
-        let Some(buf) = editor.buffers.get(idx) else {
-            continue;
-        };
-        if !matches!(buf.kind, BufferKind::Text) {
-            continue;
-        }
-        if editor.syntax.language_of(idx).is_none() {
-            continue;
-        }
-        // Fast path: use cached spans without Rope→String copy.
-        if let Some(spans) = editor.syntax.cached_spans(idx) {
-            out.insert(idx, spans.to_vec());
-        } else {
-            need_reparse.push(idx);
-        }
-    }
-
-    // Second pass: only allocate String for buffers that need reparsing.
-    for idx in need_reparse {
-        let source: String = editor.buffers[idx].rope().chars().collect();
-        if let Some(spans) = editor.syntax.spans_for(idx, &source) {
-            out.insert(idx, spans.to_vec());
-        }
-    }
-    out
-}
+// compute_visible_syntax_spans is now in mae_core::syntax (shared by all renderers).
 
 // ---------------------------------------------------------------------------
 // Window area dispatch
@@ -454,7 +435,8 @@ fn render_window_area(
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) {
+) -> Option<buffer_render::PixelYMap> {
+    let mut focused_pixel_y_map: Option<buffer_render::PixelYMap> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -524,7 +506,7 @@ fn render_window_area(
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    buffer_render::render_buffer_content(
+                    let py_map = buffer_render::render_buffer_content(
                         canvas,
                         editor,
                         buf,
@@ -536,6 +518,9 @@ fn render_window_area(
                         inner_height,
                         Some(&help_spans),
                     );
+                    if is_focused {
+                        focused_pixel_y_map = Some(py_map);
+                    }
                 }
                 BufferKind::Debug => {
                     debug_render::render_debug_window(
@@ -572,7 +557,7 @@ fn render_window_area(
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
-                    buffer_render::render_buffer_content(
+                    let py_map = buffer_render::render_buffer_content(
                         canvas,
                         editor,
                         buf,
@@ -584,6 +569,9 @@ fn render_window_area(
                         inner_height,
                         spans,
                     );
+                    if is_focused {
+                        focused_pixel_y_map = Some(py_map);
+                    }
                 }
             }
         }
@@ -605,6 +593,8 @@ fn render_window_area(
             }
         }
     }
+
+    focused_pixel_y_map
 }
 
 fn render_visual_buffer(
@@ -735,6 +725,8 @@ fn render_gui_cursor(
     window_height: usize,
     _status_row: usize,
     cmd_row: usize,
+    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    pixel_y_map: Option<&buffer_render::PixelYMap>,
 ) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
@@ -763,27 +755,42 @@ fn render_gui_cursor(
 
         let inner = canvas::CellRect::new(inner_row, inner_col, inner_width, inner_height);
 
+        let (_, ch) = canvas.cell_size();
+
         if editor.mode == mae_core::Mode::Command {
-            // Command line cursor.
+            // Command line cursor — always cell-based (no scaling).
             let cursor_col = editor.command_line
                 [..editor.command_cursor.min(editor.command_line.len())]
                 .chars()
                 .count();
-            cursor::render_cursor(canvas, editor, cmd_row, 1 + cursor_col);
+            let pixel_y = cmd_row as f32 * ch;
+            cursor::render_cursor(canvas, editor, pixel_y, 1 + cursor_col, 1.0);
         } else if editor.mode == mae_core::Mode::Search {
             let col = 1 + editor.search_input.len();
-            cursor::render_cursor(canvas, editor, cmd_row, col);
-        } else if let Some(pos) = cursor::compute_cursor_position(editor, inner, gutter_w) {
-            match editor.mode {
-                mae_core::Mode::ConversationInput => {
-                    let (r, c) = pos;
-                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
-                }
-                _ => {
-                    let (r, c) = pos;
-                    cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
-                }
-            }
+            let pixel_y = cmd_row as f32 * ch;
+            cursor::render_cursor(canvas, editor, pixel_y, col, 1.0);
+        } else if let Some(pos) = cursor::compute_cursor_position(
+            editor,
+            inner,
+            gutter_w,
+            syntax_spans
+                .get(&focused_win.buffer_idx)
+                .map(|v| v.as_slice()),
+        ) {
+            // Use pixel Y map for exact positioning on variable-height lines.
+            let abs_row = inner_row + pos.row;
+            let cursor_pixel_y = if let Some(map) = pixel_y_map {
+                map.pixel_y_for_row(abs_row)
+            } else {
+                abs_row as f32 * ch
+            };
+            cursor::render_cursor(
+                canvas,
+                editor,
+                cursor_pixel_y,
+                inner_col + pos.col,
+                pos.scale,
+            );
         }
     }
 }

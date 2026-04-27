@@ -55,6 +55,10 @@
 ;; Clipboard: "unnamed" (vim default) or "unnamedplus" (system)
 ;; (set-option! "clipboard-mode" "unnamed")
 
+;; Search
+;; (set-option! "ignorecase" "false")   ; case-insensitive search
+;; (set-option! "smartcase" "false")    ; if ignorecase + uppercase in pattern → case-sensitive
+
 ;; Debug stats in status bar
 ;; (set-option! "debug-mode" "false")
 
@@ -66,6 +70,10 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; Maps: "normal", "insert", "visual"
 ;; Keys: single chars, C-x (ctrl), or SPC-prefixed leader sequences.
+;;
+;; Insert-mode C-t/C-d: indent/dedent current line (vim default).
+;; To restore Emacs C-d (delete-forward): (set-option! "insert-ctrl-d" "delete-forward")
+;; (set-option! "insert-ctrl-d" "dedent")
 
 ;; (define-key "normal" "Q" "quit")
 ;; (define-key "normal" "SPC i t" "insert-timestamp")
@@ -89,6 +97,12 @@
 ;; Other examples: "gemini" (Gemini CLI), "aider", "copilot".
 ;; (set-option! "ai-editor" "claude")
 
+;; AI operating mode: "standard" (manual), "plan" (drafting), "auto-accept" (hands-free)
+;; (set-option! "ai-mode" "standard")
+;;
+;; AI prompt profile: "pair-programmer", "explorer", "planner", "reviewer"
+;; (set-option! "ai-profile" "pair-programmer")
+;;
 ;; Permission tier: ReadOnly, Write, Shell, Privileged
 ;; Controls what the AI agent is allowed to do. Can also be set via
 ;; MAE_AI_PERMISSIONS env var or config.toml.
@@ -134,10 +148,13 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ;; Insert a timestamp at the cursor.
+;; NOTE: Static date — Steel has no date/time library.
+;; Workaround: use shell-read-output to get the real date, e.g.
+;;   (buffer-insert (shell-read-output 0))  after sending "date +%Y-%m-%d"
 (define (insert-timestamp)
   (buffer-insert
     (string-append "["
-      (number->string 2026) "-04-20"  ; Steel lacks date libs
+      (number->string 2026) "-04-26"
       "]")))
 
 (define-command "insert-timestamp"

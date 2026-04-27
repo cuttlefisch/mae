@@ -72,12 +72,16 @@ pub fn spawn_watchdog() -> WatchdogState {
     let stall_count = state.stall_count.clone();
     let stall_recovery = state.stall_recovery.clone();
 
-    thread::Builder::new()
+    match thread::Builder::new()
         .name("mae-watchdog".into())
         .spawn(move || {
             watchdog_loop(heartbeat, stall_count, stall_recovery);
-        })
-        .expect("failed to spawn watchdog thread");
+        }) {
+        Ok(_) => {}
+        Err(e) => {
+            error!("failed to spawn watchdog thread: {e} — stall detection disabled");
+        }
+    }
 
     state
 }

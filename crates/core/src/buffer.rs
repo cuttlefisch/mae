@@ -45,10 +45,24 @@ pub enum BufferKind {
 /// semantics (redo stack cleared on new edit).
 #[derive(Debug, Clone)]
 pub enum EditAction {
-    InsertChar { pos: usize, ch: char },
-    DeleteChar { pos: usize, ch: char },
-    InsertRange { pos: usize, text: String },
-    DeleteRange { pos: usize, text: String },
+    InsertChar {
+        pos: usize,
+        ch: char,
+    },
+    DeleteChar {
+        pos: usize,
+        ch: char,
+    },
+    InsertRange {
+        pos: usize,
+        text: String,
+    },
+    DeleteRange {
+        pos: usize,
+        text: String,
+    },
+    /// A group of actions that undo/redo as a single unit.
+    Group(Vec<EditAction>),
 }
 
 /// Rope-backed text buffer with undo history.
@@ -77,6 +91,9 @@ pub struct Buffer {
     pub visual: Option<VisualBuffer>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
+    /// When non-None, edits accumulate here instead of the undo stack directly.
+    /// `end_undo_group()` flushes them as a single `EditAction::Group`.
+    undo_group_acc: Option<Vec<EditAction>>,
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
@@ -88,7 +105,14 @@ pub struct Buffer {
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
     /// Line indices that are currently folded (hidden).
+    /// NOTE: Fold boundaries are NOT adjusted on line insert/delete.
+    /// After structural edits, refresh folds with `zx`. A proper fix
+    /// (Emacs-style overlays with anchor tracking) is deferred.
     pub folded_ranges: Vec<(usize, usize)>,
+    /// Monotonic counter incremented on every rope mutation. Used by
+    /// `SyntaxMap` to detect stale cached spans without external
+    /// invalidation calls.
+    pub generation: u64,
     /// Per-buffer mode persistence (evil-mode pattern).  When switching away
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
@@ -117,10 +141,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -141,10 +167,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -165,10 +193,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -189,10 +219,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -214,10 +246,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -238,10 +272,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -262,10 +298,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -292,10 +330,12 @@ impl Buffer {
             visual: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_group_acc: None,
             file_mtime: mtime,
             project_root,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         })
     }
@@ -449,13 +489,42 @@ impl Buffer {
     /// Maximum number of undo entries to retain.
     const MAX_UNDO_ENTRIES: usize = 1000;
 
-    /// Push an edit action onto the undo stack, trimming if it exceeds the bound.
+    /// Push an edit action onto the undo stack (or into the active group).
     fn push_undo(&mut self, action: EditAction) {
+        if let Some(ref mut group) = self.undo_group_acc {
+            group.push(action);
+            return;
+        }
         self.undo_stack.push(action);
         if self.undo_stack.len() > Self::MAX_UNDO_ENTRIES {
             let excess = self.undo_stack.len() - Self::MAX_UNDO_ENTRIES;
             self.undo_stack.drain(..excess);
         }
+    }
+
+    /// Begin accumulating edits into a single undo group.
+    /// Call `end_undo_group()` to flush as one `EditAction::Group`.
+    pub fn begin_undo_group(&mut self) {
+        self.undo_group_acc = Some(Vec::new());
+    }
+
+    /// Flush the accumulated edits as a single undo entry.
+    pub fn end_undo_group(&mut self) {
+        if let Some(actions) = self.undo_group_acc.take() {
+            if actions.len() == 1 {
+                // Unwrap single-action groups for simplicity.
+                self.undo_stack.push(actions.into_iter().next().unwrap());
+            } else if !actions.is_empty() {
+                self.undo_stack.push(EditAction::Group(actions));
+            }
+            self.redo_stack.clear();
+        }
+    }
+
+    /// Increment the generation counter. Called on every rope mutation so
+    /// that `SyntaxMap` can detect stale caches without explicit invalidation.
+    fn bump_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
     }
 
     // --- Editing operations ---
@@ -477,6 +546,7 @@ impl Buffer {
             win.cursor_col += 1;
         }
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn delete_char_backward(&mut self, win: &mut Window) {
@@ -497,8 +567,7 @@ impl Buffer {
             0
         };
         self.rope.remove(pos - 1..pos);
-        self.undo_stack
-            .push(EditAction::DeleteChar { pos: pos - 1, ch });
+        self.push_undo(EditAction::DeleteChar { pos: pos - 1, ch });
         self.redo_stack.clear();
         if ch == '\n' {
             win.cursor_row -= 1;
@@ -507,6 +576,7 @@ impl Buffer {
             win.cursor_col -= 1;
         }
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn delete_char_forward(&mut self, win: &mut Window) {
@@ -522,6 +592,7 @@ impl Buffer {
         self.push_undo(EditAction::DeleteChar { pos, ch });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -548,6 +619,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
         text
     }
@@ -579,6 +651,7 @@ impl Buffer {
         self.push_undo(EditAction::DeleteRange { pos, text: deleted });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.cursor_col = pos - line_start;
     }
 
@@ -600,6 +673,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.cursor_col = 0;
     }
 
@@ -640,6 +714,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -656,6 +731,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
     }
 
     /// Delete a character range [start, end). Used by the AI agent.
@@ -670,10 +746,10 @@ impl Buffer {
         }
         let text: String = self.rope.slice(start..end).into();
         self.rope.remove(start..end);
-        self.undo_stack
-            .push(EditAction::DeleteRange { pos: start, text });
+        self.push_undo(EditAction::DeleteRange { pos: start, text });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn open_line_below(&mut self, win: &mut Window) {
@@ -694,6 +770,7 @@ impl Buffer {
         win.cursor_row += 1;
         win.cursor_col = 0;
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn open_line_above(&mut self, win: &mut Window) {
@@ -709,35 +786,77 @@ impl Buffer {
         self.redo_stack.clear();
         win.cursor_col = 0;
         self.modified = true;
+        self.bump_generation();
     }
 
     // --- Undo / Redo ---
+
+    /// Apply a single undo action (reverse the edit) without touching the stacks.
+    fn apply_undo_action(rope: &mut Rope, win: &mut Window, action: &EditAction) {
+        match action {
+            EditAction::InsertChar { pos, .. } => {
+                rope.remove(*pos..*pos + 1);
+                Self::set_cursor_from_char_pos(rope, win, *pos);
+            }
+            EditAction::DeleteChar { pos, ch } => {
+                rope.insert_char(*pos, *ch);
+                Self::set_cursor_from_char_pos(rope, win, *pos + 1);
+            }
+            EditAction::InsertRange { pos, text } => {
+                rope.remove(*pos..*pos + text.chars().count());
+                Self::set_cursor_from_char_pos(rope, win, *pos);
+            }
+            EditAction::DeleteRange { pos, text } => {
+                rope.insert(*pos, text);
+                Self::set_cursor_from_char_pos(rope, win, *pos);
+            }
+            EditAction::Group(actions) => {
+                // Undo in reverse order.
+                for a in actions.iter().rev() {
+                    Self::apply_undo_action(rope, win, a);
+                }
+            }
+        }
+    }
+
+    /// Apply a single redo action (re-apply the edit) without touching the stacks.
+    fn apply_redo_action(rope: &mut Rope, win: &mut Window, action: &EditAction) {
+        match action {
+            EditAction::InsertChar { pos, ch } => {
+                rope.insert_char(*pos, *ch);
+                Self::set_cursor_from_char_pos(rope, win, *pos + 1);
+            }
+            EditAction::DeleteChar { pos, .. } => {
+                rope.remove(*pos..*pos + 1);
+                Self::set_cursor_from_char_pos(rope, win, *pos);
+            }
+            EditAction::InsertRange { pos, text } => {
+                rope.insert(*pos, text);
+                Self::set_cursor_from_char_pos(rope, win, *pos + text.chars().count());
+            }
+            EditAction::DeleteRange { pos, text } => {
+                let end = *pos + text.chars().count();
+                rope.remove(*pos..end);
+                Self::set_cursor_from_char_pos(rope, win, *pos);
+            }
+            EditAction::Group(actions) => {
+                // Redo in forward order.
+                for a in actions.iter() {
+                    Self::apply_redo_action(rope, win, a);
+                }
+            }
+        }
+    }
 
     pub fn undo(&mut self, win: &mut Window) {
         let action = match self.undo_stack.pop() {
             Some(a) => a,
             None => return,
         };
-        match &action {
-            EditAction::InsertChar { pos, .. } => {
-                self.rope.remove(*pos..*pos + 1);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos);
-            }
-            EditAction::DeleteChar { pos, ch } => {
-                self.rope.insert_char(*pos, *ch);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos + 1);
-            }
-            EditAction::InsertRange { pos, text } => {
-                self.rope.remove(*pos..*pos + text.chars().count());
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos);
-            }
-            EditAction::DeleteRange { pos, text } => {
-                self.rope.insert(*pos, text);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos);
-            }
-        }
+        Self::apply_undo_action(&mut self.rope, win, &action);
         self.redo_stack.push(action);
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -746,27 +865,10 @@ impl Buffer {
             Some(a) => a,
             None => return,
         };
-        match &action {
-            EditAction::InsertChar { pos, ch } => {
-                self.rope.insert_char(*pos, *ch);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos + 1);
-            }
-            EditAction::DeleteChar { pos, .. } => {
-                self.rope.remove(*pos..*pos + 1);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos);
-            }
-            EditAction::InsertRange { pos, text } => {
-                self.rope.insert(*pos, text);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos + text.chars().count());
-            }
-            EditAction::DeleteRange { pos, text } => {
-                let end = *pos + text.chars().count();
-                self.rope.remove(*pos..end);
-                Self::set_cursor_from_char_pos(&self.rope, win, *pos);
-            }
-        }
+        Self::apply_redo_action(&mut self.rope, win, &action);
         self.push_undo(action);
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 

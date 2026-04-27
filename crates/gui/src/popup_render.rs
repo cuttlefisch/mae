@@ -1,9 +1,12 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
-use mae_core::{Editor, PalettePurpose};
+use std::collections::HashMap;
+
+use mae_core::{Editor, HighlightSpan, PalettePurpose};
 use skia_safe::Color4f;
 use unicode_width::UnicodeWidthChar;
 
+use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
 use crate::theme;
 
@@ -61,6 +64,7 @@ pub fn render_completion_popup(
     _area_col: usize,
     area_width: usize,
     area_height: usize,
+    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
@@ -68,7 +72,14 @@ pub fn render_completion_popup(
     }
 
     let win = editor.window_mgr.focused_window();
-    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
+    let buf = &editor.buffers[win.buffer_idx];
+    let heading_extra = buffer_render::heading_extra_rows(
+        buf,
+        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
+        win.scroll_offset,
+        win.cursor_row,
+    );
+    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) + heading_extra;
     let cursor_screen_col = win.cursor_col;
 
     const MAX_ITEMS: usize = 10;

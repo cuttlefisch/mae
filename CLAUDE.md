@@ -83,12 +83,12 @@ Granular milestone tracking lives in **ROADMAP.md**.
   AI security (blocklist, circuit breaker, backpressure), error handling audited
 - Registers & clipboard, vim-surround, Scheme REPL, AI prompt UX, command palette
 - **v0.4.1**: Second modularization pass — 6 god files split into module directories (key_handling, main, tools, executor, session), 12 code smell fixes, model-agnostic system prompt (1,590 tests)
-- **v0.5.0**: Agent reliability — progress checkpoint system (semantic stagnation detection), softened oscillation detector (warn-then-abort), self-test mode, watchdog recovery (cancel AI on prolonged stall), prompt caching (Claude cache_control), token budget dashboard (cache hit rate, context utilization), context compaction (extractive summarization before hard trimming), graceful degradation (auto-shed tools at >85%/92% context pressure), web_fetch tool, ANSI-only themes (light-ansi, dark-ansi), XDG-compliant transcript logging, DAP observability (enriched timeouts, protocol tracing, failure guidance) (1,641 tests)
+- **v0.5.0**: Agent reliability — progress checkpoint system (semantic stagnation detection), softened oscillation detector (warn-then-abort), self-test mode, watchdog recovery (cancel AI on prolonged stall), prompt caching (Claude cache_control), token budget dashboard (cache hit rate, context utilization), context compaction (extractive summarization before hard trimming), graceful degradation (auto-shed tools at >85%/92% context pressure), web_fetch tool, ANSI-only themes (light-ansi, dark-ansi), XDG-compliant transcript logging, DAP observability (enriched timeouts, protocol tracing, failure guidance) (1,673 tests)
 
 ### Phase 4: LSP + DAP + Syntax + KB — COMPLETE (M1-M4 each)
 - LSP client: connection, navigation (gd/gr/K), diagnostics, completion popup ✅
 - DAP client: protocol types, breakpoints, step/continue, AI debug tools ✅
-- Tree-sitter syntax highlighting: 15 languages, structural selection ✅
+- Tree-sitter syntax highlighting: 13 languages, structural selection ✅
 - Gutter rendering: breakpoints, execution line, diagnostic severity markers ✅
 - Knowledge base: in-memory graph, SQLite persistence, org-mode parser, help system, AI KB tools ✅
 - LSP AI tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols` ✅
@@ -113,7 +113,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ### Phase 7: Embedded Documentation — PLANNED
 
-### Phase 8: GUI Rendering Backend — M1-M4.5 COMPLETE (1,484+ tests)
+### Phase 8: GUI Rendering Backend — M1-M4.5 COMPLETE (1,673 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅

@@ -29,6 +29,26 @@ fn move_down_with_count() {
 }
 
 #[test]
+fn move_down_with_count_from_nonzero_row() {
+    // 2j from line 4 (row 3) should land on line 6 (row 5).
+    let mut editor = editor_with_text("l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n");
+    editor.window_mgr.focused_window_mut().cursor_row = 3;
+    editor.count_prefix = Some(2);
+    editor.dispatch_builtin("move-down");
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 5);
+}
+
+#[test]
+fn move_down_count_consistent_from_row_zero() {
+    // 17j from row 0 should land on row 17.
+    let text: String = (0..30).map(|i| format!("line{}\n", i)).collect();
+    let mut editor = editor_with_text(&text);
+    editor.count_prefix = Some(17);
+    editor.dispatch_builtin("move-down");
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 17);
+}
+
+#[test]
 fn move_up_with_count_clamps() {
     let mut editor = editor_with_text("line1\nline2\nline3\n");
     editor.window_mgr.focused_window_mut().cursor_row = 2;

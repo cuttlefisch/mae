@@ -278,6 +278,205 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
     }
 
+    // -----------------------------------------------------------------------
+    // Pixel-Y positioned methods (for variable-height line rendering)
+    // -----------------------------------------------------------------------
+    // These accept a pre-computed pixel Y instead of a cell row. Column is
+    // still cell-based (col * cell_width). Used by the buffer renderer when
+    // lines have different heights (e.g. org headings).
+
+    /// Fill a rectangle at a specific pixel Y with pixel height. Column is cell-based.
+    pub fn draw_rect_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        w: usize,
+        pixel_h: f32,
+        color: Color4f,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let pw = w as f32 * self.cell_width;
+        let paint = fill_paint(color);
+        self.surface
+            .canvas()
+            .draw_rect(skia_safe::Rect::from_xywh(x, pixel_y, pw, pixel_h), &paint);
+    }
+
+    /// Draw a single character at pixel Y. Column is cell-based.
+    pub fn draw_char_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        ch: char,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+
+        let text = ch.to_string();
+
+        let mut font = if bold {
+            self.bold_font.clone()
+        } else {
+            self.font.clone()
+        };
+
+        if scale != 1.0 {
+            font.set_size(font.size() * scale);
+        }
+
+        let (_, metrics) = font.metrics();
+        let baseline = pixel_y - metrics.ascent;
+
+        if italic {
+            self.surface.canvas().save();
+            let mut skew_matrix = skia_safe::Matrix::new_identity();
+            skew_matrix.pre_skew((-0.2, 0.0), None);
+            self.surface.canvas().translate((x, baseline));
+            self.surface.canvas().concat(&skew_matrix);
+            self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+            self.surface.canvas().restore();
+            return;
+        }
+
+        // 1. Try primary font
+        if font.unichar_to_glyph(ch as i32) != 0 {
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, baseline), &font, &paint);
+            return;
+        }
+
+        // 2. Try icon font fallback
+        if let Some(mut icon_font) = self.icon_font.clone() {
+            if scale != 1.0 {
+                icon_font.set_size(icon_font.size() * scale);
+            }
+            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+                self.surface
+                    .canvas()
+                    .draw_str(&text, (x, baseline), &icon_font, &paint);
+                return;
+            }
+        }
+
+        // 3. System fallback via FontMgr
+        let font_mgr = FontMgr::default();
+        let family_name = self.font.typeface().family_name();
+        let style = self.font.typeface().font_style();
+
+        if let Some(fallback_tf) =
+            font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
+        {
+            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+            let (_, fb_metrics) = fallback_font.metrics();
+            let fb_baseline = pixel_y - fb_metrics.ascent;
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
+        } else {
+            self.surface
+                .canvas()
+                .draw_str(&text, (x, baseline), &font, &paint);
+        }
+    }
+
+    /// Draw a text run at pixel Y. Column is cell-based.
+    pub fn draw_text_run_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        text: &str,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let x = col as f32 * self.cell_width;
+        let font = if bold { &self.bold_font } else { &self.font };
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+
+        if scale != 1.0 {
+            let mut scaled = font.clone();
+            scaled.set_size(font.size() * scale);
+            let (_, m) = scaled.metrics();
+            let baseline = pixel_y - m.ascent;
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface
+                    .canvas()
+                    .draw_str(text, (0, 0), &scaled, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (x, baseline), &scaled, &paint);
+            }
+            return;
+        }
+
+        let baseline = pixel_y + self.ascent;
+        if italic {
+            self.surface.canvas().save();
+            let mut skew = skia_safe::Matrix::new_identity();
+            skew.pre_skew((-0.2, 0.0), None);
+            self.surface.canvas().translate((x, baseline));
+            self.surface.canvas().concat(&skew);
+            self.surface.canvas().draw_str(text, (0, 0), font, &paint);
+            self.surface.canvas().restore();
+        } else {
+            self.surface
+                .canvas()
+                .draw_str(text, (x, baseline), font, &paint);
+        }
+    }
+
+    /// Draw an underline span at pixel Y. Column is cell-based.
+    pub fn draw_underline_at_y(&mut self, pixel_y: f32, col: usize, count: usize, color: Color4f) {
+        let x = col as f32 * self.cell_width;
+        let underline_y = pixel_y + self.ascent + 1.0;
+        let width = count as f32 * self.cell_width;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((x, underline_y), (x + width, underline_y), &paint);
+    }
+
+    /// Draw text at pixel Y. ASCII uses a single run; mixed/CJK falls back per-char.
+    pub fn draw_text_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        text: &str,
+        fg: Color4f,
+        scale: f32,
+    ) {
+        if text.is_ascii() {
+            self.draw_text_run_at_y(pixel_y, col, text, fg, false, false, scale);
+            return;
+        }
+        use unicode_width::UnicodeWidthChar;
+        let mut c = col;
+        for ch in text.chars() {
+            self.draw_char_at_y(pixel_y, c, ch, fg, false, false, scale);
+            c += ch.width().unwrap_or(1);
+        }
+    }
+
     /// Draw a single character at a specific (row, col) with optional bold/italic/icon/scale fallback.
     pub fn draw_char(
         &mut self,
@@ -515,6 +714,7 @@ impl SkiaCanvas {
     }
 
     /// Draw a horizontal underline spanning `count` cells.
+    #[allow(dead_code)]
     pub fn draw_underline_span(&mut self, row: usize, col: usize, count: usize, color: Color4f) {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;

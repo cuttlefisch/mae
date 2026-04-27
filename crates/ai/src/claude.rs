@@ -170,7 +170,13 @@ impl ClaudeProvider {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let arguments = block.get("input").cloned().unwrap_or(json!({}));
+                    let arguments = match block.get("input").cloned() {
+                        Some(v) => v,
+                        None => {
+                            warn!(tool = %name, "Claude tool_use block missing 'input' field, defaulting to {{}}");
+                            json!({})
+                        }
+                    };
                     tool_calls.push(ToolCall {
                         id,
                         name,

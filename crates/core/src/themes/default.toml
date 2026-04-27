@@ -1,6 +1,19 @@
 # Default MAE theme — ANSI named colors only, works on all terminals.
 
 [palette]
+# Gruvbox-inspired palette defaults. Child themes override these.
+# Without palette entries, "yellow" etc. fall through to ANSI named
+# colors which look harsh — especially at scaled heading sizes.
+red = "#cc241d"
+green = "#98971a"
+yellow = "#d79921"
+blue = "#458588"
+magenta = "#b16286"
+cyan = "#689d6a"
+white = "#ebdbb2"
+black = "#282828"
+dark_gray = "#928374"
+gray = "#a89984"
 
 [styles]
 "ui.background" = { bg = "black" }

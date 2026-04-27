@@ -53,6 +53,15 @@ use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowManager};
 use crate::Mode;
 
+/// LSP server connection status, tracked per language_id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspServerStatus {
+    Starting,
+    Connected,
+    Failed,
+    Exited,
+}
+
 /// A single item in the LSP completion popup.
 #[derive(Debug, Clone)]
 pub struct CompletionItem {
@@ -265,9 +274,17 @@ pub struct Editor {
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
+    /// LSP server connection status, keyed by language_id.
+    pub lsp_servers: HashMap<String, LspServerStatus>,
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
+    /// Buffer indices that need a deferred syntax reparse. Populated by the
+    /// renderer when it uses stale spans; drained by the event loop after
+    /// a debounce period (~50ms after last edit).
+    pub syntax_reparse_pending: std::collections::HashSet<usize>,
+    /// Timestamp of the last buffer edit. Used for debouncing syntax reparses.
+    pub last_edit_time: std::time::Instant,
     /// Stack of prior char-offset visual selections created by
     /// `syntax_expand_selection` — lets `syntax_contract_selection` walk
     /// back down the node tree. Cleared on `syntax_select_node`.
@@ -398,6 +415,8 @@ pub struct Editor {
     pub renderer_name: String,
     /// GUI font size in points. Default 14.0. Set via config.toml `[editor] font_size`.
     pub gui_font_size: f32,
+    /// User-configured font size (from config.toml). Used by reset-font-size.
+    pub gui_font_size_default: f32,
     /// GUI primary font family. Default "". Set via config.toml `[editor] font_family`.
     pub gui_font_family: String,
     /// GUI icon font family (fallback). Default "". Set via config.toml `[editor] icon_font_family`.
@@ -429,6 +448,16 @@ pub struct Editor {
     pub ai_base_url: String,
     /// Whether to restore sessions on startup. Default false.
     pub restore_session: bool,
+    /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
+    pub insert_ctrl_d: String,
+    /// Case-insensitive search (vim ignorecase).
+    pub ignorecase: bool,
+    /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
+    pub smartcase: bool,
+    /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
+    /// is pressed in block visual mode. On insert-mode exit, the typed text is
+    /// replicated to all rows in the range.
+    pub pending_block_insert: Option<(usize, usize, usize)>,
     /// Shared heartbeat counter — incremented each event loop tick by the
     /// binary. The watchdog thread monitors this to detect main-thread stalls.
     pub heartbeat: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -517,7 +546,10 @@ impl Editor {
             hooks: HookRegistry::new(),
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
+            lsp_servers: HashMap::new(),
             syntax: crate::syntax::SyntaxMap::new(),
+            syntax_reparse_pending: std::collections::HashSet::new(),
+            last_edit_time: std::time::Instant::now(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
             completion_items: Vec::new(),
@@ -570,6 +602,7 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_size_default: 14.0,
             gui_font_family: String::new(),
             gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
@@ -583,6 +616,10 @@ impl Editor {
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
+            insert_ctrl_d: "dedent".to_string(),
+            ignorecase: false,
+            smartcase: false,
+            pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -656,6 +693,7 @@ impl Editor {
             hooks: HookRegistry::new(),
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
+            lsp_servers: HashMap::new(),
             syntax: {
                 let mut m = crate::syntax::SyntaxMap::new();
                 // If the buffer was opened with a file path, attach the
@@ -668,6 +706,8 @@ impl Editor {
                 }
                 m
             },
+            syntax_reparse_pending: std::collections::HashSet::new(),
+            last_edit_time: std::time::Instant::now(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
             completion_items: Vec::new(),
@@ -721,6 +761,7 @@ impl Editor {
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
+            gui_font_size_default: 14.0,
             gui_font_family: String::new(),
             gui_icon_font_family: String::new(),
             ai_editor: "claude".to_string(),
@@ -734,6 +775,10 @@ impl Editor {
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
+            insert_ctrl_d: "dedent".to_string(),
+            ignorecase: false,
+            smartcase: false,
+            pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -808,6 +853,9 @@ impl Editor {
             "ai_mode" => self.ai_mode.clone(),
             "ai_profile" => self.ai_profile.clone(),
             "restore_session" => self.restore_session.to_string(),
+            "insert_ctrl_d" => self.insert_ctrl_d.clone(),
+            "ignorecase" => self.ignorecase.to_string(),
+            "smartcase" => self.smartcase.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -922,9 +970,27 @@ impl Editor {
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;
             }
+            "insert_ctrl_d" => {
+                let valid = ["dedent", "delete-forward"];
+                if !valid.contains(&value) {
+                    return Err(format!(
+                        "Invalid insert_ctrl_d: '{}' (expected: dedent, delete-forward)",
+                        value
+                    ));
+                }
+                self.insert_ctrl_d = value.to_string();
+            }
+            "ignorecase" => {
+                self.ignorecase = parse_option_bool(value)?;
+            }
+            "smartcase" => {
+                self.smartcase = parse_option_bool(value)?;
+            }
             _ => return Err(format!("Unknown option: {}", name)),
         }
-        let (current, _) = self.get_option(def_name).unwrap();
+        let (current, _) = self
+            .get_option(def_name)
+            .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;
         Ok(format!("{} = {}", def_name, current))
     }
 

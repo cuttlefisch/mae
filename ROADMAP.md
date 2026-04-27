@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.0 (1,590+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix).
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.1 (1,673 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix). v0.5.1: cached lazy theme resolution (org heading colors change on theme cycle), scaled heading overflow fix in splits.
 
 ---
 
@@ -67,6 +67,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Vim Parity
 - [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
 - [x] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15) (v0.5.0).
+- [ ] **Chained Ex Command Abbreviations**: Parse compound ex commands like `:wqa` (write-quit-all), `:xa` (save-all-quit), `:wqa!` (force variant). Tokenize the command string into a sequence of known abbreviations (`w`→write, `q`→quit, `a`→all, `!`→force) and execute in order. Also: `:wa` (write-all), `:qa!` (quit-all-force). Vim users expect these as muscle memory.
 
 ### Setup & Onboarding
 - [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
@@ -76,6 +77,20 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
+- [ ] **Org Table Styling**: Column alignment with `|` delimiters, Tab to next cell, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection. Emacs `org-table-align` equivalent. Prerequisite for org-mode spreadsheet features.
+- [ ] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files.
+- [ ] **Org Heading Depth Manipulation**: `M-Left`/`M-Right` (or `<<`/`>>` on heading lines) to decrease/increase heading depth (remove/add `*` prefix). Evil-org parity.
+- [ ] **Org Heading Movement**: `M-j`/`M-k` to move heading (and its subtree) down/up past sibling headings. `M-h`/`M-l` for promote/demote. Evil-org parity for structural editing.
+
+### Rendering Infrastructure
+- [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `PixelYMap`. Enables zero-gap heading rendering, future inline images, code block padding.
+- [ ] **Popup Pixel-Y Migration**: Migrate `popup_render.rs` from `heading_extra_rows()` integer-row estimation to `PixelYMap`-based pixel-Y positioning. Popups (completion, file picker, command palette) should anchor to exact pixel positions near variable-height lines.
+
+### Buffer Safety
+- [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
+
+### Project Intelligence
+- [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.
 
 ### Test Infrastructure
 - [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
@@ -84,7 +99,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,641 tests)
+### What We Have (1,673 tests)
 
 | Category | Features |
 |----------|----------|
@@ -102,7 +117,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
 | **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard, tool tiers (Core/Extended), 10 tool categories, `request_tools`, editor state save/restore, 107 AI tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
-| **Themes** | 9 bundled (incl. light-ansi, dark-ansi), TOML-based, hot-switchable |
+| **Themes** | 9 bundled (incl. light-ansi, dark-ansi), TOML-based, hot-switchable, cached lazy resolution (palette mutation → cache rebuild), Scheme `set_palette_color`/`set_style` API |
 | **Debug** | Self-debug, DAP protocol, debug panel, watchdog, event recording, introspect, DAP attach/evaluate, lock contention tracking |
 | **Terminal** | Full VT100 via alacritty_terminal, ShellInsert mode, MCP bridge, agent bootstrap, file auto-reload |
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
@@ -149,6 +164,13 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 26 | Shell CPU idle fix (generation-based dirty tracking, 30%→~0%) | v0.3.0 ✅ |
 | 27 | `find-file` uses project root instead of CWD | v0.3.0 ✅ |
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
+| 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
+| 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
+| 31 | Org table styling: column alignment, Tab-to-cell, auto-align, horizontal rules, cell highlighting | future |
+| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | future |
+| 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | v0.5.1 ✅ |
+| 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — compound command parsing | future |
+| 35 | Cached lazy theme resolution: unresolved style strings → palette-aware cache rebuild on theme cycle/mutation | v0.5.1 ✅ |
 
 ---
 
@@ -1028,7 +1050,7 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 - [x] Line numbers and gutter in GUI (`gutter.rs`: relative/absolute, breakpoint/diagnostic markers)
 - [x] Syntax highlighting colors in GUI (tree-sitter spans → theme keys → per-char style)
 - [x] Visual mode selection highlighting in GUI (charwise + linewise, multi-line clipping)
-- [ ] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — investigate color attribute leak during insert-mode rendering
+- [x] Bug: vertical line characters render with incorrect colors in insert mode (GUI) — fixed (v0.5.1)
 
 ### M4: GUI Event Loop Refactor — `run_app` + `EventLoopProxy` ✅
 
@@ -1242,4 +1264,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | 8 M3-M4 + v0.3.0 | 141 ✅ | GUI polish, font zoom, BackTab, `:read !cmd`, session, tutor→KB, shell auto-close, debugger powerhouse, Doom init.scm |
 | v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
 | v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
-| **Total** | **1,641** | All passing, 0 failures |
+| v0.5.1 vim parity + fixes | 36 ✅ | ghost cursor, status bar, block visual, ignorecase, :g/:v, C-t/C-d, cached theme resolution |
+| **Total** | **1,677** | All passing, 0 failures |

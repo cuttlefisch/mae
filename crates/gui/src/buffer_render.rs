@@ -10,9 +10,161 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
+/// Maps logical display rows to pixel Y positions.
+///
+/// The buffer renderer populates this as it processes lines. Cursor and popup
+/// rendering use it to convert row-based positions to exact pixel coordinates.
+pub struct PixelYMap {
+    /// pixel Y for each display row, indexed by `display_row`.
+    entries: Vec<f32>,
+    /// The absolute row of the first entry (area_row).
+    base_row: usize,
+    /// Fallback cell height for rows not in the map.
+    cell_height: f32,
+}
+
+impl PixelYMap {
+    /// Look up the pixel Y for a given absolute screen row.
+    pub fn pixel_y_for_row(&self, abs_row: usize) -> f32 {
+        let idx = abs_row.saturating_sub(self.base_row);
+        self.entries
+            .get(idx)
+            .copied()
+            .unwrap_or(abs_row as f32 * self.cell_height)
+    }
+
+    /// Look up the line height (in pixels) for a given absolute screen row.
+    #[allow(dead_code)]
+    pub fn line_height_for_row(&self, abs_row: usize) -> f32 {
+        let idx = abs_row.saturating_sub(self.base_row);
+        if let Some(&y) = self.entries.get(idx) {
+            // Height = next row's Y - this row's Y
+            if let Some(&next_y) = self.entries.get(idx + 1) {
+                next_y - y
+            } else {
+                self.cell_height
+            }
+        } else {
+            self.cell_height
+        }
+    }
+}
+
+/// Compute the font scale for an org heading level.
+/// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
+pub fn org_heading_scale_for_level(level: u8) -> f32 {
+    match level {
+        1 => 1.5,
+        2 => 1.3,
+        3 => 1.15,
+        _ => 1.0,
+    }
+}
+
+/// Compute the number of extra display rows a scaled heading consumes.
+fn extra_rows_for_scale(scale: f32) -> usize {
+    if scale > 1.0 {
+        (scale - 1.0 + 0.5).ceil() as usize
+    } else {
+        0
+    }
+}
+
+/// Get the heading scale for a single line. Returns 1.0 if not a heading.
+pub fn line_heading_scale(
+    buf: &mae_core::Buffer,
+    syntax_spans: Option<&[HighlightSpan]>,
+    line_idx: usize,
+) -> f32 {
+    let spans = match syntax_spans {
+        Some(s) if !s.is_empty() => s,
+        _ => return 1.0,
+    };
+    let rope = buf.rope();
+    if line_idx >= buf.line_count() {
+        return 1.0;
+    }
+    let line_char_start = rope.line_to_char(line_idx);
+    let line_len = rope.line(line_idx).len_chars();
+    let text_len = if line_idx + 1 < buf.line_count() {
+        line_len.saturating_sub(1)
+    } else {
+        line_len
+    };
+    let line_byte_start = rope.char_to_byte(line_char_start);
+    let line_byte_end = rope.char_to_byte(line_char_start + text_len);
+
+    let has_heading = spans.iter().any(|s| {
+        s.theme_key == "markup.heading"
+            && s.byte_start >= line_byte_start
+            && s.byte_start < line_byte_end
+    });
+    if has_heading {
+        let level = rope
+            .line(line_idx)
+            .chars()
+            .take_while(|&c| c == '*')
+            .count()
+            .min(255) as u8;
+        org_heading_scale_for_level(level)
+    } else {
+        1.0
+    }
+}
+
+/// Count extra display rows consumed by scaled org headings in a range of lines.
+/// Used by cursor positioning and popup rendering to offset screen coordinates.
+pub fn heading_extra_rows(
+    buf: &mae_core::Buffer,
+    syntax_spans: Option<&[HighlightSpan]>,
+    from_line: usize,
+    to_line: usize,
+) -> usize {
+    let spans = match syntax_spans {
+        Some(s) if !s.is_empty() => s,
+        _ => return 0,
+    };
+    let rope = buf.rope();
+    let line_count = buf.line_count();
+    let mut extra = 0;
+    for ln in from_line..to_line.min(line_count) {
+        let line_char_start = rope.line_to_char(ln);
+        let line_len = rope.line(ln).len_chars();
+        // Exclude trailing newline from char count for byte range.
+        let text_len = if ln + 1 < line_count {
+            line_len.saturating_sub(1)
+        } else {
+            line_len
+        };
+        let line_byte_start = rope.char_to_byte(line_char_start);
+        let line_byte_end = rope.char_to_byte(line_char_start + text_len);
+
+        let has_heading = spans.iter().any(|s| {
+            s.theme_key == "markup.heading"
+                && s.byte_start >= line_byte_start
+                && s.byte_start < line_byte_end
+        });
+        if has_heading {
+            // Count leading stars.
+            let level = rope
+                .line(ln)
+                .chars()
+                .take_while(|&c| c == '*')
+                .count()
+                .min(255) as u8;
+            let scale = org_heading_scale_for_level(level);
+            extra += extra_rows_for_scale(scale);
+        }
+    }
+    extra
+}
+
 /// Render a text buffer's content into a cell region.
 /// `area_row/area_col` are the top-left of the text area (after border).
 /// `area_width/area_height` are the available cell dimensions.
+///
+/// Returns a `PixelYMap` mapping display rows to pixel Y positions,
+/// used by cursor and popup rendering for pixel-accurate positioning.
 pub fn render_buffer_content(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
@@ -24,7 +176,9 @@ pub fn render_buffer_content(
     area_width: usize,
     area_height: usize,
     syntax_spans: Option<&[HighlightSpan]>,
-) {
+) -> PixelYMap {
+    let (_, cell_height) = canvas.cell_size();
+
     let display_lines = buf.display_line_count();
     let gutter_w = if editor.show_line_numbers {
         gutter::gutter_width(display_lines)
@@ -41,10 +195,16 @@ pub fn render_buffer_content(
     let highlight_search =
         editor.search_state.highlight_active && !editor.search_state.matches.is_empty();
     let highlight_selection = matches!(editor.mode, Mode::Visual(_));
-    let (sel_start, sel_end) = if highlight_selection {
+    let is_block_visual = matches!(editor.mode, Mode::Visual(mae_core::VisualType::Block));
+    let (sel_start, sel_end) = if highlight_selection && !is_block_visual {
         editor.visual_selection_range()
     } else {
         (0, 0)
+    };
+    let block_rect = if is_block_visual {
+        Some(editor.block_selection_rect())
+    } else {
+        None
     };
     let has_syntax = syntax_spans.map(|s| !s.is_empty()).unwrap_or(false);
     let show_cursorline = focused && !highlight_selection && cursorline_style.bg.is_some();
@@ -65,13 +225,19 @@ pub fn render_buffer_content(
         0
     };
 
-    let mut display_row = 0;
+    // Pixel Y accumulator — exact positioning for variable-height lines.
+    let mut pixel_y = area_row as f32 * cell_height;
+    let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
+
+    // PixelYMap: record pixel_y for each display_row so cursor/popup can look it up.
+    let mut y_map_entries: Vec<f32> = Vec::with_capacity(area_height + 1);
+
     let mut line_idx = win.scroll_offset;
     // Hoisted allocations — reused across lines to avoid ~160 allocs/frame.
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
 
-    while display_row < area_height && line_idx < display_lines {
+    while pixel_y < pixel_y_limit && line_idx < display_lines {
         // Skip folded lines
         let mut is_folded = false;
         for (start, end) in &buf.folded_ranges {
@@ -99,16 +265,35 @@ pub fn render_buffer_content(
         let line_char_start = buf.rope().line_to_char(line_idx);
         let line_char_end = line_char_start + full_count;
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
+        let line_byte_end = buf.rope().char_to_byte(line_char_end);
 
-        let is_org_heading = needs_spans
-            && syntax_spans
+        // Org headings: determine heading level from the star prefix.
+        // `*` = level 1, `**` = level 2, `***` = level 3, deeper = no scaling.
+        // Emacs pattern: org-level-1 is largest, org-level-3 is slightly enlarged.
+        let org_heading_level: u8 = if needs_spans {
+            let has_heading = syntax_spans
                 .and_then(|spans| {
                     spans.iter().find(|s| {
-                        s.byte_start == line_byte_start && s.theme_key == "markup.heading"
+                        s.theme_key == "markup.heading"
+                            && s.byte_start >= line_byte_start
+                            && s.byte_start < line_byte_end
                     })
                 })
                 .is_some();
-
+            if has_heading {
+                // Count leading stars to determine level.
+                full_chars
+                    .iter()
+                    .take_while(|&&c| c == '*')
+                    .count()
+                    .min(255) as u8
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let org_heading_scale = org_heading_scale_for_level(org_heading_level);
         let base_fg = if is_stopped_line {
             stopped_line_fg
         } else {
@@ -191,7 +376,22 @@ pub fn render_buffer_content(
             }
 
             // Layer 4: Visual selection.
-            if highlight_selection && sel_start < line_char_end && sel_end > line_char_start {
+            if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
+                // Block visual: highlight column range on rows within the rectangle.
+                if line_idx >= br_min && line_idx <= br_max {
+                    let s = bc_min.min(full_count);
+                    let e = (bc_max + 1).min(full_count);
+                    let sel_fg = theme::color_or(selection_style.fg, text_fg);
+                    let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
+                    for cs in char_styles[s..e].iter_mut() {
+                        cs.fg = sel_fg;
+                        if let Some(bg) = sel_bg {
+                            cs.bg = Some(bg);
+                        }
+                    }
+                }
+            } else if highlight_selection && sel_start < line_char_end && sel_end > line_char_start
+            {
                 let s = sel_start.saturating_sub(line_char_start);
                 let e = (sel_end - line_char_start).min(full_count);
                 let sel_fg = theme::color_or(selection_style.fg, text_fg);
@@ -240,22 +440,29 @@ pub fn render_buffer_content(
             let mut pos = 0;
             let mut is_first = true;
             loop {
-                if display_row >= area_height {
+                if pixel_y >= pixel_y_limit {
                     break;
                 }
-                let screen_row = area_row + display_row;
+                // Record this display row's pixel Y.
+                y_map_entries.push(pixel_y);
+
+                // Line height: first segment scaled, continuations normal.
+                let seg_scale = if is_first { org_heading_scale } else { 1.0 };
+                let seg_height = seg_scale * cell_height;
 
                 if is_first {
-                    // Gutter.
-                    gutter::render_gutter_line(
+                    // Gutter at pixel Y with scaling.
+                    gutter::render_gutter_line_at_y(
                         canvas,
                         editor,
-                        screen_row,
+                        pixel_y,
                         area_col,
                         line_idx,
                         gutter_w,
                         win.cursor_row,
                         is_cursor_line,
+                        seg_height,
+                        seg_scale,
                         &breakpoint_lines,
                         stopped_line,
                         &line_severities,
@@ -264,10 +471,17 @@ pub fn render_buffer_content(
                     // Continuation line gutter.
                     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
                     let padding = " ".repeat(gutter_w);
-                    canvas.draw_text_at(screen_row, area_col, &padding, gutter_fg);
+                    canvas.draw_text_at_y(pixel_y, area_col, &padding, gutter_fg, 1.0);
                 }
 
-                let avail = if is_first { text_width } else { cont_text_w };
+                let base_avail = if is_first { text_width } else { cont_text_w };
+                // Scale down available width for heading lines so scaled glyphs
+                // don't overflow into adjacent split windows.
+                let avail = if seg_scale > 1.0 {
+                    (base_avail as f32 / seg_scale).floor() as usize
+                } else {
+                    base_avail
+                };
                 let end = find_wrap_break(&full_chars, pos, avail);
                 let chunk_chars = &full_chars[pos..end];
                 let chunk_styles = &char_styles[pos..end];
@@ -276,7 +490,7 @@ pub fn render_buffer_content(
                 if show_cursorline && is_cursor_line {
                     if let Some(bg_tc) = cursorline_style.bg {
                         let bg = theme::theme_color_to_skia(&bg_tc);
-                        canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                        canvas.draw_rect_at_y(pixel_y, text_col, text_width, seg_height, bg);
                     }
                 }
 
@@ -286,50 +500,56 @@ pub fn render_buffer_content(
                     let prefix_fg = theme::ts_fg(editor, "ui.gutter");
                     if indent_len > 0 {
                         let indent = " ".repeat(indent_len);
-                        canvas.draw_text_at(screen_row, current_col, &indent, prefix_fg);
+                        canvas.draw_text_at_y(pixel_y, current_col, &indent, prefix_fg, 1.0);
                         current_col += indent_len;
                     }
                     if !editor.show_break.is_empty() {
-                        canvas.draw_text_at(screen_row, current_col, &editor.show_break, prefix_fg);
+                        canvas.draw_text_at_y(
+                            pixel_y,
+                            current_col,
+                            &editor.show_break,
+                            prefix_fg,
+                            1.0,
+                        );
                         current_col += show_break_width;
                     }
                 }
 
-                let scale = if is_org_heading { 1.5 } else { 1.0 };
                 draw_styled_at(
                     canvas,
-                    screen_row,
+                    pixel_y,
                     current_col,
                     chunk_chars,
                     chunk_styles,
-                    scale,
+                    seg_scale,
+                    seg_height,
                 );
 
-                display_row += 1;
-                if is_org_heading {
-                    display_row += 1; // Org headings take 2 rows for height.
-                }
+                pixel_y += seg_height;
                 is_first = false;
                 pos = end;
                 if pos >= full_count {
-                    if full_count == 0 {
-                        // Empty line still takes one row
-                    }
                     break;
                 }
             }
         } else {
             // No wrap.
-            let screen_row = area_row + display_row;
-            gutter::render_gutter_line(
+            let line_height = org_heading_scale * cell_height;
+
+            // Record this display row's pixel Y.
+            y_map_entries.push(pixel_y);
+
+            gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
-                screen_row,
+                pixel_y,
                 area_col,
                 line_idx,
                 gutter_w,
                 win.cursor_row,
                 is_cursor_line,
+                line_height,
+                org_heading_scale,
                 &breakpoint_lines,
                 stopped_line,
                 &line_severities,
@@ -339,17 +559,24 @@ pub fn render_buffer_content(
             if show_cursorline && is_cursor_line {
                 if let Some(bg_tc) = cursorline_style.bg {
                     let bg = theme::theme_color_to_skia(&bg_tc);
-                    canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                    canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, bg);
                 }
             }
 
             let visible_start = col_offset.min(full_count);
+            // Scale down available width for heading lines so scaled glyphs
+            // don't overflow into adjacent split windows.
+            let effective_width = if org_heading_scale > 1.0 {
+                (text_width as f32 / org_heading_scale).floor() as usize
+            } else {
+                text_width
+            };
             // Walk from visible_start accumulating display width to find visible_end.
             let mut vis_width = 0;
             let mut visible_end = visible_start;
             for &ch in &full_chars[visible_start..] {
                 let w = char_width(ch);
-                if vis_width + w > text_width {
+                if vis_width + w > effective_width {
                     break;
                 }
                 vis_width += w;
@@ -358,46 +585,59 @@ pub fn render_buffer_content(
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];
 
-            let scale = if is_org_heading { 1.5 } else { 1.0 };
             draw_styled_at(
                 canvas,
-                screen_row,
+                pixel_y,
                 text_col,
                 visible_chars,
                 visible_styles,
-                scale,
+                org_heading_scale,
+                line_height,
             );
-            display_row += 1;
-            if is_org_heading {
-                display_row += 1;
-            }
+
+            pixel_y += line_height;
         }
 
         line_idx += 1;
     }
     // Tilde lines past EOF.
-    while display_row < area_height {
-        let screen_row = area_row + display_row;
-        let padding = " ".repeat(gutter_w.saturating_sub(1));
-        canvas.draw_text_at(screen_row, area_col, &format!("{}~", padding), gutter_fg);
-        display_row += 1;
+    while pixel_y < pixel_y_limit {
+        y_map_entries.push(pixel_y);
+        canvas.draw_text_at_y(
+            pixel_y,
+            area_col,
+            &format!("{}{}", " ".repeat(gutter_w.saturating_sub(1)), "~"),
+            gutter_fg,
+            1.0,
+        );
+        pixel_y += cell_height;
+    }
+
+    PixelYMap {
+        entries: y_map_entries,
+        base_row: area_row,
+        cell_height,
     }
 }
 
-/// Draw styled text at an absolute position using 3-pass run batching.
+/// Draw styled text at a pixel Y position using 3-pass run batching.
 ///
 /// Pass 1: coalesce adjacent cells with the same bg into single rects.
-/// Pass 2: accumulate text into runs with uniform style, flush via `draw_text_run`.
+/// Pass 2: accumulate text into runs with uniform style, flush via `draw_text_run_at_y`.
 /// Pass 3: coalesce adjacent underlined cells into single line spans.
+///
+/// `pixel_y` is the exact pixel Y coordinate. `line_height` is the pixel height
+/// of this line (scale * cell_height). Column positioning remains cell-based.
 ///
 /// Reduces ~80 Skia calls per line to ~3-5 (one per style run).
 fn draw_styled_at(
     canvas: &mut SkiaCanvas,
-    row: usize,
+    pixel_y: f32,
     col: usize,
     chars: &[char],
     styles: &[CharStyle],
     scale: f32,
+    line_height: f32,
 ) {
     if chars.is_empty() {
         return;
@@ -405,15 +645,27 @@ fn draw_styled_at(
     let ascii_ok = *canvas.ascii_in_font();
 
     // Pre-compute cumulative display column for each char (CJK = 2 cols).
+    // When scale > 1.0, each character occupies more horizontal space.
+    // We use fractional column offsets rounded to the nearest cell to keep
+    // runs positioned correctly under Skia's natural glyph advance.
     let mut col_offsets = Vec::with_capacity(chars.len() + 1);
-    let mut acc = 0usize;
-    for &ch in chars {
-        col_offsets.push(acc);
-        acc += char_width(ch);
+    if scale != 1.0 {
+        let mut acc_f = 0.0f32;
+        for &ch in chars {
+            col_offsets.push(acc_f.round() as usize);
+            acc_f += char_width(ch) as f32 * scale;
+        }
+        col_offsets.push(acc_f.round() as usize);
+    } else {
+        let mut acc = 0usize;
+        for &ch in chars {
+            col_offsets.push(acc);
+            acc += char_width(ch);
+        }
+        col_offsets.push(acc); // sentinel for total width
     }
-    col_offsets.push(acc); // sentinel for total width
 
-    // Pass 1: Coalesce background rects.
+    // Pass 1: Coalesce background rects (pixel-precise height).
     {
         let mut run_start = 0;
         let mut run_bg: Option<Color4f> = styles[0].bg;
@@ -429,7 +681,7 @@ fn draw_styled_at(
                 if let Some(bg) = run_bg {
                     let start_col = col_offsets[run_start];
                     let width = col_offsets[i] - start_col;
-                    canvas.draw_rect_fill(row, col + start_col, width, 1, bg);
+                    canvas.draw_rect_at_y(pixel_y, col + start_col, width, line_height, bg);
                 }
                 run_start = i;
                 run_bg = this_bg;
@@ -467,8 +719,8 @@ fn draw_styled_at(
             } else {
                 // Flush current run.
                 if !run_buf.is_empty() {
-                    canvas.draw_text_run(
-                        row,
+                    canvas.draw_text_run_at_y(
+                        pixel_y,
                         col + run_start_col,
                         &run_buf,
                         run_fg,
@@ -488,8 +740,8 @@ fn draw_styled_at(
                     run_buf.push(ch);
                 } else if ch != ' ' {
                     // Non-ASCII / missing glyph — per-char fallback.
-                    canvas.draw_char(
-                        row,
+                    canvas.draw_char_at_y(
+                        pixel_y,
                         col + col_offsets[i],
                         ch,
                         cs.fg,
@@ -501,8 +753,8 @@ fn draw_styled_at(
             }
         }
         if !run_buf.is_empty() {
-            canvas.draw_text_run(
-                row,
+            canvas.draw_text_run_at_y(
+                pixel_y,
                 col + run_start_col,
                 &run_buf,
                 run_fg,
@@ -523,12 +775,12 @@ fn draw_styled_at(
                 }
             } else if let Some((_, start_col, fg)) = ul_start.take() {
                 let width = col_offsets[i] - start_col;
-                canvas.draw_underline_span(row, col + start_col, width, fg);
+                canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
             }
         }
         if let Some((_, start_col, fg)) = ul_start {
             let width = col_offsets[styles.len()] - start_col;
-            canvas.draw_underline_span(row, col + start_col, width, fg);
+            canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
         }
     }
 }
@@ -699,5 +951,74 @@ mod tests {
         };
         assert!(!cs.bold);
         assert!(cs.bg.is_none());
+    }
+
+    // --- Pixel-Y / variable-height regression tests ---
+
+    #[test]
+    fn pixel_y_map_lookup_basic() {
+        let map = PixelYMap {
+            entries: vec![0.0, 20.0, 40.0, 70.0], // row 3 is taller (heading)
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.pixel_y_for_row(0), 0.0);
+        assert_eq!(map.pixel_y_for_row(1), 20.0);
+        assert_eq!(map.pixel_y_for_row(2), 40.0);
+        assert_eq!(map.pixel_y_for_row(3), 70.0);
+    }
+
+    #[test]
+    fn pixel_y_map_fallback_for_missing_row() {
+        let map = PixelYMap {
+            entries: vec![0.0, 20.0],
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        // Row 5 is not in the map — falls back to row * cell_height.
+        assert_eq!(map.pixel_y_for_row(5), 100.0);
+    }
+
+    #[test]
+    fn pixel_y_map_with_base_row_offset() {
+        let map = PixelYMap {
+            entries: vec![100.0, 120.0, 140.0],
+            base_row: 5,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.pixel_y_for_row(5), 100.0);
+        assert_eq!(map.pixel_y_for_row(6), 120.0);
+        assert_eq!(map.pixel_y_for_row(7), 140.0);
+    }
+
+    #[test]
+    fn pixel_y_map_line_height() {
+        let map = PixelYMap {
+            entries: vec![0.0, 30.0, 50.0], // first line is 30px (heading), second is 20px
+            base_row: 0,
+            cell_height: 20.0,
+        };
+        assert_eq!(map.line_height_for_row(0), 30.0);
+        assert_eq!(map.line_height_for_row(1), 20.0);
+        // Last row falls back to cell_height.
+        assert_eq!(map.line_height_for_row(2), 20.0);
+    }
+
+    #[test]
+    fn org_heading_scale_levels() {
+        assert_eq!(org_heading_scale_for_level(1), 1.5);
+        assert_eq!(org_heading_scale_for_level(2), 1.3);
+        assert_eq!(org_heading_scale_for_level(3), 1.15);
+        assert_eq!(org_heading_scale_for_level(4), 1.0);
+        assert_eq!(org_heading_scale_for_level(0), 1.0);
+        assert_eq!(org_heading_scale_for_level(255), 1.0);
+    }
+
+    #[test]
+    fn extra_rows_for_scale_values() {
+        assert_eq!(extra_rows_for_scale(1.0), 0);
+        assert_eq!(extra_rows_for_scale(1.15), 1);
+        assert_eq!(extra_rows_for_scale(1.3), 1);
+        assert_eq!(extra_rows_for_scale(1.5), 1);
     }
 }

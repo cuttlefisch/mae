@@ -119,7 +119,8 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
     let area = frame.area();
 
     // Pre-compute syntax-highlight spans for every visible text buffer.
-    let syntax_spans = compute_visible_syntax_spans(editor);
+    // Uses stale spans during typing; deferred reparse happens in the event loop.
+    let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
     let editor: &Editor = editor;
 
     if editor.file_picker.is_some() {
@@ -206,44 +207,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
     }
 }
 
-/// Compute tree-sitter highlight spans for every text buffer visible in the
-/// current window layout.
-fn compute_visible_syntax_spans(editor: &mut Editor) -> HashMap<usize, Vec<HighlightSpan>> {
-    let mut out = HashMap::new();
-
-    // First pass: collect cached spans without any String allocation.
-    let mut need_reparse: Vec<usize> = Vec::new();
-    for win in editor.window_mgr.iter_windows() {
-        let idx = win.buffer_idx;
-        if out.contains_key(&idx) || need_reparse.contains(&idx) {
-            continue;
-        }
-        let Some(buf) = editor.buffers.get(idx) else {
-            continue;
-        };
-        if !matches!(buf.kind, mae_core::BufferKind::Text) {
-            continue;
-        }
-        if editor.syntax.language_of(idx).is_none() {
-            continue;
-        }
-        // Fast path: use cached spans without Rope→String copy.
-        if let Some(spans) = editor.syntax.cached_spans(idx) {
-            out.insert(idx, spans.to_vec());
-        } else {
-            need_reparse.push(idx);
-        }
-    }
-
-    // Second pass: only allocate String for buffers that need reparsing.
-    for idx in need_reparse {
-        let source: String = editor.buffers[idx].rope().chars().collect();
-        if let Some(spans) = editor.syntax.spans_for(idx, &source) {
-            out.insert(idx, spans.to_vec());
-        }
-    }
-    out
-}
+// compute_visible_syntax_spans is now in mae_core::syntax (shared by all renderers).
 
 // ---------------------------------------------------------------------------
 // Window area dispatch
