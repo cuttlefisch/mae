@@ -57,6 +57,8 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, ch);
+            // Invalidate cached search match offsets (they shift on every edit).
+            editor.search_state.matches.clear();
             // Trigger completion after word characters.
             if ch.is_alphanumeric() || ch == '_' {
                 editor.lsp_request_completion();

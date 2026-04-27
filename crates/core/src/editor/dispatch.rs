@@ -1541,6 +1541,9 @@ impl Editor {
                     let (min_row, max_row, min_col, _max_col) = self.block_selection_rect();
                     self.save_visual_state();
                     self.pending_block_insert = Some((min_row, max_row, min_col));
+                    // Clear search highlights so stale match offsets don't render
+                    // as a sliding highlight while typing.
+                    self.search_state.highlight_active = false;
                     // Position cursor at the top-left of the block.
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = min_row;

@@ -463,6 +463,12 @@ impl Editor {
         let mut total_subs = 0;
         let mut lines_changed = 0;
 
+        // Group all substitute edits into a single undo entry.
+        let multi_line = end_line - start_line > 1;
+        if multi_line {
+            self.buffers[idx].begin_undo_group();
+        }
+
         // Process lines in reverse so char offsets remain stable
         for line_idx in (start_line..end_line).rev() {
             let line_start = self.buffers[idx].rope().line_to_char(line_idx);
@@ -478,6 +484,10 @@ impl Editor {
                 self.buffers[idx].delete_range(line_start, end_offset);
                 self.buffers[idx].insert_text_at(line_start, &new_text);
             }
+        }
+
+        if multi_line {
+            self.buffers[idx].end_undo_group();
         }
 
         if total_subs > 0 {
