@@ -52,7 +52,70 @@ pub fn resolve_gutter_marker(
     }
 }
 
-/// Render the gutter for one visible line.
+/// Render the gutter for one visible line at a pixel Y position.
+/// `line_height` is the pixel height of this line (for cursorline bg).
+/// `scale` is the font scale (for scaled line numbers on headings).
+pub fn render_gutter_line_at_y(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    pixel_y: f32,
+    screen_col_offset: usize,
+    line_idx: usize,
+    gutter_w: usize,
+    cursor_row: usize,
+    is_cursor_line: bool,
+    line_height: f32,
+    scale: f32,
+    breakpoint_lines: &HashSet<u32>,
+    stopped_line: Option<u32>,
+    line_severities: &HashMap<u32, DiagnosticSeverity>,
+) {
+    let gutter_fg = theme::ts_fg(editor, "ui.gutter");
+    let cursorline_bg = if is_cursor_line {
+        theme::ts_bg(editor, "ui.cursorline")
+    } else {
+        None
+    };
+
+    // Background for cursorline gutter (pixel-precise height).
+    if let Some(bg) = cursorline_bg {
+        canvas.draw_rect_at_y(pixel_y, screen_col_offset, gutter_w, line_height, bg);
+    }
+
+    // Line number (scaled to match heading text).
+    let line_num = if !editor.show_line_numbers {
+        " ".to_string()
+    } else if editor.relative_line_numbers && line_idx != cursor_row {
+        let offset = line_idx.abs_diff(cursor_row);
+        format!("{:>width$}", offset, width = gutter_w - 1)
+    } else {
+        format!("{:>width$}", line_idx + 1, width = gutter_w - 1)
+    };
+    canvas.draw_text_at_y(pixel_y, screen_col_offset, &line_num, gutter_fg, scale);
+
+    // Marker column (last char of gutter).
+    let line_idx_u32 = line_idx as u32;
+    let marker = resolve_gutter_marker(
+        stopped_line == Some(line_idx_u32),
+        breakpoint_lines.contains(&line_idx_u32),
+        line_severities.get(&line_idx_u32).copied(),
+    );
+    if let Some((ch, key)) = marker.glyph_and_theme_key() {
+        let marker_fg = theme::ts_fg(editor, key);
+        canvas.draw_char_at_y(
+            pixel_y,
+            screen_col_offset + gutter_w - 1,
+            ch,
+            marker_fg,
+            false,
+            false,
+            scale,
+        );
+    }
+}
+
+/// Render the gutter for one visible line (cell-based, for non-buffer contexts).
+#[allow(dead_code)]
 pub fn render_gutter_line(
     canvas: &mut SkiaCanvas,
     editor: &Editor,

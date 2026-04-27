@@ -356,7 +356,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            render_window_area(
+            let pixel_y_map = render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -381,6 +381,7 @@ impl Renderer for GuiRenderer {
                     status_row,
                     cmd_row,
                     &syntax_spans,
+                    pixel_y_map.as_ref(),
                 );
             }
 
@@ -434,7 +435,8 @@ fn render_window_area(
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) {
+) -> Option<buffer_render::PixelYMap> {
+    let mut focused_pixel_y_map: Option<buffer_render::PixelYMap> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -504,7 +506,7 @@ fn render_window_area(
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    buffer_render::render_buffer_content(
+                    let py_map = buffer_render::render_buffer_content(
                         canvas,
                         editor,
                         buf,
@@ -516,6 +518,9 @@ fn render_window_area(
                         inner_height,
                         Some(&help_spans),
                     );
+                    if is_focused {
+                        focused_pixel_y_map = Some(py_map);
+                    }
                 }
                 BufferKind::Debug => {
                     debug_render::render_debug_window(
@@ -552,7 +557,7 @@ fn render_window_area(
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
-                    buffer_render::render_buffer_content(
+                    let py_map = buffer_render::render_buffer_content(
                         canvas,
                         editor,
                         buf,
@@ -564,6 +569,9 @@ fn render_window_area(
                         inner_height,
                         spans,
                     );
+                    if is_focused {
+                        focused_pixel_y_map = Some(py_map);
+                    }
                 }
             }
         }
@@ -585,6 +593,8 @@ fn render_window_area(
             }
         }
     }
+
+    focused_pixel_y_map
 }
 
 fn render_visual_buffer(
@@ -716,6 +726,7 @@ fn render_gui_cursor(
     _status_row: usize,
     cmd_row: usize,
     syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    pixel_y_map: Option<&buffer_render::PixelYMap>,
 ) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
@@ -744,16 +755,20 @@ fn render_gui_cursor(
 
         let inner = canvas::CellRect::new(inner_row, inner_col, inner_width, inner_height);
 
+        let (_, ch) = canvas.cell_size();
+
         if editor.mode == mae_core::Mode::Command {
-            // Command line cursor.
+            // Command line cursor — always cell-based (no scaling).
             let cursor_col = editor.command_line
                 [..editor.command_cursor.min(editor.command_line.len())]
                 .chars()
                 .count();
-            cursor::render_cursor(canvas, editor, cmd_row, 1 + cursor_col, 1.0);
+            let pixel_y = cmd_row as f32 * ch;
+            cursor::render_cursor(canvas, editor, pixel_y, 1 + cursor_col, 1.0);
         } else if editor.mode == mae_core::Mode::Search {
             let col = 1 + editor.search_input.len();
-            cursor::render_cursor(canvas, editor, cmd_row, col, 1.0);
+            let pixel_y = cmd_row as f32 * ch;
+            cursor::render_cursor(canvas, editor, pixel_y, col, 1.0);
         } else if let Some(pos) = cursor::compute_cursor_position(
             editor,
             inner,
@@ -762,10 +777,17 @@ fn render_gui_cursor(
                 .get(&focused_win.buffer_idx)
                 .map(|v| v.as_slice()),
         ) {
+            // Use pixel Y map for exact positioning on variable-height lines.
+            let abs_row = inner_row + pos.row;
+            let cursor_pixel_y = if let Some(map) = pixel_y_map {
+                map.pixel_y_for_row(abs_row)
+            } else {
+                abs_row as f32 * ch
+            };
             cursor::render_cursor(
                 canvas,
                 editor,
-                inner_row + pos.row,
+                cursor_pixel_y,
                 inner_col + pos.col,
                 pos.scale,
             );

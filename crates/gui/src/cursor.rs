@@ -184,12 +184,13 @@ pub fn cursor_shape(editor: &Editor) -> CursorShape {
     }
 }
 
-/// Render the cursor onto the canvas at an absolute (row, col) position.
+/// Render the cursor onto the canvas at a pixel Y position.
+/// `pixel_y` is the exact pixel Y from the PixelYMap. `abs_col` is cell-based.
 /// `scale` is the font scale at the cursor line (1.0 for normal, >1.0 for headings).
 pub fn render_cursor(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
-    abs_row: usize,
+    pixel_y: f32,
     abs_col: usize,
     scale: f32,
 ) {
@@ -199,11 +200,10 @@ pub fn render_cursor(
     let (cw, ch) = canvas.cell_size();
     let shape = cursor_shape(editor);
 
-    // Scale cursor dimensions and position for heading lines.
+    // Scale cursor dimensions for heading lines.
     let scaled_cw = cw * scale;
     let scaled_ch = ch * scale;
     let pixel_x = abs_col as f32 * cw * scale;
-    let pixel_y = abs_row as f32 * ch;
 
     match shape {
         CursorShape::Block => {
@@ -229,20 +229,16 @@ pub fn render_cursor(
                 }
             };
             if let Some(c) = ch_under {
-                if scale != 1.0 {
-                    // Draw character at scaled size to match the heading text.
-                    canvas.draw_text_run(
-                        abs_row,
-                        abs_col,
-                        &c.to_string(),
-                        cursor_fg,
-                        false,
-                        false,
-                        scale,
-                    );
-                } else {
-                    canvas.draw_text_at(abs_row, abs_col, &c.to_string(), cursor_fg);
-                }
+                // Draw character under cursor at pixel Y with proper scale.
+                canvas.draw_text_run_at_y(
+                    pixel_y,
+                    abs_col,
+                    &c.to_string(),
+                    cursor_fg,
+                    false,
+                    false,
+                    scale,
+                );
             }
         }
         CursorShape::Bar => {

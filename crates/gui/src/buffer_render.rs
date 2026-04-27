@@ -10,6 +10,46 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
+/// Maps logical display rows to pixel Y positions.
+///
+/// The buffer renderer populates this as it processes lines. Cursor and popup
+/// rendering use it to convert row-based positions to exact pixel coordinates.
+pub struct PixelYMap {
+    /// pixel Y for each display row, indexed by `display_row`.
+    entries: Vec<f32>,
+    /// The absolute row of the first entry (area_row).
+    base_row: usize,
+    /// Fallback cell height for rows not in the map.
+    cell_height: f32,
+}
+
+impl PixelYMap {
+    /// Look up the pixel Y for a given absolute screen row.
+    pub fn pixel_y_for_row(&self, abs_row: usize) -> f32 {
+        let idx = abs_row.saturating_sub(self.base_row);
+        self.entries
+            .get(idx)
+            .copied()
+            .unwrap_or(abs_row as f32 * self.cell_height)
+    }
+
+    /// Look up the line height (in pixels) for a given absolute screen row.
+    #[allow(dead_code)]
+    pub fn line_height_for_row(&self, abs_row: usize) -> f32 {
+        let idx = abs_row.saturating_sub(self.base_row);
+        if let Some(&y) = self.entries.get(idx) {
+            // Height = next row's Y - this row's Y
+            if let Some(&next_y) = self.entries.get(idx + 1) {
+                next_y - y
+            } else {
+                self.cell_height
+            }
+        } else {
+            self.cell_height
+        }
+    }
+}
+
 /// Compute the font scale for an org heading level.
 /// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
 pub fn org_heading_scale_for_level(level: u8) -> f32 {
@@ -122,6 +162,9 @@ pub fn heading_extra_rows(
 /// Render a text buffer's content into a cell region.
 /// `area_row/area_col` are the top-left of the text area (after border).
 /// `area_width/area_height` are the available cell dimensions.
+///
+/// Returns a `PixelYMap` mapping display rows to pixel Y positions,
+/// used by cursor and popup rendering for pixel-accurate positioning.
 pub fn render_buffer_content(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
@@ -133,7 +176,9 @@ pub fn render_buffer_content(
     area_width: usize,
     area_height: usize,
     syntax_spans: Option<&[HighlightSpan]>,
-) {
+) -> PixelYMap {
+    let (_, cell_height) = canvas.cell_size();
+
     let display_lines = buf.display_line_count();
     let gutter_w = if editor.show_line_numbers {
         gutter::gutter_width(display_lines)
@@ -180,13 +225,19 @@ pub fn render_buffer_content(
         0
     };
 
-    let mut display_row = 0;
+    // Pixel Y accumulator — exact positioning for variable-height lines.
+    let mut pixel_y = area_row as f32 * cell_height;
+    let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
+
+    // PixelYMap: record pixel_y for each display_row so cursor/popup can look it up.
+    let mut y_map_entries: Vec<f32> = Vec::with_capacity(area_height + 1);
+
     let mut line_idx = win.scroll_offset;
     // Hoisted allocations — reused across lines to avoid ~160 allocs/frame.
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
 
-    while display_row < area_height && line_idx < display_lines {
+    while pixel_y < pixel_y_limit && line_idx < display_lines {
         // Skip folded lines
         let mut is_folded = false;
         for (start, end) in &buf.folded_ranges {
@@ -389,22 +440,29 @@ pub fn render_buffer_content(
             let mut pos = 0;
             let mut is_first = true;
             loop {
-                if display_row >= area_height {
+                if pixel_y >= pixel_y_limit {
                     break;
                 }
-                let screen_row = area_row + display_row;
+                // Record this display row's pixel Y.
+                y_map_entries.push(pixel_y);
+
+                // Line height: first segment scaled, continuations normal.
+                let seg_scale = if is_first { org_heading_scale } else { 1.0 };
+                let seg_height = seg_scale * cell_height;
 
                 if is_first {
-                    // Gutter.
-                    gutter::render_gutter_line(
+                    // Gutter at pixel Y with scaling.
+                    gutter::render_gutter_line_at_y(
                         canvas,
                         editor,
-                        screen_row,
+                        pixel_y,
                         area_col,
                         line_idx,
                         gutter_w,
                         win.cursor_row,
                         is_cursor_line,
+                        seg_height,
+                        seg_scale,
                         &breakpoint_lines,
                         stopped_line,
                         &line_severities,
@@ -413,7 +471,7 @@ pub fn render_buffer_content(
                     // Continuation line gutter.
                     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
                     let padding = " ".repeat(gutter_w);
-                    canvas.draw_text_at(screen_row, area_col, &padding, gutter_fg);
+                    canvas.draw_text_at_y(pixel_y, area_col, &padding, gutter_fg, 1.0);
                 }
 
                 let avail = if is_first { text_width } else { cont_text_w };
@@ -425,12 +483,7 @@ pub fn render_buffer_content(
                 if show_cursorline && is_cursor_line {
                     if let Some(bg_tc) = cursorline_style.bg {
                         let bg = theme::theme_color_to_skia(&bg_tc);
-                        let cl_height = if is_first {
-                            1 + extra_rows_for_scale(org_heading_scale)
-                        } else {
-                            1
-                        };
-                        canvas.draw_rect_fill(screen_row, text_col, text_width, cl_height, bg);
+                        canvas.draw_rect_at_y(pixel_y, text_col, text_width, seg_height, bg);
                     }
                 }
 
@@ -440,53 +493,56 @@ pub fn render_buffer_content(
                     let prefix_fg = theme::ts_fg(editor, "ui.gutter");
                     if indent_len > 0 {
                         let indent = " ".repeat(indent_len);
-                        canvas.draw_text_at(screen_row, current_col, &indent, prefix_fg);
+                        canvas.draw_text_at_y(pixel_y, current_col, &indent, prefix_fg, 1.0);
                         current_col += indent_len;
                     }
                     if !editor.show_break.is_empty() {
-                        canvas.draw_text_at(screen_row, current_col, &editor.show_break, prefix_fg);
+                        canvas.draw_text_at_y(
+                            pixel_y,
+                            current_col,
+                            &editor.show_break,
+                            prefix_fg,
+                            1.0,
+                        );
                         current_col += show_break_width;
                     }
                 }
 
-                let scale = org_heading_scale;
                 draw_styled_at(
                     canvas,
-                    screen_row,
+                    pixel_y,
                     current_col,
                     chunk_chars,
                     chunk_styles,
-                    scale,
+                    seg_scale,
+                    seg_height,
                 );
 
-                // Extra rows for scaled headings to prevent overlap.
-                let extra_rows = if is_first {
-                    extra_rows_for_scale(org_heading_scale)
-                } else {
-                    0
-                };
-                display_row += 1 + extra_rows;
+                pixel_y += seg_height;
                 is_first = false;
                 pos = end;
                 if pos >= full_count {
-                    if full_count == 0 {
-                        // Empty line still takes one row
-                    }
                     break;
                 }
             }
         } else {
             // No wrap.
-            let screen_row = area_row + display_row;
-            gutter::render_gutter_line(
+            let line_height = org_heading_scale * cell_height;
+
+            // Record this display row's pixel Y.
+            y_map_entries.push(pixel_y);
+
+            gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
-                screen_row,
+                pixel_y,
                 area_col,
                 line_idx,
                 gutter_w,
                 win.cursor_row,
                 is_cursor_line,
+                line_height,
+                org_heading_scale,
                 &breakpoint_lines,
                 stopped_line,
                 &line_severities,
@@ -496,8 +552,7 @@ pub fn render_buffer_content(
             if show_cursorline && is_cursor_line {
                 if let Some(bg_tc) = cursorline_style.bg {
                     let bg = theme::theme_color_to_skia(&bg_tc);
-                    let cl_height = 1 + extra_rows_for_scale(org_heading_scale);
-                    canvas.draw_rect_fill(screen_row, text_col, text_width, cl_height, bg);
+                    canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, bg);
                 }
             }
 
@@ -516,44 +571,59 @@ pub fn render_buffer_content(
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];
 
-            let scale = org_heading_scale;
             draw_styled_at(
                 canvas,
-                screen_row,
+                pixel_y,
                 text_col,
                 visible_chars,
                 visible_styles,
-                scale,
+                org_heading_scale,
+                line_height,
             );
-            let extra_rows = extra_rows_for_scale(org_heading_scale);
-            display_row += 1 + extra_rows;
+
+            pixel_y += line_height;
         }
 
         line_idx += 1;
     }
     // Tilde lines past EOF.
-    while display_row < area_height {
-        let screen_row = area_row + display_row;
-        let padding = " ".repeat(gutter_w.saturating_sub(1));
-        canvas.draw_text_at(screen_row, area_col, &format!("{}~", padding), gutter_fg);
-        display_row += 1;
+    while pixel_y < pixel_y_limit {
+        y_map_entries.push(pixel_y);
+        canvas.draw_text_at_y(
+            pixel_y,
+            area_col,
+            &format!("{}{}", " ".repeat(gutter_w.saturating_sub(1)), "~"),
+            gutter_fg,
+            1.0,
+        );
+        pixel_y += cell_height;
+    }
+
+    PixelYMap {
+        entries: y_map_entries,
+        base_row: area_row,
+        cell_height,
     }
 }
 
-/// Draw styled text at an absolute position using 3-pass run batching.
+/// Draw styled text at a pixel Y position using 3-pass run batching.
 ///
 /// Pass 1: coalesce adjacent cells with the same bg into single rects.
-/// Pass 2: accumulate text into runs with uniform style, flush via `draw_text_run`.
+/// Pass 2: accumulate text into runs with uniform style, flush via `draw_text_run_at_y`.
 /// Pass 3: coalesce adjacent underlined cells into single line spans.
+///
+/// `pixel_y` is the exact pixel Y coordinate. `line_height` is the pixel height
+/// of this line (scale * cell_height). Column positioning remains cell-based.
 ///
 /// Reduces ~80 Skia calls per line to ~3-5 (one per style run).
 fn draw_styled_at(
     canvas: &mut SkiaCanvas,
-    row: usize,
+    pixel_y: f32,
     col: usize,
     chars: &[char],
     styles: &[CharStyle],
     scale: f32,
+    line_height: f32,
 ) {
     if chars.is_empty() {
         return;
@@ -581,7 +651,7 @@ fn draw_styled_at(
         col_offsets.push(acc); // sentinel for total width
     }
 
-    // Pass 1: Coalesce background rects.
+    // Pass 1: Coalesce background rects (pixel-precise height).
     {
         let mut run_start = 0;
         let mut run_bg: Option<Color4f> = styles[0].bg;
@@ -597,8 +667,7 @@ fn draw_styled_at(
                 if let Some(bg) = run_bg {
                     let start_col = col_offsets[run_start];
                     let width = col_offsets[i] - start_col;
-                    let bg_height = 1 + extra_rows_for_scale(scale);
-                    canvas.draw_rect_fill(row, col + start_col, width, bg_height, bg);
+                    canvas.draw_rect_at_y(pixel_y, col + start_col, width, line_height, bg);
                 }
                 run_start = i;
                 run_bg = this_bg;
@@ -636,8 +705,8 @@ fn draw_styled_at(
             } else {
                 // Flush current run.
                 if !run_buf.is_empty() {
-                    canvas.draw_text_run(
-                        row,
+                    canvas.draw_text_run_at_y(
+                        pixel_y,
                         col + run_start_col,
                         &run_buf,
                         run_fg,
@@ -657,8 +726,8 @@ fn draw_styled_at(
                     run_buf.push(ch);
                 } else if ch != ' ' {
                     // Non-ASCII / missing glyph — per-char fallback.
-                    canvas.draw_char(
-                        row,
+                    canvas.draw_char_at_y(
+                        pixel_y,
                         col + col_offsets[i],
                         ch,
                         cs.fg,
@@ -670,8 +739,8 @@ fn draw_styled_at(
             }
         }
         if !run_buf.is_empty() {
-            canvas.draw_text_run(
-                row,
+            canvas.draw_text_run_at_y(
+                pixel_y,
                 col + run_start_col,
                 &run_buf,
                 run_fg,
@@ -692,12 +761,12 @@ fn draw_styled_at(
                 }
             } else if let Some((_, start_col, fg)) = ul_start.take() {
                 let width = col_offsets[i] - start_col;
-                canvas.draw_underline_span(row, col + start_col, width, fg);
+                canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
             }
         }
         if let Some((_, start_col, fg)) = ul_start {
             let width = col_offsets[styles.len()] - start_col;
-            canvas.draw_underline_span(row, col + start_col, width, fg);
+            canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
         }
     }
 }
