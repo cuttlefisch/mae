@@ -268,6 +268,7 @@ impl Editor {
 
         if subcmd == "d" {
             // Delete matching lines (iterate in reverse for stable indices).
+            self.buffers[idx].begin_undo_group();
             for &line_idx in matching_lines.iter().rev() {
                 let line_start = self.buffers[idx].rope().line_to_char(line_idx);
                 let line_end = if line_idx + 1 < self.buffers[idx].line_count() {
@@ -279,6 +280,7 @@ impl Editor {
                     self.buffers[idx].delete_range(line_start, line_end);
                 }
             }
+            self.buffers[idx].end_undo_group();
             self.set_status(format!("{} lines deleted", match_count));
             let win = self.window_mgr.focused_window_mut();
             win.clamp_cursor(&self.buffers[idx]);
@@ -356,7 +358,81 @@ impl Editor {
     }
 
     /// Execute a substitute command (`:s/old/new/g` or `:%s/old/new/g`).
+    /// Parse a vim-style line address relative to the current cursor row.
+    /// Supports: `.` (current), `$` (last), digits, `+N`, `-N`, `.+N`, `.-N`.
+    fn parse_line_address(&self, addr: &str) -> Option<usize> {
+        let addr = addr.trim();
+        let idx = self.active_buffer_idx();
+        let cursor_row = self.window_mgr.focused_window().cursor_row;
+        let last_line = self.buffers[idx].line_count().saturating_sub(1);
+
+        if addr == "." {
+            return Some(cursor_row);
+        }
+        if addr == "$" {
+            return Some(last_line);
+        }
+        // Relative: +N, -N, .+N, .-N (check before pure number since +2 parses as usize)
+        let rel = addr.strip_prefix('.').unwrap_or(addr);
+        if let Some(offset) = rel.strip_prefix('+') {
+            let n: usize = offset.parse().ok()?;
+            return Some((cursor_row + n).min(last_line));
+        }
+        if let Some(offset) = rel.strip_prefix('-') {
+            let n: usize = offset.parse().ok()?;
+            return Some(cursor_row.saturating_sub(n));
+        }
+        // Pure number (1-indexed absolute line number)
+        if let Ok(n) = addr.parse::<usize>() {
+            return Some(n.saturating_sub(1).min(last_line));
+        }
+        None
+    }
+
+    /// Parse a range prefix like `1,5`, `.,+5`, `%` from the beginning of an
+    /// ex command. Returns `(start_line, end_line_exclusive, rest_of_cmd)`.
+    /// If no range is found, returns None.
+    pub(crate) fn parse_ex_range<'a>(&self, cmd: &'a str) -> Option<(usize, usize, &'a str)> {
+        // % prefix (whole buffer)
+        if let Some(rest) = cmd.strip_prefix('%') {
+            let idx = self.active_buffer_idx();
+            return Some((0, self.buffers[idx].line_count(), rest));
+        }
+
+        // Find the 's/' that starts the substitute command to know where range ends.
+        // Range is everything before 's/'.
+        let s_pos = cmd.find("s/")?;
+        if s_pos == 0 {
+            return None; // No range prefix
+        }
+        let range_str = &cmd[..s_pos];
+        let rest = &cmd[s_pos..];
+
+        // Split on comma
+        let parts: Vec<&str> = range_str.splitn(2, ',').collect();
+        match parts.len() {
+            1 => {
+                let line = self.parse_line_address(parts[0])?;
+                Some((line, line + 1, rest))
+            }
+            2 => {
+                let start = self.parse_line_address(parts[0])?;
+                let end = self.parse_line_address(parts[1])?;
+                Some((start, end + 1, rest))
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn execute_substitute_command(&mut self, cmd: &str) {
+        self.execute_substitute_with_range(cmd, None);
+    }
+
+    pub(crate) fn execute_substitute_with_range(
+        &mut self,
+        cmd: &str,
+        range: Option<(usize, usize)>,
+    ) {
         let sub = match search::parse_substitute(cmd) {
             Ok(s) => s,
             Err(e) => {
@@ -376,7 +452,9 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let win_row = self.window_mgr.focused_window().cursor_row;
 
-        let (start_line, end_line) = if sub.whole_buffer {
+        let (start_line, end_line) = if let Some((s, e)) = range {
+            (s, e)
+        } else if sub.whole_buffer {
             (0, self.buffers[idx].line_count())
         } else {
             (win_row, win_row + 1)

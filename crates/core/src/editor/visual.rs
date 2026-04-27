@@ -338,6 +338,7 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let mut yanked = String::new();
 
+        self.buffers[idx].begin_undo_group();
         // Process in reverse for stable offsets.
         for row in (min_row..=max_row).rev() {
             let line_start = self.buffers[idx].rope().line_to_char(row);
@@ -351,6 +352,7 @@ impl Editor {
                 self.buffers[idx].delete_range(line_start + start, line_start + end);
             }
         }
+        self.buffers[idx].end_undo_group();
         if yanked.ends_with('\n') {
             yanked.pop();
         }
@@ -404,6 +406,7 @@ impl Editor {
         }
         let (min_row, max_row, min_col, _max_col) = self.block_selection_rect();
         let idx = self.active_buffer_idx();
+        self.buffers[idx].begin_undo_group();
         // Insert in reverse so offsets stay stable.
         for row in (min_row..=max_row).rev() {
             let line_start = self.buffers[idx].rope().line_to_char(row);
@@ -415,6 +418,7 @@ impl Editor {
             let col = min_col.min(line_len);
             self.buffers[idx].insert_text_at(line_start + col, text);
         }
+        self.buffers[idx].end_undo_group();
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = min_row;
         win.cursor_col = min_col;

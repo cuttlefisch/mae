@@ -32,18 +32,75 @@ pub struct SubstituteCommand {
     pub global: bool,
 }
 
+/// Maximum number of search matches to collect. Prevents OOM and freezes
+/// on patterns that match nearly every character in large buffers.
+const MAX_SEARCH_MATCHES: usize = 10_000;
+
 /// Find all matches in the rope text. Returns char-offset ranges.
+/// Capped at [`MAX_SEARCH_MATCHES`] to prevent freezes on large buffers.
 pub fn find_all(rope: &Rope, regex: &Regex) -> Vec<SearchMatch> {
+    // For very large buffers (>5 MB), use a line-by-line approach to avoid
+    // materializing the entire rope into one contiguous String.
+    let total_chars = rope.len_chars();
+    if total_chars > 500_000 {
+        return find_all_chunked(rope, regex);
+    }
+
     let text: String = rope.chars().collect();
     let mut matches = Vec::new();
+    // Build a byte-offset → char-offset lookup in O(n) instead of O(n) per match.
+    let byte_to_char = build_byte_to_char_map(&text);
     for m in regex.find_iter(&text) {
-        // Convert byte offsets to char offsets
-        let start_chars = text[..m.start()].chars().count();
-        let end_chars = text[..m.end()].chars().count();
         matches.push(SearchMatch {
-            start: start_chars,
-            end: end_chars,
+            start: byte_to_char[m.start()],
+            end: byte_to_char[m.end()],
         });
+        if matches.len() >= MAX_SEARCH_MATCHES {
+            break;
+        }
+    }
+    matches
+}
+
+/// Build a byte-offset → char-offset lookup table in O(n).
+fn build_byte_to_char_map(text: &str) -> Vec<usize> {
+    let mut map = Vec::with_capacity(text.len() + 1);
+    let mut char_idx = 0usize;
+    for (byte_idx, ch) in text.char_indices() {
+        while map.len() <= byte_idx {
+            map.push(char_idx);
+        }
+        char_idx += 1;
+        let next_byte = byte_idx + ch.len_utf8();
+        while map.len() < next_byte {
+            map.push(char_idx);
+        }
+    }
+    while map.len() <= text.len() {
+        map.push(char_idx);
+    }
+    map
+}
+
+/// Line-by-line search for large buffers. Avoids allocating the entire rope
+/// as a contiguous String. Capped at MAX_SEARCH_MATCHES.
+fn find_all_chunked(rope: &Rope, regex: &Regex) -> Vec<SearchMatch> {
+    let mut matches = Vec::new();
+    let mut char_offset = 0usize;
+    for line_idx in 0..rope.len_lines() {
+        let line = rope.line(line_idx);
+        let line_str: String = line.chars().collect();
+        let byte_to_char = build_byte_to_char_map(&line_str);
+        for m in regex.find_iter(&line_str) {
+            matches.push(SearchMatch {
+                start: char_offset + byte_to_char[m.start()],
+                end: char_offset + byte_to_char[m.end()],
+            });
+            if matches.len() >= MAX_SEARCH_MATCHES {
+                return matches;
+            }
+        }
+        char_offset += line.len_chars();
     }
     matches
 }

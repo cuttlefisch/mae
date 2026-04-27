@@ -322,5 +322,103 @@ fn ignorecase_smartcase_options() {
 }
 
 // -----------------------------------------------------------------------
+// Undo grouping tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn block_visual_delete_undoes_as_one_group() {
+    let mut editor = editor_with_text("abcd\nefgh\nijkl\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 1;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 2;
+    editor.block_visual_delete();
+    // Should have deleted columns 1-2 from all 3 lines.
+    assert_eq!(editor.buffers[0].line_text(0).trim_end(), "ad");
+    // One undo should restore all lines.
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].undo(win);
+    assert_eq!(editor.buffers[0].line_text(0).trim_end(), "abcd");
+    assert_eq!(editor.buffers[0].line_text(1).trim_end(), "efgh");
+    assert_eq!(editor.buffers[0].line_text(2).trim_end(), "ijkl");
+}
+
+#[test]
+fn block_visual_insert_undoes_as_one_group() {
+    let mut editor = editor_with_text("abc\ndef\nghi\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 0;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 0;
+    editor.block_visual_insert("XX");
+    assert!(editor.buffers[0].text().starts_with("XXabc\n"));
+    // One undo should restore all lines.
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].undo(win);
+    assert_eq!(editor.buffers[0].text(), "abc\ndef\nghi\n");
+}
+
+#[test]
+fn global_delete_undoes_as_one_group() {
+    let mut editor = editor_with_text("keep\ndelete me\nkeep too\ndelete me\n");
+    editor.execute_global_command("g/delete/d");
+    assert_eq!(editor.buffers[0].line_count(), 3); // 2 lines + trailing
+                                                   // One undo should restore all deleted lines.
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].undo(win);
+    assert_eq!(editor.buffers[0].line_count(), 5);
+}
+
+// -----------------------------------------------------------------------
+// Range substitute tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn range_substitute_dot_plus_n() {
+    let mut editor = editor_with_text("aaa\nbbb\nccc\nddd\neee\n");
+    // Cursor on line 1 (0-indexed)
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    // .,+2s/./X/ should substitute on lines 1,2,3
+    if let Some((start, end, sub_cmd)) = editor.parse_ex_range(".,+2s/./X/") {
+        editor.execute_substitute_with_range(sub_cmd, Some((start, end)));
+    }
+    assert_eq!(editor.buffers[0].line_text(0).trim_end(), "aaa"); // untouched
+    assert_eq!(editor.buffers[0].line_text(1).trim_end(), "Xbb"); // substituted
+    assert_eq!(editor.buffers[0].line_text(2).trim_end(), "Xcc"); // substituted
+    assert_eq!(editor.buffers[0].line_text(3).trim_end(), "Xdd"); // substituted
+    assert_eq!(editor.buffers[0].line_text(4).trim_end(), "eee"); // untouched
+}
+
+#[test]
+fn range_substitute_absolute_lines() {
+    let mut editor = editor_with_text("aaa\nbbb\nccc\n");
+    if let Some((start, end, sub_cmd)) = editor.parse_ex_range("2,3s/./X/") {
+        editor.execute_substitute_with_range(sub_cmd, Some((start, end)));
+    }
+    assert_eq!(editor.buffers[0].line_text(0).trim_end(), "aaa"); // line 1 untouched
+    assert_eq!(editor.buffers[0].line_text(1).trim_end(), "Xbb"); // line 2 substituted
+    assert_eq!(editor.buffers[0].line_text(2).trim_end(), "Xcc"); // line 3 substituted
+}
+
+// -----------------------------------------------------------------------
+// Tab completion tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn set_tab_completes_option_names() {
+    let editor = Editor::new();
+    let mut e = editor;
+    e.command_line = "set ignore".to_string();
+    e.command_cursor = e.command_line.len();
+    let completions = e.cmdline_completions();
+    assert!(completions.contains(&"ignorecase".to_string()));
+}
+
+// -----------------------------------------------------------------------
 // Visual mode tests
 // -----------------------------------------------------------------------

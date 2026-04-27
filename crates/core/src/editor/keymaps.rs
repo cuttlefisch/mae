@@ -430,6 +430,8 @@ impl Editor {
         visual.bind(parse_key_seq("\""), "prompt-register");
         // Surround visual selection: `S<char>`.
         visual.bind(parse_key_seq("S"), "surround-visual-await");
+        // Block visual insert (I inserts at left edge on all rows)
+        visual.bind(parse_key_seq("I"), "block-visual-insert");
         // Text objects in visual mode
         visual.bind(parse_key_seq("i"), "visual-inner-object");
         visual.bind(parse_key_seq("a"), "visual-around-object");

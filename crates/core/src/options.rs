@@ -286,6 +286,11 @@ impl OptionRegistry {
     pub fn list(&self) -> &[OptionDef] {
         &self.options
     }
+
+    /// Return all canonical option names (for tab completion).
+    pub fn all_names(&self) -> Vec<String> {
+        self.options.iter().map(|o| o.name.to_string()).collect()
+    }
 }
 
 /// Parse a string as a boolean value. Accepts: true, #t, 1, yes, on → true; everything else → false.

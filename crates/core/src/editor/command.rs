@@ -619,10 +619,17 @@ impl Editor {
                     self.execute_global_command(cmd);
                     return true;
                 }
-                // Check for substitute commands: s/.../.../  or %s/.../.../
+                // Check for substitute commands: s/.../.../  or %s/.../.../ or range s/
                 if cmd.starts_with("s/") || cmd.starts_with("%s/") {
                     self.execute_substitute_command(cmd);
                     return true;
+                }
+                // Range-prefixed substitute: .,+5s/...  1,10s/...  $s/...
+                if cmd.contains("s/") {
+                    if let Some((start, end, sub_cmd)) = self.parse_ex_range(cmd) {
+                        self.execute_substitute_with_range(sub_cmd, Some((start, end)));
+                        return true;
+                    }
                 }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work

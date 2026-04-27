@@ -721,6 +721,16 @@ impl Editor {
                 .filter(|n| n.starts_with(prefix))
                 .map(|n| n.to_string())
                 .collect(),
+            "set" => {
+                let mut matches: Vec<String> = self
+                    .option_registry
+                    .all_names()
+                    .into_iter()
+                    .filter(|n| n.starts_with(prefix))
+                    .collect();
+                matches.sort();
+                matches
+            }
             _ => Vec::new(),
         }
     }

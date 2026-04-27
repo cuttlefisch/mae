@@ -446,6 +446,10 @@ pub struct Editor {
     pub ignorecase: bool,
     /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
     pub smartcase: bool,
+    /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
+    /// is pressed in block visual mode. On insert-mode exit, the typed text is
+    /// replicated to all rows in the range.
+    pub pending_block_insert: Option<(usize, usize, usize)>,
     /// Shared heartbeat counter — incremented each event loop tick by the
     /// binary. The watchdog thread monitors this to detect main-thread stalls.
     pub heartbeat: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -604,6 +608,7 @@ impl Editor {
             insert_ctrl_d: "dedent".to_string(),
             ignorecase: false,
             smartcase: false,
+            pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -759,6 +764,7 @@ impl Editor {
             insert_ctrl_d: "dedent".to_string(),
             ignorecase: false,
             smartcase: false,
+            pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
