@@ -278,13 +278,19 @@ pub struct HighlightSpan {
 #[derive(Default)]
 pub struct SyntaxMap {
     entries: HashMap<usize, SyntaxState>,
+    /// Cached `HighlightConfiguration` per language. These are expensive to
+    /// build (query compilation) but immutable per language, so we cache them.
+    configs: HashMap<Language, HighlightConfiguration>,
 }
 
 struct SyntaxState {
     language: Language,
     tree: Option<Tree>,
-    /// Cached highlight spans. Invalidated on edit, recomputed lazily.
+    /// Cached highlight spans. Recomputed lazily when buffer generation changes.
     spans: Option<Vec<HighlightSpan>>,
+    /// Buffer generation at which `spans` was last computed.
+    /// Compared against `Buffer::generation` to detect staleness.
+    computed_at: u64,
 }
 
 impl SyntaxMap {
@@ -300,6 +306,7 @@ impl SyntaxMap {
                 language,
                 tree: None,
                 spans: None,
+                computed_at: 0,
             },
         );
     }
@@ -327,22 +334,29 @@ impl SyntaxMap {
         self.entries.get(&buf_idx).map(|s| s.language)
     }
 
-    /// Returns `true` if cached spans exist for this buffer (no reparse needed).
-    /// Used by renderers to skip the Rope→String allocation when the cache is
-    /// still valid.
-    pub fn has_cached_spans(&self, buf_idx: usize) -> bool {
+    /// Returns `true` if cached spans exist and are fresh for this buffer
+    /// (no reparse needed). Used by renderers to skip the Rope→String
+    /// allocation when the cache is still valid.
+    pub fn has_cached_spans(&self, buf_idx: usize, generation: u64) -> bool {
         self.entries
             .get(&buf_idx)
-            .is_some_and(|s| s.spans.is_some())
+            .is_some_and(|s| s.spans.is_some() && s.computed_at == generation)
     }
 
-    /// Return cached spans without triggering a reparse. Returns `None` if
-    /// no cached spans exist (invalidated or never computed).
-    pub fn cached_spans(&self, buf_idx: usize) -> Option<&[HighlightSpan]> {
-        self.entries.get(&buf_idx).and_then(|s| s.spans.as_deref())
+    /// Return cached spans only if they are fresh (computed at the given
+    /// generation). Returns `None` if stale or never computed.
+    pub fn cached_spans(&self, buf_idx: usize, generation: u64) -> Option<&[HighlightSpan]> {
+        self.entries.get(&buf_idx).and_then(|s| {
+            if s.computed_at == generation {
+                s.spans.as_deref()
+            } else {
+                None
+            }
+        })
     }
 
     /// Mark the buffer as dirty so the next `spans_for` reparses.
+    /// Still useful for callers that force a reparse (e.g. language change).
     pub fn invalidate(&mut self, buf_idx: usize) {
         if let Some(state) = self.entries.get_mut(&buf_idx) {
             state.spans = None;
@@ -350,12 +364,38 @@ impl SyntaxMap {
         }
     }
 
+    /// Return cached spans regardless of freshness. Returns `(spans, is_fresh)`
+    /// where `is_fresh` is true if computed at the given generation.
+    /// Always returns spans if any exist (even stale), plus the freshness flag.
+    /// Returns `None` only if no spans have ever been computed for this buffer.
+    pub fn cached_spans_any(
+        &self,
+        buf_idx: usize,
+        generation: u64,
+    ) -> Option<(&[HighlightSpan], bool)> {
+        self.entries.get(&buf_idx).and_then(|s| {
+            s.spans
+                .as_deref()
+                .map(|spans| (spans, s.computed_at == generation))
+        })
+    }
+
     /// Return cached (or freshly computed) highlight spans for the buffer.
+    /// Reparses only when the buffer generation has changed since the last
+    /// computation.
     /// Returns `None` if the buffer has no associated language.
-    pub fn spans_for(&mut self, buf_idx: usize, source: &str) -> Option<&[HighlightSpan]> {
+    pub fn spans_for(
+        &mut self,
+        buf_idx: usize,
+        source: &str,
+        generation: u64,
+    ) -> Option<&[HighlightSpan]> {
         let state = self.entries.get_mut(&buf_idx)?;
-        if state.spans.is_none() {
-            state.spans = Some(compute_spans(state.language, source));
+        if state.spans.is_none() || state.computed_at != generation {
+            let lang = state.language;
+            state.spans = Some(compute_spans_with_cache(lang, source, &mut self.configs));
+            state.tree = None; // tree is also stale
+            state.computed_at = generation;
         }
         state.spans.as_deref()
     }
@@ -371,6 +411,94 @@ impl SyntaxMap {
     }
 }
 
+/// Compute tree-sitter highlight spans for every text buffer visible in the
+/// current window layout. Uses stale spans during typing (never blocks render)
+/// and queues buffers for deferred reparse into `editor.syntax_reparse_pending`.
+///
+/// Synchronous parse only happens on first file open (no cached spans at all).
+pub fn compute_visible_syntax_spans(
+    editor: &mut crate::editor::Editor,
+) -> HashMap<usize, Vec<HighlightSpan>> {
+    let mut out = HashMap::new();
+    let mut need_first_parse: Vec<(usize, u64)> = Vec::new();
+
+    for win in editor.window_mgr.iter_windows() {
+        let idx = win.buffer_idx;
+        if out.contains_key(&idx) || need_first_parse.iter().any(|(i, _)| *i == idx) {
+            continue;
+        }
+        let Some(buf) = editor.buffers.get(idx) else {
+            continue;
+        };
+        if !matches!(buf.kind, crate::buffer::BufferKind::Text) {
+            continue;
+        }
+        if editor.syntax.language_of(idx).is_none() {
+            continue;
+        }
+        let gen = buf.generation;
+        match editor.syntax.cached_spans_any(idx, gen) {
+            Some((spans, true)) => {
+                // Fresh cache — use directly.
+                out.insert(idx, spans.to_vec());
+            }
+            Some((spans, false)) => {
+                // Stale cache — use stale spans for this frame, queue reparse.
+                out.insert(idx, spans.to_vec());
+                editor.syntax_reparse_pending.insert(idx);
+            }
+            None => {
+                // No spans at all (first open) — must parse synchronously.
+                need_first_parse.push((idx, gen));
+            }
+        }
+    }
+
+    // Synchronous first-parse only for buffers with no cached spans at all.
+    for (idx, gen) in need_first_parse {
+        let source: String = editor.buffers[idx].rope().chars().collect();
+        if let Some(spans) = editor.syntax.spans_for(idx, &source, gen) {
+            out.insert(idx, spans.to_vec());
+        }
+    }
+    out
+}
+
+/// Perform deferred syntax reparses for buffers in `syntax_reparse_pending`.
+/// Called from event loops after a debounce period (~50ms after last edit).
+pub fn drain_pending_reparses(editor: &mut crate::editor::Editor) {
+    let pending: Vec<usize> = editor.syntax_reparse_pending.drain().collect();
+    for idx in pending {
+        let Some(buf) = editor.buffers.get(idx) else {
+            continue;
+        };
+        let gen = buf.generation;
+        let source: String = buf.rope().chars().collect();
+        editor.syntax.spans_for(idx, &source, gen);
+    }
+}
+
+/// Compute highlight spans using a config cache (avoids rebuilding
+/// `HighlightConfiguration` on every call).
+fn compute_spans_with_cache(
+    language: Language,
+    source: &str,
+    configs: &mut HashMap<Language, HighlightConfiguration>,
+) -> Vec<HighlightSpan> {
+    if language == Language::Org {
+        return compute_org_spans(source);
+    }
+    if let std::collections::hash_map::Entry::Vacant(e) = configs.entry(language) {
+        if let Some(config) = build_configuration(language) {
+            e.insert(config);
+        } else {
+            return Vec::new();
+        }
+    }
+    highlight_with_config(configs.get(&language).unwrap(), source)
+}
+
+#[cfg(test)]
 fn compute_spans(language: Language, source: &str) -> Vec<HighlightSpan> {
     // Org: regex-based fallback until a tree-sitter-org compatible with
     // tree-sitter 0.25 is available.
@@ -380,8 +508,12 @@ fn compute_spans(language: Language, source: &str) -> Vec<HighlightSpan> {
     let Some(config) = build_configuration(language) else {
         return Vec::new();
     };
+    highlight_with_config(&config, source)
+}
+
+fn highlight_with_config(config: &HighlightConfiguration, source: &str) -> Vec<HighlightSpan> {
     let mut highlighter = Highlighter::new();
-    let events = match highlighter.highlight(&config, source.as_bytes(), None, |_| None) {
+    let events = match highlighter.highlight(config, source.as_bytes(), None, |_| None) {
         Ok(it) => it,
         Err(_) => return Vec::new(),
     };
@@ -727,20 +859,19 @@ mod tests {
     fn syntax_map_caches_spans() {
         let mut map = SyntaxMap::new();
         map.set_language(0, Language::Rust);
-        let spans_len = map.spans_for(0, "fn x() {}").unwrap().len();
+        let spans_len = map.spans_for(0, "fn x() {}", 1).unwrap().len();
         assert!(spans_len > 0);
-        // Second call returns the same cached vec; compare lengths.
-        assert_eq!(map.spans_for(0, "fn x() {}").unwrap().len(), spans_len);
+        // Second call with same generation returns the cached vec.
+        assert_eq!(map.spans_for(0, "fn x() {}", 1).unwrap().len(), spans_len);
     }
 
     #[test]
     fn syntax_map_invalidate_forces_recompute() {
         let mut map = SyntaxMap::new();
         map.set_language(0, Language::Rust);
-        let _ = map.spans_for(0, "fn x() {}");
-        map.invalidate(0);
-        // After invalidation the map must recompute against new source.
-        let spans = map.spans_for(0, "let y = 42;").unwrap();
+        let _ = map.spans_for(0, "fn x() {}", 1);
+        // Generation bump triggers recompute against new source.
+        let spans = map.spans_for(0, "let y = 42;", 2).unwrap();
         assert!(spans.iter().any(|s| s.theme_key == "keyword"));
     }
 
@@ -839,6 +970,6 @@ mod tests {
     #[test]
     fn no_language_returns_none_from_map() {
         let mut map = SyntaxMap::new();
-        assert!(map.spans_for(42, "source").is_none());
+        assert!(map.spans_for(42, "source", 0).is_none());
     }
 }

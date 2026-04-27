@@ -165,6 +165,14 @@ pub(crate) async fn run_terminal_loop(
                 .ensure_scroll(viewport_height);
         }
 
+        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        if !editor.syntax_reparse_pending.is_empty()
+            && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+        {
+            mae_core::syntax::drain_pending_reparses(editor);
+            tui_dirty = true;
+        }
+
         if tui_dirty {
             let since_last = last_render.elapsed();
             if since_last >= MIN_FRAME_INTERVAL {
@@ -296,16 +304,40 @@ pub(crate) async fn run_terminal_loop(
             }
         };
 
+        // Syntax reparse timer: fires 50ms after last edit when reparses are pending.
+        let has_pending_reparse = !editor.syntax_reparse_pending.is_empty();
+        let reparse_sleep_dur = if has_pending_reparse {
+            let debounce = std::time::Duration::from_millis(50);
+            debounce.checked_sub(editor.last_edit_time.elapsed())
+        } else {
+            None
+        };
+        let syntax_reparse_timer = async {
+            if let Some(dur) = reparse_sleep_dur {
+                tokio::time::sleep(dur).await;
+            } else if has_pending_reparse {
+                // debounce already expired, fire immediately
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
         tokio::select! {
             _ = frame_timer => {
                 // Frame slot arrived — mark dirty so the render section fires.
                 tui_dirty = true;
                 render_pending = false;
             }
+            _ = syntax_reparse_timer => {
+                // Debounce expired — drain pending reparses.
+                mae_core::syntax::drain_pending_reparses(editor);
+                tui_dirty = true;
+            }
             maybe_event = event_stream.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         tui_dirty = true;
+                        editor.last_edit_time = std::time::Instant::now();
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc

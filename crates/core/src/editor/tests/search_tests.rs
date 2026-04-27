@@ -297,6 +297,38 @@ fn block_visual_insert_on_all_lines() {
     assert!(text.contains("gXXhi\n"));
 }
 
+#[test]
+fn block_visual_append_on_all_lines() {
+    let mut editor = editor_with_text("abc\ndef\nghi\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 1;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 2;
+    // Dispatch block-visual-append: should enter insert at max_col+1 = 3.
+    editor.dispatch_builtin("block-visual-append");
+    assert_eq!(editor.mode, crate::Mode::Insert);
+    assert_eq!(editor.pending_block_insert, Some((0, 2, 3)));
+    // Simulate typing "XX" in insert mode on the first row (char at a time
+    // so finalize_insert_for_repeat can capture the inserted text range).
+    let idx = editor.active_buffer_idx();
+    for ch in "XX".chars() {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[idx].insert_char(win, ch);
+    }
+    editor.dispatch_builtin("enter-normal-mode");
+    // All three lines should have "XX" appended after column 2.
+    let text = editor.buffers[0].text();
+    assert!(text.contains("abcXX\n"), "got: {}", text);
+    assert!(text.contains("defXX\n"), "got: {}", text);
+    assert!(text.contains("ghiXX\n"), "got: {}", text);
+    // One undo should revert ALL lines (first row + replicated rows).
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].undo(win);
+    assert_eq!(editor.buffers[0].text(), "abc\ndef\nghi\n");
+}
+
 // -----------------------------------------------------------------------
 // Option tests
 // -----------------------------------------------------------------------
@@ -357,6 +389,35 @@ fn block_visual_insert_undoes_as_one_group() {
     editor.block_visual_insert("XX");
     assert!(editor.buffers[0].text().starts_with("XXabc\n"));
     // One undo should restore all lines.
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].undo(win);
+    assert_eq!(editor.buffers[0].text(), "abc\ndef\nghi\n");
+}
+
+#[test]
+fn block_visual_insert_dispatch_undoes_as_one_group() {
+    let mut editor = editor_with_text("abc\ndef\nghi\n");
+    editor.enter_visual_mode(crate::VisualType::Block);
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 0;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 0;
+    // Use the dispatch path (like a real keypress of `I`).
+    editor.dispatch_builtin("block-visual-insert");
+    assert_eq!(editor.mode, crate::Mode::Insert);
+    let idx = editor.active_buffer_idx();
+    for ch in "XX".chars() {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[idx].insert_char(win, ch);
+    }
+    editor.dispatch_builtin("enter-normal-mode");
+    assert!(
+        editor.buffers[0].text().starts_with("XXabc\n"),
+        "{}",
+        editor.buffers[0].text()
+    );
+    // One undo should restore ALL lines (first row + replicated rows).
     let win = editor.window_mgr.focused_window_mut();
     editor.buffers[0].undo(win);
     assert_eq!(editor.buffers[0].text(), "abc\ndef\nghi\n");

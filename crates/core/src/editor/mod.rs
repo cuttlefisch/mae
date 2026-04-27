@@ -279,6 +279,12 @@ pub struct Editor {
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
+    /// Buffer indices that need a deferred syntax reparse. Populated by the
+    /// renderer when it uses stale spans; drained by the event loop after
+    /// a debounce period (~50ms after last edit).
+    pub syntax_reparse_pending: std::collections::HashSet<usize>,
+    /// Timestamp of the last buffer edit. Used for debouncing syntax reparses.
+    pub last_edit_time: std::time::Instant,
     /// Stack of prior char-offset visual selections created by
     /// `syntax_expand_selection` — lets `syntax_contract_selection` walk
     /// back down the node tree. Cleared on `syntax_select_node`.
@@ -540,6 +546,8 @@ impl Editor {
             diagnostics: DiagnosticStore::default(),
             lsp_servers: HashMap::new(),
             syntax: crate::syntax::SyntaxMap::new(),
+            syntax_reparse_pending: std::collections::HashSet::new(),
+            last_edit_time: std::time::Instant::now(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
             completion_items: Vec::new(),
@@ -695,6 +703,8 @@ impl Editor {
                 }
                 m
             },
+            syntax_reparse_pending: std::collections::HashSet::new(),
+            last_edit_time: std::time::Instant::now(),
             syntax_selection_stack: Vec::new(),
             marks: HashMap::new(),
             completion_items: Vec::new(),

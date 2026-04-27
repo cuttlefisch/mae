@@ -367,7 +367,7 @@ fn execute_perf_benchmark(
             let start = std::time::Instant::now();
             let mut syntax_map = mae_core::syntax::SyntaxMap::new();
             syntax_map.set_language(0, mae_core::syntax::Language::Rust);
-            let _ = syntax_map.spans_for(0, &source);
+            let _ = syntax_map.spans_for(0, &source, 0);
             let elapsed = start.elapsed().as_micros() as u64;
             let ops = if elapsed > 0 {
                 (size as f64 / (elapsed as f64 / 1_000_000.0)) as u64

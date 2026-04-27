@@ -948,11 +948,10 @@ impl Editor {
                     // Block-visual insert replication: if we just exited an `I`
                     // in block visual, replicate the typed text to all other rows.
                     if let Some((min_row, max_row, col)) = self.pending_block_insert.take() {
+                        let idx = self.active_buffer_idx();
                         if let Some(ref edit) = self.last_edit {
                             if let Some(ref text) = edit.inserted_text {
                                 if !text.is_empty() {
-                                    let idx = self.active_buffer_idx();
-                                    self.buffers[idx].begin_undo_group();
                                     // Replicate to rows below the first (first row already has the text).
                                     for row in (min_row + 1..=max_row).rev() {
                                         if row < self.buffers[idx].line_count() {
@@ -968,10 +967,12 @@ impl Editor {
                                                 .insert_text_at(line_start + ins_col, text);
                                         }
                                     }
-                                    self.buffers[idx].end_undo_group();
                                 }
                             }
                         }
+                        // Close the undo group opened when I/A entered block-insert.
+                        // This groups the first-row typed chars + replication into one undo.
+                        self.buffers[idx].end_undo_group();
                     }
 
                     let win = self.window_mgr.focused_window_mut();
@@ -1553,6 +1554,35 @@ impl Editor {
                     self.insert_start_offset =
                         Some(self.buffers[idx].char_offset_at(min_row, min_col));
                     self.insert_initiated_by = Some("block-visual-insert".to_string());
+                    // Begin an undo group so the typed chars on the first row
+                    // AND the replication to other rows undo as one unit.
+                    self.buffers[idx].begin_undo_group();
+                    self.set_mode(Mode::Insert);
+                }
+            }
+            "block-visual-append" => {
+                if self.mode == Mode::Visual(VisualType::Block) {
+                    let (min_row, max_row, _min_col, max_col) = self.block_selection_rect();
+                    self.save_visual_state();
+                    let append_col = max_col + 1;
+                    self.pending_block_insert = Some((min_row, max_row, append_col));
+                    self.search_state.highlight_active = false;
+                    // Position cursor at the top row, one past the right edge.
+                    let idx = self.active_buffer_idx();
+                    let line_len = self.buffers[idx]
+                        .line_text(min_row)
+                        .trim_end_matches('\n')
+                        .chars()
+                        .count();
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = min_row;
+                    win.cursor_col = append_col.min(line_len);
+                    self.insert_start_offset =
+                        Some(self.buffers[idx].char_offset_at(min_row, win.cursor_col));
+                    self.insert_initiated_by = Some("block-visual-append".to_string());
+                    // Begin an undo group so the typed chars on the first row
+                    // AND the replication to other rows undo as one unit.
+                    self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }
             }

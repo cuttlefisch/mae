@@ -105,7 +105,14 @@ pub struct Buffer {
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
     /// Line indices that are currently folded (hidden).
+    /// NOTE: Fold boundaries are NOT adjusted on line insert/delete.
+    /// After structural edits, refresh folds with `zx`. A proper fix
+    /// (Emacs-style overlays with anchor tracking) is deferred.
     pub folded_ranges: Vec<(usize, usize)>,
+    /// Monotonic counter incremented on every rope mutation. Used by
+    /// `SyntaxMap` to detect stale cached spans without external
+    /// invalidation calls.
+    pub generation: u64,
     /// Per-buffer mode persistence (evil-mode pattern).  When switching away
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
@@ -139,6 +146,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -164,6 +172,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -189,6 +198,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -214,6 +224,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -240,6 +251,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -265,6 +277,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -290,6 +303,7 @@ impl Buffer {
             project_root: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         }
     }
@@ -321,6 +335,7 @@ impl Buffer {
             project_root,
             agent_shell: false,
             folded_ranges: Vec::new(),
+            generation: 0,
             saved_mode: None,
         })
     }
@@ -506,6 +521,12 @@ impl Buffer {
         }
     }
 
+    /// Increment the generation counter. Called on every rope mutation so
+    /// that `SyntaxMap` can detect stale caches without explicit invalidation.
+    fn bump_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     // --- Editing operations ---
     // Each records an EditAction for undo and clears the redo stack.
     // Cursor state is on Window, passed as parameter.
@@ -525,6 +546,7 @@ impl Buffer {
             win.cursor_col += 1;
         }
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn delete_char_backward(&mut self, win: &mut Window) {
@@ -554,6 +576,7 @@ impl Buffer {
             win.cursor_col -= 1;
         }
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn delete_char_forward(&mut self, win: &mut Window) {
@@ -569,6 +592,7 @@ impl Buffer {
         self.push_undo(EditAction::DeleteChar { pos, ch });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -595,6 +619,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
         text
     }
@@ -626,6 +651,7 @@ impl Buffer {
         self.push_undo(EditAction::DeleteRange { pos, text: deleted });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.cursor_col = pos - line_start;
     }
 
@@ -647,6 +673,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.cursor_col = 0;
     }
 
@@ -687,6 +714,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -703,6 +731,7 @@ impl Buffer {
         });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
     }
 
     /// Delete a character range [start, end). Used by the AI agent.
@@ -720,6 +749,7 @@ impl Buffer {
         self.push_undo(EditAction::DeleteRange { pos: start, text });
         self.redo_stack.clear();
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn open_line_below(&mut self, win: &mut Window) {
@@ -740,6 +770,7 @@ impl Buffer {
         win.cursor_row += 1;
         win.cursor_col = 0;
         self.modified = true;
+        self.bump_generation();
     }
 
     pub fn open_line_above(&mut self, win: &mut Window) {
@@ -755,6 +786,7 @@ impl Buffer {
         self.redo_stack.clear();
         win.cursor_col = 0;
         self.modified = true;
+        self.bump_generation();
     }
 
     // --- Undo / Redo ---
@@ -824,6 +856,7 @@ impl Buffer {
         Self::apply_undo_action(&mut self.rope, win, &action);
         self.redo_stack.push(action);
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 
@@ -835,6 +868,7 @@ impl Buffer {
         Self::apply_redo_action(&mut self.rope, win, &action);
         self.push_undo(action);
         self.modified = true;
+        self.bump_generation();
         win.clamp_cursor(self);
     }
 

@@ -77,6 +77,12 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
 
+### Buffer Safety
+- [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
+
+### Project Intelligence
+- [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.
+
 ### Test Infrastructure
 - [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
 
@@ -149,6 +155,8 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 26 | Shell CPU idle fix (generation-based dirty tracking, 30%→~0%) | v0.3.0 ✅ |
 | 27 | `find-file` uses project root instead of CWD | v0.3.0 ✅ |
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
+| 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
+| 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
 
 ---
 

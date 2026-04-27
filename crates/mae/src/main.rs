@@ -940,6 +940,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             {
                 self.dirty = true;
                 self.input_dirty = true;
+                self.editor.last_edit_time = std::time::Instant::now();
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1194,6 +1195,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.bell_sent = false;
         }
 
+        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        if !self.editor.syntax_reparse_pending.is_empty()
+            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+        {
+            mae_core::syntax::drain_pending_reparses(&mut self.editor);
+            self.dirty = true;
+        }
+
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
         // so keyboard/scroll never waits for the next frame boundary.
@@ -1209,6 +1218,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
+        } else if !self.editor.syntax_reparse_pending.is_empty() {
+            // Pending reparses but not otherwise dirty — wake up when debounce expires.
+            let debounce = std::time::Duration::from_millis(50);
+            let wake_at = self.editor.last_edit_time + debounce;
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake_at));
         } else {
             // Not dirty — sleep until next event (no busy-loop).
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);

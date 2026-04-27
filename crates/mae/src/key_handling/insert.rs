@@ -73,6 +73,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, '\n');
+            editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
         }
@@ -80,6 +81,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, '\n');
+            editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
         }
@@ -88,6 +90,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
+            editor.search_state.matches.clear();
             editor.lsp_request_completion();
             return;
         }
@@ -95,6 +98,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
+            editor.search_state.matches.clear();
             editor.lsp_request_completion();
             return;
         }
@@ -116,6 +120,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_word_backward(win);
+            editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
         }
@@ -124,6 +129,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_to_line_start(win);
+            editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
         }
@@ -132,6 +138,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_to_line_end(win);
+            editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
         }
@@ -147,6 +154,7 @@ pub(super) fn handle_insert_mode(
                 let idx = editor.active_buffer_idx();
                 let win = editor.window_mgr.focused_window_mut();
                 editor.buffers[idx].delete_char_forward(win);
+                editor.search_state.matches.clear();
             } else {
                 editor.dispatch_builtin("dedent-line");
             }

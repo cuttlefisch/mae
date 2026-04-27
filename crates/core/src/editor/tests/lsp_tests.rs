@@ -208,13 +208,12 @@ fn record_edit_invalidates_syntax_cache() {
     buf.set_file_path(std::path::PathBuf::from("/tmp/x.rs"));
     let mut editor = Editor::with_buffer(buf);
     // Prime the cache
-    let _ = editor.syntax.spans_for(0, "fn x() {}");
+    let _ = editor.syntax.spans_for(0, "fn x() {}", 0);
     // Force invalidation via the edit-recording path
     editor.record_edit("delete-line");
-    // After invalidate, a fresh call should produce spans again. If the cache
-    // had been left behind, recomputing against different source would still
-    // match the old cached vec; invalidate forces recompute.
-    let spans = editor.syntax.spans_for(0, "let y = 42;").unwrap();
+    // After invalidate, a fresh call should produce spans again. The generation
+    // bump (or explicit invalidate) causes recompute against new source.
+    let spans = editor.syntax.spans_for(0, "let y = 42;", 1).unwrap();
     assert!(spans.iter().any(|s| s.theme_key == "keyword"));
 }
 

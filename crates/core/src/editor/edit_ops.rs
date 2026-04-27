@@ -146,9 +146,6 @@ impl Editor {
             // Notify LSP of the full insert-session content so queries during
             // the next idle tick reflect typed text.
             self.lsp_notify_did_change();
-            // Invalidate tree-sitter cache so the next render reparses.
-            let buf_idx = self.active_buffer_idx();
-            self.syntax.invalidate(buf_idx);
             // Capture the edit position for `g;` / `g,` navigation.
             self.record_change();
         }
@@ -167,8 +164,6 @@ impl Editor {
             count: None,
         });
         self.lsp_notify_did_change();
-        let buf_idx = self.active_buffer_idx();
-        self.syntax.invalidate(buf_idx);
         self.record_change();
     }
 
@@ -184,8 +179,6 @@ impl Editor {
             count,
         });
         self.lsp_notify_did_change();
-        let buf_idx = self.active_buffer_idx();
-        self.syntax.invalidate(buf_idx);
         self.record_change();
     }
 
