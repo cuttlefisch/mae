@@ -373,12 +373,28 @@ impl Renderer for GuiRenderer {
             if editor.mode != mae_core::Mode::ShellInsert
                 && editor.mode != mae_core::Mode::ConversationInput
             {
-                render_gui_cursor(canvas, editor, cols, window_height, status_row, cmd_row);
+                render_gui_cursor(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    status_row,
+                    cmd_row,
+                    &syntax_spans,
+                );
             }
 
             // Completion popup.
             if !editor.completion_items.is_empty() {
-                popup_render::render_completion_popup(canvas, editor, 0, 0, cols, window_height);
+                popup_render::render_completion_popup(
+                    canvas,
+                    editor,
+                    0,
+                    0,
+                    cols,
+                    window_height,
+                    &syntax_spans,
+                );
             }
         }
 
@@ -699,6 +715,7 @@ fn render_gui_cursor(
     window_height: usize,
     _status_row: usize,
     cmd_row: usize,
+    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
 ) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
@@ -733,13 +750,25 @@ fn render_gui_cursor(
                 [..editor.command_cursor.min(editor.command_line.len())]
                 .chars()
                 .count();
-            cursor::render_cursor(canvas, editor, cmd_row, 1 + cursor_col);
+            cursor::render_cursor(canvas, editor, cmd_row, 1 + cursor_col, 1.0);
         } else if editor.mode == mae_core::Mode::Search {
             let col = 1 + editor.search_input.len();
-            cursor::render_cursor(canvas, editor, cmd_row, col);
-        } else if let Some(pos) = cursor::compute_cursor_position(editor, inner, gutter_w) {
-            let (r, c) = pos;
-            cursor::render_cursor(canvas, editor, inner_row + r, inner_col + c);
+            cursor::render_cursor(canvas, editor, cmd_row, col, 1.0);
+        } else if let Some(pos) = cursor::compute_cursor_position(
+            editor,
+            inner,
+            gutter_w,
+            syntax_spans
+                .get(&focused_win.buffer_idx)
+                .map(|v| v.as_slice()),
+        ) {
+            cursor::render_cursor(
+                canvas,
+                editor,
+                inner_row + pos.row,
+                inner_col + pos.col,
+                pos.scale,
+            );
         }
     }
 }

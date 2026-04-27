@@ -76,6 +76,11 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
+- [ ] **Org Table Styling**: Column alignment with `|` delimiters, Tab to next cell, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection. Emacs `org-table-align` equivalent. Prerequisite for org-mode spreadsheet features.
+- [ ] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files.
+
+### Rendering Infrastructure
+- [ ] **Pixel-Based Variable-Height Lines**: Replace `extra_rows_for_scale()` bandaid with proper pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Enables zero-gap heading rendering, future inline images, code block padding, and markdown preview. Canvas gets `_at_y` pixel-positioned methods; gutter/cursor/popup use pixel Y mapping. Plan: `~/.claude/plans/variable-height-lines.md`.
 
 ### Buffer Safety
 - [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
@@ -157,6 +162,9 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
 | 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
 | 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
+| 31 | Org table styling: column alignment, Tab-to-cell, auto-align, horizontal rules, cell highlighting | future |
+| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | future |
+| 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | future |
 
 ---
 

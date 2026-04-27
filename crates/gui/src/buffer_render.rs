@@ -10,6 +10,115 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
+/// Compute the font scale for an org heading level.
+/// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
+pub fn org_heading_scale_for_level(level: u8) -> f32 {
+    match level {
+        1 => 1.5,
+        2 => 1.3,
+        3 => 1.15,
+        _ => 1.0,
+    }
+}
+
+/// Compute the number of extra display rows a scaled heading consumes.
+fn extra_rows_for_scale(scale: f32) -> usize {
+    if scale > 1.0 {
+        (scale - 1.0 + 0.5).ceil() as usize
+    } else {
+        0
+    }
+}
+
+/// Get the heading scale for a single line. Returns 1.0 if not a heading.
+pub fn line_heading_scale(
+    buf: &mae_core::Buffer,
+    syntax_spans: Option<&[HighlightSpan]>,
+    line_idx: usize,
+) -> f32 {
+    let spans = match syntax_spans {
+        Some(s) if !s.is_empty() => s,
+        _ => return 1.0,
+    };
+    let rope = buf.rope();
+    if line_idx >= buf.line_count() {
+        return 1.0;
+    }
+    let line_char_start = rope.line_to_char(line_idx);
+    let line_len = rope.line(line_idx).len_chars();
+    let text_len = if line_idx + 1 < buf.line_count() {
+        line_len.saturating_sub(1)
+    } else {
+        line_len
+    };
+    let line_byte_start = rope.char_to_byte(line_char_start);
+    let line_byte_end = rope.char_to_byte(line_char_start + text_len);
+
+    let has_heading = spans.iter().any(|s| {
+        s.theme_key == "markup.heading"
+            && s.byte_start >= line_byte_start
+            && s.byte_start < line_byte_end
+    });
+    if has_heading {
+        let level = rope
+            .line(line_idx)
+            .chars()
+            .take_while(|&c| c == '*')
+            .count()
+            .min(255) as u8;
+        org_heading_scale_for_level(level)
+    } else {
+        1.0
+    }
+}
+
+/// Count extra display rows consumed by scaled org headings in a range of lines.
+/// Used by cursor positioning and popup rendering to offset screen coordinates.
+pub fn heading_extra_rows(
+    buf: &mae_core::Buffer,
+    syntax_spans: Option<&[HighlightSpan]>,
+    from_line: usize,
+    to_line: usize,
+) -> usize {
+    let spans = match syntax_spans {
+        Some(s) if !s.is_empty() => s,
+        _ => return 0,
+    };
+    let rope = buf.rope();
+    let line_count = buf.line_count();
+    let mut extra = 0;
+    for ln in from_line..to_line.min(line_count) {
+        let line_char_start = rope.line_to_char(ln);
+        let line_len = rope.line(ln).len_chars();
+        // Exclude trailing newline from char count for byte range.
+        let text_len = if ln + 1 < line_count {
+            line_len.saturating_sub(1)
+        } else {
+            line_len
+        };
+        let line_byte_start = rope.char_to_byte(line_char_start);
+        let line_byte_end = rope.char_to_byte(line_char_start + text_len);
+
+        let has_heading = spans.iter().any(|s| {
+            s.theme_key == "markup.heading"
+                && s.byte_start >= line_byte_start
+                && s.byte_start < line_byte_end
+        });
+        if has_heading {
+            // Count leading stars.
+            let level = rope
+                .line(ln)
+                .chars()
+                .take_while(|&c| c == '*')
+                .count()
+                .min(255) as u8;
+            let scale = org_heading_scale_for_level(level);
+            extra += extra_rows_for_scale(scale);
+        }
+    }
+    extra
+}
+
 /// Render a text buffer's content into a cell region.
 /// `area_row/area_col` are the top-left of the text area (after border).
 /// `area_width/area_height` are the available cell dimensions.
@@ -105,16 +214,35 @@ pub fn render_buffer_content(
         let line_char_start = buf.rope().line_to_char(line_idx);
         let line_char_end = line_char_start + full_count;
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
+        let line_byte_end = buf.rope().char_to_byte(line_char_end);
 
-        let is_org_heading = needs_spans
-            && syntax_spans
+        // Org headings: determine heading level from the star prefix.
+        // `*` = level 1, `**` = level 2, `***` = level 3, deeper = no scaling.
+        // Emacs pattern: org-level-1 is largest, org-level-3 is slightly enlarged.
+        let org_heading_level: u8 = if needs_spans {
+            let has_heading = syntax_spans
                 .and_then(|spans| {
                     spans.iter().find(|s| {
-                        s.byte_start == line_byte_start && s.theme_key == "markup.heading"
+                        s.theme_key == "markup.heading"
+                            && s.byte_start >= line_byte_start
+                            && s.byte_start < line_byte_end
                     })
                 })
                 .is_some();
-
+            if has_heading {
+                // Count leading stars to determine level.
+                full_chars
+                    .iter()
+                    .take_while(|&&c| c == '*')
+                    .count()
+                    .min(255) as u8
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let org_heading_scale = org_heading_scale_for_level(org_heading_level);
         let base_fg = if is_stopped_line {
             stopped_line_fg
         } else {
@@ -297,7 +425,12 @@ pub fn render_buffer_content(
                 if show_cursorline && is_cursor_line {
                     if let Some(bg_tc) = cursorline_style.bg {
                         let bg = theme::theme_color_to_skia(&bg_tc);
-                        canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                        let cl_height = if is_first {
+                            1 + extra_rows_for_scale(org_heading_scale)
+                        } else {
+                            1
+                        };
+                        canvas.draw_rect_fill(screen_row, text_col, text_width, cl_height, bg);
                     }
                 }
 
@@ -316,7 +449,7 @@ pub fn render_buffer_content(
                     }
                 }
 
-                let scale = if is_org_heading { 1.5 } else { 1.0 };
+                let scale = org_heading_scale;
                 draw_styled_at(
                     canvas,
                     screen_row,
@@ -326,10 +459,13 @@ pub fn render_buffer_content(
                     scale,
                 );
 
-                display_row += 1;
-                if is_org_heading {
-                    display_row += 1; // Org headings take 2 rows for height.
-                }
+                // Extra rows for scaled headings to prevent overlap.
+                let extra_rows = if is_first {
+                    extra_rows_for_scale(org_heading_scale)
+                } else {
+                    0
+                };
+                display_row += 1 + extra_rows;
                 is_first = false;
                 pos = end;
                 if pos >= full_count {
@@ -360,7 +496,8 @@ pub fn render_buffer_content(
             if show_cursorline && is_cursor_line {
                 if let Some(bg_tc) = cursorline_style.bg {
                     let bg = theme::theme_color_to_skia(&bg_tc);
-                    canvas.draw_rect_fill(screen_row, text_col, text_width, 1, bg);
+                    let cl_height = 1 + extra_rows_for_scale(org_heading_scale);
+                    canvas.draw_rect_fill(screen_row, text_col, text_width, cl_height, bg);
                 }
             }
 
@@ -379,7 +516,7 @@ pub fn render_buffer_content(
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];
 
-            let scale = if is_org_heading { 1.5 } else { 1.0 };
+            let scale = org_heading_scale;
             draw_styled_at(
                 canvas,
                 screen_row,
@@ -388,10 +525,8 @@ pub fn render_buffer_content(
                 visible_styles,
                 scale,
             );
-            display_row += 1;
-            if is_org_heading {
-                display_row += 1;
-            }
+            let extra_rows = extra_rows_for_scale(org_heading_scale);
+            display_row += 1 + extra_rows;
         }
 
         line_idx += 1;
@@ -426,13 +561,25 @@ fn draw_styled_at(
     let ascii_ok = *canvas.ascii_in_font();
 
     // Pre-compute cumulative display column for each char (CJK = 2 cols).
+    // When scale > 1.0, each character occupies more horizontal space.
+    // We use fractional column offsets rounded to the nearest cell to keep
+    // runs positioned correctly under Skia's natural glyph advance.
     let mut col_offsets = Vec::with_capacity(chars.len() + 1);
-    let mut acc = 0usize;
-    for &ch in chars {
-        col_offsets.push(acc);
-        acc += char_width(ch);
+    if scale != 1.0 {
+        let mut acc_f = 0.0f32;
+        for &ch in chars {
+            col_offsets.push(acc_f.round() as usize);
+            acc_f += char_width(ch) as f32 * scale;
+        }
+        col_offsets.push(acc_f.round() as usize);
+    } else {
+        let mut acc = 0usize;
+        for &ch in chars {
+            col_offsets.push(acc);
+            acc += char_width(ch);
+        }
+        col_offsets.push(acc); // sentinel for total width
     }
-    col_offsets.push(acc); // sentinel for total width
 
     // Pass 1: Coalesce background rects.
     {
@@ -450,7 +597,8 @@ fn draw_styled_at(
                 if let Some(bg) = run_bg {
                     let start_col = col_offsets[run_start];
                     let width = col_offsets[i] - start_col;
-                    canvas.draw_rect_fill(row, col + start_col, width, 1, bg);
+                    let bg_height = 1 + extra_rows_for_scale(scale);
+                    canvas.draw_rect_fill(row, col + start_col, width, bg_height, bg);
                 }
                 run_start = i;
                 run_bg = this_bg;

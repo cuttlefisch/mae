@@ -4,9 +4,10 @@
 //! cursor shapes using Skia.
 
 use mae_core::wrap::{wrap_cursor_position, wrap_line_display_rows};
-use mae_core::{grapheme, Editor, Mode};
+use mae_core::{grapheme, Editor, HighlightSpan, Mode};
 use skia_safe::Color4f;
 
+use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
 use crate::theme;
 
@@ -19,13 +20,22 @@ pub enum CursorShape {
     Bar,
 }
 
+/// Cursor position with optional heading scale info.
+pub struct CursorPos {
+    pub row: usize,
+    pub col: usize,
+    /// Font scale at the cursor's line (1.0 for normal, >1.0 for org headings).
+    pub scale: f32,
+}
+
 /// Compute the cursor's (row, col) screen position within a window area.
 /// Returns `None` if the cursor is outside the visible viewport.
 pub fn compute_cursor_position(
     editor: &Editor,
     win_inner: CellRect,
     gutter_w: usize,
-) -> Option<(usize, usize)> {
+    syntax_spans: Option<&[HighlightSpan]>,
+) -> Option<CursorPos> {
     let win = editor.window_mgr.focused_window();
     let buf = &editor.buffers[win.buffer_idx];
 
@@ -37,11 +47,19 @@ pub fn compute_cursor_position(
                 .count();
             // Command line cursor is handled separately in render_command_line.
             // Return None here; it's drawn on the command row.
-            Some((0, 1 + cursor_col)) // relative to command area
+            Some(CursorPos {
+                row: 0,
+                col: 1 + cursor_col,
+                scale: 1.0,
+            })
         }
         Mode::Search => {
             let col = editor.search_input.len();
-            Some((0, 1 + col))
+            Some(CursorPos {
+                row: 0,
+                col: 1 + col,
+                scale: 1.0,
+            })
         }
         Mode::ConversationInput => {
             if let Some(ref conv) = buf.conversation {
@@ -49,7 +67,11 @@ pub fn compute_cursor_position(
                     let cursor_byte = conv.input_cursor.min(conv.input_line.len());
                     let cursor_col = conv.input_line[..cursor_byte].chars().count();
                     let input_y = win_inner.height.saturating_sub(1);
-                    return Some((input_y, 2 + cursor_col));
+                    return Some(CursorPos {
+                        row: input_y,
+                        col: 2 + cursor_col,
+                        scale: 1.0,
+                    });
                 }
             }
             None
@@ -83,6 +105,13 @@ pub fn compute_cursor_position(
                         );
                     }
                 }
+                // Add extra rows from scaled org headings.
+                screen_row += buffer_render::heading_extra_rows(
+                    buf,
+                    syntax_spans,
+                    win.scroll_offset,
+                    win.cursor_row,
+                );
 
                 // Row/col within the wrapped cursor line.
                 let (row_off, col) = wrap_cursor_position(
@@ -94,6 +123,8 @@ pub fn compute_cursor_position(
                 );
                 screen_row += row_off;
 
+                let line_scale =
+                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row);
                 if screen_row < win_inner.height {
                     let indent_len = if editor.break_indent && row_off > 0 {
                         let chars: Vec<char> = line_text.chars().collect();
@@ -106,19 +137,37 @@ pub fn compute_cursor_position(
                     } else {
                         0
                     };
-                    Some((screen_row, gutter_w + prefix_w + col))
+                    Some(CursorPos {
+                        row: screen_row,
+                        col: gutter_w + prefix_w + col,
+                        scale: line_scale,
+                    })
                 } else {
                     None
                 }
             } else {
                 let display_col =
                     grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
-                let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
+                let base_row = win.cursor_row.saturating_sub(win.scroll_offset);
+                // Account for extra display rows from scaled org headings above cursor.
+                let heading_extra = buffer_render::heading_extra_rows(
+                    buf,
+                    syntax_spans,
+                    win.scroll_offset,
+                    win.cursor_row,
+                );
+                let screen_row = base_row + heading_extra;
                 let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
                 let screen_col = gutter_w + display_col.saturating_sub(scroll_col);
+                let line_scale =
+                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row);
 
                 if screen_row < win_inner.height {
-                    Some((screen_row, screen_col))
+                    Some(CursorPos {
+                        row: screen_row,
+                        col: screen_col,
+                        scale: line_scale,
+                    })
                 } else {
                     None
                 }
@@ -136,30 +185,36 @@ pub fn cursor_shape(editor: &Editor) -> CursorShape {
 }
 
 /// Render the cursor onto the canvas at an absolute (row, col) position.
-pub fn render_cursor(canvas: &mut SkiaCanvas, editor: &Editor, abs_row: usize, abs_col: usize) {
+/// `scale` is the font scale at the cursor line (1.0 for normal, >1.0 for headings).
+pub fn render_cursor(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    abs_row: usize,
+    abs_col: usize,
+    scale: f32,
+) {
     let cursor_style = editor.theme.style("ui.cursor");
     let cursor_bg = theme::color_or(cursor_style.bg, Color4f::new(0.9, 0.9, 0.9, 1.0));
 
     let (cw, ch) = canvas.cell_size();
     let shape = cursor_shape(editor);
 
+    // Scale cursor dimensions and position for heading lines.
+    let scaled_cw = cw * scale;
+    let scaled_ch = ch * scale;
+    let pixel_x = abs_col as f32 * cw * scale;
+    let pixel_y = abs_row as f32 * ch;
+
     match shape {
         CursorShape::Block => {
-            // Filled block.
-            canvas.draw_pixel_rect(abs_col as f32 * cw, abs_row as f32 * ch, cw, ch, cursor_bg);
-            // Draw the character under the cursor with inverted color.
+            canvas.draw_pixel_rect(pixel_x, pixel_y, scaled_cw, scaled_ch, cursor_bg);
             let cursor_fg = theme::color_or(cursor_style.fg, Color4f::new(0.1, 0.1, 0.1, 1.0));
-            // Draw the character under the cursor with inverted color.
-            // In command/search modes, read from the input line, not the buffer.
             let ch_under = match editor.mode {
                 Mode::Command => {
                     let chars: Vec<char> = editor.command_line.chars().collect();
                     chars.get(editor.command_cursor).copied()
                 }
-                Mode::Search => {
-                    // Search cursor is always at the end; no char under it.
-                    None
-                }
+                Mode::Search => None,
                 _ => {
                     let win = editor.window_mgr.focused_window();
                     let buf = &editor.buffers[win.buffer_idx];
@@ -173,13 +228,25 @@ pub fn render_cursor(canvas: &mut SkiaCanvas, editor: &Editor, abs_row: usize, a
                     }
                 }
             };
-            if let Some(ch) = ch_under {
-                canvas.draw_text_at(abs_row, abs_col, &ch.to_string(), cursor_fg);
+            if let Some(c) = ch_under {
+                if scale != 1.0 {
+                    // Draw character at scaled size to match the heading text.
+                    canvas.draw_text_run(
+                        abs_row,
+                        abs_col,
+                        &c.to_string(),
+                        cursor_fg,
+                        false,
+                        false,
+                        scale,
+                    );
+                } else {
+                    canvas.draw_text_at(abs_row, abs_col, &c.to_string(), cursor_fg);
+                }
             }
         }
         CursorShape::Bar => {
-            // Thin vertical bar (2px wide) at the left edge of the cell.
-            canvas.draw_pixel_rect(abs_col as f32 * cw, abs_row as f32 * ch, 2.0, ch, cursor_bg);
+            canvas.draw_pixel_rect(pixel_x, pixel_y, 2.0, scaled_ch, cursor_bg);
         }
     }
 }
@@ -216,11 +283,11 @@ mod tests {
     fn compute_cursor_normal_mode() {
         let editor = Editor::default();
         let inner = CellRect::new(1, 1, 78, 22);
-        let pos = compute_cursor_position(&editor, inner, 3);
+        let pos = compute_cursor_position(&editor, inner, 3, None);
         assert!(pos.is_some());
-        let (row, col) = pos.unwrap();
-        assert_eq!(row, 0);
-        assert_eq!(col, 3); // gutter_w
+        let p = pos.unwrap();
+        assert_eq!(p.row, 0);
+        assert_eq!(p.col, 3); // gutter_w
     }
 
     #[test]
@@ -232,9 +299,9 @@ mod tests {
             ..Default::default()
         };
         let inner = CellRect::new(1, 1, 78, 22);
-        let pos = compute_cursor_position(&editor, inner, 3);
+        let pos = compute_cursor_position(&editor, inner, 3, None);
         assert!(pos.is_some());
-        let (_, col) = pos.unwrap();
-        assert_eq!(col, 2); // ':' + 'w'
+        let p = pos.unwrap();
+        assert_eq!(p.col, 2); // ':' + 'w'
     }
 }
