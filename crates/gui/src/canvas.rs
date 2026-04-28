@@ -109,8 +109,15 @@ impl SkiaCanvas {
         let icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, font_size));
 
         // Measure a reference character for cell dimensions.
-        let (_, bounds) = font.measure_str("M", None);
-        let cell_width = bounds.width().max(font_size * 0.6);
+        // Use the advance width (first return value), NOT the bounding box width.
+        // Skia's draw_str uses advance widths for glyph positioning; using the
+        // bounding box causes cumulative drift along the line.
+        let (advance, bounds) = font.measure_str("M", None);
+        let cell_width = if advance > 0.0 {
+            advance
+        } else {
+            bounds.width().max(font_size * 0.6)
+        };
         let cell_height = font.spacing();
         // Font metrics: ascent is negative in Skia (distance above baseline).
         let (_, metrics) = font.metrics();
@@ -160,8 +167,12 @@ impl SkiaCanvas {
         self.bold_font = Font::from_typeface(bold_typeface, size);
         self.icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, size));
 
-        let (_, bounds) = self.font.measure_str("M", None);
-        self.cell_width = bounds.width().max(size * 0.6);
+        let (advance, bounds) = self.font.measure_str("M", None);
+        self.cell_width = if advance > 0.0 {
+            advance
+        } else {
+            bounds.width().max(size * 0.6)
+        };
         self.cell_height = self.font.spacing();
         let (_, metrics) = self.font.metrics();
         self.ascent = (-metrics.ascent).max(size * 0.8);

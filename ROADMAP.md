@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,840+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, GUI cursor/border fixes, unified diff display, AI guidance self-tests.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,891 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests.
 
 ---
 
@@ -88,8 +88,11 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [x] **zM/zR for Org and Markdown**: `close-all-folds`/`open-all-folds` dispatch to heading scan for org/markdown buffers. (v0.6.0)
 
 ### Rendering Infrastructure
-- [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `PixelYMap`. Enables zero-gap heading rendering, future inline images, code block padding.
-- [x] **Popup Pixel-Y Migration**: Completion popup now uses `FrameLayout::display_row_of()` for fold/scale-aware cursor positioning. `heading_extra_rows()` removed.
+- [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `FrameLayout`. Enables zero-gap heading rendering, future inline images, code block padding.
+- [x] **FrameLayout Unified Layout Pass**: Single source of truth for text positioning (`layout.rs`). `compute_layout()` runs once per frame per window; renderer, cursor, and completion popup all consume the same `FrameLayout`. Fold-aware, scale-aware, wrap-aware. Eliminated `PixelYMap`, `accumulated_scaled_col()`, `heading_extra_rows()`.
+- [x] **Popup Pixel-Y Migration**: Completion popup now uses `FrameLayout::display_row_of()` for fold/scale-aware cursor positioning.
+- [x] **Canvas Clip**: `set_clip_height()` prevents descender overflow at window bottom edge.
+- [ ] **Mouse Click FrameLayout**: Mouse handler uses cell-based coordinates — clicks near scaled headings/folds land on wrong line. Requires reverse lookup from FrameLayout across crate boundary (gui→core). Tracked as follow-up.
 
 ### Buffer Safety
 - [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
@@ -104,7 +107,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,673 tests)
+### What We Have (1,891 tests)
 
 | Category | Features |
 |----------|----------|

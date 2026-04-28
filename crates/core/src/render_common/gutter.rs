@@ -53,6 +53,11 @@ pub fn resolve_gutter_marker(
 }
 
 /// Format a line number string for the gutter.
+/// Format a line number for the gutter.
+///
+/// `display_offset` overrides the relative-number calculation when provided.
+/// This is used by the GUI renderer where folds make buffer-row distance
+/// differ from visual distance.
 pub fn format_line_number(
     line_idx: usize,
     cursor_row: usize,
@@ -60,10 +65,29 @@ pub fn format_line_number(
     show_line_numbers: bool,
     relative_line_numbers: bool,
 ) -> String {
+    format_line_number_with_offset(
+        line_idx,
+        cursor_row,
+        gutter_w,
+        show_line_numbers,
+        relative_line_numbers,
+        None,
+    )
+}
+
+/// Format a line number with an explicit display offset for relative mode.
+pub fn format_line_number_with_offset(
+    line_idx: usize,
+    cursor_row: usize,
+    gutter_w: usize,
+    show_line_numbers: bool,
+    relative_line_numbers: bool,
+    display_offset: Option<usize>,
+) -> String {
     if !show_line_numbers {
         " ".to_string()
     } else if relative_line_numbers && line_idx != cursor_row {
-        let offset = line_idx.abs_diff(cursor_row);
+        let offset = display_offset.unwrap_or_else(|| line_idx.abs_diff(cursor_row));
         format!("{:>width$}", offset, width = gutter_w - 1)
     } else {
         format!("{:>width$}", line_idx + 1, width = gutter_w - 1)
@@ -199,6 +223,26 @@ mod tests {
     fn format_line_number_relative() {
         assert_eq!(format_line_number(5, 5, 3, true, true), " 6");
         assert_eq!(format_line_number(3, 5, 3, true, true), " 2");
+    }
+
+    #[test]
+    fn format_line_number_with_display_offset() {
+        // With folds, buffer rows 0,1,7 are visible. Cursor on row 1 (display row 1).
+        // Row 7 should show display offset 2 (not buffer offset 6).
+        assert_eq!(
+            format_line_number_with_offset(7, 1, 3, true, true, Some(2)),
+            " 2"
+        );
+        // Cursor row always shows absolute number.
+        assert_eq!(
+            format_line_number_with_offset(1, 1, 3, true, true, Some(0)),
+            " 2"
+        );
+        // Without display_offset, falls back to buffer diff.
+        assert_eq!(
+            format_line_number_with_offset(7, 1, 3, true, true, None),
+            " 6"
+        );
     }
 
     #[test]

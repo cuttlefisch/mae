@@ -129,10 +129,13 @@ pub fn render_buffer_content(
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
 
+    // Pre-compute cursor's display row for fold-aware relative line numbers.
+    let cursor_display_row = frame_layout.display_row_of(win.cursor_row);
+
     // Iterate over the pre-computed layout lines.
     // Layout already handled fold skipping, pixel_y accumulation, and heading scale.
     let mut prev_buf_row: Option<usize> = None;
-    for ll in &frame_layout.lines {
+    for (display_idx, ll) in frame_layout.lines.iter().enumerate() {
         let line_idx = ll.buf_row;
         let pixel_y = ll.pixel_y;
         let org_heading_scale = ll.scale;
@@ -336,6 +339,7 @@ pub fn render_buffer_content(
             );
         } else if wrap {
             // First segment of a wrapped line.
+            let rel_offset = cursor_display_row.map(|cdr| display_idx.abs_diff(cdr));
             gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
@@ -351,6 +355,7 @@ pub fn render_buffer_content(
                 &breakpoint_lines,
                 stopped_line,
                 &line_severities,
+                rel_offset,
             );
 
             if show_cursorline && is_cursor_line {
@@ -376,6 +381,7 @@ pub fn render_buffer_content(
             );
         } else {
             // No wrap: single segment per line.
+            let rel_offset = cursor_display_row.map(|cdr| display_idx.abs_diff(cdr));
             gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
@@ -391,6 +397,7 @@ pub fn render_buffer_content(
                 &breakpoint_lines,
                 stopped_line,
                 &line_severities,
+                rel_offset,
             );
 
             // Cursorline full-width background.

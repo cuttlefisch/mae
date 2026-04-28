@@ -18,6 +18,7 @@ pub use mae_core::render_common::gutter::{
 /// Render the gutter for one visible line at a pixel Y position.
 /// `line_height` is the pixel height of this line (for cursorline bg).
 /// `scale` is the font scale (for scaled line numbers on headings).
+/// `display_offset` is the visual distance from the cursor line (for fold-aware relative numbers).
 pub fn render_gutter_line_at_y(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
@@ -33,6 +34,7 @@ pub fn render_gutter_line_at_y(
     breakpoint_lines: &HashSet<u32>,
     stopped_line: Option<u32>,
     line_severities: &HashMap<u32, DiagnosticSeverity>,
+    display_offset: Option<usize>,
 ) {
     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
     let cursorline_bg = if is_cursor_line {
@@ -47,12 +49,13 @@ pub fn render_gutter_line_at_y(
     }
 
     // Line number (always at 1.0 scale — gutter stays fixed width).
-    let line_num = gutter::format_line_number(
+    let line_num = gutter::format_line_number_with_offset(
         line_idx,
         cursor_row,
         gutter_w,
         editor.show_line_numbers,
         editor.relative_line_numbers,
+        display_offset,
     );
     canvas.draw_text_at_y(pixel_y, screen_col_offset, &line_num, gutter_fg, 1.0);
 
