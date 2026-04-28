@@ -1918,6 +1918,38 @@ impl Editor {
             "change-forward" => self.change_forward(n),
             "show-changes-buffer" => self.show_changes_buffer(),
             "show-registers" => self.show_registers_buffer(),
+            "paste-from-yank" => {
+                // Paste from the "0 (yank) register — avoids clobbering by deletes.
+                if let Some(text) = self.registers.get(&'0').cloned() {
+                    let idx = self.active_buffer_idx();
+                    let is_linewise = text.ends_with('\n');
+                    for _ in 0..n {
+                        if is_linewise {
+                            let win = self.window_mgr.focused_window_mut();
+                            let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
+                            let line_len =
+                                self.buffers[idx].rope().line(win.cursor_row).len_chars();
+                            let insert_pos = line_start + line_len;
+                            self.buffers[idx].insert_text_at(insert_pos, &text);
+                            win.cursor_row += 1;
+                            win.cursor_col = 0;
+                        } else {
+                            let win = self.window_mgr.focused_window_mut();
+                            let pos =
+                                self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+                            let insert_pos = (pos + 1).min(self.buffers[idx].rope().len_chars());
+                            self.buffers[idx].insert_text_at(insert_pos, &text);
+                            let new_end = insert_pos + text.len();
+                            let new_row = self.buffers[idx]
+                                .rope()
+                                .char_to_line(new_end.saturating_sub(1));
+                            let line_start = self.buffers[idx].rope().line_to_char(new_row);
+                            win.cursor_row = new_row;
+                            win.cursor_col = new_end.saturating_sub(1) - line_start;
+                        }
+                    }
+                }
+            }
             "prompt-register" => {
                 self.pending_register_prompt = true;
                 self.set_status("\"");

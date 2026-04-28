@@ -346,4 +346,42 @@ mod tests {
         assert_eq!(ed.clipboard, "internal");
         assert!(ed.set_option("clipboard", "bogus").is_err());
     }
+
+    #[test]
+    fn paste_from_yank_register() {
+        let mut ed = Editor::new();
+        ed.registers.insert('0', "yanked".into());
+        ed.registers.insert('"', "deleted".into());
+        ed.dispatch_builtin("paste-from-yank");
+        let text = ed.buffers[ed.active_buffer_idx()].text();
+        assert!(
+            text.contains("yanked"),
+            "paste-from-yank should use register 0, got: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn spc_r_r_resolves_to_show_registers() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        use crate::keymap::parse_key_seq_spaced;
+        let result = normal.lookup(&parse_key_seq_spaced("SPC r r"));
+        assert!(
+            matches!(result, crate::keymap::LookupResult::Exact(cmd) if cmd == "show-registers"),
+            "SPC r r should bind to show-registers"
+        );
+    }
+
+    #[test]
+    fn spc_r_y_resolves_to_paste_from_yank() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        use crate::keymap::parse_key_seq_spaced;
+        let result = normal.lookup(&parse_key_seq_spaced("SPC r y"));
+        assert!(
+            matches!(result, crate::keymap::LookupResult::Exact(cmd) if cmd == "paste-from-yank"),
+            "SPC r y should bind to paste-from-yank"
+        );
+    }
 }
