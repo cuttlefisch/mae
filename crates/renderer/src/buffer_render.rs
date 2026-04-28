@@ -475,31 +475,11 @@ pub(crate) fn apply_hex_color_preview(chars: &[char], styles: &mut [Style]) {
     }
 }
 
-fn parse_hex6(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some((r, g, b))
-}
-
-fn parse_hex3(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 3 {
-        return None;
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let r = u8::from_str_radix(&format!("{0}{0}", chars[0]), 16).ok()?;
-    let g = u8::from_str_radix(&format!("{0}{0}", chars[1]), 16).ok()?;
-    let b = u8::from_str_radix(&format!("{0}{0}", chars[2]), 16).ok()?;
-    Some((r, g, b))
-}
+use mae_core::render_common::color::{luminance, parse_hex3, parse_hex6};
 
 /// Pick black or white foreground for readability on the given bg color.
 fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
-    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if lum > 128.0 {
+    if luminance(r, g, b) > 128.0 {
         Color::Black
     } else {
         Color::White

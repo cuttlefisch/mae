@@ -842,45 +842,13 @@ fn apply_hex_color_preview(chars: &[char], styles: &mut [CharStyle]) {
     }
 }
 
-fn parse_hex6(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some((r, g, b))
-}
-
-fn parse_hex3(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 3 {
-        return None;
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let r = u8::from_str_radix(&format!("{0}{0}", chars[0]), 16).ok()?;
-    let g = u8::from_str_radix(&format!("{0}{0}", chars[1]), 16).ok()?;
-    let b = u8::from_str_radix(&format!("{0}{0}", chars[2]), 16).ok()?;
-    Some((r, g, b))
-}
+use mae_core::render_common::color::{parse_hex3, parse_hex6};
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn hex6_parses_correctly() {
-        assert_eq!(parse_hex6("ff5733"), Some((255, 87, 51)));
-    }
-
-    #[test]
-    fn hex3_parses_correctly() {
-        assert_eq!(parse_hex3("f00"), Some((255, 0, 0)));
-    }
-
-    #[test]
-    fn hex6_invalid_returns_none() {
-        assert_eq!(parse_hex6("zzzzzz"), None);
-    }
+    // parse_hex6/parse_hex3 tests are in mae_core::render_common::color
 
     #[test]
     fn hex_color_preview_applies() {
