@@ -1541,6 +1541,51 @@ mod tests {
         assert_eq!(win.col_offset, 1);
     }
 
+    #[test]
+    fn ensure_scroll_wrapped_heading_scale_keeps_cursor_visible() {
+        // Regression: scaled headings take >1 visual row but ensure_scroll
+        // counted them as 1, allowing cursor to go below viewport.
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 9;
+
+        // Viewport = 10 cell rows.
+        // Lines 0, 3, 6 are headings taking 2 visual rows each.
+        // Visual budget: lines 0(2) + 1(1) + 2(1) + 3(2) + 4(1) + 5(1) + 6(2) = 10 rows.
+        // So only lines 0-6 fit. Line 9 should push scroll forward.
+        win.ensure_scroll_wrapped(10, |line| {
+            if line == 0 || line == 3 || line == 6 {
+                2 // heading: ceil(1.5)
+            } else {
+                1
+            }
+        });
+
+        // Cursor at row 9 should NOT be at scroll_offset 0 (that only fits 7 lines = 10 rows).
+        assert!(
+            win.scroll_offset > 0,
+            "scroll must advance when headings consume extra visual rows, got offset={}",
+            win.scroll_offset
+        );
+
+        // Verify cursor is actually within viewport by walking forward.
+        let mut visual = 0;
+        for line in win.scroll_offset..=win.cursor_row {
+            let rows = if line == 0 || line == 3 || line == 6 {
+                2
+            } else {
+                1
+            };
+            visual += rows;
+        }
+        assert!(
+            visual <= 10,
+            "cursor row {} should be within viewport (visual rows used: {}, viewport: 10)",
+            win.cursor_row,
+            visual
+        );
+    }
+
     // --- Resize / Balance / Maximize / Move tests ---
 
     #[test]

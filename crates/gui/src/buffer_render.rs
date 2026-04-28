@@ -13,12 +13,7 @@ use crate::theme::color4f_eq;
 /// Compute the font scale for an org heading level.
 /// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
 pub fn org_heading_scale_for_level(level: u8) -> f32 {
-    match level {
-        1 => 1.5,
-        2 => 1.3,
-        3 => 1.15,
-        _ => 1.0,
-    }
+    mae_core::heading::heading_scale_for_level(level)
 }
 
 /// Get the heading scale for a single line. Returns 1.0 if not a heading

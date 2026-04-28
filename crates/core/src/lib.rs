@@ -13,6 +13,7 @@ pub mod file_browser;
 pub mod file_picker;
 pub mod git_status;
 pub mod grapheme;
+pub mod heading;
 pub mod help_view;
 pub mod hooks;
 pub mod input;

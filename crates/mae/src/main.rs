@@ -1178,13 +1178,17 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.editor.text_area_width = inner_w.saturating_sub(gutter_w);
             }
 
-            if self.editor.word_wrap && self.editor.text_area_width > 0 {
-                let tw = self.editor.text_area_width;
-                let bi = self.editor.break_indent;
-                let sb_w = self.editor.show_break.chars().count();
+            {
                 let buf_idx = self.editor.active_buffer_idx();
                 let rope = self.editor.buffers[buf_idx].rope().clone();
                 let line_count = rope.len_lines();
+                let folded = self.editor.buffers[buf_idx].folded_ranges.clone();
+                let heading_scale = self.editor.heading_scale;
+                let word_wrap = self.editor.word_wrap && self.editor.text_area_width > 0;
+                let tw = self.editor.text_area_width;
+                let bi = self.editor.break_indent;
+                let sb_w = self.editor.show_break.chars().count();
+
                 self.editor
                     .window_mgr
                     .focused_window_mut()
@@ -1192,32 +1196,35 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         if line >= line_count {
                             return 1;
                         }
-                        let rope_line = rope.line(line);
-                        let text: String = rope_line.chars().collect();
-                        let text = text.trim_end_matches('\n');
-                        mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
-                    });
-            } else {
-                let buf_idx = self.editor.active_buffer_idx();
-                let folded = self.editor.buffers[buf_idx].folded_ranges.clone();
-                if folded.is_empty() {
-                    self.editor
-                        .window_mgr
-                        .focused_window_mut()
-                        .ensure_scroll(vh);
-                } else {
-                    self.editor
-                        .window_mgr
-                        .focused_window_mut()
-                        .ensure_scroll_wrapped(vh, |line| {
-                            for (start, end) in &folded {
-                                if line > *start && line < *end {
-                                    return 0;
-                                }
+                        // Folded lines are invisible.
+                        for (start, end) in &folded {
+                            if line > *start && line < *end {
+                                return 0;
                             }
-                            1
-                        });
-                }
+                        }
+                        let rope_line = rope.line(line);
+                        let chars: Vec<char> = rope_line.chars().collect();
+                        let trimmed: Vec<char> = chars
+                            .iter()
+                            .filter(|c| **c != '\n' && **c != '\r')
+                            .copied()
+                            .collect();
+
+                        // Heading scale: ceil(scale) extra visual rows.
+                        let heading_rows =
+                            mae_core::heading::line_heading_visual_rows(&trimmed, heading_scale);
+
+                        if word_wrap {
+                            let text: String = trimmed.iter().collect();
+                            let wrap_rows =
+                                mae_core::wrap::wrap_line_display_rows(&text, tw, bi, sb_w);
+                            // For wrapped headings: each wrap segment gets heading height,
+                            // but at minimum use heading_rows (ceil of scale).
+                            wrap_rows.max(heading_rows)
+                        } else {
+                            heading_rows
+                        }
+                    });
             }
         }
 
