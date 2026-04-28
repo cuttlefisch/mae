@@ -1024,38 +1024,10 @@ impl Editor {
                     self.set_status("Cannot close last window");
                 }
             }
-            "focus-left" => {
-                self.fire_hook("focus-out");
-                self.save_mode_to_buffer();
-                let area = self.default_area();
-                self.window_mgr.focus_direction(Direction::Left, area);
-                self.sync_mode_to_buffer();
-                self.fire_hook("focus-in");
-            }
-            "focus-right" => {
-                self.fire_hook("focus-out");
-                self.save_mode_to_buffer();
-                let area = self.default_area();
-                self.window_mgr.focus_direction(Direction::Right, area);
-                self.sync_mode_to_buffer();
-                self.fire_hook("focus-in");
-            }
-            "focus-up" => {
-                self.fire_hook("focus-out");
-                self.save_mode_to_buffer();
-                let area = self.default_area();
-                self.window_mgr.focus_direction(Direction::Up, area);
-                self.sync_mode_to_buffer();
-                self.fire_hook("focus-in");
-            }
-            "focus-down" => {
-                self.fire_hook("focus-out");
-                self.save_mode_to_buffer();
-                let area = self.default_area();
-                self.window_mgr.focus_direction(Direction::Down, area);
-                self.sync_mode_to_buffer();
-                self.fire_hook("focus-in");
-            }
+            "focus-left" => self.focus_direction(Direction::Left),
+            "focus-right" => self.focus_direction(Direction::Right),
+            "focus-up" => self.focus_direction(Direction::Up),
+            "focus-down" => self.focus_direction(Direction::Down),
 
             // Diagnostics
             "view-messages" => {
@@ -1246,70 +1218,16 @@ impl Editor {
                 self.set_status("New buffer");
             }
             "kill-buffer" => {
-                self.fire_hook("buffer-close");
                 let idx = self.active_buffer_idx();
                 if self.buffers[idx].modified {
                     self.set_status("Buffer has unsaved changes (save first or use :q!)");
-                } else if self.buffers.len() <= 1 {
-                    // Notify LSP before clobbering the only buffer.
-                    self.lsp_notify_did_close_for_buffer(0);
-                    // Replace with empty scratch — never have 0 buffers
-                    self.buffers[0] = Buffer::new();
-                    self.syntax.remove(0);
-                    let win = self.window_mgr.focused_window_mut();
-                    win.cursor_row = 0;
-                    win.cursor_col = 0;
-                    self.set_status("Buffer killed — [scratch]");
                 } else {
-                    // Notify LSP before removing the buffer.
-                    self.lsp_notify_did_close_for_buffer(idx);
-                    self.buffers.remove(idx);
-                    self.syntax.shift_after_remove(idx);
-                    self.adjust_ai_target_after_remove(idx);
-                    // Fix all window buffer_idx references
-                    for win in self.window_mgr.iter_windows_mut() {
-                        if win.buffer_idx == idx {
-                            win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
-                            win.cursor_row = 0;
-                            win.cursor_col = 0;
-                        } else if win.buffer_idx > idx {
-                            win.buffer_idx -= 1;
-                        }
-                    }
-                    let new_idx = self.active_buffer_idx();
-                    let name = self.buffers[new_idx].name.clone();
-                    self.set_status(format!("Buffer killed — now: {}", name));
+                    self.kill_buffer_at(idx);
                 }
             }
             "force-kill-buffer" => {
-                self.fire_hook("buffer-close");
                 let idx = self.active_buffer_idx();
-                if self.buffers.len() <= 1 {
-                    self.lsp_notify_did_close_for_buffer(0);
-                    self.buffers[0] = Buffer::new();
-                    self.syntax.remove(0);
-                    let win = self.window_mgr.focused_window_mut();
-                    win.cursor_row = 0;
-                    win.cursor_col = 0;
-                    self.set_status("Buffer killed — [scratch]");
-                } else {
-                    self.lsp_notify_did_close_for_buffer(idx);
-                    self.buffers.remove(idx);
-                    self.syntax.shift_after_remove(idx);
-                    self.adjust_ai_target_after_remove(idx);
-                    for win in self.window_mgr.iter_windows_mut() {
-                        if win.buffer_idx == idx {
-                            win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
-                            win.cursor_row = 0;
-                            win.cursor_col = 0;
-                        } else if win.buffer_idx > idx {
-                            win.buffer_idx -= 1;
-                        }
-                    }
-                    let new_idx = self.active_buffer_idx();
-                    let name = self.buffers[new_idx].name.clone();
-                    self.set_status(format!("Buffer killed — now: {}", name));
-                }
+                self.kill_buffer_at(idx);
             }
             "switch-buffer" => {
                 let mut names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
@@ -1867,29 +1785,11 @@ impl Editor {
                 self.record_edit_with_count("toggle-case", count);
             }
             "uppercase-line" => {
-                let idx = self.active_buffer_idx();
-                let row = self.window_mgr.focused_window().cursor_row;
-                let line_start = self.buffers[idx].rope().line_to_char(row);
-                let line_len = self.buffers[idx].line_len(row);
-                if line_len > 0 {
-                    let text = self.buffers[idx].text_range(line_start, line_start + line_len);
-                    let upper = text.to_uppercase();
-                    self.buffers[idx].delete_range(line_start, line_start + line_len);
-                    self.buffers[idx].insert_text_at(line_start, &upper);
-                }
+                self.transform_current_line(|t| t.to_uppercase());
                 self.record_edit("uppercase-line");
             }
             "lowercase-line" => {
-                let idx = self.active_buffer_idx();
-                let row = self.window_mgr.focused_window().cursor_row;
-                let line_start = self.buffers[idx].rope().line_to_char(row);
-                let line_len = self.buffers[idx].line_len(row);
-                if line_len > 0 {
-                    let text = self.buffers[idx].text_range(line_start, line_start + line_len);
-                    let lower = text.to_lowercase();
-                    self.buffers[idx].delete_range(line_start, line_start + line_len);
-                    self.buffers[idx].insert_text_at(line_start, &lower);
-                }
+                self.transform_current_line(|t| t.to_lowercase());
                 self.record_edit("lowercase-line");
             }
 
@@ -2387,5 +2287,60 @@ impl Editor {
             _ => return false,
         }
         true
+    }
+
+    /// Kill buffer at `idx`, handling LSP notification, window fixup, and fallback.
+    fn kill_buffer_at(&mut self, idx: usize) {
+        self.fire_hook("buffer-close");
+        if self.buffers.len() <= 1 {
+            self.lsp_notify_did_close_for_buffer(0);
+            self.buffers[0] = Buffer::new();
+            self.syntax.remove(0);
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = 0;
+            win.cursor_col = 0;
+            self.set_status("Buffer killed — [scratch]");
+        } else {
+            self.lsp_notify_did_close_for_buffer(idx);
+            self.buffers.remove(idx);
+            self.syntax.shift_after_remove(idx);
+            self.adjust_ai_target_after_remove(idx);
+            for win in self.window_mgr.iter_windows_mut() {
+                if win.buffer_idx == idx {
+                    win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                } else if win.buffer_idx > idx {
+                    win.buffer_idx -= 1;
+                }
+            }
+            let new_idx = self.active_buffer_idx();
+            let name = self.buffers[new_idx].name.clone();
+            self.set_status(format!("Buffer killed — now: {}", name));
+        }
+    }
+
+    /// Focus a window in the given direction with proper hook firing and mode sync.
+    fn focus_direction(&mut self, dir: Direction) {
+        self.fire_hook("focus-out");
+        self.save_mode_to_buffer();
+        let area = self.default_area();
+        self.window_mgr.focus_direction(dir, area);
+        self.sync_mode_to_buffer();
+        self.fire_hook("focus-in");
+    }
+
+    /// Transform the current line's text using a closure (e.g. uppercase, lowercase).
+    fn transform_current_line(&mut self, f: impl FnOnce(&str) -> String) {
+        let idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line_start = self.buffers[idx].rope().line_to_char(row);
+        let line_len = self.buffers[idx].line_len(row);
+        if line_len > 0 {
+            let text = self.buffers[idx].text_range(line_start, line_start + line_len);
+            let transformed = f(&text);
+            self.buffers[idx].delete_range(line_start, line_start + line_len);
+            self.buffers[idx].insert_text_at(line_start, &transformed);
+        }
     }
 }
