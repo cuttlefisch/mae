@@ -566,6 +566,7 @@ fn run_gui(
         cursor_x: 0.0,
         cursor_y: 0.0,
         scroll_accumulator: 0.0,
+        scroll_accumulator_x: 0.0,
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
@@ -697,6 +698,7 @@ struct GuiApp {
     cursor_x: f64,
     cursor_y: f64,
     scroll_accumulator: f64,
+    scroll_accumulator_x: f64,
     mouse_pressed: bool,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
@@ -1077,28 +1079,33 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 use tracing::debug;
-                let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        debug!(y, "MouseWheel: LineDelta");
-                        y as i16
+                let (h_delta, v_delta) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        debug!(x, y, "MouseWheel: LineDelta");
+                        (x as i16, y as i16)
                     }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
                         self.scroll_accumulator += pos.y;
+                        self.scroll_accumulator_x += pos.x;
                         let whole_lines = (self.scroll_accumulator / 20.0) as i16;
-                        debug!(
-                            pos_y = pos.y,
-                            accum = self.scroll_accumulator,
-                            whole_lines,
-                            "MouseWheel: PixelDelta"
-                        );
+                        let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
+                        debug!(pos_x = pos.x, pos_y = pos.y, "MouseWheel: PixelDelta");
                         if whole_lines != 0 {
                             self.scroll_accumulator -= whole_lines as f64 * 20.0;
                         }
-                        whole_lines
+                        if whole_cols != 0 {
+                            self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
+                        }
+                        (whole_cols, whole_lines)
                     }
                 };
-                if lines != 0 {
-                    self.editor.handle_mouse_scroll(lines);
+                if v_delta != 0 {
+                    self.editor.handle_mouse_scroll(v_delta);
+                    self.dirty = true;
+                    self.input_dirty = true;
+                }
+                if h_delta != 0 {
+                    self.editor.handle_mouse_scroll_horizontal(h_delta);
                     self.dirty = true;
                     self.input_dirty = true;
                 }

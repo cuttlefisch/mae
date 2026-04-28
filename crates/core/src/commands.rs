@@ -615,6 +615,7 @@ impl CommandRegistry {
             "Toggle relative line numbers (SPC t r)",
         );
         reg.register_builtin("toggle-word-wrap", "Toggle word wrap (SPC t w)");
+        reg.register_builtin("toggle-scrollbar", "Toggle scrollbar visibility (SPC t s)");
 
         // Git commands (shell-out stubs)
         reg.register_builtin("git-status", "Show git status in scratch buffer (SPC g s)");

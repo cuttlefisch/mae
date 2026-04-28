@@ -317,6 +317,7 @@ impl Editor {
             "toggle-relative-line-numbers",
         );
         normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
+        normal.bind(parse_key_seq_spaced("SPC t s"), "toggle-scrollbar");
         normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
         normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
         // +git

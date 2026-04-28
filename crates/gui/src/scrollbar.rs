@@ -1,8 +1,12 @@
 //! Vertical scrollbar rendering for the GUI.
 //!
-//! Uses the FrameLayout's scrollbar_col to know where to draw. The track
-//! spans the full content area height; the thumb size and position reflect
-//! the viewport's proportion of total buffer lines.
+//! Design: a thin rounded bar (6px) centered within the allocated scrollbar
+//! column. The track is nearly invisible (low-alpha tint); the thumb uses the
+//! theme's `ui.scrollbar.thumb` color or a sensible default derived from the
+//! editor's current theme brightness.
+//!
+//! Pattern references: VS Code, Zed, Helix — all use a thin overlay scrollbar
+//! that doesn't fight with the content area for attention.
 
 use crate::canvas::SkiaCanvas;
 use crate::layout::FrameLayout;
@@ -10,10 +14,18 @@ use crate::theme;
 use mae_core::Editor;
 use skia_safe::Color4f;
 
+/// Thin bar width in pixels.
+const SCROLLBAR_WIDTH: f32 = 6.0;
+/// Corner radius for the thumb pill shape.
+const THUMB_RADIUS: f32 = 3.0;
+/// Minimum thumb height in pixels (so it's always grabbable).
+const MIN_THUMB_HEIGHT: f32 = 20.0;
+
 /// Render a vertical scrollbar in the allocated column.
 ///
-/// The scrollbar is pixel-precise: track fills the full content area,
-/// thumb position = scroll_offset / total_lines, thumb height = viewport / total_lines.
+/// The scrollbar uses pixel-precise positioning:
+/// - Track: subtle tinted background spanning the full content area height.
+/// - Thumb: proportional pill (rounded rect) positioned by scroll ratio.
 pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayout) {
     let Some(sb_col) = fl.scrollbar_col else {
         return;
@@ -25,8 +37,15 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     }
 
     let viewport = fl.lines.len();
+    // Don't show scrollbar when everything fits.
+    if viewport >= total {
+        return;
+    }
+
     let (cw, _ch) = canvas.cell_size();
-    let track_x = sb_col as f32 * cw;
+    // Center the thin bar within the column.
+    let col_x = sb_col as f32 * cw;
+    let bar_x = col_x + (cw - SCROLLBAR_WIDTH) / 2.0;
     let track_y_start = fl.area_row as f32 * fl.cell_height;
     let track_height = fl.pixel_y_limit - track_y_start;
 
@@ -34,17 +53,20 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
         return;
     }
 
-    // Track background.
-    let track_color = theme::ts_fg_or(
-        editor,
-        "ui.scrollbar.track",
-        Color4f::new(0.15, 0.15, 0.15, 1.0),
+    // --- Track background (very subtle) ---
+    let track_color = resolve_track_color(editor);
+    canvas.draw_pixel_rrect(
+        bar_x,
+        track_y_start,
+        SCROLLBAR_WIDTH,
+        track_height,
+        THUMB_RADIUS,
+        track_color,
     );
-    canvas.draw_pixel_rect(track_x, track_y_start, cw, track_height, track_color);
 
-    // Thumb.
+    // --- Thumb ---
     let thumb_ratio = (viewport as f32 / total as f32).min(1.0);
-    let thumb_height = (thumb_ratio * track_height).max(fl.cell_height); // min 1 cell tall
+    let thumb_height = (thumb_ratio * track_height).max(MIN_THUMB_HEIGHT);
     let scroll_ratio = if total > viewport {
         fl.scroll_offset as f32 / (total - viewport) as f32
     } else {
@@ -52,12 +74,50 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     };
     let thumb_y = track_y_start + scroll_ratio * (track_height - thumb_height);
 
-    let thumb_color = theme::ts_fg_or(
-        editor,
-        "ui.scrollbar.thumb",
-        Color4f::new(0.4, 0.4, 0.4, 1.0),
+    let thumb_color = resolve_thumb_color(editor);
+    canvas.draw_pixel_rrect(
+        bar_x,
+        thumb_y,
+        SCROLLBAR_WIDTH,
+        thumb_height,
+        THUMB_RADIUS,
+        thumb_color,
     );
-    canvas.draw_pixel_rect(track_x, thumb_y, cw, thumb_height, thumb_color);
+}
+
+/// Resolve the track background color from the theme or derive a sensible default.
+///
+/// If the theme defines `ui.scrollbar.track`, use that (as fg color).
+/// Otherwise: derive from the editor background — on dark themes a faint white,
+/// on light themes a faint black.
+fn resolve_track_color(editor: &Editor) -> Color4f {
+    let style = editor.theme.style("ui.scrollbar.track");
+    if let Some(c) = style.fg {
+        return theme::theme_color_to_skia(&c);
+    }
+    // Derive: faint tint opposite to background brightness.
+    if editor.theme.is_dark() {
+        Color4f::new(1.0, 1.0, 1.0, 0.04)
+    } else {
+        Color4f::new(0.0, 0.0, 0.0, 0.04)
+    }
+}
+
+/// Resolve the thumb color from the theme or derive a sensible default.
+///
+/// If the theme defines `ui.scrollbar.thumb`, use that.
+/// Otherwise: semi-transparent foreground-ish color that contrasts with track.
+fn resolve_thumb_color(editor: &Editor) -> Color4f {
+    let style = editor.theme.style("ui.scrollbar.thumb");
+    if let Some(c) = style.fg {
+        return theme::theme_color_to_skia(&c);
+    }
+    // Derive: medium-alpha tint for visibility.
+    if editor.theme.is_dark() {
+        Color4f::new(1.0, 1.0, 1.0, 0.25)
+    } else {
+        Color4f::new(0.0, 0.0, 0.0, 0.25)
+    }
 }
 
 #[cfg(test)]

@@ -206,4 +206,34 @@ fn mouse_right_click_is_noop() {
     assert_eq!(win.cursor_col, orig_col);
 }
 
+#[test]
+fn mouse_scroll_horizontal_right() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 0;
+    editor.handle_mouse_scroll_horizontal(2); // positive = right
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 6); // 2 * scroll_speed(3)
+}
+
+#[test]
+fn mouse_scroll_horizontal_left() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 10;
+    editor.handle_mouse_scroll_horizontal(-2); // negative = left
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 4); // 10 - 2*3
+}
+
+#[test]
+fn mouse_scroll_horizontal_saturates_at_zero() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 2;
+    editor.handle_mouse_scroll_horizontal(-5); // Would go negative
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 0);
+}
+
 // --- Debug mode tests ---

@@ -1703,6 +1703,30 @@ impl Editor {
         }
     }
 
+    /// Handle horizontal mouse scroll (positive = right, negative = left).
+    ///
+    /// Adjusts col_offset directly. Only applies to normal file buffers.
+    pub fn handle_mouse_scroll_horizontal(&mut self, delta: i16) {
+        let cols = delta.unsigned_abs() as usize;
+        if cols == 0 {
+            return;
+        }
+        let scroll_speed = 3;
+        let buf_idx = self.active_buffer_idx();
+        let kind = self.buffers[buf_idx].kind;
+        if kind != crate::BufferKind::Text {
+            return;
+        }
+        let win = self.window_mgr.focused_window_mut();
+        if delta > 0 {
+            // Scroll right — increase col_offset.
+            win.col_offset = win.col_offset.saturating_add(cols * scroll_speed);
+        } else {
+            // Scroll left — decrease col_offset.
+            win.col_offset = win.col_offset.saturating_sub(cols * scroll_speed);
+        }
+    }
+
     /// Handle mouse scroll (positive = up, negative = down).
     ///
     /// Vim-style: scroll moves the viewport and clamps the cursor into the

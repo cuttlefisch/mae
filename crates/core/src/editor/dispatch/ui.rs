@@ -314,6 +314,13 @@ impl Editor {
                     if self.word_wrap { "on" } else { "off" }
                 ));
             }
+            "toggle-scrollbar" => {
+                self.scrollbar = !self.scrollbar;
+                self.set_status(format!(
+                    "Scrollbar: {}",
+                    if self.scrollbar { "on" } else { "off" }
+                ));
+            }
             "toggle-fps" => {
                 self.show_fps = !self.show_fps;
                 self.set_status(format!(

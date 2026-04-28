@@ -349,6 +349,22 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
     }
 
+    /// Fill a pixel-precise rounded rectangle.
+    pub fn draw_pixel_rrect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: Color4f,
+    ) {
+        let paint = fill_paint(color);
+        let rect = skia_safe::Rect::from_xywh(x, y, w, h);
+        let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
+        self.surface.canvas().draw_rrect(rrect, &paint);
+    }
+
     // -----------------------------------------------------------------------
     // Pixel-Y positioned methods (for variable-height line rendering)
     // -----------------------------------------------------------------------
