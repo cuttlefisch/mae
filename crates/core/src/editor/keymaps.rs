@@ -522,6 +522,11 @@ impl Editor {
         // Move subtrees (M-j/M-k + M-Up/M-Down)
         org.bind(parse_key_seq("M-j"), "org-move-subtree-down");
         org.bind(parse_key_seq("M-k"), "org-move-subtree-up");
+        // Narrow/widen
+        org.bind(parse_key_seq_spaced("SPC m s n"), "org-narrow-subtree");
+        org.bind(parse_key_seq_spaced("SPC m s w"), "org-widen");
+        org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
+        org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
         org.bind(
             vec![KeyPress {
                 key: Key::Up,
@@ -588,6 +593,12 @@ impl Editor {
             }],
             "md-move-subtree-down",
         );
+
+        // Narrow/widen
+        markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
+        markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
 
         maps.insert("markdown".to_string(), markdown);
 

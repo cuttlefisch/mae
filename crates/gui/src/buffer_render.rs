@@ -242,7 +242,21 @@ pub fn render_buffer_content(
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
 
+    // Narrow range: if set, clamp rendering to visible lines.
+    let narrow = buf.narrowed_range;
+    if let Some((ns, _)) = narrow {
+        if line_idx < ns {
+            line_idx = ns;
+        }
+    }
+
     while pixel_y < pixel_y_limit && line_idx < display_lines {
+        // Skip lines outside narrowed range
+        if let Some((_, ne)) = narrow {
+            if line_idx >= ne {
+                break;
+            }
+        }
         // Skip folded lines
         let mut is_folded = false;
         for (start, end) in &buf.folded_ranges {

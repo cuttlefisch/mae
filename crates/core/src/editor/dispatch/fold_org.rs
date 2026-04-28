@@ -54,6 +54,13 @@ impl Editor {
             "md-move-subtree-down" => {
                 self.md_move_subtree_down();
             }
+            // Narrow/widen (shared)
+            "narrow-to-subtree" | "org-narrow-subtree" | "md-narrow-subtree" => {
+                self.narrow_to_subtree();
+            }
+            "widen" | "org-widen" | "md-widen" => {
+                self.widen();
+            }
             _ => return None,
         }
         Some(true)

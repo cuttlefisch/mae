@@ -131,9 +131,14 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     let position = format!(" {}:{} ", win.cursor_row + 1, win.cursor_col + 1);
     segments.push(Segment::new(position, 1));
 
-    // Priority 2: filename + modified flag.
+    // Priority 2: filename + modified flag + narrowed indicator.
     let modified = if buf.modified { " [+]" } else { "" };
-    let file_info = format!(" {}{}", buf.name, modified);
+    let narrowed = if buf.narrowed_range.is_some() {
+        " [Narrowed]"
+    } else {
+        ""
+    };
+    let file_info = format!(" {}{}{}", buf.name, modified, narrowed);
     segments.push(Segment::new(file_info, 2));
 
     // Priority 3: diagnostics summary (hide if all zero).

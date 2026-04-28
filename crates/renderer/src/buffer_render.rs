@@ -108,7 +108,21 @@ pub(crate) fn render_buffer(
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
 
+    // Narrow range: if set, clamp rendering to visible lines.
+    let narrow = buf.narrowed_range;
+    if let Some((ns, _)) = narrow {
+        if line_idx < ns {
+            line_idx = ns;
+        }
+    }
+
     while display_row < viewport_height && line_idx < display_lines {
+        // Skip lines outside narrowed range
+        if let Some((_, ne)) = narrow {
+            if line_idx >= ne {
+                break;
+            }
+        }
         // Skip folded lines
         let mut is_folded = false;
         for (start, end) in &buf.folded_ranges {

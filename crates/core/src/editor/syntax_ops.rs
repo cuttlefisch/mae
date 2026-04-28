@@ -734,6 +734,48 @@ impl Editor {
         self.set_status("Moved subtree up");
     }
 
+    // --- Narrow/Widen ---
+
+    /// Narrow buffer to the subtree at the cursor (org or markdown).
+    pub fn narrow_to_subtree(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let lang = self.syntax.language_of(buf_idx);
+        let heading_lang = match lang {
+            Some(crate::syntax::Language::Org) => crate::syntax::Language::Org,
+            Some(crate::syntax::Language::Markdown) => crate::syntax::Language::Markdown,
+            _ => {
+                self.set_status("Narrow: not an org/markdown buffer");
+                return;
+            }
+        };
+        let row = self.window_mgr.focused_window().cursor_row;
+        let Some((start, end)) = self.heading_subtree_range(row, heading_lang) else {
+            self.set_status("Narrow: not on a heading");
+            return;
+        };
+        self.buffers[buf_idx].narrow_to(start, end);
+        // Clamp cursor to narrow range
+        let win = self.window_mgr.focused_window_mut();
+        if win.cursor_row < start {
+            win.cursor_row = start;
+            win.cursor_col = 0;
+        } else if win.cursor_row >= end {
+            win.cursor_row = end.saturating_sub(1);
+            win.cursor_col = 0;
+        }
+        if win.scroll_offset < start {
+            win.scroll_offset = start;
+        }
+        self.set_status("[Narrowed]");
+    }
+
+    /// Remove narrowing, restoring the full buffer view.
+    pub fn widen(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        self.buffers[buf_idx].widen();
+        self.set_status("Widened");
+    }
+
     /// Toggle fold at cursor (za). Works for org/markdown headings and code blocks.
     pub fn toggle_fold(&mut self) {
         let buf_idx = self.active_buffer_idx();
@@ -1150,6 +1192,52 @@ mod tests {
         assert_eq!(Editor::heading_level("*** H3", Language::Org), 3);
         assert_eq!(Editor::heading_level("Not a heading", Language::Org), 0);
         assert_eq!(Editor::heading_level("**nospace", Language::Org), 0);
+    }
+
+    // --- Narrow/widen tests ---
+
+    #[test]
+    fn narrow_to_subtree_hides_outer_lines() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.narrow_to_subtree();
+        let range = ed.buffers[0].narrowed_range;
+        assert_eq!(range, Some((0, 2)));
+        // Lines outside range are not visible
+        assert!(ed.buffers[0].is_line_visible(0));
+        assert!(ed.buffers[0].is_line_visible(1));
+        assert!(!ed.buffers[0].is_line_visible(2));
+        assert!(!ed.buffers[0].is_line_visible(3));
+    }
+
+    #[test]
+    fn widen_restores_full_buffer() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.narrow_to_subtree();
+        assert!(ed.buffers[0].narrowed_range.is_some());
+        ed.widen();
+        assert!(ed.buffers[0].narrowed_range.is_none());
+        assert!(ed.buffers[0].is_line_visible(3));
+    }
+
+    #[test]
+    fn narrow_clamps_cursor() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 3;
+        // Narrow to H1 subtree (rows 0-1), cursor at row 3 should clamp
+        ed.buffers[0].narrow_to(0, 2);
+        let win = ed.window_mgr.focused_window_mut();
+        win.clamp_cursor(&ed.buffers[0]);
+        assert!(win.cursor_row <= 1);
+    }
+
+    #[test]
+    fn narrow_status_indicator() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.narrow_to_subtree();
+        assert!(ed.status_msg.contains("Narrowed"));
     }
 
     #[test]

@@ -214,12 +214,23 @@ impl Window {
     // --- Cursor clamping ---
 
     /// Ensure cursor is within valid bounds after any structural change.
+    /// Respects narrowed range if set.
     pub fn clamp_cursor(&mut self, buf: &crate::buffer::Buffer) {
         let line_count = buf.display_line_count();
         if line_count == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;
             return;
+        }
+        // Respect narrowed range
+        if let Some((ns, ne)) = buf.narrowed_range {
+            if self.cursor_row < ns {
+                self.cursor_row = ns;
+            }
+            let max_narrow = ne.saturating_sub(1);
+            if self.cursor_row > max_narrow {
+                self.cursor_row = max_narrow;
+            }
         }
         let max_row = line_count.saturating_sub(1);
         if self.cursor_row > max_row {

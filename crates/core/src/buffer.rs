@@ -118,6 +118,9 @@ pub struct Buffer {
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
     pub saved_mode: Option<crate::Mode>,
+    /// Narrowed view: when set, only lines in `[start, end)` are visible.
+    /// Rendering and cursor movement are clamped to this range.
+    pub narrowed_range: Option<(usize, usize)>,
     /// Line indices modified since the last save. Used by gutter rendering
     /// to show change markers. Cleared on `save()`.
     pub changed_lines: HashSet<usize>,
@@ -155,6 +158,7 @@ impl Buffer {
             folded_ranges: Vec::new(),
             generation: 0,
             saved_mode: None,
+            narrowed_range: None,
             changed_lines: HashSet::new(),
             link_spans: Vec::new(),
         }
@@ -361,6 +365,27 @@ impl Buffer {
             n - 1
         } else {
             n
+        }
+    }
+
+    /// Narrow the buffer view to a range of lines `[start, end)`.
+    pub fn narrow_to(&mut self, start: usize, end: usize) {
+        let clamped_end = end.min(self.line_count());
+        if start < clamped_end {
+            self.narrowed_range = Some((start, clamped_end));
+        }
+    }
+
+    /// Remove narrowing, restoring the full buffer view.
+    pub fn widen(&mut self) {
+        self.narrowed_range = None;
+    }
+
+    /// Check if a line is visible (not hidden by narrowing).
+    pub fn is_line_visible(&self, line: usize) -> bool {
+        match self.narrowed_range {
+            Some((start, end)) => line >= start && line < end,
+            None => true,
         }
     }
 
