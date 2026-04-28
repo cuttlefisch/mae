@@ -272,6 +272,14 @@ impl OptionRegistry {
                     config_key: Some("editor.ignorecase"),
                 },
                 OptionDef {
+                    name: "heading_scale",
+                    aliases: &["heading-scale"],
+                    doc: "Scale heading font size in org/markdown buffers (GUI only)",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.heading_scale"),
+                },
+                OptionDef {
                     name: "smartcase",
                     aliases: &[],
                     doc: "When ignorecase is on and pattern contains uppercase, search case-sensitively",

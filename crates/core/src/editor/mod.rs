@@ -457,6 +457,8 @@ pub struct Editor {
     pub restore_session: bool,
     /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
     pub insert_ctrl_d: String,
+    /// Toggle: scale heading font size in org/markdown buffers. Default true.
+    pub heading_scale: bool,
     /// Case-insensitive search (vim ignorecase).
     pub ignorecase: bool,
     /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
@@ -629,6 +631,7 @@ impl Editor {
             clipboard: "unnamed".to_string(),
             restore_session: false,
             insert_ctrl_d: "dedent".to_string(),
+            heading_scale: true,
             ignorecase: false,
             smartcase: false,
             pending_block_insert: None,
@@ -740,6 +743,7 @@ impl Editor {
             "ai_profile" => self.ai_profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
+            "heading_scale" => self.heading_scale.to_string(),
             "ignorecase" => self.ignorecase.to_string(),
             "smartcase" => self.smartcase.to_string(),
             "autosave_interval" => self.autosave_interval.to_string(),
@@ -866,6 +870,9 @@ impl Editor {
                     ));
                 }
                 self.insert_ctrl_d = value.to_string();
+            }
+            "heading_scale" => {
+                self.heading_scale = parse_option_bool(value)?;
             }
             "ignorecase" => {
                 self.ignorecase = parse_option_bool(value)?;

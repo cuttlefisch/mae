@@ -70,7 +70,8 @@ fn extra_rows_for_scale(scale: f32) -> usize {
     }
 }
 
-/// Get the heading scale for a single line. Returns 1.0 if not a heading.
+/// Get the heading scale for a single line. Returns 1.0 if not a heading
+/// or if heading scaling is disabled.
 pub fn line_heading_scale(
     buf: &mae_core::Buffer,
     syntax_spans: Option<&[HighlightSpan]>,
@@ -300,7 +301,11 @@ pub fn render_buffer_content(
         } else {
             0
         };
-        let org_heading_scale = org_heading_scale_for_level(org_heading_level);
+        let org_heading_scale = if editor.heading_scale {
+            org_heading_scale_for_level(org_heading_level)
+        } else {
+            1.0
+        };
         let base_fg = if is_stopped_line {
             stopped_line_fg
         } else {

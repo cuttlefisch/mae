@@ -1152,6 +1152,16 @@ mod tests {
         assert_eq!(Editor::heading_level("**nospace", Language::Org), 0);
     }
 
+    #[test]
+    fn heading_scale_option_toggle() {
+        let mut ed = Editor::new();
+        assert!(ed.heading_scale); // default on
+        assert!(ed.set_option("heading_scale", "false").is_ok());
+        assert!(!ed.heading_scale);
+        assert!(ed.set_option("heading-scale", "true").is_ok());
+        assert!(ed.heading_scale);
+    }
+
     // --- Markdown structural editing tests ---
 
     fn md_editor(text: &str) -> Editor {

@@ -130,8 +130,11 @@ pub fn compute_cursor_position(
                 );
                 screen_row += row_off;
 
-                let line_scale =
-                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row);
+                let line_scale = if editor.heading_scale {
+                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row)
+                } else {
+                    1.0
+                };
                 if screen_row < win_inner.height {
                     let indent_len = if editor.break_indent && row_off > 0 {
                         let chars: Vec<char> = line_text.chars().collect();
@@ -165,8 +168,11 @@ pub fn compute_cursor_position(
                     grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
                 let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
                 let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
-                let line_scale =
-                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row);
+                let line_scale = if editor.heading_scale {
+                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row)
+                } else {
+                    1.0
+                };
                 // Scale column offset using per-char accumulation (matches draw_styled_at).
                 let visible_col = display_col.saturating_sub(scroll_col);
                 let scaled_col = if line_scale != 1.0 {
