@@ -472,6 +472,10 @@ pub struct Editor {
     /// State stack for save/restore (push/pop) during temporary operations
     /// like self-test. AI tools call `editor_save_state` / `editor_restore_state`.
     pub state_stack: Vec<EditorStateSnapshot>,
+    /// Last time autosave fired. Compared against `autosave_interval` option.
+    pub last_autosave: std::time::Instant,
+    /// Autosave interval in seconds (0 = disabled). Parsed from option registry.
+    pub autosave_interval: u64,
 }
 
 impl Default for Editor {
@@ -625,6 +629,8 @@ impl Editor {
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
             state_stack: Vec::new(),
+            last_autosave: std::time::Instant::now(),
+            autosave_interval: 0,
         }
     }
 
@@ -719,6 +725,7 @@ impl Editor {
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
             "ignorecase" => self.ignorecase.to_string(),
             "smartcase" => self.smartcase.to_string(),
+            "autosave_interval" => self.autosave_interval.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -848,6 +855,12 @@ impl Editor {
             }
             "smartcase" => {
                 self.smartcase = parse_option_bool(value)?;
+            }
+            "autosave_interval" => {
+                let secs: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.autosave_interval = secs;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -1531,6 +1544,23 @@ impl Editor {
                 let buf_row = win.scroll_offset + row.saturating_sub(1);
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
+
+                // Check for link click: convert row+col to byte offset, search link_spans
+                if !buf.link_spans.is_empty() {
+                    let line_start_byte =
+                        buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+                    let click_byte = line_start_byte + text_col;
+                    if let Some(link) = buf
+                        .link_spans
+                        .iter()
+                        .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+                    {
+                        let target = link.target.clone();
+                        self.handle_link_click(&target);
+                        return;
+                    }
+                }
+
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
                 let win = self.window_mgr.focused_window_mut();
@@ -1544,6 +1574,19 @@ impl Editor {
                 // Middle-click paste from default register.
                 self.dispatch_builtin("paste-after");
             }
+        }
+    }
+
+    /// Handle a link click: open file paths in the editor, URLs externally.
+    fn handle_link_click(&mut self, target: &str) {
+        if target.starts_with("http://") || target.starts_with("https://") {
+            // Open URL externally
+            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            self.set_status(format!("Opening {}", target));
+        } else {
+            // Strip :line:col suffix for file paths
+            let (path, _line, _col) = file_ops::parse_file_link(target);
+            self.open_file(path);
         }
     }
 

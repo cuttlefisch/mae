@@ -107,6 +107,18 @@ impl Editor {
             "org-open-link" => {
                 self.org_open_link();
             }
+            "org-promote" => {
+                self.org_promote();
+            }
+            "org-demote" => {
+                self.org_demote();
+            }
+            "org-move-subtree-up" => {
+                self.org_move_subtree_up();
+            }
+            "org-move-subtree-down" => {
+                self.org_move_subtree_down();
+            }
 
             // Movement — operates on focused window + its buffer
             "move-up" => {
@@ -1745,35 +1757,52 @@ impl Editor {
                 self.record_edit_with_count("join-lines", count);
             }
 
-            // Indent / dedent
+            // Indent / dedent (org headings: >> = demote, << = promote)
             "indent-line" => {
                 let idx = self.active_buffer_idx();
-                let start_row = self.window_mgr.focused_window().cursor_row;
-                let line_count = self.buffers[idx].line_count();
-                let end_row = (start_row + n).min(line_count);
-                for row in start_row..end_row {
-                    let line_start = self.buffers[idx].rope().line_to_char(row);
-                    self.buffers[idx].insert_text_at(line_start, "    ");
+                let is_org = self.syntax.language_of(idx) == Some(crate::syntax::Language::Org);
+                let row = self.window_mgr.focused_window().cursor_row;
+                let on_heading = is_org && self.buffers[idx].line_text(row).starts_with('*');
+                if on_heading {
+                    for _ in 0..n {
+                        self.org_demote();
+                    }
+                } else {
+                    let line_count = self.buffers[idx].line_count();
+                    let end_row = (row + n).min(line_count);
+                    for r in row..end_row {
+                        let line_start = self.buffers[idx].rope().line_to_char(r);
+                        self.buffers[idx].insert_text_at(line_start, "    ");
+                    }
                 }
                 self.record_edit_with_count("indent-line", count);
             }
             "dedent-line" => {
                 let idx = self.active_buffer_idx();
-                let start_row = self.window_mgr.focused_window().cursor_row;
-                let line_count = self.buffers[idx].line_count();
-                let end_row = (start_row + n).min(line_count);
-                for row in start_row..end_row {
-                    let line_start = self.buffers[idx].rope().line_to_char(row);
-                    let line_text = self.buffers[idx].line_text(row);
-                    let spaces: usize = line_text.chars().take(4).take_while(|c| *c == ' ').count();
-                    if spaces > 0 {
-                        self.buffers[idx].delete_range(line_start, line_start + spaces);
+                let is_org = self.syntax.language_of(idx) == Some(crate::syntax::Language::Org);
+                let row = self.window_mgr.focused_window().cursor_row;
+                let on_heading = is_org && self.buffers[idx].line_text(row).starts_with('*');
+                if on_heading {
+                    for _ in 0..n {
+                        self.org_promote();
                     }
+                } else {
+                    let line_count = self.buffers[idx].line_count();
+                    let end_row = (row + n).min(line_count);
+                    for r in row..end_row {
+                        let line_start = self.buffers[idx].rope().line_to_char(r);
+                        let line_text = self.buffers[idx].line_text(r);
+                        let spaces: usize =
+                            line_text.chars().take(4).take_while(|c| *c == ' ').count();
+                        if spaces > 0 {
+                            self.buffers[idx].delete_range(line_start, line_start + spaces);
+                        }
+                    }
+                    // Clamp cursor col after dedent
+                    let idx2 = self.active_buffer_idx();
+                    let win = self.window_mgr.focused_window_mut();
+                    win.clamp_cursor(&self.buffers[idx2]);
                 }
-                // Clamp cursor col after dedent
-                let idx2 = self.active_buffer_idx();
-                let win = self.window_mgr.focused_window_mut();
-                win.clamp_cursor(&self.buffers[idx2]);
                 self.record_edit_with_count("dedent-line", count);
             }
 
@@ -2035,16 +2064,7 @@ impl Editor {
                 self.set_status(format!("Killed {} buffer(s)", killed));
             }
             "save-all-buffers" => {
-                let mut saved = 0;
-                let mut errors = Vec::new();
-                for i in 0..self.buffers.len() {
-                    if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
-                        match self.buffers[i].save() {
-                            Ok(()) => saved += 1,
-                            Err(e) => errors.push(format!("{}: {}", self.buffers[i].name, e)),
-                        }
-                    }
-                }
+                let (saved, errors) = self.save_all_modified_buffers();
                 if errors.is_empty() {
                     self.set_status(format!("Saved {} buffer(s)", saved));
                 } else {

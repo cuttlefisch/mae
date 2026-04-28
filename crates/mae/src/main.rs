@@ -909,6 +909,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.deferred_ai_reply.is_some(),
                     self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
                 );
+                // Autosave check (piggybacks on 30s health tick).
+                self.editor.try_autosave();
             }
         }
     }

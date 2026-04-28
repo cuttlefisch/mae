@@ -310,6 +310,172 @@ impl Editor {
         }
     }
 
+    /// Promote the Org heading at the cursor (remove one `*`). Noop if
+    /// not on a heading or already a single-star heading.
+    pub fn org_promote(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let star_count = line.chars().take_while(|&c| c == '*').count();
+        if star_count <= 1 {
+            return; // single star or not a heading
+        }
+        // Remove first star
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        self.buffers[buf_idx].delete_range(start, start + 1);
+        self.set_status(format!("Promoted to level {}", star_count - 1));
+    }
+
+    /// Demote the Org heading at the cursor (add one `*`). Noop if not on a heading.
+    pub fn org_demote(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let star_count = line.chars().take_while(|&c| c == '*').count();
+        if star_count == 0 {
+            return; // not a heading
+        }
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        self.buffers[buf_idx].insert_text_at(start, "*");
+        self.set_status(format!("Demoted to level {}", star_count + 1));
+    }
+
+    /// Calculate the range of lines covered by the subtree rooted at the
+    /// heading on `row`. Returns `(start_row, end_row_exclusive)` where
+    /// `start_row` is the heading itself and `end_row_exclusive` is the
+    /// first line of the next sibling (same or higher level) or EOF.
+    pub fn org_subtree_range(&self, row: usize) -> Option<(usize, usize)> {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return None;
+        }
+        let line_count = self.buffers[buf_idx].line_count();
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = line.chars().take_while(|&c| c == '*').count();
+        if level == 0 {
+            return None;
+        }
+        let mut end = row + 1;
+        while end < line_count {
+            let l: String = self.buffers[buf_idx].rope().line(end).chars().collect();
+            let l_level = l.chars().take_while(|&c| c == '*').count();
+            if l_level > 0 && l_level <= level {
+                break;
+            }
+            end += 1;
+        }
+        Some((row, end))
+    }
+
+    /// Move the subtree at the cursor down past the next sibling subtree.
+    pub fn org_move_subtree_down(&mut self) {
+        let row = self.window_mgr.focused_window().cursor_row;
+        let Some((start, end)) = self.org_subtree_range(row) else {
+            return;
+        };
+        let buf_idx = self.active_buffer_idx();
+        let line_count = self.buffers[buf_idx].line_count();
+        if end >= line_count {
+            return; // already at bottom
+        }
+        // Find the sibling subtree below
+        let sibling_start = end;
+        let sibling_range = self.org_subtree_range(sibling_start);
+        let sibling_end = match sibling_range {
+            Some((_, se)) => se,
+            None => {
+                // Next line is not a heading — treat as single line
+                sibling_start + 1
+            }
+        };
+
+        // Extract both blocks as text
+        let rope = self.buffers[buf_idx].rope();
+        let our_char_start = rope.line_to_char(start);
+        let our_char_end = rope.line_to_char(end);
+        let sib_char_start = rope.line_to_char(sibling_start);
+        let sib_char_end = if sibling_end >= line_count {
+            rope.len_chars()
+        } else {
+            rope.line_to_char(sibling_end)
+        };
+
+        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
+        let sib_text: String = rope.slice(sib_char_start..sib_char_end).chars().collect();
+
+        // Replace: sibling first, then our block
+        self.buffers[buf_idx].delete_range(our_char_start, sib_char_end);
+        let combined = format!("{}{}", sib_text, our_text);
+        self.buffers[buf_idx].insert_text_at(our_char_start, &combined);
+
+        // Move cursor: count newlines in sibling text to find offset
+        let sib_lines = sib_text.chars().filter(|&c| c == '\n').count();
+        self.window_mgr.focused_window_mut().cursor_row = start + sib_lines;
+        self.set_status("Moved subtree down");
+    }
+
+    /// Move the subtree at the cursor up past the previous sibling subtree.
+    pub fn org_move_subtree_up(&mut self) {
+        let row = self.window_mgr.focused_window().cursor_row;
+        let Some((start, end)) = self.org_subtree_range(row) else {
+            return;
+        };
+        if start == 0 {
+            return; // already at top
+        }
+        let buf_idx = self.active_buffer_idx();
+
+        // Find the sibling above: scan upward for a heading at same or higher level
+        let line: String = self.buffers[buf_idx].rope().line(start).chars().collect();
+        let level = line.chars().take_while(|&c| c == '*').count();
+
+        let mut prev_start = start - 1;
+        loop {
+            let l: String = self.buffers[buf_idx]
+                .rope()
+                .line(prev_start)
+                .chars()
+                .collect();
+            let l_level = l.chars().take_while(|&c| c == '*').count();
+            if l_level > 0 && l_level <= level {
+                break;
+            }
+            if prev_start == 0 {
+                return; // no sibling above
+            }
+            prev_start -= 1;
+        }
+
+        // Extract both blocks as text
+        let rope = self.buffers[buf_idx].rope();
+        let prev_char_start = rope.line_to_char(prev_start);
+        let prev_char_end = rope.line_to_char(start);
+        let our_char_start = rope.line_to_char(start);
+        let our_char_end = if end >= self.buffers[buf_idx].line_count() {
+            rope.len_chars()
+        } else {
+            rope.line_to_char(end)
+        };
+
+        let prev_text: String = rope.slice(prev_char_start..prev_char_end).chars().collect();
+        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
+
+        // Replace: our block first, then previous
+        self.buffers[buf_idx].delete_range(prev_char_start, our_char_end);
+        let combined = format!("{}{}", our_text, prev_text);
+        self.buffers[buf_idx].insert_text_at(prev_char_start, &combined);
+
+        // Move cursor to new position
+        self.window_mgr.focused_window_mut().cursor_row = prev_start;
+        self.set_status("Moved subtree up");
+    }
+
     /// Open the Org link at the cursor.
     pub fn org_open_link(&mut self) {
         let buf_idx = self.active_buffer_idx();
@@ -361,5 +527,96 @@ impl Editor {
                 // TODO: implement actual search/jump logic
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::Language;
+
+    fn org_editor(text: &str) -> Editor {
+        let mut ed = Editor::new();
+        ed.buffers[0].insert_text_at(0, text);
+        ed.syntax.set_language(0, Language::Org);
+        ed
+    }
+
+    #[test]
+    fn org_demote_adds_star() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_demote();
+        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
+        assert!(ed.status_msg.contains("level 2"));
+    }
+
+    #[test]
+    fn org_promote_removes_star() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_promote();
+        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
+        assert!(ed.status_msg.contains("level 1"));
+    }
+
+    #[test]
+    fn org_promote_single_star_noop() {
+        let mut ed = org_editor("* Heading\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_promote();
+        assert_eq!(ed.buffers[0].text(), "* Heading\n");
+    }
+
+    #[test]
+    fn org_demote_non_heading_noop() {
+        let mut ed = org_editor("Just text\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_demote();
+        assert_eq!(ed.buffers[0].text(), "Just text\n");
+    }
+
+    #[test]
+    fn org_subtree_range_single() {
+        let ed = org_editor("* H1\nBody\n* H2\n");
+        let range = ed.org_subtree_range(0);
+        assert_eq!(range, Some((0, 2)));
+    }
+
+    #[test]
+    fn org_subtree_range_nested() {
+        let ed = org_editor("* H1\n** Sub\nBody\n* H2\n");
+        let range = ed.org_subtree_range(0);
+        assert_eq!(range, Some((0, 3)));
+        let range = ed.org_subtree_range(1);
+        assert_eq!(range, Some((1, 3)));
+    }
+
+    #[test]
+    fn org_move_subtree_down() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_move_subtree_down();
+        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
+    }
+
+    #[test]
+    fn org_move_subtree_up() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 2;
+        ed.org_move_subtree_up();
+        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(ed.window_mgr.focused_window().cursor_row, 0);
+    }
+
+    #[test]
+    fn org_move_at_boundary_noop() {
+        let mut ed = org_editor("* H1\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_move_subtree_down();
+        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+        ed.org_move_subtree_up();
+        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
     }
 }

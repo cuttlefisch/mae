@@ -256,6 +256,14 @@ impl OptionRegistry {
                     config_key: Some("editor.insert_ctrl_d"),
                 },
                 OptionDef {
+                    name: "autosave_interval",
+                    aliases: &["autosave-interval"],
+                    doc: "Auto-save interval in seconds (0 = disabled). Saves all modified file-backed buffers.",
+                    kind: OptionKind::String,
+                    default_value: "0",
+                    config_key: Some("editor.autosave_interval"),
+                },
+                OptionDef {
                     name: "ignorecase",
                     aliases: &[],
                     doc: "Case-insensitive search (like vim :set ignorecase)",

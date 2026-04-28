@@ -44,6 +44,39 @@ impl Editor {
                 }
                 true
             }
+            "wa" => {
+                let (saved, errors) = self.save_all_modified_buffers();
+                if errors.is_empty() {
+                    self.set_status(format!("Saved {} buffer(s)", saved));
+                } else {
+                    self.set_status(format!("Saved {}, errors: {}", saved, errors.join(", ")));
+                }
+                true
+            }
+            "qa" => {
+                if self.any_buffer_modified() {
+                    self.set_status("No write since last change (add ! to override)");
+                } else {
+                    self.on_quit();
+                    self.running = false;
+                }
+                true
+            }
+            "qa!" => {
+                self.on_quit();
+                self.running = false;
+                true
+            }
+            "wqa" | "xa" => {
+                let (_saved, errors) = self.save_all_modified_buffers();
+                if errors.is_empty() {
+                    self.on_quit();
+                    self.running = false;
+                } else {
+                    self.set_status(format!("Save errors: {}", errors.join(", ")));
+                }
+                true
+            }
             "e" => {
                 if let Some(path) = args {
                     self.open_file(path);

@@ -109,6 +109,12 @@ pub fn collect_breakpoints(buf: &Buffer, editor: &Editor) -> (HashSet<u32>, Opti
     (bps, stopped)
 }
 
+/// Check if a line has been modified since the last save.
+/// Returns `true` if the line index is in the buffer's changed_lines set.
+pub fn is_line_changed(buf: &Buffer, line_idx: usize) -> bool {
+    buf.changed_lines.contains(&line_idx)
+}
+
 fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeverity>) -> bool {
     fn rank(s: Option<DiagnosticSeverity>) -> u8 {
         match s {

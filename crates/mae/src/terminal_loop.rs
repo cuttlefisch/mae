@@ -98,6 +98,9 @@ pub(crate) async fn run_terminal_loop(
             last_health_check = tokio::time::Instant::now();
         }
 
+        // Autosave check (runs on every loop iteration, try_autosave gates on interval).
+        editor.try_autosave();
+
         editor.clamp_all_cursors();
 
         let (term_w, term_h) = renderer.size()?;

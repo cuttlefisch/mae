@@ -317,6 +317,11 @@ pub fn serialize_keypress(kp: &KeyPress) -> String {
         (Key::PageDown, false, false) => "<PageDown>".to_string(),
         (Key::Delete, false, false) => "<Del>".to_string(),
         (Key::F(n), false, false) => format!("<F{}>", n),
+        // Alt + special keys
+        (Key::Left, false, true) => "<M-Left>".to_string(),
+        (Key::Right, false, true) => "<M-Right>".to_string(),
+        (Key::Up, false, true) => "<M-Up>".to_string(),
+        (Key::Down, false, true) => "<M-Down>".to_string(),
         // Special keys with modifiers (rare; emit as best-effort)
         (Key::Escape, true, _) => "<C-Esc>".to_string(),
         _ => String::new(),
@@ -374,6 +379,14 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
         });
     }
     if let Some(rest) = lower.strip_prefix("m-") {
+        // M-{special key}: M-Left, M-Right, M-Up, M-Down, etc.
+        if let Some((key, _)) = match_named_key(rest) {
+            return Some(KeyPress {
+                key,
+                ctrl: false,
+                alt: true,
+            });
+        }
         let ch = rest.chars().next()?;
         return Some(KeyPress {
             key: Key::Char(ch),
@@ -898,6 +911,42 @@ mod tests {
         let seq = parse_key_seq("backtab");
         assert_eq!(seq.len(), 1);
         assert_eq!(seq[0].key, Key::BackTab);
+    }
+
+    #[test]
+    fn parse_m_arrow_keys() {
+        let keys = deserialize_macro("<M-Left>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Left);
+        assert!(keys[0].alt);
+        assert!(!keys[0].ctrl);
+
+        let keys = deserialize_macro("<M-Right>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Right);
+        assert!(keys[0].alt);
+
+        let keys = deserialize_macro("<M-Up>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Up);
+        assert!(keys[0].alt);
+
+        let keys = deserialize_macro("<M-Down>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Down);
+        assert!(keys[0].alt);
+    }
+
+    #[test]
+    fn serialize_m_arrow_roundtrip() {
+        let kp = KeyPress {
+            key: Key::Left,
+            ctrl: false,
+            alt: true,
+        };
+        assert_eq!(serialize_keypress(&kp), "<M-Left>");
+        let back = deserialize_macro("<M-Left>");
+        assert_eq!(back[0], kp);
     }
 
     #[test]

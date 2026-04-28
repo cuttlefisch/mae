@@ -3,6 +3,7 @@
 use mae_core::conversation::{
     char_boundary_at, chars_to_display_cols, screen_line_count, wrap_text_into_rows, LineStyle,
 };
+use mae_core::link_detect::render_segments;
 use mae_core::{Editor, Mode, Window};
 use unicode_width::UnicodeWidthChar;
 
@@ -331,7 +332,26 @@ pub fn render_conversation_window(
                 LineStyle::InputPrompt => theme::ts_fg(editor, "conversation.input"),
             };
 
-            canvas.draw_text_at(row, inner_col, sl.text, fg);
+            // Render markdown/org links as underlined labels
+            let segs = render_segments(sl.text);
+            if segs.len() == 1 && segs[0].link_target.is_none() {
+                canvas.draw_text_at(row, inner_col, sl.text, fg);
+            } else {
+                let link_fg = theme::ts_fg(editor, "markup.link");
+                let mut col = inner_col;
+                for seg in &segs {
+                    if seg.link_target.is_some() {
+                        // Draw with link color + underline
+                        canvas.draw_text_at(row, col, &seg.text, link_fg);
+                        let w = unicode_width::UnicodeWidthStr::width(seg.text.as_str());
+                        canvas.draw_underline_span(row, col, w, link_fg);
+                        col += w;
+                    } else {
+                        canvas.draw_text_at(row, col, &seg.text, fg);
+                        col += unicode_width::UnicodeWidthStr::width(seg.text.as_str());
+                    }
+                }
+            }
             viewport_row += 1;
         }
     }

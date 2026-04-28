@@ -7,6 +7,54 @@ use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 use super::Editor;
 
 impl Editor {
+    /// Save all modified file-backed buffers. Returns the count saved.
+    /// Errors are collected and returned as a Vec of "(name: error)" strings.
+    pub fn save_all_modified_buffers(&mut self) -> (usize, Vec<String>) {
+        let mut saved = 0;
+        let mut errors = Vec::new();
+        for i in 0..self.buffers.len() {
+            if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
+                match self.buffers[i].save() {
+                    Ok(()) => saved += 1,
+                    Err(e) => errors.push(format!("{}: {}", self.buffers[i].name, e)),
+                }
+            }
+        }
+        (saved, errors)
+    }
+
+    /// Check whether any buffer has unsaved modifications.
+    pub fn any_buffer_modified(&self) -> bool {
+        self.buffers.iter().any(|b| b.modified)
+    }
+
+    /// Try to autosave all modified file-backed buffers if the configured
+    /// interval has elapsed. Called from event loop idle ticks.
+    /// Returns the number of buffers saved (0 if nothing to do or disabled).
+    pub fn try_autosave(&mut self) -> usize {
+        if self.autosave_interval == 0 {
+            return 0;
+        }
+        let elapsed = self.last_autosave.elapsed().as_secs();
+        if elapsed < self.autosave_interval {
+            return 0;
+        }
+        let (saved, errors) = self.save_all_modified_buffers();
+        if saved > 0 {
+            if errors.is_empty() {
+                self.set_status(format!("Autosaved {} buffer(s)", saved));
+            } else {
+                self.set_status(format!(
+                    "Autosaved {}, errors: {}",
+                    saved,
+                    errors.join(", ")
+                ));
+            }
+        }
+        self.last_autosave = std::time::Instant::now();
+        saved
+    }
+
     pub(crate) fn save_current_buffer(&mut self) {
         self.fire_hook("before-save");
         let idx = self.active_buffer_idx();
@@ -900,6 +948,27 @@ impl Editor {
             None => self.set_status(format!("gf: file not found: {}", raw)),
         }
     }
+}
+
+/// Parse a file path link that may include `:line:col` suffix.
+/// Returns `(path, optional_line, optional_col)`.
+pub fn parse_file_link(target: &str) -> (&str, Option<usize>, Option<usize>) {
+    // Try to split on : to extract line:col
+    let parts: Vec<&str> = target.rsplitn(3, ':').collect();
+    match parts.len() {
+        3 => {
+            if let (Ok(col), Ok(line)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                return (parts[2], Some(line), Some(col));
+            }
+        }
+        2 => {
+            if let Ok(line) = parts[0].parse::<usize>() {
+                return (parts[1], Some(line), None);
+            }
+        }
+        _ => {}
+    }
+    (target, None, None)
 }
 
 /// Extract the filename/path-like run containing `pos`. Used by `gf`

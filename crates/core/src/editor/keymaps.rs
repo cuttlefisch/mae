@@ -479,6 +479,44 @@ impl Editor {
         org.bind(parse_key_seq_spaced("S-Up"), "org-priority-up");
         org.bind(parse_key_seq_spaced("S-Down"), "org-priority-down");
         org.bind(vec![KeyPress::special(Key::Enter)], "org-open-link");
+        // Promote/demote headings (M-Left/M-Right + M-h/M-l)
+        org.bind(
+            vec![KeyPress {
+                key: Key::Left,
+                ctrl: false,
+                alt: true,
+            }],
+            "org-promote",
+        );
+        org.bind(
+            vec![KeyPress {
+                key: Key::Right,
+                ctrl: false,
+                alt: true,
+            }],
+            "org-demote",
+        );
+        org.bind(parse_key_seq("M-h"), "org-promote");
+        org.bind(parse_key_seq("M-l"), "org-demote");
+        // Move subtrees (M-j/M-k + M-Up/M-Down)
+        org.bind(parse_key_seq("M-j"), "org-move-subtree-down");
+        org.bind(parse_key_seq("M-k"), "org-move-subtree-up");
+        org.bind(
+            vec![KeyPress {
+                key: Key::Up,
+                ctrl: false,
+                alt: true,
+            }],
+            "org-move-subtree-up",
+        );
+        org.bind(
+            vec![KeyPress {
+                key: Key::Down,
+                ctrl: false,
+                alt: true,
+            }],
+            "org-move-subtree-down",
+        );
 
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);

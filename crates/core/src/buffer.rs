@@ -1,4 +1,5 @@
 use ropey::Rope;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -117,6 +118,12 @@ pub struct Buffer {
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
     pub saved_mode: Option<crate::Mode>,
+    /// Line indices modified since the last save. Used by gutter rendering
+    /// to show change markers. Cleared on `save()`.
+    pub changed_lines: HashSet<usize>,
+    /// Detected link spans in the buffer content. Populated lazily by
+    /// the renderer for conversation and shell buffers.
+    pub link_spans: Vec<crate::link_detect::LinkSpan>,
 }
 
 impl Default for Buffer {
@@ -148,6 +155,8 @@ impl Buffer {
             folded_ranges: Vec::new(),
             generation: 0,
             saved_mode: None,
+            changed_lines: HashSet::new(),
+            link_spans: Vec::new(),
         }
     }
 
@@ -245,6 +254,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
+            self.changed_lines.clear();
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
         } else {
@@ -430,9 +440,11 @@ impl Buffer {
         self.rope.insert_char(pos, ch);
         self.push_undo(EditAction::InsertChar { pos, ch });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         if ch == '\n' {
             win.cursor_row += 1;
             win.cursor_col = 0;
+            self.changed_lines.insert(win.cursor_row);
         } else {
             win.cursor_col += 1;
         }
@@ -615,7 +627,14 @@ impl Buffer {
             return;
         }
         let offset = char_offset.min(self.rope.len_chars());
+        let start_line = self.rope.char_to_line(offset);
         self.rope.insert(offset, text);
+        let end_line = self
+            .rope
+            .char_to_line((offset + text.len()).min(self.rope.len_chars()));
+        for line in start_line..=end_line {
+            self.changed_lines.insert(line);
+        }
         self.push_undo(EditAction::InsertRange {
             pos: offset,
             text: text.to_string(),
@@ -635,8 +654,10 @@ impl Buffer {
         if start >= end {
             return;
         }
+        let del_line = self.rope.char_to_line(start);
         let text: String = self.rope.slice(start..end).into();
         self.rope.remove(start..end);
+        self.changed_lines.insert(del_line);
         self.push_undo(EditAction::DeleteRange { pos: start, text });
         self.redo_stack.clear();
         self.modified = true;
@@ -1519,5 +1540,36 @@ mod tests {
 
         let buf = Buffer::from_file(&file).unwrap();
         assert_eq!(buf.project_root, Some(dir.path().to_path_buf()));
+    }
+
+    // --- Change markers ---
+
+    #[test]
+    fn buffer_tracks_changed_lines_on_insert() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello\n");
+        assert!(buf.changed_lines.contains(&0));
+    }
+
+    #[test]
+    fn buffer_tracks_changed_lines_on_delete() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello world");
+        buf.changed_lines.clear();
+        buf.delete_range(0, 5);
+        assert!(buf.changed_lines.contains(&0));
+    }
+
+    #[test]
+    fn buffer_clears_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("change_test.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut buf = Buffer::from_file(&path).unwrap();
+        let mut win = Window::new(0, 0);
+        buf.insert_char(&mut win, '!');
+        assert!(!buf.changed_lines.is_empty());
+        buf.save().unwrap();
+        assert!(buf.changed_lines.is_empty());
     }
 }

@@ -455,6 +455,7 @@ pub fn render_buffer_content(
                     gutter::render_gutter_line_at_y(
                         canvas,
                         editor,
+                        buf,
                         pixel_y,
                         area_col,
                         line_idx,
@@ -542,6 +543,7 @@ pub fn render_buffer_content(
             gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
+                buf,
                 pixel_y,
                 area_col,
                 line_idx,

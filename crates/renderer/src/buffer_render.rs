@@ -143,6 +143,9 @@ pub(crate) fn render_buffer(
         );
         let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
             Some((ch, key)) => (ch, ts(editor, key)),
+            None if gutter_common::is_line_changed(buf, line_idx) => {
+                ('│', ts(editor, "diff.modified"))
+            }
             None => (' ', gutter_style),
         };
         let line_text_style = if stopped_line == Some(line_idx_u32) {

@@ -21,6 +21,7 @@ pub use mae_core::render_common::gutter::{
 pub fn render_gutter_line_at_y(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
+    buf: &mae_core::Buffer,
     pixel_y: f32,
     screen_col_offset: usize,
     line_idx: usize,
@@ -69,6 +70,17 @@ pub fn render_gutter_line_at_y(
             screen_col_offset + gutter_w - 1,
             ch,
             marker_fg,
+            false,
+            false,
+            1.0,
+        );
+    } else if gutter::is_line_changed(buf, line_idx) {
+        let change_fg = theme::ts_fg(editor, "diff.modified");
+        canvas.draw_char_at_y(
+            pixel_y,
+            screen_col_offset + gutter_w - 1,
+            '│',
+            change_fg,
             false,
             false,
             1.0,

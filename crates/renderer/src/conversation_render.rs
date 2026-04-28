@@ -1,5 +1,6 @@
 //! Conversation (AI chat) window rendering.
 
+use mae_core::link_detect::render_segments;
 use mae_core::{Editor, Window};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -106,7 +107,24 @@ pub(crate) fn render_conversation_window(
                     ts(editor, "conversation.input")
                 }
             };
-            lines.push(Line::from(Span::styled(rl.text.clone(), style)));
+            // Render markdown/org links as underlined labels
+            let segs = render_segments(&rl.text);
+            if segs.len() == 1 && segs[0].link_target.is_none() {
+                lines.push(Line::from(Span::styled(rl.text.clone(), style)));
+            } else {
+                let link_style = ts(editor, "markup.link").add_modifier(Modifier::UNDERLINED);
+                let spans: Vec<Span> = segs
+                    .iter()
+                    .map(|seg| {
+                        if seg.link_target.is_some() {
+                            Span::styled(seg.text.clone(), link_style)
+                        } else {
+                            Span::styled(seg.text.clone(), style)
+                        }
+                    })
+                    .collect();
+                lines.push(Line::from(spans));
+            }
         }
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

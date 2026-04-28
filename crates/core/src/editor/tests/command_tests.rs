@@ -679,4 +679,133 @@ fn cmdline_completes_theme_names() {
     assert!(completions.iter().any(|c| c == "default"));
 }
 
+// ===== Chained ex commands (v0.6.0) =====
+
+#[test]
+fn wa_saves_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let p1 = dir.path().join("a.txt");
+    let p2 = dir.path().join("b.txt");
+    fs::write(&p1, "aaa").unwrap();
+    fs::write(&p2, "bbb").unwrap();
+
+    let mut ed = Editor::new();
+    ed.open_file(p1.to_str().unwrap());
+    ed.open_file(p2.to_str().unwrap());
+    // Modify both
+    let idx = ed.active_buffer_idx();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[idx].insert_char(win, '!');
+    ed.window_mgr.focused_window_mut().buffer_idx = 1;
+    let idx = ed.active_buffer_idx();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[idx].insert_char(win, '?');
+    ed.execute_command("wa");
+    assert!(!ed.buffers[1].modified);
+    assert!(!ed.buffers[2].modified);
+    assert!(ed.status_msg.contains("Saved 2"));
+}
+
+#[test]
+fn qa_refuses_if_modified() {
+    let mut ed = Editor::new();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[0].insert_char(win, 'x');
+    ed.execute_command("qa");
+    assert!(ed.running);
+    assert!(ed.status_msg.contains("No write"));
+}
+
+#[test]
+fn qa_quits_if_clean() {
+    let mut ed = Editor::new();
+    ed.execute_command("qa");
+    assert!(!ed.running);
+}
+
+#[test]
+fn qa_force_quits() {
+    let mut ed = Editor::new();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[0].insert_char(win, 'x');
+    ed.execute_command("qa!");
+    assert!(!ed.running);
+}
+
+#[test]
+fn wqa_saves_all_then_quits() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("c.txt");
+    fs::write(&p, "ccc").unwrap();
+
+    let mut ed = Editor::new();
+    ed.open_file(p.to_str().unwrap());
+    let idx = ed.active_buffer_idx();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[idx].insert_char(win, '!');
+    ed.execute_command("wqa");
+    assert!(!ed.running);
+    assert!(!ed.buffers[1].modified);
+}
+
+#[test]
+fn xa_alias() {
+    let mut ed = Editor::new();
+    ed.execute_command("xa");
+    assert!(!ed.running);
+}
+
+// ===== Autosave (v0.6.0) =====
+
+#[test]
+fn autosave_option_registered() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("autosave_interval").unwrap();
+    assert_eq!(val, "0");
+    assert_eq!(def.name, "autosave_interval");
+}
+
+#[test]
+fn try_autosave_saves_modified() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("auto.txt");
+    fs::write(&p, "original").unwrap();
+
+    let mut ed = Editor::new();
+    ed.open_file(p.to_str().unwrap());
+    let idx = ed.active_buffer_idx();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[idx].insert_char(win, '!');
+    assert!(ed.buffers[idx].modified);
+
+    ed.autosave_interval = 1;
+    // Force last_autosave to be old enough
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    let saved = ed.try_autosave();
+    assert_eq!(saved, 1);
+    assert!(!ed.buffers[idx].modified);
+}
+
+#[test]
+fn try_autosave_skips_clean() {
+    let mut ed = Editor::new();
+    ed.autosave_interval = 1;
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    let saved = ed.try_autosave();
+    assert_eq!(saved, 0);
+}
+
+#[test]
+fn try_autosave_skips_non_file() {
+    let mut ed = Editor::new();
+    // Modify the scratch buffer (no file path)
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[0].insert_char(win, 'x');
+    ed.autosave_interval = 1;
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    let saved = ed.try_autosave();
+    assert_eq!(saved, 0);
+    assert!(ed.buffers[0].modified); // still modified, not saved
+}
+
 // ===== Operator-pending mode tests (WU0) =====

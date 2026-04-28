@@ -17,6 +17,7 @@ pub mod hooks;
 pub mod input;
 pub mod kb_seed;
 pub mod keymap;
+pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;
 pub mod messages;
