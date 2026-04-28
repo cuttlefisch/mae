@@ -38,6 +38,7 @@ mod input;
 mod layout;
 mod messages_render;
 mod popup_render;
+mod scrollbar;
 mod shell_render;
 mod splash_render;
 mod status_render;
@@ -77,6 +78,9 @@ pub struct GuiRenderer {
     icon_font_family: Option<String>,
     /// Configured font size (None = 14.0).
     font_size: Option<f32>,
+    /// Cached FrameLayout from the last render of the focused window.
+    /// Used by the mouse handler for pixel-precise click positioning.
+    last_focused_layout: Option<layout::FrameLayout>,
 }
 
 impl GuiRenderer {
@@ -95,6 +99,7 @@ impl GuiRenderer {
             font_family: None,
             icon_font_family: None,
             font_size: None,
+            last_focused_layout: None,
         }
     }
 
@@ -188,6 +193,13 @@ impl GuiRenderer {
         self.font_size.unwrap_or(14.0)
     }
 
+    /// Access the cached FrameLayout from the last render.
+    /// Used by the mouse handler for pixel-precise click positioning
+    /// on scaled/folded lines.
+    pub fn last_focused_layout(&self) -> Option<&layout::FrameLayout> {
+        self.last_focused_layout.as_ref()
+    }
+
     /// Apply a new font size at runtime — recreates font objects, recalculates
     /// cell metrics and column/row counts. This is the lisp-machine contract:
     /// `(set-option! "font-size" "20")` must take effect immediately.
@@ -263,6 +275,9 @@ impl Renderer for GuiRenderer {
         let status_row = rows.saturating_sub(2);
         let cmd_row = rows.saturating_sub(1);
         let window_height = rows.saturating_sub(2);
+
+        // Track focused layout across render branches for mouse click caching.
+        let mut focused_frame_layout: Option<layout::FrameLayout> = None;
 
         // Check for fullscreen overlays first.
         if editor.file_picker.is_some() {
@@ -348,7 +363,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            let focused_frame_layout = render_window_area(
+            focused_frame_layout = render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -390,6 +405,9 @@ impl Renderer for GuiRenderer {
                 );
             }
         }
+
+        // Cache focused layout for mouse click positioning.
+        self.last_focused_layout = focused_frame_layout;
 
         canvas.end_frame();
 
@@ -570,6 +588,7 @@ fn render_window_area(
                         &fl,
                         syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
                     );
+                    scrollbar::render_scrollbar(canvas, editor, &fl);
                     if is_focused {
                         focused_layout = Some(fl);
                     }
@@ -626,6 +645,7 @@ fn render_window_area(
                     buffer_render::render_buffer_content(
                         canvas, editor, buf, win, is_focused, &fl, spans,
                     );
+                    scrollbar::render_scrollbar(canvas, editor, &fl);
                     if is_focused {
                         focused_layout = Some(fl);
                     }

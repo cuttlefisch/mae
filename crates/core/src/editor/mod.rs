@@ -5,6 +5,7 @@ mod debug_panel_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
+pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
 mod help_ops;
@@ -463,6 +464,8 @@ pub struct Editor {
     pub ignorecase: bool,
     /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
     pub smartcase: bool,
+    pub scrollbar: bool,
+    pub nyan_mode: bool,
     /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
     /// is pressed in block visual mode. On insert-mode exit, the typed text is
     /// replicated to all rows in the range.
@@ -634,6 +637,8 @@ impl Editor {
             heading_scale: true,
             ignorecase: false,
             smartcase: false,
+            scrollbar: true,
+            nyan_mode: false,
             pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -747,6 +752,8 @@ impl Editor {
             "ignorecase" => self.ignorecase.to_string(),
             "smartcase" => self.smartcase.to_string(),
             "autosave_interval" => self.autosave_interval.to_string(),
+            "scrollbar" => self.scrollbar.to_string(),
+            "nyan_mode" => self.nyan_mode.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -885,6 +892,12 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.autosave_interval = secs;
+            }
+            "scrollbar" => {
+                self.scrollbar = parse_option_bool(value)?;
+            }
+            "nyan_mode" => {
+                self.nyan_mode = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -1526,6 +1539,21 @@ impl Editor {
     /// Left-click places the cursor, adjusting for gutter width and scroll offset.
     /// Middle-click pastes from the default register. Right-click is reserved for
     /// future context menu support.
+    /// Set cursor position directly from buffer (row, col) coordinates.
+    /// Used by the GUI mouse handler when FrameLayout-based pixel positioning
+    /// is available (bypasses scroll/gutter arithmetic).
+    pub fn set_cursor_position(&mut self, buf_row: usize, char_col: usize) {
+        let win = self.window_mgr.focused_window();
+        let buf = &self.buffers[win.buffer_idx];
+        let max_row = buf.line_count().saturating_sub(1);
+        let target_row = buf_row.min(max_row);
+        let line_len = buf.line_len(target_row);
+        let target_col = char_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = target_row;
+        win.cursor_col = target_col;
+    }
+
     pub fn handle_mouse_click(
         &mut self,
         row: usize,

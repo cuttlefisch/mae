@@ -873,6 +873,63 @@ impl Editor {
         self.set_status(format!("Unfolded {} regions", count));
     }
 
+    /// Insert a heading at the same level below the current subtree (M-Enter).
+    ///
+    /// - On a heading line: insert new heading at same level after subtree.
+    /// - Not on a heading: insert level-1 heading below current line.
+    /// - Enters insert mode with cursor after the heading prefix.
+    pub fn insert_heading(&mut self, lang: crate::syntax::Language) {
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = Self::heading_level(&line, lang);
+
+        let (insert_row, insert_level) = if level > 0 {
+            let end = self
+                .heading_subtree_range(row, lang)
+                .map(|(_, e)| e)
+                .unwrap_or(row + 1);
+            (end, level)
+        } else {
+            (row + 1, 1)
+        };
+
+        let prefix_char = match lang {
+            crate::syntax::Language::Org => '*',
+            crate::syntax::Language::Markdown => '#',
+            _ => return,
+        };
+        let prefix: String = std::iter::repeat_n(prefix_char, insert_level as usize)
+            .chain(std::iter::once(' '))
+            .collect();
+
+        // Build the text to insert: newline + heading prefix
+        let insert_text = format!("\n{}", prefix);
+        let char_offset = self.buffers[buf_idx].rope().line_to_char(insert_row);
+        // If inserting at end-of-file, put the newline before the prefix.
+        // If inserting between lines, insert at start of insert_row.
+        if insert_row >= self.buffers[buf_idx].line_count() {
+            // At EOF: append after last char
+            let len = self.buffers[buf_idx].rope().len_chars();
+            self.buffers[buf_idx].insert_text_at(len, &insert_text);
+            len + insert_text.chars().count()
+        } else {
+            // Insert a new line before insert_row
+            let text = format!("{}\n", prefix);
+            self.buffers[buf_idx].insert_text_at(char_offset, &text);
+            char_offset + text.chars().count() - 1 // before the newline
+        };
+
+        // Move cursor to end of prefix and enter insert mode.
+        let new_row = insert_row;
+        let new_col = prefix.chars().count();
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = new_row;
+        win.cursor_col = new_col;
+        self.mode = crate::Mode::Insert;
+        self.set_status(format!("Inserted level-{} heading", insert_level));
+    }
+
     /// Open the Org link at the cursor.
     pub fn org_open_link(&mut self) {
         let buf_idx = self.active_buffer_idx();

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::theme::bundled_theme_names;
 
+use super::ex_parse::{self, ExWriteQuit, SetAction};
 use super::Editor;
 
 impl Editor {
@@ -13,70 +14,22 @@ impl Editor {
             None => (cmd, None),
         };
 
+        // Write/quit compound commands: w, q, wq, wq!, qa, qa!, wqa, wqa!, x, xa, xa!
+        // The `:w <path>` variant needs special handling (args = path).
+        if command == "w" && args.is_some() {
+            // `:w <filename>` — save-as
+            if let Some(path) = args {
+                let idx = self.active_buffer_idx();
+                self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
+            }
+            self.save_current_buffer();
+            return true;
+        }
+        if let Some(actions) = ex_parse::parse_write_quit(command) {
+            return self.execute_write_quit(&actions);
+        }
+
         match command {
-            "w" => {
-                if let Some(path) = args {
-                    let idx = self.active_buffer_idx();
-                    self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
-                }
-                self.save_current_buffer();
-                true
-            }
-            "q" => {
-                if self.active_buffer().modified {
-                    self.set_status("No write since last change (add ! to override)");
-                } else {
-                    self.on_quit();
-                    self.running = false;
-                }
-                true
-            }
-            "q!" => {
-                self.on_quit();
-                self.running = false;
-                true
-            }
-            "wq" | "x" => {
-                self.save_current_buffer();
-                if self.running && !self.active_buffer().modified {
-                    self.on_quit();
-                    self.running = false;
-                }
-                true
-            }
-            "wa" => {
-                let (saved, errors) = self.save_all_modified_buffers();
-                if errors.is_empty() {
-                    self.set_status(format!("Saved {} buffer(s)", saved));
-                } else {
-                    self.set_status(format!("Saved {}, errors: {}", saved, errors.join(", ")));
-                }
-                true
-            }
-            "qa" => {
-                if self.any_buffer_modified() {
-                    self.set_status("No write since last change (add ! to override)");
-                } else {
-                    self.on_quit();
-                    self.running = false;
-                }
-                true
-            }
-            "qa!" => {
-                self.on_quit();
-                self.running = false;
-                true
-            }
-            "wqa" | "xa" => {
-                let (_saved, errors) = self.save_all_modified_buffers();
-                if errors.is_empty() {
-                    self.on_quit();
-                    self.running = false;
-                } else {
-                    self.set_status(format!("Save errors: {}", errors.join(", ")));
-                }
-                true
-            }
             "e" => {
                 if let Some(path) = args {
                     self.open_file(path);
@@ -348,27 +301,58 @@ impl Editor {
             }
             "set" => {
                 if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
-                    let parts: Vec<&str> = kv.splitn(2, ' ').collect();
-                    if parts.len() == 2 {
-                        match self.set_option(parts[0], parts[1]) {
+                    match ex_parse::parse_set_args(kv) {
+                        SetAction::Query(name) => match self.get_option(&name) {
+                            Some((val, def)) => {
+                                self.set_status(format!("{} = {}", def.name, val));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Assign(name, value) => match self.set_option(&name, &value) {
                             Ok(msg) => self.set_status(msg),
                             Err(e) => self.set_status(e),
-                        }
-                    } else {
-                        // Single arg: toggle boolean or show current value
-                        match self.get_option(parts[0]) {
+                        },
+                        SetAction::Toggle(name) => match self.get_option(&name) {
                             Some((val, def)) if def.kind == crate::options::OptionKind::Bool => {
                                 let toggled = if val == "true" { "false" } else { "true" };
-                                match self.set_option(parts[0], toggled) {
+                                match self.set_option(&name, toggled) {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
+                                }
+                            }
+                            Some((_, def)) => {
+                                self.set_status(format!("{} is not a boolean option", def.name));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Enable(name) => match self.get_option(&name) {
+                            Some((val, def)) if def.kind == crate::options::OptionKind::Bool => {
+                                if val == "true" {
+                                    self.set_status(format!("{} = true", def.name));
+                                } else {
+                                    match self.set_option(&name, "true") {
+                                        Ok(msg) => self.set_status(msg),
+                                        Err(e) => self.set_status(e),
+                                    }
                                 }
                             }
                             Some((val, def)) => {
                                 self.set_status(format!("{} = {}", def.name, val));
                             }
-                            None => self.set_status(format!("Unknown option: {}", parts[0])),
-                        }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Disable(name) => match self.get_option(&name) {
+                            Some((_, def)) if def.kind == crate::options::OptionKind::Bool => {
+                                match self.set_option(def.name, "false") {
+                                    Ok(msg) => self.set_status(msg),
+                                    Err(e) => self.set_status(e),
+                                }
+                            }
+                            Some((_, def)) => {
+                                self.set_status(format!("{} is not a boolean option", def.name));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
                     }
                 } else {
                     // No args: list all options
@@ -675,6 +659,60 @@ impl Editor {
                 false
             }
         }
+    }
+
+    /// Execute a parsed write/quit compound command.
+    fn execute_write_quit(&mut self, actions: &[ExWriteQuit]) -> bool {
+        for action in actions {
+            match action {
+                ExWriteQuit::Write { all: false } => {
+                    self.save_current_buffer();
+                    if !self.running {
+                        return true;
+                    }
+                }
+                ExWriteQuit::Write { all: true } => {
+                    let (saved, errors) = self.save_all_modified_buffers();
+                    if !errors.is_empty() {
+                        self.set_status(format!("Saved {}, errors: {}", saved, errors.join(", ")));
+                        return true;
+                    }
+                    // If this is a standalone :wa (no quit follows), show status.
+                    if !actions
+                        .iter()
+                        .any(|a| matches!(a, ExWriteQuit::Quit { .. }))
+                    {
+                        self.set_status(format!("Saved {} buffer(s)", saved));
+                    }
+                }
+                ExWriteQuit::WriteIfModified { all: false } => {
+                    if self.active_buffer().modified {
+                        self.save_current_buffer();
+                    }
+                }
+                ExWriteQuit::WriteIfModified { all: true } => {
+                    let (_saved, errors) = self.save_all_modified_buffers();
+                    if !errors.is_empty() {
+                        self.set_status(format!("Save errors: {}", errors.join(", ")));
+                        return true;
+                    }
+                }
+                ExWriteQuit::Quit { all, force } => {
+                    if *all {
+                        if !force && self.any_buffer_modified() {
+                            self.set_status("No write since last change (add ! to override)");
+                            return true;
+                        }
+                    } else if !force && self.active_buffer().modified {
+                        self.set_status("No write since last change (add ! to override)");
+                        return true;
+                    }
+                    self.on_quit();
+                    self.running = false;
+                }
+            }
+        }
+        true
     }
 
     /// Shared handler for `:<cmd> <path>` style commands backed by a

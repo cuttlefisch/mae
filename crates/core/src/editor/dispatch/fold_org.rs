@@ -61,6 +61,12 @@ impl Editor {
             "widen" | "org-widen" | "md-widen" => {
                 self.widen();
             }
+            "org-insert-heading" => {
+                self.insert_heading(crate::syntax::Language::Org);
+            }
+            "md-insert-heading" => {
+                self.insert_heading(crate::syntax::Language::Markdown);
+            }
             "org-global-cycle" => {
                 self.heading_global_cycle(crate::syntax::Language::Org);
             }

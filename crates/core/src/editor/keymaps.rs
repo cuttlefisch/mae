@@ -523,6 +523,15 @@ impl Editor {
         // Move subtrees (M-j/M-k + M-Up/M-Down)
         org.bind(parse_key_seq("M-j"), "org-move-subtree-down");
         org.bind(parse_key_seq("M-k"), "org-move-subtree-up");
+        // Insert heading (M-Enter)
+        org.bind(
+            vec![KeyPress {
+                key: Key::Enter,
+                ctrl: false,
+                alt: true,
+            }],
+            "org-insert-heading",
+        );
         // Narrow/widen
         org.bind(parse_key_seq_spaced("SPC m s n"), "org-narrow-subtree");
         org.bind(parse_key_seq_spaced("SPC m s N"), "org-widen");
@@ -597,6 +606,15 @@ impl Editor {
             "md-move-subtree-down",
         );
 
+        // Insert heading (M-Enter)
+        markdown.bind(
+            vec![KeyPress {
+                key: Key::Enter,
+                ctrl: false,
+                alt: true,
+            }],
+            "md-insert-heading",
+        );
         // Narrow/widen
         markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
         markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");

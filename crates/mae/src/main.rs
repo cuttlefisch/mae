@@ -1030,11 +1030,34 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     }
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        let col = (self.cursor_x / cell_w as f64) as u16;
-                        let row = (self.cursor_y / cell_h as f64) as u16;
-                        self.editor
-                            .handle_mouse_click(row as usize, col as usize, mae_button);
-                        self.dirty = true;
+                        // Try pixel-precise positioning via cached FrameLayout
+                        // (handles scaled headings and folded lines correctly).
+                        let px_x = self.cursor_x as f32;
+                        let px_y = self.cursor_y as f32;
+                        if let Some(fl) = self.renderer.last_focused_layout() {
+                            if let Some((buf_row, char_col)) =
+                                fl.pixel_to_buffer_position(px_x, px_y)
+                            {
+                                self.editor.set_cursor_position(buf_row, char_col);
+                                self.dirty = true;
+                            } else {
+                                // Click outside text area — fall back to grid math.
+                                let col = (self.cursor_x / cell_w as f64) as u16;
+                                let row = (self.cursor_y / cell_h as f64) as u16;
+                                self.editor.handle_mouse_click(
+                                    row as usize,
+                                    col as usize,
+                                    mae_button,
+                                );
+                                self.dirty = true;
+                            }
+                        } else {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            self.editor
+                                .handle_mouse_click(row as usize, col as usize, mae_button);
+                            self.dirty = true;
+                        }
                     }
                 }
             }

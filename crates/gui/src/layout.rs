@@ -52,7 +52,7 @@ pub struct FrameLayout {
     pub gutter_width: usize,
     /// First text column (area_col + gutter_width).
     pub text_col: usize,
-    /// Text area width in columns (area_width - gutter_width).
+    /// Text area width in columns (area_width - gutter_width - scrollbar).
     pub text_width: usize,
     /// Total area width in columns.
     pub area_width: usize,
@@ -66,6 +66,12 @@ pub struct FrameLayout {
     pub area_col: usize,
     /// Pixel Y limit (area_row + area_height) * cell_height.
     pub pixel_y_limit: f32,
+    /// Scrollbar column (absolute), or None if scrollbar disabled.
+    pub scrollbar_col: Option<usize>,
+    /// Total buffer line count (for scrollbar thumb computation).
+    pub total_lines: usize,
+    /// Scroll offset (for scrollbar thumb position).
+    pub scroll_offset: usize,
 }
 
 #[allow(dead_code)]
@@ -165,6 +171,32 @@ impl FrameLayout {
             .sum()
     }
 
+    /// Convert pixel coordinates to a (buffer_row, char_col) position.
+    ///
+    /// Used by the GUI mouse handler to resolve clicks on scaled/folded lines
+    /// without falling back to grid-based `pixel / cell_size` math.
+    /// Returns `None` if the click is outside the text area.
+    pub fn pixel_to_buffer_position(&self, pixel_x: f32, pixel_y: f32) -> Option<(usize, usize)> {
+        // Find which display row the click falls into.
+        let line = self
+            .lines
+            .iter()
+            .find(|l| pixel_y >= l.pixel_y && pixel_y < l.pixel_y + l.line_height)?;
+
+        // Compute the text-area pixel offset.
+        let text_pixel_x = pixel_x - (self.text_col as f32 * self.cell_width);
+        if text_pixel_x < 0.0 {
+            return Some((line.buf_row, 0));
+        }
+
+        // Compute char column from pixel offset using glyph advance.
+        // Monospace + scaled headings: uniform advance per char.
+        let chars_from_start = (text_pixel_x / line.glyph_advance).floor() as usize;
+        let char_col = line.char_start + chars_from_start.min(line.char_count);
+
+        Some((line.buf_row, char_col))
+    }
+
     /// Return all display row indices for a buffer row (including wrap continuations).
     pub fn display_rows_for(&self, buf_row: usize) -> Vec<usize> {
         self.lines
@@ -206,8 +238,17 @@ pub fn compute_layout(
     } else {
         2
     };
+    let scrollbar_enabled = editor.scrollbar;
+    let scrollbar_w = if scrollbar_enabled { 1 } else { 0 };
     let text_col = area_col + gutter_w;
-    let text_width = area_width.saturating_sub(gutter_w);
+    let text_width = area_width
+        .saturating_sub(gutter_w)
+        .saturating_sub(scrollbar_w);
+    let scrollbar_col = if scrollbar_enabled {
+        Some(text_col + text_width)
+    } else {
+        None
+    };
 
     let wrap = editor.word_wrap && text_width > 0;
     let show_break_width = if wrap {
@@ -409,6 +450,9 @@ pub fn compute_layout(
         area_row,
         area_col,
         pixel_y_limit,
+        scrollbar_col,
+        total_lines: display_lines,
+        scroll_offset: win.scroll_offset,
     }
 }
 

@@ -183,6 +183,12 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         }
     }
 
+    // Priority 6.5: nyan mode progress bar.
+    if editor.nyan_mode {
+        let nyan = build_nyan_segment(buf, win);
+        segments.push(Segment::new(nyan, 6));
+    }
+
     // Priority 7: file type + scroll % + AI tier.
     let buf_idx = win.buffer_idx;
     let file_type = editor
@@ -288,6 +294,40 @@ pub fn command_line_text(editor: &Editor) -> String {
     } else {
         editor.status_msg.clone()
     }
+}
+
+/// Build a nyan cat progress indicator: filled bar + cat at scroll position.
+/// Width: 20 chars. Format: `[=========>          ]` style with rainbow fill + cat emoji.
+fn build_nyan_segment(buf: &Buffer, win: &Window) -> String {
+    let total = buf.line_count();
+    let ratio = if total <= 1 {
+        0.0
+    } else {
+        (win.cursor_row as f32 / (total - 1) as f32).clamp(0.0, 1.0)
+    };
+    let bar_width = 18; // Inside the brackets
+    let cat_pos = (ratio * bar_width as f32).round() as usize;
+    let cat_pos = cat_pos.min(bar_width);
+
+    // Rainbow bar fills left of cat, empty fills right.
+    let rainbow_chars = ['='; 1];
+    let mut bar = String::with_capacity(bar_width + 4);
+    bar.push('[');
+    for i in 0..bar_width {
+        if i == cat_pos {
+            bar.push_str("~>");
+            if i + 1 < bar_width {
+                // Skip next position (cat is 2 chars)
+                continue;
+            }
+        } else if i < cat_pos {
+            bar.push(rainbow_chars[0]);
+        } else {
+            bar.push(' ');
+        }
+    }
+    bar.push(']');
+    format!(" {}", bar)
 }
 
 fn compute_scroll_pct(buf: &Buffer, win: &Window) -> String {

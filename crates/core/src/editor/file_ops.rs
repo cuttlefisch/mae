@@ -770,17 +770,54 @@ impl Editor {
                 .map(|n| n.to_string())
                 .collect(),
             "set" => {
-                let mut matches: Vec<String> = self
-                    .option_registry
-                    .all_names()
-                    .into_iter()
-                    .filter(|n| n.starts_with(prefix))
-                    .collect();
-                matches.sort();
-                matches
+                // Two-part completion: `:set optname val<Tab>` completes values.
+                if let Some(space_pos) = prefix.find(' ') {
+                    let opt_name = &prefix[..space_pos];
+                    let val_prefix = &prefix[space_pos + 1..];
+                    self.complete_set_value(opt_name, val_prefix)
+                } else {
+                    let mut matches: Vec<String> = self
+                        .option_registry
+                        .all_names()
+                        .into_iter()
+                        .filter(|n| n.starts_with(prefix))
+                        .collect();
+                    matches.sort();
+                    matches
+                }
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Complete values for a `:set optname val<Tab>` command.
+    fn complete_set_value(&self, opt_name: &str, val_prefix: &str) -> Vec<String> {
+        let Some(def) = self.option_registry.find(opt_name) else {
+            return Vec::new();
+        };
+        if def.kind == crate::options::OptionKind::Bool {
+            return ["true", "false"]
+                .iter()
+                .filter(|v| v.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        if def.kind == crate::options::OptionKind::Theme {
+            return bundled_theme_names()
+                .into_iter()
+                .filter(|n| n.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        if !def.valid_values.is_empty() {
+            return def
+                .valid_values
+                .iter()
+                .filter(|v| v.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        Vec::new()
     }
 
     #[cfg(test)]

@@ -45,6 +45,8 @@ pub struct OptionDef {
     pub default_value: &'static str,
     /// TOML path in config.toml, if persistable. e.g. `"editor.line_numbers"`.
     pub config_key: Option<&'static str>,
+    /// Valid values for enum-like options (tab completion). Empty = any value.
+    pub valid_values: &'static [&'static str],
 }
 
 /// Registry of all known editor options.
@@ -69,6 +71,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "true",
                     config_key: Some("editor.line_numbers"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "relative_line_numbers",
@@ -77,6 +80,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.relative_line_numbers"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "word_wrap",
@@ -85,6 +89,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.word_wrap"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "break_indent",
@@ -93,6 +98,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "true",
                     config_key: Some("editor.break_indent"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "show_break",
@@ -101,6 +107,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "↪ ",
                     config_key: Some("editor.show_break"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "org_hide_emphasis_markers",
@@ -109,6 +116,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.org_hide_emphasis_markers"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "show_fps",
@@ -117,6 +125,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.show_fps"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "font_size",
@@ -125,6 +134,7 @@ impl OptionRegistry {
                     kind: OptionKind::Float,
                     default_value: "14.0",
                     config_key: Some("editor.font_size"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "font_family",
@@ -133,6 +143,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("editor.font_family"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "icon_font_family",
@@ -141,6 +152,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("editor.icon_font_family"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "theme",
@@ -149,6 +161,7 @@ impl OptionRegistry {
                     kind: OptionKind::Theme,
                     default_value: "default",
                     config_key: Some("editor.theme"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "splash_art",
@@ -157,6 +170,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "bat",
                     config_key: None,
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "debug_mode",
@@ -166,6 +180,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.debug_mode"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "clipboard",
@@ -174,6 +189,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "unnamed",
                     config_key: Some("editor.clipboard"),
+                    valid_values: &["unnamedplus", "unnamed", "internal"],
                 },
                 OptionDef {
                     name: "ai_tier",
@@ -182,6 +198,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "ReadOnly",
                     config_key: Some("ai.auto_approve_tier"),
+                    valid_values: &["ReadOnly", "Write", "Shell", "Privileged"],
                 },
                 OptionDef {
                     name: "ai_editor",
@@ -190,6 +207,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "claude",
                     config_key: Some("ai.editor"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "ai_provider",
@@ -198,6 +216,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("ai.provider"),
+                    valid_values: &["claude", "openai", "gemini", "ollama", "deepseek"],
                 },
                 OptionDef {
                     name: "ai_model",
@@ -206,6 +225,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("ai.model"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "ai_api_key_command",
@@ -214,6 +234,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("ai.api_key_command"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "ai_base_url",
@@ -222,6 +243,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "",
                     config_key: Some("ai.base_url"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "ai_mode",
@@ -230,6 +252,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "standard",
                     config_key: Some("ai.mode"),
+                    valid_values: &["standard", "plan", "auto-accept"],
                 },
                 OptionDef {
                     name: "ai_profile",
@@ -238,6 +261,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "pair-programmer",
                     config_key: Some("ai.profile"),
+                    valid_values: &["pair-programmer", "explorer", "planner", "reviewer"],
                 },
                 OptionDef {
                     name: "restore_session",
@@ -246,6 +270,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.restore_session"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "insert_ctrl_d",
@@ -254,6 +279,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "dedent",
                     config_key: Some("editor.insert_ctrl_d"),
+                    valid_values: &["dedent", "delete-forward"],
                 },
                 OptionDef {
                     name: "autosave_interval",
@@ -262,6 +288,7 @@ impl OptionRegistry {
                     kind: OptionKind::String,
                     default_value: "0",
                     config_key: Some("editor.autosave_interval"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "ignorecase",
@@ -270,6 +297,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.ignorecase"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "heading_scale",
@@ -278,6 +306,7 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "true",
                     config_key: Some("editor.heading_scale"),
+                    valid_values: &[],
                 },
                 OptionDef {
                     name: "smartcase",
@@ -286,6 +315,25 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.smartcase"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "scrollbar",
+                    aliases: &[],
+                    doc: "Show vertical scrollbar in the GUI",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.scrollbar"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "nyan_mode",
+                    aliases: &["nyan-mode"],
+                    doc: "Show nyan cat progress indicator in the status bar",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.nyan_mode"),
+                    valid_values: &[],
                 },
             ],
         }
@@ -306,6 +354,11 @@ impl OptionRegistry {
     /// Return all canonical option names (for tab completion).
     pub fn all_names(&self) -> Vec<String> {
         self.options.iter().map(|o| o.name.to_string()).collect()
+    }
+
+    /// Check if an option exists by canonical name or alias.
+    pub fn has_option(&self, name: &str) -> bool {
+        self.find(name).is_some()
     }
 }
 

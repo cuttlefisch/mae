@@ -78,6 +78,12 @@ pub fn ts_fg(editor: &Editor, key: &str) -> Color4f {
         .unwrap_or_else(|| Color4f::new(0.9, 0.9, 0.9, 1.0))
 }
 
+/// Look up a theme key's foreground color, with a fallback default.
+pub fn ts_fg_or(editor: &Editor, key: &str, default: Color4f) -> Color4f {
+    let style = editor.theme.style(key);
+    style.fg.map(|c| theme_color_to_skia(&c)).unwrap_or(default)
+}
+
 /// Look up a theme key's background color, returning `Some(Color4f)` if set.
 pub fn ts_bg(editor: &Editor, key: &str) -> Option<Color4f> {
     let style = editor.theme.style(key);
