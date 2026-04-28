@@ -321,6 +321,12 @@ impl Theme {
         ThemeStyle::default()
     }
 
+    /// Look up a style by exact key — no dot-notation fallback.
+    /// Returns None if the theme doesn't explicitly define this key.
+    pub fn style_exact(&self, key: &str) -> Option<ThemeStyle> {
+        self.resolved_cache.get(key).cloned()
+    }
+
     /// Convert the theme palette to 16 standard ANSI color RGB values.
     /// Used to configure shell terminal emulators with theme-aware colors.
     /// Returns: [Black, Red, Green, Yellow, Blue, Magenta, Cyan, White,

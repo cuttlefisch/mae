@@ -87,13 +87,13 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
 
 /// Resolve the track background color from the theme or derive a sensible default.
 ///
-/// If the theme defines `ui.scrollbar.track`, use that (as fg color).
-/// Otherwise: derive from the editor background — on dark themes a faint white,
-/// on light themes a faint black.
+/// Uses `style_exact` to avoid inheriting `ui.text` fg via dot-notation fallback.
+/// Without exact match, all themes would get an opaque track that hides the thumb.
 fn resolve_track_color(editor: &Editor) -> Color4f {
-    let style = editor.theme.style("ui.scrollbar.track");
-    if let Some(c) = style.fg {
-        return theme::theme_color_to_skia(&c);
+    if let Some(style) = editor.theme.style_exact("ui.scrollbar.track") {
+        if let Some(c) = style.fg {
+            return theme::theme_color_to_skia(&c);
+        }
     }
     // Derive: faint tint opposite to background brightness.
     if editor.theme.is_dark() {
@@ -105,12 +105,12 @@ fn resolve_track_color(editor: &Editor) -> Color4f {
 
 /// Resolve the thumb color from the theme or derive a sensible default.
 ///
-/// If the theme defines `ui.scrollbar.thumb`, use that.
-/// Otherwise: semi-transparent foreground-ish color that contrasts with track.
+/// Uses `style_exact` — same reasoning as track color.
 fn resolve_thumb_color(editor: &Editor) -> Color4f {
-    let style = editor.theme.style("ui.scrollbar.thumb");
-    if let Some(c) = style.fg {
-        return theme::theme_color_to_skia(&c);
+    if let Some(style) = editor.theme.style_exact("ui.scrollbar.thumb") {
+        if let Some(c) = style.fg {
+            return theme::theme_color_to_skia(&c);
+        }
     }
     // Derive: medium-alpha tint for visibility.
     if editor.theme.is_dark() {

@@ -209,6 +209,10 @@ fn mouse_right_click_is_noop() {
 #[test]
 fn mouse_scroll_horizontal_right() {
     let mut editor = Editor::new();
+    // Need a long line so horizontal scroll isn't clamped to 0.
+    let long_line = "x".repeat(200);
+    editor.buffers[0].replace_contents(&long_line);
+    editor.viewport_height = 40;
     let win = editor.window_mgr.focused_window_mut();
     win.col_offset = 0;
     editor.handle_mouse_scroll_horizontal(2); // positive = right
@@ -219,6 +223,9 @@ fn mouse_scroll_horizontal_right() {
 #[test]
 fn mouse_scroll_horizontal_left() {
     let mut editor = Editor::new();
+    let long_line = "x".repeat(200);
+    editor.buffers[0].replace_contents(&long_line);
+    editor.viewport_height = 40;
     let win = editor.window_mgr.focused_window_mut();
     win.col_offset = 10;
     editor.handle_mouse_scroll_horizontal(-2); // negative = left
@@ -234,6 +241,18 @@ fn mouse_scroll_horizontal_saturates_at_zero() {
     editor.handle_mouse_scroll_horizontal(-5); // Would go negative
     let win = editor.window_mgr.focused_window();
     assert_eq!(win.col_offset, 0);
+}
+
+#[test]
+fn mouse_scroll_horizontal_clamped_to_max_line_width() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("short");
+    editor.viewport_height = 40;
+    // Try to scroll way past the 5-char line.
+    editor.handle_mouse_scroll_horizontal(100);
+    let win = editor.window_mgr.focused_window();
+    // Clamped to max_line_width - 1 = 4.
+    assert_eq!(win.col_offset, 4);
 }
 
 // --- Debug mode tests ---

@@ -1706,6 +1706,7 @@ impl Editor {
     /// Handle horizontal mouse scroll (positive = right, negative = left).
     ///
     /// Adjusts col_offset directly. Only applies to normal file buffers.
+    /// Clamped so the rightmost character is still visible.
     pub fn handle_mouse_scroll_horizontal(&mut self, delta: i16) {
         let cols = delta.unsigned_abs() as usize;
         if cols == 0 {
@@ -1717,13 +1718,37 @@ impl Editor {
         if kind != crate::BufferKind::Text {
             return;
         }
+
+        // Find the longest visible line to clamp horizontal scroll.
+        // Only scan the viewport region to avoid O(n) on large files.
+        let buf = &self.buffers[buf_idx];
+        let max_line_width = {
+            let rope = buf.rope();
+            let total = rope.len_lines();
+            let win = self.window_mgr.focused_window();
+            let start = win.scroll_offset;
+            let end = (start + self.viewport_height + 1).min(total);
+            let mut max_w = 0usize;
+            for i in start..end {
+                let line = rope.line(i);
+                let w = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                if w > max_w {
+                    max_w = w;
+                }
+            }
+            max_w
+        };
+
         let win = self.window_mgr.focused_window_mut();
         if delta > 0 {
-            // Scroll right — increase col_offset.
             win.col_offset = win.col_offset.saturating_add(cols * scroll_speed);
         } else {
-            // Scroll left — decrease col_offset.
             win.col_offset = win.col_offset.saturating_sub(cols * scroll_speed);
+        }
+        // Clamp: don't scroll past the rightmost character.
+        let max_offset = max_line_width.saturating_sub(1);
+        if win.col_offset > max_offset {
+            win.col_offset = max_offset;
         }
     }
 
