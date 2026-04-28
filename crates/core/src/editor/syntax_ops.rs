@@ -178,68 +178,172 @@ impl Editor {
             .map(|n| n.kind().to_string())
     }
 
-    /// Toggle folding for the Org heading at the cursor.
+    /// Return the heading level (count of leading `*` or `#`) for a line,
+    /// respecting the buffer language. Returns 0 if not a heading.
+    pub fn heading_level(line: &str, lang: crate::syntax::Language) -> u8 {
+        let prefix_char = match lang {
+            crate::syntax::Language::Org => '*',
+            crate::syntax::Language::Markdown => '#',
+            _ => return 0,
+        };
+        let count = line.chars().take_while(|&c| c == prefix_char).count();
+        if count == 0 {
+            return 0;
+        }
+        // Require a space after the prefix chars (e.g. "* Heading" not "**word")
+        let next = line.chars().nth(count);
+        if next == Some(' ') || next.is_none() {
+            count.min(255) as u8
+        } else {
+            0
+        }
+    }
+
+    /// Generalized subtree range: find the range of lines covered by a heading
+    /// subtree at `row`. Works for both org (`*`) and markdown (`#`).
+    pub fn heading_subtree_range(
+        &self,
+        row: usize,
+        lang: crate::syntax::Language,
+    ) -> Option<(usize, usize)> {
+        let buf_idx = self.active_buffer_idx();
+        let line_count = self.buffers[buf_idx].line_count();
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = Self::heading_level(&line, lang);
+        if level == 0 {
+            return None;
+        }
+        let mut end = row + 1;
+        while end < line_count {
+            let l: String = self.buffers[buf_idx].rope().line(end).chars().collect();
+            let l_level = Self::heading_level(&l, lang);
+            if l_level > 0 && l_level <= level {
+                break;
+            }
+            end += 1;
+        }
+        Some((row, end))
+    }
+
+    /// Find direct child headings within a range (at exactly `parent_level + 1`).
+    pub fn direct_child_headings(
+        &self,
+        start_row: usize,
+        end_row: usize,
+        parent_level: u8,
+        lang: crate::syntax::Language,
+    ) -> Vec<usize> {
+        let buf_idx = self.active_buffer_idx();
+        let mut children = Vec::new();
+        for row in (start_row + 1)..end_row {
+            let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+            let level = Self::heading_level(&line, lang);
+            if level == parent_level + 1 {
+                children.push(row);
+            }
+        }
+        children
+    }
+
+    /// Three-state org heading cycle (TAB).
+    ///
+    /// Cycle: SUBTREE (all visible) → FOLDED (heading only) → CHILDREN
+    /// (body + child headings visible, child bodies folded) → SUBTREE.
+    /// Leaf headings (no children) cycle: SUBTREE ↔ FOLDED.
     pub fn org_cycle(&mut self) {
         let buf_idx = self.active_buffer_idx();
         let lang = self.syntax.language_of(buf_idx);
         if lang != Some(crate::syntax::Language::Org) {
             return;
         }
+        self.heading_cycle(crate::syntax::Language::Org);
+    }
 
-        info!(buf_idx, "org cycling at cursor");
+    /// Generic three-state heading cycle for org and markdown.
+    pub fn heading_cycle(&mut self, lang: crate::syntax::Language) {
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
 
-        let win = self.window_mgr.focused_window();
-        let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
-        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
+        info!(buf_idx, row, "heading cycle");
 
-        let source: String = self.buffers[buf_idx].rope().chars().collect();
-        let Some(tree) = self.syntax.tree_for(buf_idx, &source) else {
-            return;
-        };
-
-        // Find the heading node at or above the cursor
-        let mut node = tree
-            .root_node()
-            .descendant_for_byte_range(cursor_byte, cursor_byte);
-
-        while let Some(n) = node {
-            if n.kind() == "headline" {
-                break;
-            }
-            node = n.parent();
-        }
-
-        let Some(headline) = node else {
-            return;
-        };
-
-        let start_row = self.buffers[buf_idx]
-            .rope()
-            .byte_to_line(headline.start_byte());
-        let end_row = self.buffers[buf_idx]
-            .rope()
-            .byte_to_line(headline.end_byte());
-
-        if start_row >= end_row {
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = Self::heading_level(&line, lang);
+        if level == 0 {
             return;
         }
 
-        // Cycle logic: Unfolded -> Children -> Folded -> Unfolded
-        // For now, just implement simple Fold/Unfold toggle
+        let Some((start, end)) = self.heading_subtree_range(row, lang) else {
+            return;
+        };
+        if start >= end.saturating_sub(1) {
+            return; // single-line heading, nothing to fold
+        }
+
+        // Determine current state from folded_ranges
         let is_folded = self.buffers[buf_idx]
             .folded_ranges
             .iter()
-            .any(|(s, _)| *s == start_row);
+            .any(|(s, _)| *s == start);
+
+        let children = self.direct_child_headings(start, end, level, lang);
+
+        if children.is_empty() {
+            // Leaf heading: two-state toggle
+            if is_folded {
+                self.buffers[buf_idx]
+                    .folded_ranges
+                    .retain(|(s, _)| *s != start);
+                self.set_status("Unfolded");
+            } else {
+                self.buffers[buf_idx].folded_ranges.push((start, end));
+                self.set_status("Folded");
+            }
+            return;
+        }
+
+        // Three-state cycle: SUBTREE → FOLDED → CHILDREN → SUBTREE
+        let children_all_folded = children.iter().all(|&child_row| {
+            self.buffers[buf_idx]
+                .folded_ranges
+                .iter()
+                .any(|(s, _)| *s == child_row)
+        });
 
         if is_folded {
+            // FOLDED → CHILDREN: unfold this heading, fold each direct child
             self.buffers[buf_idx]
                 .folded_ranges
-                .retain(|(s, _)| *s != start_row);
-            self.set_status("Unfolded");
+                .retain(|(s, _)| *s != start);
+            for &child_row in &children {
+                // Add fold for each child if it has content to fold
+                if let Some((cs, ce)) = self.heading_subtree_range(child_row, lang) {
+                    if ce > cs + 1 {
+                        // Only add if not already folded
+                        if !self.buffers[buf_idx]
+                            .folded_ranges
+                            .iter()
+                            .any(|(s, _)| *s == cs)
+                        {
+                            self.buffers[buf_idx].folded_ranges.push((cs, ce));
+                        }
+                    }
+                }
+            }
+            self.set_status("Children");
+        } else if children_all_folded {
+            // CHILDREN → SUBTREE: unfold all children in range
+            self.buffers[buf_idx]
+                .folded_ranges
+                .retain(|(s, _)| *s < start || *s >= end);
+            // Also clear any deeper nested folds within this subtree
+            self.set_status("Subtree (all visible)");
         } else {
+            // SUBTREE → FOLDED: fold entire subtree
+            // First clear any existing folds within this subtree range
             self.buffers[buf_idx]
                 .folded_ranges
-                .push((start_row, end_row));
+                .retain(|(s, _)| *s < start || *s >= end);
+            self.buffers[buf_idx].folded_ranges.push((start, end));
             self.set_status("Folded");
         }
     }
@@ -355,22 +459,7 @@ impl Editor {
         if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
             return None;
         }
-        let line_count = self.buffers[buf_idx].line_count();
-        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
-        let level = line.chars().take_while(|&c| c == '*').count();
-        if level == 0 {
-            return None;
-        }
-        let mut end = row + 1;
-        while end < line_count {
-            let l: String = self.buffers[buf_idx].rope().line(end).chars().collect();
-            let l_level = l.chars().take_while(|&c| c == '*').count();
-            if l_level > 0 && l_level <= level {
-                break;
-            }
-            end += 1;
-        }
-        Some((row, end))
+        self.heading_subtree_range(row, crate::syntax::Language::Org)
     }
 
     /// Move the subtree at the cursor down past the next sibling subtree.
@@ -413,6 +502,13 @@ impl Editor {
         self.buffers[buf_idx].delete_range(our_char_start, sib_char_end);
         let combined = format!("{}{}", sib_text, our_text);
         self.buffers[buf_idx].insert_text_at(our_char_start, &combined);
+
+        // Invalidate folds in the affected range
+        let min_start = start;
+        let max_end = sibling_end;
+        self.buffers[buf_idx]
+            .folded_ranges
+            .retain(|(s, _)| *s < min_start || *s >= max_end);
 
         // Move cursor: count newlines in sibling text to find offset
         let sib_lines = sib_text.chars().filter(|&c| c == '\n').count();
@@ -470,6 +566,13 @@ impl Editor {
         self.buffers[buf_idx].delete_range(prev_char_start, our_char_end);
         let combined = format!("{}{}", our_text, prev_text);
         self.buffers[buf_idx].insert_text_at(prev_char_start, &combined);
+
+        // Invalidate folds in the affected range
+        let min_start = prev_start;
+        let max_end = end;
+        self.buffers[buf_idx]
+            .folded_ranges
+            .retain(|(s, _)| *s < min_start || *s >= max_end);
 
         // Move cursor to new position
         self.window_mgr.focused_window_mut().cursor_row = prev_start;
@@ -683,6 +786,167 @@ mod tests {
         assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
         ed.org_move_subtree_up();
         assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+    }
+
+    // --- Three-state org heading cycle tests ---
+
+    #[test]
+    fn org_cycle_subtree_to_folded() {
+        // TAB on unfolded heading folds entire subtree
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle();
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            "Expected fold at row 0"
+        );
+        assert!(ed.status_msg.contains("Folded"));
+    }
+
+    #[test]
+    fn org_cycle_folded_to_children() {
+        // TAB on folded heading shows children but folds their bodies
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        // First TAB: SUBTREE → FOLDED
+        ed.org_cycle();
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        // Second TAB: FOLDED → CHILDREN
+        ed.org_cycle();
+        assert!(
+            !ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            "Heading 0 should not be folded in CHILDREN state"
+        );
+        // Child heading at row 2 should be folded
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2),
+            "Child heading at row 2 should be folded"
+        );
+        assert!(ed.status_msg.contains("Children"));
+    }
+
+    #[test]
+    fn org_cycle_children_to_subtree() {
+        // TAB on children-visible heading unfolds all
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // SUBTREE → FOLDED
+        ed.org_cycle(); // FOLDED → CHILDREN
+        ed.org_cycle(); // CHILDREN → SUBTREE
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "All folds should be cleared in SUBTREE state"
+        );
+        assert!(ed.status_msg.contains("Subtree"));
+    }
+
+    #[test]
+    fn org_cycle_full_round_trip() {
+        // 3 TABs return to original state (SUBTREE)
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n* H2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+        ed.org_cycle(); // → FOLDED
+        ed.org_cycle(); // → CHILDREN
+        ed.org_cycle(); // → SUBTREE
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_cycle_leaf_heading_two_state() {
+        // Heading with no children only toggles fold/unfold
+        let mut ed = org_editor("* H1\nBody line 1\nBody line 2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // → FOLDED
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        ed.org_cycle(); // → UNFOLDED
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_cycle_nested_children() {
+        // Grandchildren stay folded in CHILDREN state
+        let mut ed = org_editor("* H1\n** Sub1\n*** Deep\nDeep body\n** Sub2\nSub2 body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // → FOLDED
+        ed.org_cycle(); // → CHILDREN
+                        // ** Sub1 (row 1) should be folded (has content below)
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 1),
+            "Sub1 should be folded in CHILDREN state"
+        );
+        // ** Sub2 (row 4) should be folded
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4),
+            "Sub2 should be folded in CHILDREN state"
+        );
+    }
+
+    // --- Fold-aware structural editing tests (Item 5) ---
+
+    #[test]
+    fn org_move_subtree_down_clears_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        // Fold H1
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_move_subtree_down();
+        // Folds in affected range should be cleared
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "Folds should be cleared after move: {:?}",
+            ed.buffers[0].folded_ranges
+        );
+    }
+
+    #[test]
+    fn org_move_subtree_up_clears_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 2;
+        // Fold H2
+        ed.buffers[0].folded_ranges.push((2, 4));
+        ed.org_move_subtree_up();
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "Folds should be cleared after move up"
+        );
+    }
+
+    #[test]
+    fn org_promote_preserves_folds() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_promote();
+        assert_eq!(
+            ed.buffers[0].folded_ranges.len(),
+            1,
+            "Promote should preserve folds"
+        );
+    }
+
+    #[test]
+    fn org_demote_preserves_folds() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_demote();
+        assert_eq!(
+            ed.buffers[0].folded_ranges.len(),
+            1,
+            "Demote should preserve folds"
+        );
+    }
+
+    // --- heading_level helper tests ---
+
+    #[test]
+    fn heading_level_org() {
+        assert_eq!(Editor::heading_level("* H1", Language::Org), 1);
+        assert_eq!(Editor::heading_level("** H2", Language::Org), 2);
+        assert_eq!(Editor::heading_level("*** H3", Language::Org), 3);
+        assert_eq!(Editor::heading_level("Not a heading", Language::Org), 0);
+        assert_eq!(Editor::heading_level("**nospace", Language::Org), 0);
     }
 
     fn rust_editor(text: &str) -> Editor {
