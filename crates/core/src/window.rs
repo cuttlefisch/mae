@@ -295,6 +295,7 @@ impl Window {
     }
 
     /// Scroll up one line (C-y). Cursor stays on screen.
+    /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         self.scroll_up_line_wrapped(buf, viewport_height, |_| 1);
     }
@@ -302,6 +303,7 @@ impl Window {
     /// Scroll up one line (C-y) with wrap-aware cursor clamping.
     ///
     /// `line_visual_rows` returns how many display rows a buffer line occupies.
+    /// Folded (invisible) lines return 0 and are skipped.
     /// The cursor is clamped to the last buffer line whose visual rows fit
     /// within the viewport, preventing `ensure_scroll_wrapped` from undoing
     /// the scroll on the next frame.
@@ -313,7 +315,8 @@ impl Window {
     ) where
         F: Fn(usize) -> usize,
     {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        // Move to previous visible line (skip folds).
+        self.scroll_offset = buf.prev_visible_line(self.scroll_offset);
         if viewport_height == 0 {
             return;
         }
@@ -322,13 +325,20 @@ impl Window {
         let max_row = buf.display_line_count().saturating_sub(1);
         let mut visual = 0;
         let mut bottom = self.scroll_offset;
-        for line in self.scroll_offset..=max_row {
+        let mut line = self.scroll_offset;
+        while line <= max_row {
             let rows = line_visual_rows(line);
-            if visual + rows > viewport_height {
-                break;
+            if rows > 0 {
+                if visual + rows > viewport_height {
+                    break;
+                }
+                visual += rows;
+                bottom = line;
             }
-            visual += rows;
-            bottom = line;
+            line = buf.next_visible_line(line);
+            if line <= bottom {
+                break; // safety: prevent infinite loop
+            }
         }
         if self.cursor_row > bottom {
             self.cursor_row = bottom;
@@ -337,9 +347,12 @@ impl Window {
     }
 
     /// Scroll down one line (C-e). Cursor stays on screen.
+    /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         let max_row = buf.display_line_count().saturating_sub(1);
-        self.scroll_offset = (self.scroll_offset + 1).min(max_row);
+        // Move to next visible line (skip folds).
+        let next = buf.next_visible_line(self.scroll_offset);
+        self.scroll_offset = next.min(max_row);
         // If cursor scrolled above the viewport, push it down to the top visible line.
         if self.cursor_row < self.scroll_offset {
             self.cursor_row = self.scroll_offset;

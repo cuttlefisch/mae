@@ -490,14 +490,19 @@ impl Editor {
                         let tw = self.text_area_width;
                         let bi = self.break_indent;
                         let sb_w = self.show_break.chars().count();
+                        let has_folds = !buf.folded_ranges.is_empty();
                         for _ in 0..n {
-                            if wrap {
+                            if wrap || has_folds {
                                 let rope = buf.rope().clone();
                                 self.window_mgr.focused_window_mut().scroll_up_line_wrapped(
                                     buf,
                                     vh,
                                     |line| {
-                                        if line >= rope.len_lines() {
+                                        // Folded lines are invisible (0 visual rows).
+                                        if buf.is_line_folded(line) {
+                                            return 0;
+                                        }
+                                        if !wrap || line >= rope.len_lines() {
                                             return 1;
                                         }
                                         let text: String = rope.line(line).chars().collect();

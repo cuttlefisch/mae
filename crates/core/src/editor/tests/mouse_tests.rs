@@ -255,4 +255,58 @@ fn mouse_scroll_horizontal_clamped_to_max_line_width() {
     assert_eq!(win.col_offset, 4);
 }
 
+#[test]
+fn mouse_scroll_skips_folded_lines() {
+    let mut editor = Editor::new();
+    // Create 50 lines.
+    let content = (0..50)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    editor.buffers[0].replace_contents(&content);
+    editor.viewport_height = 40;
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 0;
+
+    // Fold lines 2..10 (lines 3-9 become invisible).
+    editor.buffers[0].folded_ranges.push((2, 10));
+
+    // Scroll down by 1 click (delta = -1, scroll_speed = 3 → 3 visible lines).
+    editor.handle_mouse_scroll(-1);
+    let offset = editor.window_mgr.focused_window().scroll_offset;
+    // Should skip past the fold: 0→1→2→10 (3 visible-line steps).
+    assert_eq!(offset, 10, "scroll should skip folded range");
+}
+
+#[test]
+fn fold_navigation_next_visible_skips_fold() {
+    let mut buf = crate::buffer::Buffer::new();
+    let content = (0..20)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    buf.replace_contents(&content);
+    buf.folded_ranges.push((3, 8)); // lines 4-7 hidden
+
+    assert_eq!(buf.next_visible_line(2), 3); // 3 is fold start, visible
+    assert_eq!(buf.next_visible_line(3), 8); // 4 is inside fold → skip to 8
+    assert_eq!(buf.next_visible_line(8), 9); // 8 is fold end, visible; next is 9
+}
+
+#[test]
+fn fold_navigation_prev_visible_skips_fold() {
+    let mut buf = crate::buffer::Buffer::new();
+    let content = (0..20)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    buf.replace_contents(&content);
+    buf.folded_ranges.push((3, 8)); // lines 4-7 hidden
+
+    assert_eq!(buf.prev_visible_line(9), 8); // 8 is visible
+    assert_eq!(buf.prev_visible_line(8), 3); // 7 is inside fold → skip to 3
+    assert_eq!(buf.prev_visible_line(3), 2); // 2 is visible
+    assert_eq!(buf.prev_visible_line(0), 0); // already at 0
+}
+
 // --- Debug mode tests ---

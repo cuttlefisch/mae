@@ -1800,13 +1800,33 @@ impl Editor {
             _ => {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
                 let viewport_height = self.viewport_height;
+                let buf = &self.buffers[buf_idx];
 
+                // Fold-aware scroll: step by visible lines, not raw indices.
                 let win = self.window_mgr.focused_window_mut();
+                let steps = lines * scroll_speed;
                 if delta > 0 {
-                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
+                    // Scroll up.
+                    for _ in 0..steps {
+                        let prev = buf.prev_visible_line(win.scroll_offset);
+                        if prev >= win.scroll_offset {
+                            break; // at top
+                        }
+                        win.scroll_offset = prev;
+                    }
                 } else {
+                    // Scroll down.
                     let max_scroll = buf_line_count.saturating_sub(viewport_height);
-                    win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
+                    for _ in 0..steps {
+                        if win.scroll_offset >= max_scroll {
+                            break;
+                        }
+                        let next = buf.next_visible_line(win.scroll_offset);
+                        if next <= win.scroll_offset {
+                            break; // safety
+                        }
+                        win.scroll_offset = next.min(max_scroll);
+                    }
                 }
 
                 // Clamp cursor into visible viewport (wrap-aware).
@@ -1815,41 +1835,62 @@ impl Editor {
                 }
 
                 // Compute the bottom visible buffer row, accounting for
-                // word-wrap where one buffer line may use multiple visual rows.
+                // word-wrap and folds.
                 let bottom = {
                     let max_row = buf_line_count.saturating_sub(1);
                     if self.word_wrap && self.text_area_width > 0 {
                         let tw = self.text_area_width;
                         let bi = self.break_indent;
                         let sb_w = self.show_break.chars().count();
-                        let buf = &self.buffers[buf_idx];
                         let rope = buf.rope();
                         let mut visual = 0;
                         let mut last_fit = win.scroll_offset;
-                        for line in win.scroll_offset..=max_row {
-                            let rows = if line < rope.len_lines() {
-                                let text: String = rope.line(line).chars().collect();
-                                let text = text.trim_end_matches('\n');
-                                crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
-                            } else {
-                                1
-                            };
-                            if visual + rows > viewport_height {
-                                break;
+                        let mut line = win.scroll_offset;
+                        while line <= max_row {
+                            if !buf.is_line_folded(line) {
+                                let rows = if line < rope.len_lines() {
+                                    let text: String = rope.line(line).chars().collect();
+                                    let text = text.trim_end_matches('\n');
+                                    crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                                } else {
+                                    1
+                                };
+                                if visual + rows > viewport_height {
+                                    break;
+                                }
+                                visual += rows;
+                                last_fit = line;
                             }
-                            visual += rows;
-                            last_fit = line;
+                            line = buf.next_visible_line(line);
+                            if line <= last_fit {
+                                break; // safety
+                            }
                         }
                         last_fit
                     } else {
-                        (win.scroll_offset + viewport_height.saturating_sub(1)).min(max_row)
+                        // No wrap: walk visible lines to find bottom.
+                        let mut count = 0;
+                        let mut last_fit = win.scroll_offset;
+                        let mut line = win.scroll_offset;
+                        while line <= max_row && count < viewport_height {
+                            if !buf.is_line_folded(line) {
+                                count += 1;
+                                last_fit = line;
+                            }
+                            let next = buf.next_visible_line(line);
+                            if next <= line {
+                                break;
+                            }
+                            line = next;
+                        }
+                        last_fit
                     }
                 };
 
                 if win.cursor_row > bottom {
                     win.cursor_row = bottom;
                 }
-                win.clamp_cursor(&self.buffers[buf_idx]);
+                win.clamp_cursor(buf);
             }
         }
     }

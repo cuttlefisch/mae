@@ -372,6 +372,35 @@ impl Buffer {
         }
     }
 
+    /// Given a line, find the next visible line going forward (skipping folds).
+    /// Returns `line + 1` if the next line is visible, or jumps past fold ends.
+    pub fn next_visible_line(&self, line: usize) -> usize {
+        let mut next = line + 1;
+        // If next lands inside a fold, skip to the fold end.
+        for (start, end) in &self.folded_ranges {
+            if next > *start && next < *end {
+                next = *end;
+            }
+        }
+        next
+    }
+
+    /// Given a line, find the previous visible line going backward (skipping folds).
+    /// Returns `line - 1` if visible, or jumps before fold starts.
+    pub fn prev_visible_line(&self, line: usize) -> usize {
+        if line == 0 {
+            return 0;
+        }
+        let mut prev = line - 1;
+        // If prev lands inside a fold, skip to the fold start.
+        for (start, end) in &self.folded_ranges {
+            if prev > *start && prev < *end {
+                prev = *start;
+            }
+        }
+        prev
+    }
+
     /// Narrow the buffer view to a range of lines `[start, end)`.
     pub fn narrow_to(&mut self, start: usize, end: usize) {
         let clamped_end = end.min(self.line_count());
