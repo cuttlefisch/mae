@@ -336,6 +336,7 @@ pub fn render_buffer_content(
                 chunk_styles,
                 1.0,
                 line_height,
+                ll.glyph_advance,
             );
         } else if wrap {
             // First segment of a wrapped line.
@@ -378,6 +379,7 @@ pub fn render_buffer_content(
                 chunk_styles,
                 org_heading_scale,
                 line_height,
+                ll.glyph_advance,
             );
         } else {
             // No wrap: single segment per line.
@@ -421,18 +423,21 @@ pub fn render_buffer_content(
                 visible_styles,
                 org_heading_scale,
                 line_height,
+                ll.glyph_advance,
             );
 
             // Fold indicator: show "... N lines" after fold start lines.
-            // Use scaled column offset so the indicator appears after the scaled heading.
+            // Use actual glyph advance for positioning after the scaled heading.
             if ll.is_fold_start && ll.folded_line_count > 0 {
                 let indicator = format!(" ··· {} lines", ll.folded_line_count);
                 let vis_char_count = visible_end - visible_start;
                 let line_str: String = visible_chars.iter().collect();
+                let (cw, _) = canvas.cell_size();
+                let effective_scale = ll.glyph_advance / cw;
                 let scaled_vis_width = crate::layout::FrameLayout::scaled_col(
                     &line_str,
                     vis_char_count,
-                    org_heading_scale,
+                    effective_scale,
                 );
                 let indicator_col = text_col + scaled_vis_width;
                 let fold_fg = theme::ts_fg(editor, "comment");
@@ -486,22 +491,25 @@ fn draw_styled_at(
     styles: &[CharStyle],
     scale: f32,
     line_height: f32,
+    glyph_advance: f32,
 ) {
     if chars.is_empty() {
         return;
     }
     let ascii_ok = *canvas.ascii_in_font();
+    let (cw, _) = canvas.cell_size();
 
     // Pre-compute cumulative display column for each char (CJK = 2 cols).
-    // When scale > 1.0, each character occupies more horizontal space.
-    // We use fractional column offsets rounded to the nearest cell to keep
-    // runs positioned correctly under Skia's natural glyph advance.
+    // When scale > 1.0, use the font's actual glyph advance (not scale * cell_width)
+    // because font engines grid-fit advances to integer pixel boundaries.
     let mut col_offsets = Vec::with_capacity(chars.len() + 1);
     if scale != 1.0 {
+        // effective_scale accounts for the actual font advance vs cell_width.
+        let effective_scale = glyph_advance / cw;
         let mut acc_f = 0.0f32;
         for &ch in chars {
             col_offsets.push(acc_f.round() as usize);
-            acc_f += char_width(ch) as f32 * scale;
+            acc_f += char_width(ch) as f32 * effective_scale;
         }
         col_offsets.push(acc_f.round() as usize);
     } else {

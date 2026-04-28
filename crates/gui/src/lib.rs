@@ -438,6 +438,23 @@ fn render_window_area(
     area_width: usize,
     area_height: usize,
 ) -> Option<layout::FrameLayout> {
+    // Pre-compute scaled glyph advances for heading scales.
+    // Font engines grid-fit advances at each font size, so `cell_width * scale`
+    // is incorrect. We measure once and pass into layout/render.
+    let (cw, _ch) = canvas.cell_size();
+    let advance_1_15 = canvas.scaled_cell_width(1.15);
+    let advance_1_30 = canvas.scaled_cell_width(1.3);
+    let advance_1_50 = canvas.scaled_cell_width(1.5);
+    let glyph_advance_fn = |scale: f32| -> f32 {
+        let key = (scale * 100.0).round() as u32;
+        match key {
+            115 => advance_1_15,
+            130 => advance_1_30,
+            150 => advance_1_50,
+            _ => cw * scale, // fallback for unexpected scales
+        }
+    };
+
     let mut focused_layout: Option<layout::FrameLayout> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
@@ -540,7 +557,9 @@ fn render_window_area(
                         inner_width,
                         inner_height,
                         cell_height,
+                        cw,
                         Some(&help_spans),
+                        Some(&glyph_advance_fn),
                     );
                     buffer_render::render_buffer_content(
                         canvas,
@@ -600,7 +619,9 @@ fn render_window_area(
                         inner_width,
                         inner_height,
                         cell_height,
+                        cw,
                         spans,
+                        Some(&glyph_advance_fn),
                     );
                     buffer_render::render_buffer_content(
                         canvas, editor, buf, win, is_focused, &fl, spans,
@@ -819,9 +840,9 @@ fn render_gui_cursor(
         ) {
             // Use FrameLayout for exact pixel-Y positioning (fold-aware, scale-aware).
             let cursor_pixel_y = pos.pixel_y.unwrap_or((inner_row + pos.row) as f32 * ch);
-            // Use exact fractional pixel X for scaled lines, integer col for normal.
-            let cursor_pixel_x = if let Some(frac_col) = pos.pixel_x_col {
-                (inner_col as f32 + frac_col) * cw
+            // Use exact pixel X from font metrics for scaled lines.
+            let cursor_pixel_x = if let Some(px) = pos.pixel_x {
+                px
             } else {
                 (inner_col + pos.col) as f32 * cw
             };

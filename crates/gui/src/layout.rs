@@ -27,6 +27,10 @@ pub struct LineLayout {
     pub line_height: f32,
     /// Heading scale factor (1.0 for normal lines).
     pub scale: f32,
+    /// Actual per-glyph advance width in pixels for this line's font size.
+    /// For scale=1.0 this equals cell_width; for scaled headings it's the
+    /// font engine's grid-fitted advance at `base_size * scale`.
+    pub glyph_advance: f32,
     /// True for 2nd+ segments of a wrapped line.
     pub is_wrap_continuation: bool,
     /// True if this line is the start of a folded range.
@@ -52,6 +56,8 @@ pub struct FrameLayout {
     pub text_width: usize,
     /// Total area width in columns.
     pub area_width: usize,
+    /// Base cell width in pixels.
+    pub cell_width: f32,
     /// Base cell height in pixels.
     pub cell_height: f32,
     /// Area row offset (for absolute screen positioning).
@@ -87,6 +93,13 @@ impl FrameLayout {
     /// Scale factor for a buffer row. Returns 1.0 if not visible.
     pub fn scale_for_row(&self, buf_row: usize) -> f32 {
         self.layout_for_row(buf_row).map(|l| l.scale).unwrap_or(1.0)
+    }
+
+    /// Actual glyph advance for a buffer row. Returns cell_width if not visible.
+    pub fn glyph_advance_for_row(&self, buf_row: usize) -> f32 {
+        self.layout_for_row(buf_row)
+            .map(|l| l.glyph_advance)
+            .unwrap_or(self.cell_width)
     }
 
     /// Pixel Y for a display row index. Used by cursor rendering.
@@ -138,6 +151,20 @@ impl FrameLayout {
         }
     }
 
+    /// Compute the exact pixel X offset for `target_col` chars using the
+    /// font's actual glyph advance (not `scale * cell_width`).
+    ///
+    /// This is the CORRECT way to compute cursor position for scaled lines.
+    /// Font engines grid-fit advances to integer pixels at each size, so
+    /// `char_width * scale * cell_width` diverges from Skia's actual layout.
+    pub fn pixel_x_for_col(line_text: &str, target_col: usize, glyph_advance: f32) -> f32 {
+        line_text
+            .chars()
+            .take(target_col)
+            .map(|ch| char_width(ch) as f32 * glyph_advance)
+            .sum()
+    }
+
     /// Return all display row indices for a buffer row (including wrap continuations).
     pub fn display_rows_for(&self, buf_row: usize) -> Vec<usize> {
         self.lines
@@ -154,6 +181,12 @@ impl FrameLayout {
 /// This extracts the layout-computing logic from `render_buffer_content()`:
 /// scroll offset iteration, fold skipping, heading scale lookup, pixel Y
 /// accumulation, and visible char range. No drawing is done here.
+///
+/// `glyph_advance_fn` maps a heading scale to the font's actual per-glyph
+/// advance width at that scale. Font engines grid-fit advances to integer
+/// pixels, so `cell_width * scale` is incorrect. Pass `None` in tests to
+/// use the linear approximation (for logic-only tests that don't care about
+/// pixel accuracy).
 pub fn compute_layout(
     editor: &Editor,
     buf: &Buffer,
@@ -163,7 +196,9 @@ pub fn compute_layout(
     area_width: usize,
     area_height: usize,
     cell_height: f32,
+    cell_width: f32,
     syntax_spans: Option<&[HighlightSpan]>,
+    glyph_advance_fn: Option<&dyn Fn(f32) -> f32>,
 ) -> FrameLayout {
     let display_lines = buf.display_line_count();
     let gutter_w = if editor.show_line_numbers {
@@ -277,11 +312,19 @@ pub fn compute_layout(
                 };
                 let end = find_wrap_break(&full_chars, pos, avail);
 
+                let seg_glyph_advance = if seg_scale != 1.0 {
+                    glyph_advance_fn
+                        .map(|f| f(seg_scale))
+                        .unwrap_or(cell_width * seg_scale)
+                } else {
+                    cell_width
+                };
                 lines.push(LineLayout {
                     buf_row: line_idx,
                     pixel_y,
                     line_height: seg_height,
                     scale: seg_scale,
+                    glyph_advance: seg_glyph_advance,
                     is_wrap_continuation: !is_first,
                     is_fold_start: is_first && is_fold_start,
                     folded_line_count: if is_first { fold_info } else { 0 },
@@ -329,11 +372,19 @@ pub fn compute_layout(
                 visible_end += 1;
             }
 
+            let line_glyph_advance = if org_heading_scale != 1.0 {
+                glyph_advance_fn
+                    .map(|f| f(org_heading_scale))
+                    .unwrap_or(cell_width * org_heading_scale)
+            } else {
+                cell_width
+            };
             lines.push(LineLayout {
                 buf_row: line_idx,
                 pixel_y,
                 line_height,
                 scale: org_heading_scale,
+                glyph_advance: line_glyph_advance,
                 is_wrap_continuation: false,
                 is_fold_start,
                 folded_line_count: fold_info,
@@ -353,6 +404,7 @@ pub fn compute_layout(
         text_col,
         text_width,
         area_width,
+        cell_width,
         cell_height,
         area_row,
         area_col,
@@ -380,7 +432,7 @@ mod tests {
         let idx = e.active_buffer_idx();
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
-        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, None);
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
         assert_eq!(layout.lines.len(), 5);
         for (i, ll) in layout.lines.iter().enumerate() {
             assert_eq!(ll.buf_row, i);
@@ -399,7 +451,7 @@ mod tests {
         e.buffers[idx].folded_ranges.push((1, 7));
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
-        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, None);
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
         // Visible: line 0, line 1 (fold start), line 7, 8, 9
         assert_eq!(layout.lines.len(), 5);
         assert_eq!(layout.lines[0].buf_row, 0);
@@ -422,7 +474,7 @@ mod tests {
         e.buffers[idx].folded_ranges.push((1, 5));
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
-        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, None);
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
         // Visible: 0, 1(fold), 5, 6, 7
         assert_eq!(layout.display_row_of(0), Some(0));
         assert_eq!(layout.display_row_of(1), Some(1));
@@ -438,7 +490,7 @@ mod tests {
         e.buffers[idx].folded_ranges.push((1, 5));
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
-        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, None);
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
         assert_eq!(layout.buf_row_for_display_row(0), Some(0));
         assert_eq!(layout.buf_row_for_display_row(1), Some(1));
         assert_eq!(layout.buf_row_for_display_row(2), Some(5));
@@ -493,7 +545,7 @@ mod tests {
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
         // Use a tight area: 3 rows * 16px = 48px limit.
-        let layout = compute_layout(&e, buf, win, 0, 0, 80, 3, 16.0, None);
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 3, 16.0, 8.0, None, None);
         for ll in &layout.lines {
             assert!(
                 ll.pixel_y + ll.line_height <= 48.0,

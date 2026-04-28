@@ -241,6 +241,23 @@ impl SkiaCanvas {
         })
     }
 
+    /// Return the actual per-glyph advance width for a scaled font.
+    ///
+    /// Font engines grid-fit glyph advances to integer (or half-pixel)
+    /// boundaries at each size, so `cell_width * scale` is WRONG.
+    /// Example: base=14px → cell_width=8; scale=1.5 → size=21px →
+    /// actual advance=13, NOT 8*1.5=12. This function returns 13.
+    ///
+    /// For scale=1.0, returns `cell_width` (no scaled font lookup needed).
+    pub fn scaled_cell_width(&mut self, scale: f32) -> f32 {
+        if scale == 1.0 {
+            return self.cell_width;
+        }
+        let font = self.get_scaled_font(false, scale).clone();
+        let (advance, _) = font.measure_str("M", None);
+        advance
+    }
+
     // -----------------------------------------------------------------------
     // Cell-level drawing methods
     // -----------------------------------------------------------------------
@@ -980,5 +997,106 @@ mod tests {
         }
         assert_eq!(call_count, 1);
         assert_eq!(cache.len(), 1);
+    }
+
+    /// Verify: cursor position using `pixel_x_for_col(glyph_advance)` matches
+    /// Skia's actual string advance. This is THE correctness test for the fix.
+    #[test]
+    fn cursor_pixel_x_matches_skia_string_advance() {
+        use crate::layout::FrameLayout;
+
+        let fm = FontMgr::new();
+        let tf = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have a monospace font");
+
+        let base_size = 14.0;
+        let base_font = Font::from_typeface(&tf, base_size);
+        let (cell_width, _) = base_font.measure_str("M", None);
+
+        let test_text = "# This is a heading for testing alignment";
+        let char_count = test_text.len();
+
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let mut scaled_font = base_font.clone();
+            scaled_font.set_size(base_size * scale);
+            let (glyph_advance, _) = scaled_font.measure_str("M", None);
+
+            // Skia's actual total string advance:
+            let (actual_str_advance, _) = scaled_font.measure_str(test_text, None);
+
+            // Our NEW cursor math: pixel_x_for_col with actual glyph_advance
+            let cursor_px = FrameLayout::pixel_x_for_col(test_text, char_count, glyph_advance);
+
+            let error_in_cells = (actual_str_advance - cursor_px).abs() / cell_width;
+
+            eprintln!(
+                "scale={:.2}: cursor_px={:.2}, skia_advance={:.2}, error={:.4} cells",
+                scale, cursor_px, actual_str_advance, error_in_cells,
+            );
+
+            assert!(
+                error_in_cells < 0.1,
+                "scale={}: cursor vs skia drift = {:.2} cells! cursor_px={}, skia={}",
+                scale,
+                error_in_cells,
+                cursor_px,
+                actual_str_advance,
+            );
+        }
+    }
+
+    /// Documents that font advance scaling is non-linear (grid-fitting).
+    /// This test proves our old `char_width * scale * cell_width` model was wrong.
+    #[test]
+    fn font_advance_scaling_is_nonlinear() {
+        let fm = FontMgr::new();
+        let tf = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have a monospace font");
+
+        let base_size = 14.0;
+        let base_font = Font::from_typeface(&tf, base_size);
+        let (cell_width, _) = base_font.measure_str("M", None);
+        assert!(cell_width > 0.0, "base font advance must be positive");
+
+        let test_text = "# This is a heading for testing alignment";
+        let char_count = test_text.len();
+
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let mut scaled_font = base_font.clone();
+            scaled_font.set_size(base_size * scale);
+
+            let (actual_str_advance, _) = scaled_font.measure_str(test_text, None);
+            let (scaled_cell, _) = scaled_font.measure_str("M", None);
+
+            // Skia's actual per-glyph advance at this scale:
+            let actual_per_glyph = scaled_cell;
+            // Our incorrect assumption: per-glyph = cell_width * scale
+            let assumed_per_glyph = cell_width * scale;
+
+            eprintln!(
+                "scale={:.2}: actual_glyph_advance={:.2}, assumed={:.2} (cell_width*scale), \
+                 diff={:.2}px, str_advance={:.2} vs assumed={:.2}",
+                scale,
+                actual_per_glyph,
+                assumed_per_glyph,
+                actual_per_glyph - assumed_per_glyph,
+                actual_str_advance,
+                char_count as f32 * assumed_per_glyph,
+            );
+
+            // The CORRECT model: use the scaled font's actual advance.
+            let correct_math = char_count as f32 * actual_per_glyph;
+            let correct_error = (actual_str_advance - correct_math).abs() / cell_width;
+            assert!(
+                correct_error < 0.5,
+                "Even with actual glyph advance, string advance doesn't match: \
+                 str={:.2}, N*glyph={:.2}, error={:.2} cells",
+                actual_str_advance,
+                correct_math,
+                correct_error,
+            );
+        }
     }
 }

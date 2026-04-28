@@ -27,10 +27,10 @@ pub struct CursorPos {
     pub col: usize,
     /// Exact pixel Y from the layout. None for Command/Search modes.
     pub pixel_y: Option<f32>,
-    /// Exact fractional column offset (cell-width units) for scaled lines.
-    /// When set, the cursor renderer uses this instead of integer `col` to
-    /// eliminate column-grid quantization error on scaled headings.
-    pub pixel_x_col: Option<f32>,
+    /// Exact pixel X for the cursor. When set, the cursor renderer uses this
+    /// instead of `col * cell_width`. Computed using the font's actual glyph
+    /// advance, which may differ from `scale * cell_width` due to grid-fitting.
+    pub pixel_x: Option<f32>,
     /// Font scale at the cursor's line (1.0 for normal, >1.0 for org headings).
     pub scale: f32,
 }
@@ -58,7 +58,7 @@ pub fn compute_cursor_position(
                 row: 0,
                 col: 1 + cursor_col,
                 pixel_y: None,
-                pixel_x_col: None,
+                pixel_x: None,
                 scale: 1.0,
             })
         }
@@ -68,7 +68,7 @@ pub fn compute_cursor_position(
                 row: 0,
                 col: 1 + col,
                 pixel_y: None,
-                pixel_x_col: None,
+                pixel_x: None,
                 scale: 1.0,
             })
         }
@@ -82,7 +82,7 @@ pub fn compute_cursor_position(
                         row: input_y,
                         col: 2 + cursor_col,
                         pixel_y: None,
-                        pixel_x_col: None,
+                        pixel_x: None,
                         scale: 1.0,
                     });
                 }
@@ -135,11 +135,14 @@ pub fn compute_cursor_position(
                         0
                     };
                     let target = prefix_w + col;
+                    let glyph_advance = layout.glyph_advance_for_row(win.cursor_row);
                     let scaled_col = FrameLayout::scaled_col(&line_text, target, scale);
-                    let precise_col = if scale != 1.0 {
+                    // Compute pixel X using the font's actual glyph advance.
+                    let pixel_x_abs = if scale != 1.0 {
+                        let text_start_px = layout.text_col as f32 * layout.cell_width;
                         Some(
-                            gutter_w as f32
-                                + FrameLayout::scaled_col_precise(&line_text, target, scale),
+                            text_start_px
+                                + FrameLayout::pixel_x_for_col(&line_text, target, glyph_advance),
                         )
                     } else {
                         None
@@ -152,7 +155,7 @@ pub fn compute_cursor_position(
                             row: screen_row,
                             col: gutter_w + scaled_col,
                             pixel_y: actual_pixel_y,
-                            pixel_x_col: precise_col,
+                            pixel_x: pixel_x_abs,
                             scale,
                         })
                     } else {
@@ -171,13 +174,16 @@ pub fn compute_cursor_position(
                         .collect();
                     let scaled_col =
                         FrameLayout::scaled_col(&visible_text, cursor_char_in_visible, scale);
-                    let precise_col = if scale != 1.0 {
+                    let glyph_advance = layout.glyph_advance_for_row(win.cursor_row);
+                    // Compute pixel X using the font's actual glyph advance.
+                    let pixel_x_abs = if scale != 1.0 {
+                        let text_start_px = layout.text_col as f32 * layout.cell_width;
                         Some(
-                            gutter_w as f32
-                                + FrameLayout::scaled_col_precise(
+                            text_start_px
+                                + FrameLayout::pixel_x_for_col(
                                     &visible_text,
                                     cursor_char_in_visible,
-                                    scale,
+                                    glyph_advance,
                                 ),
                         )
                     } else {
@@ -189,7 +195,7 @@ pub fn compute_cursor_position(
                             row: screen_row,
                             col: gutter_w + scaled_col,
                             pixel_y: pix_y,
-                            pixel_x_col: precise_col,
+                            pixel_x: pixel_x_abs,
                             scale,
                         })
                     } else {
@@ -210,7 +216,7 @@ pub fn compute_cursor_position(
                         row: screen_row,
                         col: gutter_w + visible_col,
                         pixel_y: None,
-                        pixel_x_col: None,
+                        pixel_x: None,
                         scale: 1.0,
                     })
                 } else {
@@ -382,7 +388,7 @@ mod tests {
 
         let buf = &editor.buffers[idx];
         let win = editor.window_mgr.focused_window();
-        let fl = layout::compute_layout(&editor, buf, win, 0, 0, 80, 20, 16.0, None);
+        let fl = layout::compute_layout(&editor, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
 
         let inner = CellRect::new(0, 0, 80, 20);
         let gutter_w = fl.gutter_width;
