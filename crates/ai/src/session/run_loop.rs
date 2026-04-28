@@ -354,6 +354,9 @@ impl AgentSession {
                 cache_creation_tokens: self.session_cache_creation,
                 context_window: self.context_window,
                 context_used_tokens,
+                turn_tokens_in: usage.prompt_tokens,
+                turn_tokens_out: usage.completion_tokens,
+                turn_cache_read: usage.cache_read_tokens,
             })
             .await;
         if !self.warned {

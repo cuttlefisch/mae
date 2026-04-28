@@ -99,12 +99,51 @@ pub enum ConversationRole {
     System,
 }
 
+/// Per-message token usage from the API response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input: u32,
+    pub output: u32,
+    #[serde(default)]
+    pub cache_read: u32,
+}
+
+impl TokenUsage {
+    /// Format as a compact display string: `[in:1.2k out:340]`
+    pub fn display_compact(&self) -> String {
+        fn fmt_count(n: u32) -> String {
+            if n >= 1000 {
+                format!("{:.1}k", n as f64 / 1000.0)
+            } else {
+                n.to_string()
+            }
+        }
+        if self.cache_read > 0 {
+            format!(
+                "[in:{} out:{} cache:{}]",
+                fmt_count(self.input),
+                fmt_count(self.output),
+                fmt_count(self.cache_read)
+            )
+        } else {
+            format!(
+                "[in:{} out:{}]",
+                fmt_count(self.input),
+                fmt_count(self.output)
+            )
+        }
+    }
+}
+
 /// A single entry in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationEntry {
     pub role: ConversationRole,
     pub content: String,
     pub collapsed: bool,
+    /// Token usage for this message (populated from API response for assistant messages).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
 }
 
 /// Style hint for rendered lines.
@@ -218,6 +257,7 @@ impl Conversation {
             role: ConversationRole::User,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -229,6 +269,7 @@ impl Conversation {
             role: ConversationRole::Assistant,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -249,6 +290,7 @@ impl Conversation {
             },
             content: String::new(),
             collapsed: true,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -325,6 +367,7 @@ impl Conversation {
             },
             content: output.into(),
             collapsed: true,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -336,6 +379,7 @@ impl Conversation {
             role: ConversationRole::System,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -413,7 +457,7 @@ impl Conversation {
     }
 
     /// Rebuild the cached rendered lines. Called after every content mutation.
-    fn rebuild_render_cache(&mut self) {
+    pub fn rebuild_render_cache(&mut self) {
         self.cached_lines = self.compute_rendered_lines();
         self.cached_screen_counts.clear();
         self.screen_counts_dirty = true;
@@ -602,8 +646,13 @@ impl Conversation {
                 }
             }
             ConversationRole::Assistant => {
+                let marker = if let Some(ref usage) = entry.token_usage {
+                    format!("[AI] {}", usage.display_compact())
+                } else {
+                    "[AI]".into()
+                };
                 lines.push(RenderedLine {
-                    text: "[AI]".into(),
+                    text: marker,
                     style: LineStyle::RoleMarker,
                     entry_index: Some(i),
                 });
@@ -1505,5 +1554,59 @@ mod tests {
     fn chars_to_cols_mixed() {
         // "hi日本" — 2 ASCII (2 cols) + 1 CJK (2 cols) = 4 cols for 3 chars
         assert_eq!(chars_to_display_cols("hi日本", 3), 4);
+    }
+
+    #[test]
+    fn token_usage_display_compact() {
+        let usage = TokenUsage {
+            input: 1200,
+            output: 340,
+            cache_read: 0,
+        };
+        assert_eq!(usage.display_compact(), "[in:1.2k out:340]");
+    }
+
+    #[test]
+    fn token_usage_display_with_cache() {
+        let usage = TokenUsage {
+            input: 500,
+            output: 200,
+            cache_read: 8000,
+        };
+        assert_eq!(usage.display_compact(), "[in:500 out:200 cache:8.0k]");
+    }
+
+    #[test]
+    fn token_usage_serde_roundtrip() {
+        let usage = TokenUsage {
+            input: 100,
+            output: 50,
+            cache_read: 0,
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        let parsed: TokenUsage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.input, 100);
+        assert_eq!(parsed.output, 50);
+    }
+
+    #[test]
+    fn conversation_entry_with_token_usage_renders() {
+        let mut conv = Conversation::new();
+        conv.push_assistant("Hello");
+        // Set token usage on last entry.
+        conv.entries.last_mut().unwrap().token_usage = Some(TokenUsage {
+            input: 1500,
+            output: 300,
+            cache_read: 0,
+        });
+        conv.rebuild_render_cache();
+        let lines = conv.rendered_lines();
+        let marker = lines.iter().find(|l| l.style == LineStyle::RoleMarker);
+        assert!(marker.is_some());
+        assert!(
+            marker.unwrap().text.contains("[in:1.5k out:300]"),
+            "role marker should contain token display: {}",
+            marker.unwrap().text
+        );
     }
 }

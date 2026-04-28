@@ -244,6 +244,9 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             cache_creation_tokens,
             context_window,
             context_used_tokens,
+            turn_tokens_in,
+            turn_tokens_out,
+            turn_cache_read,
             ..
         } => {
             editor.ai_session_cost_usd = session_usd;
@@ -253,6 +256,26 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai_cache_creation_tokens = cache_creation_tokens;
             editor.ai_context_window = context_window;
             editor.ai_context_used_tokens = context_used_tokens;
+            // Attach per-turn usage to the last assistant entry.
+            if turn_tokens_in > 0 || turn_tokens_out > 0 {
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    // Walk backwards to find the last assistant entry.
+                    for entry in conv.entries.iter_mut().rev() {
+                        if matches!(
+                            entry.role,
+                            mae_core::conversation::ConversationRole::Assistant
+                        ) {
+                            entry.token_usage = Some(mae_core::conversation::TokenUsage {
+                                input: turn_tokens_in as u32,
+                                output: turn_tokens_out as u32,
+                                cache_read: turn_cache_read as u32,
+                            });
+                            break;
+                        }
+                    }
+                    conv.rebuild_render_cache();
+                }
+            }
         }
         AiEvent::BudgetWarning {
             session_usd,
