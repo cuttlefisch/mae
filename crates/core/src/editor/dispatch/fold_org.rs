@@ -1,7 +1,7 @@
 use super::super::Editor;
 
 impl Editor {
-    /// Dispatch folding and org-mode commands. Returns `Some(true)` if handled.
+    /// Dispatch folding, org-mode, and markdown commands. Returns `Some(true)` if handled.
     pub(super) fn dispatch_fold_org(&mut self, name: &str) -> Option<bool> {
         match name {
             "toggle-fold" => {
@@ -13,6 +13,7 @@ impl Editor {
             "open-all-folds" => {
                 self.open_all_folds();
             }
+            // Org commands
             "org-cycle" => {
                 self.org_cycle();
             }
@@ -36,6 +37,22 @@ impl Editor {
             }
             "org-move-subtree-down" => {
                 self.org_move_subtree_down();
+            }
+            // Markdown commands
+            "md-cycle" => {
+                self.md_cycle();
+            }
+            "md-promote" => {
+                self.md_promote();
+            }
+            "md-demote" => {
+                self.md_demote();
+            }
+            "md-move-subtree-up" => {
+                self.md_move_subtree_up();
+            }
+            "md-move-subtree-down" => {
+                self.md_move_subtree_down();
             }
             _ => return None,
         }

@@ -678,6 +678,8 @@ impl Editor {
                     Some(("git-status", Some("normal")))
                 } else if lang == Some(Language::Org) {
                     Some(("org", Some("normal")))
+                } else if lang == Some(Language::Markdown) {
+                    Some(("markdown", Some("normal")))
                 } else {
                     Some(("normal", None))
                 }

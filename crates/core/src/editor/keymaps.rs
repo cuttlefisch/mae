@@ -547,6 +547,50 @@ impl Editor {
         maps.insert("git-status".to_string(), git_status);
         maps.insert("org".to_string(), org);
 
+        // Markdown keymap (mirrors org keybindings with md-* commands)
+        let mut markdown = Keymap::new("markdown");
+        markdown.bind(vec![KeyPress::special(Key::Tab)], "md-cycle");
+        // Promote/demote headings
+        markdown.bind(
+            vec![KeyPress {
+                key: Key::Left,
+                ctrl: false,
+                alt: true,
+            }],
+            "md-promote",
+        );
+        markdown.bind(
+            vec![KeyPress {
+                key: Key::Right,
+                ctrl: false,
+                alt: true,
+            }],
+            "md-demote",
+        );
+        markdown.bind(parse_key_seq("M-h"), "md-promote");
+        markdown.bind(parse_key_seq("M-l"), "md-demote");
+        // Move subtrees
+        markdown.bind(parse_key_seq("M-j"), "md-move-subtree-down");
+        markdown.bind(parse_key_seq("M-k"), "md-move-subtree-up");
+        markdown.bind(
+            vec![KeyPress {
+                key: Key::Up,
+                ctrl: false,
+                alt: true,
+            }],
+            "md-move-subtree-up",
+        );
+        markdown.bind(
+            vec![KeyPress {
+                key: Key::Down,
+                ctrl: false,
+                alt: true,
+            }],
+            "md-move-subtree-down",
+        );
+
+        maps.insert("markdown".to_string(), markdown);
+
         maps
     }
 }

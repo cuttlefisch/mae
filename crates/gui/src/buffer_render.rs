@@ -100,13 +100,16 @@ pub fn line_heading_scale(
         .take_while(|s| s.byte_start < line_byte_end)
         .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
     if has_heading {
-        let level = rope
-            .line(line_idx)
-            .chars()
-            .take_while(|&c| c == '*')
-            .count()
-            .min(255) as u8;
-        org_heading_scale_for_level(level)
+        let line_chars: Vec<char> = rope.line(line_idx).chars().collect();
+        // Detect heading level: org uses `*`, markdown uses `#`
+        let level = if line_chars.first() == Some(&'*') {
+            line_chars.iter().take_while(|&&c| c == '*').count()
+        } else if line_chars.first() == Some(&'#') {
+            line_chars.iter().take_while(|&&c| c == '#').count()
+        } else {
+            0
+        };
+        org_heading_scale_for_level(level.min(255) as u8)
     } else {
         1.0
     }
@@ -145,14 +148,15 @@ pub fn heading_extra_rows(
             .take_while(|s| s.byte_start < line_byte_end)
             .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
         if has_heading {
-            // Count leading stars.
-            let level = rope
-                .line(ln)
-                .chars()
-                .take_while(|&c| c == '*')
-                .count()
-                .min(255) as u8;
-            let scale = org_heading_scale_for_level(level);
+            let line_chars: Vec<char> = rope.line(ln).chars().collect();
+            let level = if line_chars.first() == Some(&'*') {
+                line_chars.iter().take_while(|&&c| c == '*').count()
+            } else if line_chars.first() == Some(&'#') {
+                line_chars.iter().take_while(|&&c| c == '#').count()
+            } else {
+                0
+            };
+            let scale = org_heading_scale_for_level(level.min(255) as u8);
             extra += extra_rows_for_scale(scale);
         }
     }
@@ -281,12 +285,15 @@ pub fn render_buffer_content(
                 })
                 .unwrap_or(false);
             if has_heading {
-                // Count leading stars to determine level.
-                full_chars
-                    .iter()
-                    .take_while(|&&c| c == '*')
-                    .count()
-                    .min(255) as u8
+                // Count leading stars or hashes to determine level.
+                let level = if full_chars.first() == Some(&'*') {
+                    full_chars.iter().take_while(|&&c| c == '*').count()
+                } else if full_chars.first() == Some(&'#') {
+                    full_chars.iter().take_while(|&&c| c == '#').count()
+                } else {
+                    0
+                };
+                level.min(255) as u8
             } else {
                 0
             }

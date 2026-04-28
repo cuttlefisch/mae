@@ -579,15 +579,175 @@ impl Editor {
         self.set_status("Moved subtree up");
     }
 
-    /// Toggle fold at cursor (za). Works for both org headings and code blocks.
+    // --- Markdown structural editing ---
+
+    /// Three-state heading cycle for markdown buffers (TAB).
+    pub fn md_cycle(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        self.heading_cycle(crate::syntax::Language::Markdown);
+    }
+
+    /// Promote markdown heading (remove one `#`). Noop if single `#` or not heading.
+    pub fn md_promote(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = Self::heading_level(&line, crate::syntax::Language::Markdown);
+        if level <= 1 {
+            return;
+        }
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        self.buffers[buf_idx].delete_range(start, start + 1);
+        self.set_status(format!("Promoted to level {}", level - 1));
+    }
+
+    /// Demote markdown heading (add one `#`). Noop if not a heading.
+    pub fn md_demote(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let level = Self::heading_level(&line, crate::syntax::Language::Markdown);
+        if level == 0 {
+            return;
+        }
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        self.buffers[buf_idx].insert_text_at(start, "#");
+        self.set_status(format!("Demoted to level {}", level + 1));
+    }
+
+    /// Move markdown subtree down past next sibling.
+    pub fn md_move_subtree_down(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let lang = crate::syntax::Language::Markdown;
+        let Some((start, end)) = self.heading_subtree_range(row, lang) else {
+            return;
+        };
+        let line_count = self.buffers[buf_idx].line_count();
+        if end >= line_count {
+            return;
+        }
+        let sibling_start = end;
+        let sibling_end = match self.heading_subtree_range(sibling_start, lang) {
+            Some((_, se)) => se,
+            None => sibling_start + 1,
+        };
+
+        let rope = self.buffers[buf_idx].rope();
+        let our_char_start = rope.line_to_char(start);
+        let our_char_end = rope.line_to_char(end);
+        let sib_char_end = if sibling_end >= line_count {
+            rope.len_chars()
+        } else {
+            rope.line_to_char(sibling_end)
+        };
+
+        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
+        let sib_text: String = rope
+            .slice(rope.line_to_char(sibling_start)..sib_char_end)
+            .chars()
+            .collect();
+
+        self.buffers[buf_idx].delete_range(our_char_start, sib_char_end);
+        let combined = format!("{}{}", sib_text, our_text);
+        self.buffers[buf_idx].insert_text_at(our_char_start, &combined);
+
+        self.buffers[buf_idx]
+            .folded_ranges
+            .retain(|(s, _)| *s < start || *s >= sibling_end);
+
+        let sib_lines = sib_text.chars().filter(|&c| c == '\n').count();
+        self.window_mgr.focused_window_mut().cursor_row = start + sib_lines;
+        self.set_status("Moved subtree down");
+    }
+
+    /// Move markdown subtree up past previous sibling.
+    pub fn md_move_subtree_up(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        let row = self.window_mgr.focused_window().cursor_row;
+        let lang = crate::syntax::Language::Markdown;
+        let Some((start, end)) = self.heading_subtree_range(row, lang) else {
+            return;
+        };
+        if start == 0 {
+            return;
+        }
+        let line: String = self.buffers[buf_idx].rope().line(start).chars().collect();
+        let level = Self::heading_level(&line, lang);
+
+        let mut prev_start = start - 1;
+        loop {
+            let l: String = self.buffers[buf_idx]
+                .rope()
+                .line(prev_start)
+                .chars()
+                .collect();
+            let l_level = Self::heading_level(&l, lang);
+            if l_level > 0 && l_level <= level {
+                break;
+            }
+            if prev_start == 0 {
+                return;
+            }
+            prev_start -= 1;
+        }
+
+        let rope = self.buffers[buf_idx].rope();
+        let prev_char_start = rope.line_to_char(prev_start);
+        let our_char_start = rope.line_to_char(start);
+        let our_char_end = if end >= self.buffers[buf_idx].line_count() {
+            rope.len_chars()
+        } else {
+            rope.line_to_char(end)
+        };
+
+        let prev_text: String = rope
+            .slice(prev_char_start..our_char_start)
+            .chars()
+            .collect();
+        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
+
+        self.buffers[buf_idx].delete_range(prev_char_start, our_char_end);
+        let combined = format!("{}{}", our_text, prev_text);
+        self.buffers[buf_idx].insert_text_at(prev_char_start, &combined);
+
+        self.buffers[buf_idx]
+            .folded_ranges
+            .retain(|(s, _)| *s < prev_start || *s >= end);
+
+        self.window_mgr.focused_window_mut().cursor_row = prev_start;
+        self.set_status("Moved subtree up");
+    }
+
+    /// Toggle fold at cursor (za). Works for org/markdown headings and code blocks.
     pub fn toggle_fold(&mut self) {
         let buf_idx = self.active_buffer_idx();
         let cursor_row = self.window_mgr.focused_window().cursor_row;
         let source: String = self.buffers[buf_idx].rope().chars().collect();
 
-        // For org buffers, delegate to org_cycle
+        // For org buffers, delegate to heading cycle
         if self.syntax.language_of(buf_idx) == Some(crate::syntax::Language::Org) {
             self.org_cycle();
+            return;
+        }
+        // For markdown buffers, delegate to heading cycle
+        if self.syntax.language_of(buf_idx) == Some(crate::syntax::Language::Markdown) {
+            self.md_cycle();
             return;
         }
 
@@ -607,9 +767,52 @@ impl Editor {
         self.set_status(if is_now_folded { "Folded" } else { "Unfolded" });
     }
 
-    /// Close all folds (zM). Folds all tree-sitter/org fold points.
+    /// Compute heading-based fold ranges for org/markdown buffers.
+    /// Scans lines for heading prefixes and computes subtree ranges.
+    pub fn compute_heading_fold_ranges(
+        &self,
+        lang: crate::syntax::Language,
+    ) -> Vec<(usize, usize)> {
+        let buf_idx = self.active_buffer_idx();
+        let line_count = self.buffers[buf_idx].line_count();
+        let mut ranges = Vec::new();
+        let mut i = 0;
+        while i < line_count {
+            let line: String = self.buffers[buf_idx].rope().line(i).chars().collect();
+            let level = Self::heading_level(&line, lang);
+            if level > 0 {
+                if let Some((s, e)) = self.heading_subtree_range(i, lang) {
+                    if e > s + 1 {
+                        ranges.push((s, e));
+                    }
+                }
+            }
+            i += 1;
+        }
+        ranges
+    }
+
+    /// Close all folds (zM). Folds all tree-sitter/org/markdown fold points.
     pub fn close_all_folds(&mut self) {
         let buf_idx = self.active_buffer_idx();
+        let lang = self.syntax.language_of(buf_idx);
+
+        // For org/markdown, use heading-based fold ranges
+        if lang == Some(crate::syntax::Language::Org)
+            || lang == Some(crate::syntax::Language::Markdown)
+        {
+            let heading_lang = lang.unwrap();
+            let fold_ranges = self.compute_heading_fold_ranges(heading_lang);
+            if fold_ranges.is_empty() {
+                self.set_status("No foldable headings found");
+                return;
+            }
+            self.buffers[buf_idx].fold_all(&fold_ranges);
+            self.set_status(format!("Folded {} headings", fold_ranges.len()));
+            return;
+        }
+
+        // For code buffers, use tree-sitter fold ranges
         let source: String = self.buffers[buf_idx].rope().chars().collect();
         let fold_ranges = self.syntax.compute_fold_ranges(buf_idx, &source);
         if fold_ranges.is_empty() {
@@ -947,6 +1150,108 @@ mod tests {
         assert_eq!(Editor::heading_level("*** H3", Language::Org), 3);
         assert_eq!(Editor::heading_level("Not a heading", Language::Org), 0);
         assert_eq!(Editor::heading_level("**nospace", Language::Org), 0);
+    }
+
+    // --- Markdown structural editing tests ---
+
+    fn md_editor(text: &str) -> Editor {
+        let mut ed = Editor::new();
+        ed.buffers[0].insert_text_at(0, text);
+        ed.syntax.set_language(0, Language::Markdown);
+        ed
+    }
+
+    #[test]
+    fn heading_level_markdown() {
+        assert_eq!(Editor::heading_level("# H1", Language::Markdown), 1);
+        assert_eq!(Editor::heading_level("## H2", Language::Markdown), 2);
+        assert_eq!(Editor::heading_level("### H3", Language::Markdown), 3);
+        assert_eq!(
+            Editor::heading_level("Not a heading", Language::Markdown),
+            0
+        );
+        assert_eq!(Editor::heading_level("##nospace", Language::Markdown), 0);
+    }
+
+    #[test]
+    fn md_promote_removes_hash() {
+        let mut ed = md_editor("## Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.md_promote();
+        assert_eq!(ed.buffers[0].text(), "# Heading\nBody\n");
+    }
+
+    #[test]
+    fn md_demote_adds_hash() {
+        let mut ed = md_editor("# Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.md_demote();
+        assert_eq!(ed.buffers[0].text(), "## Heading\nBody\n");
+    }
+
+    #[test]
+    fn md_subtree_range() {
+        let ed = md_editor("# H1\nBody\n## Sub\nSub body\n# H2\n");
+        let range = ed.heading_subtree_range(0, Language::Markdown);
+        assert_eq!(range, Some((0, 4)));
+        let range = ed.heading_subtree_range(2, Language::Markdown);
+        assert_eq!(range, Some((2, 4)));
+    }
+
+    #[test]
+    fn md_cycle_three_state() {
+        let mut ed = md_editor("# H1\nBody\n## Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        // SUBTREE → FOLDED
+        ed.md_cycle();
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        // FOLDED → CHILDREN
+        ed.md_cycle();
+        assert!(!ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2));
+        // CHILDREN → SUBTREE
+        ed.md_cycle();
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn md_move_subtree_down() {
+        let mut ed = md_editor("# H1\nBody1\n# H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.md_move_subtree_down();
+        assert_eq!(ed.buffers[0].text(), "# H2\nBody2\n# H1\nBody1\n");
+    }
+
+    // --- zM/zR for org and markdown headings ---
+
+    #[test]
+    fn org_close_all_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.close_all_folds();
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_open_all_folds_clears() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.close_all_folds();
+        ed.open_all_folds();
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn md_close_all_folds() {
+        let mut ed = md_editor("# H1\nBody1\n## H2\nBody2\n");
+        ed.close_all_folds();
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn md_open_all_folds() {
+        let mut ed = md_editor("# H1\nBody1\n## H2\nBody2\n");
+        ed.close_all_folds();
+        ed.open_all_folds();
+        assert!(ed.buffers[0].folded_ranges.is_empty());
     }
 
     fn rust_editor(text: &str) -> Editor {
