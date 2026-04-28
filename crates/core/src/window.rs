@@ -340,11 +340,13 @@ impl Window {
 
     /// Word-wrap-aware scroll adjustment. Counts visual rows consumed by
     /// wrapped lines between `scroll_offset` and `cursor_row`, and adjusts
-    /// `scroll_offset` upward until the cursor's wrapped line fits in the
-    /// viewport.
+    /// `scroll_offset` so the cursor line fits in the viewport.
     ///
     /// `line_visual_rows` returns how many visual rows a given buffer line
     /// occupies (>= 1). For non-wrapped buffers, always returns 1.
+    ///
+    /// O(viewport_height) — walks backward from the cursor line instead of
+    /// incrementing scroll_offset forward from its old position.
     pub fn ensure_scroll_wrapped<F>(&mut self, viewport_height: usize, line_visual_rows: F)
     where
         F: Fn(usize) -> usize,
@@ -356,37 +358,40 @@ impl Window {
         // Cursor above viewport — scroll up.
         if self.cursor_row < self.scroll_offset {
             self.scroll_offset = self.cursor_row;
+            return;
         }
 
-        // Cursor below viewport — scroll down until it fits.
-        loop {
-            let mut visual = 0;
-            let mut cursor_visible = false;
-            for line in self.scroll_offset.. {
-                let rows = line_visual_rows(line);
-                if line == self.cursor_row {
-                    if visual + rows <= viewport_height {
-                        cursor_visible = true;
-                    }
-                    break;
+        // Fast check: is cursor already visible from current scroll_offset?
+        let mut visual = 0;
+        for line in self.scroll_offset..=self.cursor_row {
+            let rows = line_visual_rows(line);
+            if line == self.cursor_row {
+                if visual + rows <= viewport_height {
+                    return; // cursor is visible
                 }
-                visual += rows;
-                if visual >= viewport_height {
-                    break;
-                }
-            }
-            if cursor_visible {
                 break;
             }
-            self.scroll_offset += 1;
-            // Safety: if cursor_row == scroll_offset, the cursor is on the
-            // first visible line and always visible (even if it wraps past
-            // the viewport — we can't do better without horizontal scrolling).
-            if self.scroll_offset >= self.cursor_row {
-                self.scroll_offset = self.cursor_row;
-                break;
+            visual += rows;
+            if visual >= viewport_height {
+                break; // cursor below viewport
             }
         }
+
+        // Cursor not visible — walk backward from cursor_row to find the
+        // right scroll_offset. This is O(viewport_height) regardless of
+        // how far the cursor jumped.
+        let cursor_rows = line_visual_rows(self.cursor_row);
+        let mut budget = viewport_height.saturating_sub(cursor_rows);
+        let mut new_offset = self.cursor_row;
+        while new_offset > 0 {
+            let prev_rows = line_visual_rows(new_offset - 1);
+            if prev_rows > budget {
+                break;
+            }
+            budget -= prev_rows;
+            new_offset -= 1;
+        }
+        self.scroll_offset = new_offset;
     }
 
     /// Adjust horizontal scroll so the cursor column stays visible.

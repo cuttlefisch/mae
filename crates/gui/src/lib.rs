@@ -400,6 +400,16 @@ impl Renderer for GuiRenderer {
         }
 
         canvas.end_frame();
+
+        // Log slow frames for debugging.
+        let frame_elapsed = frame_start.elapsed();
+        if frame_elapsed.as_millis() > 16 {
+            debug!(
+                "slow frame: {:.1}ms (budget 16.7ms)",
+                frame_elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
         self.last_frame_start = Some(frame_start);
         Ok(())
     }

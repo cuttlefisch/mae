@@ -569,6 +569,22 @@ mod tests {
     }
 
     #[test]
+    fn dedent_line_dispatches_org_promote() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.dispatch_builtin("dedent-line");
+        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
+    }
+
+    #[test]
+    fn indent_line_dispatches_org_demote() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.dispatch_builtin("indent-line");
+        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
+    }
+
+    #[test]
     fn org_demote_non_heading_noop() {
         let mut ed = org_editor("Just text\n");
         ed.window_mgr.focused_window_mut().cursor_row = 0;

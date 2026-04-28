@@ -3,12 +3,13 @@
 //! Manages the Skia raster surface that backs the editor window.
 //! Each frame: clear -> draw styled cells -> present via softbuffer.
 
+use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use mae_core::Theme;
-use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface};
+use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface, Typeface};
 use winit::window::Window;
 
 use crate::text::StyledLine;
@@ -35,6 +36,9 @@ pub struct SkiaCanvas {
     ascii_in_font: [bool; 128],
     /// Reusable pixel buffer for `end_frame()` — avoids ~4MB alloc per frame.
     pixel_buf: Vec<u8>,
+    /// Cached fallback typefaces for non-ASCII chars not in primary/icon fonts.
+    /// Maps char → Option<Typeface> (None = no fallback found, skip system lookup).
+    fallback_cache: HashMap<char, Option<Typeface>>,
 }
 
 impl SkiaCanvas {
@@ -135,6 +139,7 @@ impl SkiaCanvas {
             sb_surface,
             ascii_in_font,
             pixel_buf: Vec::new(),
+            fallback_cache: HashMap::new(),
         })
     }
 
@@ -155,6 +160,7 @@ impl SkiaCanvas {
         let (_, metrics) = self.font.metrics();
         self.ascent = (-metrics.ascent).max(size * 0.8);
         self.ascii_in_font = build_ascii_table(&self.font);
+        self.fallback_cache.clear();
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -364,15 +370,20 @@ impl SkiaCanvas {
             }
         }
 
-        // 3. System fallback via FontMgr
-        let font_mgr = FontMgr::default();
-        let family_name = self.font.typeface().family_name();
-        let style = self.font.typeface().font_style();
+        // 3. System fallback via FontMgr — cached to avoid per-char system lookup.
+        let fallback_tf = self
+            .fallback_cache
+            .entry(ch)
+            .or_insert_with(|| {
+                let font_mgr = FontMgr::default();
+                let family_name = self.font.typeface().family_name();
+                let style = self.font.typeface().font_style();
+                font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
+            })
+            .clone();
 
-        if let Some(fallback_tf) =
-            font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
-        {
-            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+        if let Some(tf) = fallback_tf {
+            let fallback_font = Font::from_typeface(tf, self.font.size() * scale);
             let (_, fb_metrics) = fallback_font.metrics();
             let fb_baseline = pixel_y - fb_metrics.ascent;
             self.surface
@@ -549,25 +560,26 @@ impl SkiaCanvas {
             }
         }
 
-        // 3. System fallback via FontMgr
-        let font_mgr = FontMgr::default();
-        let family_name = self.font.typeface().family_name();
-        let style = self.font.typeface().font_style();
+        // 3. System fallback via FontMgr — cached.
+        let fallback_tf = self
+            .fallback_cache
+            .entry(ch)
+            .or_insert_with(|| {
+                let font_mgr = FontMgr::default();
+                let family_name = self.font.typeface().family_name();
+                let style = self.font.typeface().font_style();
+                font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
+            })
+            .clone();
 
-        if let Some(fallback_tf) = font_mgr.match_family_style_character(
-            family_name.as_str(),
-            style,
-            &[], // bcp47
-            ch as i32,
-        ) {
-            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+        if let Some(tf) = fallback_tf {
+            let fallback_font = Font::from_typeface(tf, self.font.size() * scale);
             let (_, fb_metrics) = fallback_font.metrics();
             let fb_baseline = y - fb_metrics.ascent;
             self.surface
                 .canvas()
                 .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
         } else {
-            // Last resort
             self.surface
                 .canvas()
                 .draw_str(&text, (x, baseline), &font, &paint);

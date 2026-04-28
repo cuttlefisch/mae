@@ -230,11 +230,22 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
     while chars.peek().is_some() {
         // Handle <Token> bracketed syntax (e.g. <F1>, <Esc>, <C-x>)
         if chars.peek() == Some(&'<') {
-            chars.next(); // consume '<'
-            let token: String = chars.by_ref().take_while(|&c| c != '>').collect();
-            if let Some(kp) = parse_macro_token(&token) {
-                result.push(kp);
+            // Peek ahead for a closing '>' to distinguish bracket tokens from bare '<'.
+            let rest: String = chars.clone().collect();
+            if let Some(close_pos) = rest[1..].find('>') {
+                let token = &rest[1..1 + close_pos];
+                if let Some(kp) = parse_macro_token(token) {
+                    // Consume '<', token chars, and '>'.
+                    for _ in 0..close_pos + 2 {
+                        chars.next();
+                    }
+                    result.push(kp);
+                    continue;
+                }
             }
+            // No closing '>' or unrecognized token — treat '<' as a literal char.
+            chars.next();
+            result.push(KeyPress::char('<'));
             continue;
         }
 
@@ -955,5 +966,39 @@ mod tests {
         let keys = parse_key_seq_spaced("<F1>");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].key, Key::F(1));
+    }
+
+    // --- Bare `<` and `>` parsing ---
+
+    #[test]
+    fn parse_key_seq_angle_brackets() {
+        // `<<` should produce two bare '<' chars, not trigger bracket syntax.
+        let keys = parse_key_seq("<<");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('<'));
+        assert_eq!(keys[1], KeyPress::char('<'));
+
+        // `>>` should produce two bare '>' chars.
+        let keys = parse_key_seq(">>");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('>'));
+        assert_eq!(keys[1], KeyPress::char('>'));
+    }
+
+    #[test]
+    fn parse_key_seq_bare_lt_then_token() {
+        // `<` followed by a valid bracket token: `<<CR>` should be [Char('<'), Enter].
+        let keys = parse_key_seq("<<CR>");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('<'));
+        assert_eq!(keys[1].key, Key::Enter);
+    }
+
+    #[test]
+    fn parse_key_seq_lt_bracket_token() {
+        // `<lt>` is the escape for literal '<'
+        let keys = parse_key_seq("<lt>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], KeyPress::char('<'));
     }
 }

@@ -227,16 +227,10 @@ pub fn render_cursor(
                 }
             };
             if let Some(c) = ch_under {
-                // Draw character under cursor at pixel Y with proper scale.
-                canvas.draw_text_run_at_y(
-                    pixel_y,
-                    abs_col,
-                    &c.to_string(),
-                    cursor_fg,
-                    false,
-                    false,
-                    scale,
-                );
+                // Draw character under cursor with the same style (bold/italic)
+                // as the underlying text to avoid misalignment on headings.
+                let bold = scale > 1.0; // org headings are bold
+                canvas.draw_char_at_y(pixel_y, abs_col, c, cursor_fg, bold, false, scale);
             }
         }
         CursorShape::Bar => {

@@ -94,11 +94,11 @@ pub fn line_heading_scale(
     let line_byte_start = rope.char_to_byte(line_char_start);
     let line_byte_end = rope.char_to_byte(line_char_start + text_len);
 
-    let has_heading = spans.iter().any(|s| {
-        s.theme_key == "markup.heading"
-            && s.byte_start >= line_byte_start
-            && s.byte_start < line_byte_end
-    });
+    let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
+    let has_heading = spans[start_idx..]
+        .iter()
+        .take_while(|s| s.byte_start < line_byte_end)
+        .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
     if has_heading {
         let level = rope
             .line(line_idx)
@@ -139,11 +139,11 @@ pub fn heading_extra_rows(
         let line_byte_start = rope.char_to_byte(line_char_start);
         let line_byte_end = rope.char_to_byte(line_char_start + text_len);
 
-        let has_heading = spans.iter().any(|s| {
-            s.theme_key == "markup.heading"
-                && s.byte_start >= line_byte_start
-                && s.byte_start < line_byte_end
-        });
+        let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
+        let has_heading = spans[start_idx..]
+            .iter()
+            .take_while(|s| s.byte_start < line_byte_end)
+            .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
         if has_heading {
             // Count leading stars.
             let level = rope
@@ -272,14 +272,14 @@ pub fn render_buffer_content(
         // Emacs pattern: org-level-1 is largest, org-level-3 is slightly enlarged.
         let org_heading_level: u8 = if needs_spans {
             let has_heading = syntax_spans
-                .and_then(|spans| {
-                    spans.iter().find(|s| {
-                        s.theme_key == "markup.heading"
-                            && s.byte_start >= line_byte_start
-                            && s.byte_start < line_byte_end
-                    })
+                .map(|spans| {
+                    let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
+                    spans[start_idx..]
+                        .iter()
+                        .take_while(|s| s.byte_start < line_byte_end)
+                        .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start)
                 })
-                .is_some();
+                .unwrap_or(false);
             if has_heading {
                 // Count leading stars to determine level.
                 full_chars
@@ -320,11 +320,14 @@ pub fn render_buffer_content(
 
         if needs_spans {
             // Layer 1: Tree-sitter syntax spans.
+            // Spans are sorted by byte_start — binary search to skip irrelevant ones.
             if let Some(spans) = syntax_spans {
                 let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                for span in spans {
-                    if span.byte_end <= line_byte_start || span.byte_start >= line_byte_end {
-                        continue;
+                // Find first span that could overlap this line (byte_end > line_byte_start).
+                let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
+                for span in &spans[start_idx..] {
+                    if span.byte_start >= line_byte_end {
+                        break; // all remaining spans are past this line
                     }
                     let sb = span.byte_start.max(line_byte_start);
                     let eb = span.byte_end.min(line_byte_end);
