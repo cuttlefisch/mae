@@ -94,6 +94,17 @@ impl Editor {
                 }
             }
 
+            // --- Folding ---
+            "toggle-fold" => {
+                self.toggle_fold();
+            }
+            "close-all-folds" => {
+                self.close_all_folds();
+            }
+            "open-all-folds" => {
+                self.open_all_folds();
+            }
+
             // --- Org-mode ---
             "org-cycle" => {
                 self.org_cycle();

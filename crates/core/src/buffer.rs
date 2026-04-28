@@ -378,6 +378,50 @@ impl Buffer {
         }
     }
 
+    /// Check if a line is inside a folded range (hidden).
+    pub fn is_line_folded(&self, line: usize) -> bool {
+        self.folded_ranges
+            .iter()
+            .any(|(start, end)| line > *start && line < *end)
+    }
+
+    /// Toggle fold at a given line. If the line is the start of a fold range,
+    /// unfold it. If the line is inside a foldable range, fold it.
+    pub fn toggle_fold_at(&mut self, line: usize, fold_ranges: &[(usize, usize)]) {
+        // If this line starts an existing fold, remove it.
+        if let Some(idx) = self.folded_ranges.iter().position(|(s, _)| *s == line) {
+            self.folded_ranges.remove(idx);
+            return;
+        }
+        // Find the innermost foldable range containing this line.
+        let mut best: Option<(usize, usize)> = None;
+        for &(start, end) in fold_ranges {
+            if line >= start && line <= end && best.is_none_or(|(bs, be)| (end - start) < (be - bs))
+            {
+                best = Some((start, end));
+            }
+        }
+        if let Some((start, end)) = best {
+            // If already folded at this start, unfold.
+            if let Some(idx) = self.folded_ranges.iter().position(|(s, _)| *s == start) {
+                self.folded_ranges.remove(idx);
+            } else {
+                self.folded_ranges.push((start, end));
+            }
+        }
+    }
+
+    /// Fold all given ranges (zM).
+    pub fn fold_all(&mut self, fold_ranges: &[(usize, usize)]) {
+        self.folded_ranges.clear();
+        self.folded_ranges.extend_from_slice(fold_ranges);
+    }
+
+    /// Unfold all ranges (zR).
+    pub fn unfold_all(&mut self) {
+        self.folded_ranges.clear();
+    }
+
     /// Char offset in the rope for a given (row, col) position.
     pub fn char_offset_at(&self, row: usize, col: usize) -> usize {
         if self.rope.len_chars() == 0 {
@@ -1589,5 +1633,50 @@ mod tests {
         assert!(!buf.changed_lines.is_empty());
         buf.reload_from_disk().unwrap();
         assert!(buf.changed_lines.is_empty());
+    }
+
+    #[test]
+    fn is_line_folded_basic() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        buf.folded_ranges.push((1, 4));
+        assert!(!buf.is_line_folded(0));
+        assert!(!buf.is_line_folded(1)); // fold start is visible
+        assert!(buf.is_line_folded(2));
+        assert!(buf.is_line_folded(3));
+        assert!(!buf.is_line_folded(4)); // fold end is visible
+    }
+
+    #[test]
+    fn toggle_fold_at_creates_and_removes() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn main() {\n    x\n    y\n}\n");
+        let ranges = vec![(0, 3)];
+        buf.toggle_fold_at(0, &ranges);
+        assert_eq!(buf.folded_ranges, vec![(0, 3)]);
+        buf.toggle_fold_at(0, &ranges);
+        assert!(buf.folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn fold_all_and_unfold_all() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn a() {\n}\nfn b() {\n}\n");
+        let ranges = vec![(0, 1), (2, 3)];
+        buf.fold_all(&ranges);
+        assert_eq!(buf.folded_ranges.len(), 2);
+        buf.unfold_all();
+        assert!(buf.folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn toggle_fold_innermost_range() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn a() {\n  if x {\n    y\n  }\n}\n");
+        // Outer: (0, 4), inner: (1, 3)
+        let ranges = vec![(0, 4), (1, 3)];
+        buf.toggle_fold_at(2, &ranges);
+        // Should fold innermost range (1, 3) since cursor line 2 is in both
+        assert_eq!(buf.folded_ranges, vec![(1, 3)]);
     }
 }

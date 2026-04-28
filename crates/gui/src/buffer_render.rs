@@ -600,6 +600,23 @@ pub fn render_buffer_content(
                 line_height,
             );
 
+            // Fold indicator: show "... N lines" after fold start lines.
+            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                let folded_count = end - line_idx - 1;
+                let indicator = format!(" ··· {} lines", folded_count);
+                let indicator_col = text_col + vis_width;
+                let fold_fg = theme::ts_fg(editor, "comment");
+                canvas.draw_text_run_at_y(
+                    pixel_y,
+                    indicator_col,
+                    &indicator,
+                    fold_fg,
+                    false,
+                    true,
+                    1.0,
+                );
+            }
+
             pixel_y += line_height;
         }
 

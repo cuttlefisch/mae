@@ -444,6 +444,89 @@ impl SyntaxMap {
         }
         state.tree.as_ref()
     }
+
+    /// Compute foldable ranges from the tree-sitter parse tree.
+    ///
+    /// Returns `(start_line, end_line)` pairs for multi-line named nodes that
+    /// represent logical code blocks (functions, structs, impl blocks, classes,
+    /// if/match/loop bodies, etc.). Only top-level and one-level-deep nodes
+    /// are returned to avoid excessive fold points.
+    pub fn compute_fold_ranges(&mut self, buf_idx: usize, source: &str) -> Vec<(usize, usize)> {
+        let Some(tree) = self.tree_for(buf_idx, source) else {
+            return Vec::new();
+        };
+        let root = tree.root_node();
+        let mut ranges = Vec::new();
+        collect_fold_nodes(root, source, &mut ranges, 0);
+        ranges.sort_by_key(|(s, _)| *s);
+        ranges.dedup();
+        ranges
+    }
+}
+
+/// Recursively collect foldable ranges from tree-sitter nodes.
+/// Only collects multi-line named nodes up to `max_depth` levels deep.
+#[allow(clippy::only_used_in_recursion)]
+fn collect_fold_nodes(
+    node: tree_sitter::Node,
+    source: &str,
+    ranges: &mut Vec<(usize, usize)>,
+    depth: usize,
+) {
+    const MAX_DEPTH: usize = 3;
+    if depth > MAX_DEPTH {
+        return;
+    }
+
+    let start_line = node.start_position().row;
+    let end_line = node.end_position().row;
+
+    // Only fold multi-line named nodes (skip anonymous tokens like punctuation).
+    if node.is_named() && end_line > start_line + 1 && is_foldable_kind(node.kind()) {
+        ranges.push((start_line, end_line));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_fold_nodes(child, source, ranges, depth + 1);
+    }
+}
+
+/// Check if a tree-sitter node kind represents a foldable code block.
+fn is_foldable_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "function_definition"
+            | "function_item"
+            | "function_declaration"
+            | "method_definition"
+            | "method_declaration"
+            | "struct_item"
+            | "enum_item"
+            | "impl_item"
+            | "trait_item"
+            | "class_definition"
+            | "class_declaration"
+            | "class_body"
+            | "interface_declaration"
+            | "if_expression"
+            | "if_statement"
+            | "match_expression"
+            | "switch_statement"
+            | "for_expression"
+            | "for_statement"
+            | "while_statement"
+            | "loop_expression"
+            | "block"
+            | "mod_item"
+            | "module"
+            | "use_declaration"
+            | "import_statement"
+            | "macro_definition"
+            | "const_item"
+            | "static_item"
+            | "type_alias"
+    )
 }
 
 /// Compute tree-sitter highlight spans for every text buffer visible in the
@@ -1006,5 +1089,39 @@ mod tests {
     fn no_language_returns_none_from_map() {
         let mut map = SyntaxMap::new();
         assert!(map.spans_for(42, "source", 0).is_none());
+    }
+
+    #[test]
+    fn compute_fold_ranges_rust() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let source = "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n";
+        let ranges = map.compute_fold_ranges(0, source);
+        assert!(
+            !ranges.is_empty(),
+            "Expected at least one fold range for a Rust function"
+        );
+        // The function_item should span from line 0 to line 3
+        assert!(ranges.iter().any(|(s, e)| *s == 0 && *e == 3));
+    }
+
+    #[test]
+    fn compute_fold_ranges_no_language() {
+        let mut map = SyntaxMap::new();
+        let ranges = map.compute_fold_ranges(99, "some text");
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn compute_fold_ranges_multiple_functions() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let source = "fn foo() {\n    1\n}\nfn bar() {\n    2\n}\n";
+        let ranges = map.compute_fold_ranges(0, source);
+        assert!(
+            ranges.len() >= 2,
+            "Expected at least 2 fold ranges, got {}",
+            ranges.len()
+        );
     }
 }

@@ -328,6 +328,16 @@ pub(crate) fn render_buffer(
                     emit_styled_spans(display_chars, visible_styles, &mut spans);
                 }
 
+                // Fold indicator
+                if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                    let folded_count = end - line_idx - 1;
+                    let comment_style = ts(editor, "comment");
+                    spans.push(Span::styled(
+                        format!(" ··· {} lines", folded_count),
+                        comment_style,
+                    ));
+                }
+
                 lines.push(Line::from(spans));
                 display_row += 1;
             }
@@ -389,11 +399,21 @@ pub(crate) fn render_buffer(
         } else {
             // No wrap, no spans: apply horizontal scroll to simple lines.
             let display: String = full_display.chars().skip(col_offset).collect();
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(line_num, gutter_style),
                 Span::styled(marker_char.to_string(), marker_style),
                 Span::styled(display, line_text_style),
-            ]));
+            ];
+            // Fold indicator
+            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                let folded_count = end - line_idx - 1;
+                let comment_style = ts(editor, "comment");
+                spans.push(Span::styled(
+                    format!(" ··· {} lines", folded_count),
+                    comment_style,
+                ));
+            }
+            lines.push(Line::from(spans));
             display_row += 1;
         }
 

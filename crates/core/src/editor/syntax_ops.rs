@@ -476,6 +476,55 @@ impl Editor {
         self.set_status("Moved subtree up");
     }
 
+    /// Toggle fold at cursor (za). Works for both org headings and code blocks.
+    pub fn toggle_fold(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let cursor_row = self.window_mgr.focused_window().cursor_row;
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+
+        // For org buffers, delegate to org_cycle
+        if self.syntax.language_of(buf_idx) == Some(crate::syntax::Language::Org) {
+            self.org_cycle();
+            return;
+        }
+
+        // For code buffers, compute fold ranges from tree-sitter
+        let fold_ranges = self.syntax.compute_fold_ranges(buf_idx, &source);
+        if fold_ranges.is_empty() {
+            self.set_status("No foldable regions found");
+            return;
+        }
+
+        self.buffers[buf_idx].toggle_fold_at(cursor_row, &fold_ranges);
+        let is_now_folded = self.buffers[buf_idx].folded_ranges.iter().any(|(s, _)| {
+            fold_ranges
+                .iter()
+                .any(|(fs, _)| *fs == *s && cursor_row >= *s)
+        });
+        self.set_status(if is_now_folded { "Folded" } else { "Unfolded" });
+    }
+
+    /// Close all folds (zM). Folds all tree-sitter/org fold points.
+    pub fn close_all_folds(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let fold_ranges = self.syntax.compute_fold_ranges(buf_idx, &source);
+        if fold_ranges.is_empty() {
+            self.set_status("No foldable regions found");
+            return;
+        }
+        self.buffers[buf_idx].fold_all(&fold_ranges);
+        self.set_status(format!("Folded {} regions", fold_ranges.len()));
+    }
+
+    /// Open all folds (zR).
+    pub fn open_all_folds(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let count = self.buffers[buf_idx].folded_ranges.len();
+        self.buffers[buf_idx].unfold_all();
+        self.set_status(format!("Unfolded {} regions", count));
+    }
+
     /// Open the Org link at the cursor.
     pub fn org_open_link(&mut self) {
         let buf_idx = self.active_buffer_idx();
@@ -634,5 +683,73 @@ mod tests {
         assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
         ed.org_move_subtree_up();
         assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+    }
+
+    fn rust_editor(text: &str) -> Editor {
+        let mut ed = Editor::new();
+        ed.buffers[0].insert_text_at(0, text);
+        ed.syntax.set_language(0, Language::Rust);
+        ed
+    }
+
+    #[test]
+    fn toggle_fold_on_rust_function() {
+        let code = "fn main() {\n    println!(\"hello\");\n    let x = 1;\n}\n";
+        let mut ed = rust_editor(code);
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.toggle_fold();
+        // After toggling, there should be a fold range starting at line 0
+        assert!(
+            !ed.buffers[0].folded_ranges.is_empty(),
+            "Expected fold range"
+        );
+        // Toggle again to unfold
+        ed.toggle_fold();
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "Expected no folds after second toggle"
+        );
+    }
+
+    #[test]
+    fn close_all_folds_rust() {
+        let code = "fn foo() {\n    1\n}\nfn bar() {\n    2\n}\n";
+        let mut ed = rust_editor(code);
+        ed.close_all_folds();
+        assert!(
+            !ed.buffers[0].folded_ranges.is_empty(),
+            "Expected at least one fold"
+        );
+    }
+
+    #[test]
+    fn open_all_folds() {
+        let code = "fn foo() {\n    1\n}\n";
+        let mut ed = rust_editor(code);
+        ed.close_all_folds();
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        ed.open_all_folds();
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn toggle_fold_dispatch() {
+        let code = "fn main() {\n    println!(\"hello\");\n}\n";
+        let mut ed = rust_editor(code);
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.dispatch_builtin("toggle-fold");
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        ed.dispatch_builtin("toggle-fold");
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn close_open_all_folds_dispatch() {
+        let code = "fn foo() {\n    1\n}\nfn bar() {\n    2\n}\n";
+        let mut ed = rust_editor(code);
+        ed.dispatch_builtin("close-all-folds");
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        ed.dispatch_builtin("open-all-folds");
+        assert!(ed.buffers[0].folded_ranges.is_empty());
     }
 }

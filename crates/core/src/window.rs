@@ -36,13 +36,22 @@ impl Window {
     pub fn move_up(&mut self, buf: &crate::buffer::Buffer) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
+            // Skip folded lines
+            while self.cursor_row > 0 && buf.is_line_folded(self.cursor_row) {
+                self.cursor_row -= 1;
+            }
             self.clamp_cursor(buf);
         }
     }
 
     pub fn move_down(&mut self, buf: &crate::buffer::Buffer) {
-        if self.cursor_row + 1 < buf.display_line_count() {
+        let max = buf.display_line_count();
+        if self.cursor_row + 1 < max {
             self.cursor_row += 1;
+            // Skip folded lines
+            while self.cursor_row + 1 < max && buf.is_line_folded(self.cursor_row) {
+                self.cursor_row += 1;
+            }
             self.clamp_cursor(buf);
         }
     }
@@ -1577,5 +1586,30 @@ mod tests {
         wm.maximize_toggle(&mut saved);
         // Single window — save still works but it's already maximized.
         assert_eq!(wm.window_count(), 1);
+    }
+
+    #[test]
+    fn cursor_move_down_skips_folded_lines() {
+        let mut win = Window::new(0, 0);
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        // Fold lines 1-3 (visible: 0, 1(start), 4)
+        buf.folded_ranges.push((1, 4));
+        win.cursor_row = 1;
+        win.move_down(&buf);
+        // Should skip lines 2, 3 and land on 4
+        assert_eq!(win.cursor_row, 4);
+    }
+
+    #[test]
+    fn cursor_move_up_skips_folded_lines() {
+        let mut win = Window::new(0, 0);
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        buf.folded_ranges.push((1, 4));
+        win.cursor_row = 4;
+        win.move_up(&buf);
+        // Should skip lines 3, 2 and land on 1
+        assert_eq!(win.cursor_row, 1);
     }
 }

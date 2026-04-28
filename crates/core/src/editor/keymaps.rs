@@ -58,6 +58,9 @@ impl Editor {
         normal.bind(parse_key_seq("zz"), "scroll-center");
         normal.bind(parse_key_seq("zt"), "scroll-top");
         normal.bind(parse_key_seq("zb"), "scroll-bottom");
+        normal.bind(parse_key_seq("za"), "toggle-fold");
+        normal.bind(parse_key_seq("zM"), "close-all-folds");
+        normal.bind(parse_key_seq("zR"), "open-all-folds");
         // Screen-relative cursor
         normal.bind(parse_key_seq("H"), "move-screen-top");
         normal.bind(parse_key_seq("M"), "move-screen-middle");
