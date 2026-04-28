@@ -925,6 +925,70 @@ impl Editor {
             }
         }
     }
+
+    /// Global heading fold cycle (Doom Emacs S-TAB pattern).
+    ///
+    /// Three states: SHOW ALL (0) → OVERVIEW (1) → CONTENTS (2) → SHOW ALL.
+    /// - SHOW ALL: clear all heading folds
+    /// - OVERVIEW: fold every heading (all levels)
+    /// - CONTENTS: show level 1 + 2 headings, fold level 3+
+    pub fn heading_global_cycle(&mut self, lang: crate::syntax::Language) {
+        let buf_idx = self.active_buffer_idx();
+        let state = self.buffers[buf_idx].global_fold_state;
+        let next = (state + 1) % 3;
+        self.buffers[buf_idx].global_fold_state = next;
+
+        // Collect all headings with their ranges.
+        let line_count = self.buffers[buf_idx].line_count();
+        let mut headings: Vec<(usize, u8, usize)> = Vec::new(); // (row, level, end)
+        for row in 0..line_count {
+            let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+            let level = Self::heading_level(&line, lang);
+            if level > 0 {
+                // Find subtree end
+                let mut end = row + 1;
+                while end < line_count {
+                    let next_line: String =
+                        self.buffers[buf_idx].rope().line(end).chars().collect();
+                    let next_level = Self::heading_level(&next_line, lang);
+                    if next_level > 0 && next_level <= level {
+                        break;
+                    }
+                    end += 1;
+                }
+                if end > row + 1 {
+                    headings.push((row, level, end));
+                }
+            }
+        }
+
+        // Clear all existing heading folds first.
+        self.buffers[buf_idx].folded_ranges.clear();
+
+        match next {
+            0 => {
+                // SHOW ALL — already cleared above
+                self.set_status("SHOW ALL");
+            }
+            1 => {
+                // OVERVIEW — fold every heading
+                for &(row, _, end) in &headings {
+                    self.buffers[buf_idx].folded_ranges.push((row, end));
+                }
+                self.set_status("OVERVIEW");
+            }
+            2 => {
+                // CONTENTS — fold only level 3+ headings
+                for &(row, level, end) in &headings {
+                    if level >= 3 {
+                        self.buffers[buf_idx].folded_ranges.push((row, end));
+                    }
+                }
+                self.set_status("CONTENTS");
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1418,5 +1482,69 @@ mod tests {
         assert!(!ed.buffers[0].folded_ranges.is_empty());
         ed.dispatch_builtin("open-all-folds");
         assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    // --- Global fold cycle tests ---
+
+    fn org_editor_with_headings() -> Editor {
+        let text = "* H1\nbody1\n** H2a\nbody2a\n*** H3\nbody3\n** H2b\nbody2b\n* H1b\nbody1b\n";
+        let mut ed = Editor::new();
+        let idx = ed.active_buffer_idx();
+        ed.buffers[idx].insert_text_at(0, text);
+        ed.syntax.set_language(idx, Language::Org);
+        ed
+    }
+
+    #[test]
+    fn global_cycle_to_overview() {
+        let mut ed = org_editor_with_headings();
+        // State 0 → 1 (OVERVIEW): all headings folded
+        ed.heading_global_cycle(Language::Org);
+        assert_eq!(ed.buffers[0].global_fold_state, 1);
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        // Every heading with a body should be folded
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0)); // H1
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 8)); // H1b
+    }
+
+    #[test]
+    fn global_cycle_to_contents() {
+        let mut ed = org_editor_with_headings();
+        // Cycle twice: 0 → 1 → 2 (CONTENTS)
+        ed.heading_global_cycle(Language::Org);
+        ed.heading_global_cycle(Language::Org);
+        assert_eq!(ed.buffers[0].global_fold_state, 2);
+        // Level 3+ headings should be folded
+        let has_l3_fold = ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4);
+        assert!(has_l3_fold, "Level 3 heading should be folded");
+        // Level 1/2 headings should NOT be folded
+        let has_l1_fold = ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0);
+        assert!(
+            !has_l1_fold,
+            "Level 1 heading should not be folded in CONTENTS"
+        );
+    }
+
+    #[test]
+    fn global_cycle_to_show_all() {
+        let mut ed = org_editor_with_headings();
+        // Cycle three times: 0 → 1 → 2 → 0 (SHOW ALL)
+        ed.heading_global_cycle(Language::Org);
+        ed.heading_global_cycle(Language::Org);
+        ed.heading_global_cycle(Language::Org);
+        assert_eq!(ed.buffers[0].global_fold_state, 0);
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn global_cycle_round_trip() {
+        let mut ed = org_editor_with_headings();
+        // Full cycle: 0 → 1 → 2 → 0 → 1
+        for _ in 0..3 {
+            ed.heading_global_cycle(Language::Org);
+        }
+        assert_eq!(ed.buffers[0].global_fold_state, 0);
+        ed.heading_global_cycle(Language::Org);
+        assert_eq!(ed.buffers[0].global_fold_state, 1);
     }
 }

@@ -35,6 +35,7 @@ mod cursor;
 mod debug_render;
 mod gutter;
 mod input;
+mod layout;
 mod messages_render;
 mod popup_render;
 mod shell_render;
@@ -236,6 +237,10 @@ impl Renderer for GuiRenderer {
         // Begin frame.
         canvas.begin_frame(&editor.theme);
 
+        // Clip rendering to allocated row height — prevents descender overflow.
+        let clip_height = self.rows as f32 * self.cell_height;
+        canvas.set_clip_height(clip_height);
+
         // Pre-compute syntax-highlight spans for every visible text buffer.
         // Uses stale spans during typing; deferred reparse happens in the event loop.
         let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
@@ -343,7 +348,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            let pixel_y_map = render_window_area(
+            let focused_frame_layout = render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -368,7 +373,7 @@ impl Renderer for GuiRenderer {
                     status_row,
                     cmd_row,
                     &syntax_spans,
-                    pixel_y_map.as_ref(),
+                    focused_frame_layout.as_ref(),
                 );
             }
 
@@ -432,8 +437,8 @@ fn render_window_area(
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) -> Option<buffer_render::PixelYMap> {
-    let mut focused_pixel_y_map: Option<buffer_render::PixelYMap> = None;
+) -> Option<layout::FrameLayout> {
+    let mut focused_layout: Option<layout::FrameLayout> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -525,20 +530,29 @@ fn render_window_area(
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    let py_map = buffer_render::render_buffer_content(
+                    let (_, cell_height) = canvas.cell_size();
+                    let fl = layout::compute_layout(
+                        editor,
+                        buf,
+                        win,
+                        inner_row,
+                        inner_col,
+                        inner_width,
+                        inner_height,
+                        cell_height,
+                        Some(&help_spans),
+                    );
+                    buffer_render::render_buffer_content(
                         canvas,
                         editor,
                         buf,
                         win,
                         is_focused,
-                        inner_row,
-                        inner_col,
-                        inner_width,
-                        inner_height,
-                        Some(&help_spans),
+                        &fl,
+                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
                     );
                     if is_focused {
-                        focused_pixel_y_map = Some(py_map);
+                        focused_layout = Some(fl);
                     }
                 }
                 BufferKind::Debug => {
@@ -576,20 +590,23 @@ fn render_window_area(
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
                     let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
-                    let py_map = buffer_render::render_buffer_content(
-                        canvas,
+                    let (_, cell_height) = canvas.cell_size();
+                    let fl = layout::compute_layout(
                         editor,
                         buf,
                         win,
-                        is_focused,
                         inner_row,
                         inner_col,
                         inner_width,
                         inner_height,
+                        cell_height,
                         spans,
                     );
+                    buffer_render::render_buffer_content(
+                        canvas, editor, buf, win, is_focused, &fl, spans,
+                    );
                     if is_focused {
-                        focused_pixel_y_map = Some(py_map);
+                        focused_layout = Some(fl);
                     }
                 }
             }
@@ -613,7 +630,7 @@ fn render_window_area(
         }
     }
 
-    focused_pixel_y_map
+    focused_layout
 }
 
 fn render_visual_buffer(
@@ -745,7 +762,7 @@ fn render_gui_cursor(
     _status_row: usize,
     cmd_row: usize,
     syntax_spans: &SyntaxSpanMap,
-    pixel_y_map: Option<&buffer_render::PixelYMap>,
+    frame_layout: Option<&layout::FrameLayout>,
 ) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
@@ -790,19 +807,15 @@ fn render_gui_cursor(
             cursor::render_cursor(canvas, editor, pixel_y, col, 1.0);
         } else if let Some(pos) = cursor::compute_cursor_position(
             editor,
+            frame_layout,
             inner,
             gutter_w,
             syntax_spans
                 .get(&focused_win.buffer_idx)
                 .map(|v| v.as_slice()),
         ) {
-            // Use pixel Y map for exact positioning on variable-height lines.
-            let abs_row = inner_row + pos.row;
-            let cursor_pixel_y = if let Some(map) = pixel_y_map {
-                map.pixel_y_for_row(abs_row)
-            } else {
-                abs_row as f32 * ch
-            };
+            // Use FrameLayout for exact pixel-Y positioning (fold-aware, scale-aware).
+            let cursor_pixel_y = pos.pixel_y.unwrap_or((inner_row + pos.row) as f32 * ch);
             cursor::render_cursor(
                 canvas,
                 editor,

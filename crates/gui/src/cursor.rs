@@ -1,29 +1,16 @@
 //! Cursor rendering for the GUI backend.
 //!
 //! Computes cursor position from editor state and draws mode-appropriate
-//! cursor shapes using Skia.
+//! cursor shapes using Skia. Uses `FrameLayout` as the single source of
+//! truth for line positions and column scaling.
 
-use mae_core::wrap::{char_width, wrap_cursor_position, wrap_line_display_rows};
-use mae_core::{grapheme, Editor, HighlightSpan, Mode};
+use mae_core::wrap::wrap_cursor_position;
+use mae_core::{Editor, HighlightSpan, Mode};
 use skia_safe::Color4f;
 
-use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
+use crate::layout::FrameLayout;
 use crate::theme;
-
-/// Accumulate per-char scaled column offset up to `target_col` chars.
-/// This matches `draw_styled_at`'s `col_offsets` logic exactly, avoiding
-/// the rounding divergence that `(col * scale).round()` produces.
-fn accumulated_scaled_col(line: &str, target_col: usize, scale: f32) -> usize {
-    let mut acc = 0.0f32;
-    for (i, ch) in line.chars().enumerate() {
-        if i >= target_col {
-            break;
-        }
-        acc += char_width(ch) as f32 * scale;
-    }
-    acc.round() as usize
-}
 
 /// Cursor shape varies by mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,17 +25,21 @@ pub enum CursorShape {
 pub struct CursorPos {
     pub row: usize,
     pub col: usize,
+    /// Exact pixel Y from the layout. None for Command/Search modes.
+    pub pixel_y: Option<f32>,
     /// Font scale at the cursor's line (1.0 for normal, >1.0 for org headings).
     pub scale: f32,
 }
 
 /// Compute the cursor's (row, col) screen position within a window area.
+/// Uses `FrameLayout` for fold-aware Y and scale-aware X positioning.
 /// Returns `None` if the cursor is outside the visible viewport.
 pub fn compute_cursor_position(
     editor: &Editor,
+    frame_layout: Option<&FrameLayout>,
     win_inner: CellRect,
     gutter_w: usize,
-    syntax_spans: Option<&[HighlightSpan]>,
+    _syntax_spans: Option<&[HighlightSpan]>,
 ) -> Option<CursorPos> {
     let win = editor.window_mgr.focused_window();
     let buf = &editor.buffers[win.buffer_idx];
@@ -59,11 +50,10 @@ pub fn compute_cursor_position(
                 [..editor.command_cursor.min(editor.command_line.len())]
                 .chars()
                 .count();
-            // Command line cursor is handled separately in render_command_line.
-            // Return None here; it's drawn on the command row.
             Some(CursorPos {
                 row: 0,
                 col: 1 + cursor_col,
+                pixel_y: None,
                 scale: 1.0,
             })
         }
@@ -72,6 +62,7 @@ pub fn compute_cursor_position(
             Some(CursorPos {
                 row: 0,
                 col: 1 + col,
+                pixel_y: None,
                 scale: 1.0,
             })
         }
@@ -84,6 +75,7 @@ pub fn compute_cursor_position(
                     return Some(CursorPos {
                         row: input_y,
                         col: 2 + cursor_col,
+                        pixel_y: None,
                         scale: 1.0,
                     });
                 }
@@ -100,42 +92,30 @@ pub fn compute_cursor_position(
                 String::new()
             };
 
-            let text_width = win_inner.width.saturating_sub(gutter_w);
-            let wrap = editor.word_wrap && text_width > 0;
+            // Use FrameLayout for fold-aware positioning when available.
+            if let Some(layout) = frame_layout {
+                let text_width = win_inner.width.saturating_sub(gutter_w);
+                let wrap = editor.word_wrap && text_width > 0;
 
-            if wrap {
-                let show_break_w = editor.show_break.chars().count();
-                // Count display rows consumed by lines before the cursor line.
-                let mut screen_row = 0;
-                for ln in win.scroll_offset..win.cursor_row {
-                    if ln < buf.line_count() {
-                        let line = buf.rope().line(ln);
-                        let lt: String = line.chars().collect();
-                        screen_row += wrap_line_display_rows(
-                            lt.trim_end_matches('\n'),
-                            text_width,
-                            editor.break_indent,
-                            show_break_w,
-                        );
-                    }
-                }
+                // Look up the display row from the layout (fold-aware).
+                let display_row = layout.display_row_of(win.cursor_row);
+                let scale = layout.scale_for_row(win.cursor_row);
+                let pix_y = layout.pixel_y_for_row(win.cursor_row);
 
-                // Row/col within the wrapped cursor line.
-                let (row_off, col) = wrap_cursor_position(
-                    &line_text,
-                    win.cursor_col,
-                    text_width,
-                    editor.break_indent,
-                    show_break_w,
-                );
-                screen_row += row_off;
+                if wrap {
+                    // For wrapped lines, find the wrap segment offset.
+                    let show_break_w = editor.show_break.chars().count();
+                    let (row_off, col) = wrap_cursor_position(
+                        &line_text,
+                        win.cursor_col,
+                        text_width,
+                        editor.break_indent,
+                        show_break_w,
+                    );
 
-                let line_scale = if editor.heading_scale {
-                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row)
-                } else {
-                    1.0
-                };
-                if screen_row < win_inner.height {
+                    let base_display_row = display_row?;
+                    let screen_row = base_display_row + row_off;
+
                     let indent_len = if editor.break_indent && row_off > 0 {
                         let chars: Vec<char> = line_text.chars().collect();
                         mae_core::wrap::leading_indent_len(&chars)
@@ -147,54 +127,60 @@ pub fn compute_cursor_position(
                     } else {
                         0
                     };
-                    // Scale column offset to match heading text positioning.
-                    // Accumulate per-char widths (same as draw_styled_at col_offsets)
-                    // to avoid rounding divergence from `(col * scale).round()`.
-                    let scaled_col = if line_scale != 1.0 {
-                        accumulated_scaled_col(&line_text, prefix_w + col, line_scale)
+                    let scaled_col = FrameLayout::scaled_col(&line_text, prefix_w + col, scale);
+
+                    let actual_pixel_y = layout.pixel_y_for_display_row(screen_row);
+
+                    if screen_row < win_inner.height {
+                        Some(CursorPos {
+                            row: screen_row,
+                            col: gutter_w + scaled_col,
+                            pixel_y: actual_pixel_y,
+                            scale,
+                        })
                     } else {
-                        prefix_w + col
-                    };
-                    Some(CursorPos {
-                        row: screen_row,
-                        col: gutter_w + scaled_col,
-                        scale: line_scale,
-                    })
+                        None
+                    }
                 } else {
-                    None
-                }
-            } else {
-                let display_col =
-                    grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
-                let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
-                let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
-                let line_scale = if editor.heading_scale {
-                    buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row)
-                } else {
-                    1.0
-                };
-                // Scale column offset using per-char accumulation (matches draw_styled_at).
-                let visible_col = display_col.saturating_sub(scroll_col);
-                let scaled_col = if line_scale != 1.0 {
-                    // Accumulate from the scroll-visible portion of the line
+                    // No wrap: use layout's display_row directly (fold-aware).
+                    let screen_row = display_row?;
+                    // Compute column offset using FrameLayout::scaled_col.
                     let visible_start = win.col_offset;
-                    let visible_end = visible_start + win.cursor_col;
+                    let cursor_char_in_visible = win.cursor_col.saturating_sub(visible_start);
                     let visible_text: String = line_text
                         .chars()
                         .skip(visible_start)
-                        .take(visible_end - visible_start)
+                        .take(cursor_char_in_visible)
                         .collect();
-                    accumulated_scaled_col(&visible_text, visible_col, line_scale)
-                } else {
-                    visible_col
-                };
-                let screen_col = gutter_w + scaled_col;
+                    let scaled_col =
+                        FrameLayout::scaled_col(&visible_text, cursor_char_in_visible, scale);
+
+                    if screen_row < win_inner.height {
+                        Some(CursorPos {
+                            row: screen_row,
+                            col: gutter_w + scaled_col,
+                            pixel_y: pix_y,
+                            scale,
+                        })
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                // No layout available — fall back to simple calculation.
+                let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
+                let display_col =
+                    mae_core::grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
+                let scroll_col =
+                    mae_core::grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
+                let visible_col = display_col.saturating_sub(scroll_col);
 
                 if screen_row < win_inner.height {
                     Some(CursorPos {
                         row: screen_row,
-                        col: screen_col,
-                        scale: line_scale,
+                        col: gutter_w + visible_col,
+                        pixel_y: None,
+                        scale: 1.0,
                     })
                 } else {
                     None
@@ -213,7 +199,7 @@ pub fn cursor_shape(editor: &Editor) -> CursorShape {
 }
 
 /// Render the cursor onto the canvas at a pixel Y position.
-/// `pixel_y` is the exact pixel Y from the PixelYMap. `abs_col` is cell-based.
+/// `pixel_y` is the exact pixel Y from the FrameLayout. `abs_col` is cell-based.
 /// `scale` is the font scale at the cursor line (1.0 for normal, >1.0 for headings).
 pub fn render_cursor(
     canvas: &mut SkiaCanvas,
@@ -228,8 +214,6 @@ pub fn render_cursor(
     let (cw, ch) = canvas.cell_size();
     let shape = cursor_shape(editor);
 
-    // Cursor x uses unscaled cell width (same as canvas _at_y methods).
-    // Height is scaled to match the heading line height.
     let scaled_ch = ch * scale;
     let pixel_x = abs_col as f32 * cw;
     let cursor_cw = cw * scale;
@@ -258,9 +242,7 @@ pub fn render_cursor(
                 }
             };
             if let Some(c) = ch_under {
-                // Draw character under cursor with the same style (bold/italic)
-                // as the underlying text to avoid misalignment on headings.
-                let bold = scale > 1.0; // org headings are bold
+                let bold = scale > 1.0;
                 canvas.draw_char_at_y(pixel_y, abs_col, c, cursor_fg, bold, false, scale);
             }
         }
@@ -273,6 +255,8 @@ pub fn render_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout;
+    use mae_core::wrap::char_width;
 
     #[test]
     fn cursor_shape_normal_is_block() {
@@ -302,7 +286,7 @@ mod tests {
     fn compute_cursor_normal_mode() {
         let editor = Editor::default();
         let inner = CellRect::new(1, 1, 78, 22);
-        let pos = compute_cursor_position(&editor, inner, 3, None);
+        let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
         let p = pos.unwrap();
         assert_eq!(p.row, 0);
@@ -318,16 +302,15 @@ mod tests {
             ..Default::default()
         };
         let inner = CellRect::new(1, 1, 78, 22);
-        let pos = compute_cursor_position(&editor, inner, 3, None);
+        let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
         let p = pos.unwrap();
         assert_eq!(p.col, 2); // ':' + 'w'
     }
 
     #[test]
-    fn compute_cursor_no_extra_rows_without_spans() {
-        // Without syntax spans, no heading scaling — cursor row should be
-        // a simple offset from scroll_offset, with no heading_extra_rows added.
+    fn compute_cursor_no_extra_rows_without_layout() {
+        // Without layout, cursor falls back to simple row calculation.
         let mut editor = Editor::default();
         let text: String = (0..10).map(|i| format!("line {}\n", i)).collect();
         editor.buffers[0].insert_text_at(0, &text);
@@ -336,36 +319,56 @@ mod tests {
         win.cursor_col = 0;
         win.scroll_offset = 0;
         let inner = CellRect::new(0, 0, 80, 24);
-        let pos = compute_cursor_position(&editor, inner, 3, None);
+        let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
         let p = pos.unwrap();
-        // Row should be exactly cursor_row - scroll_offset = 5.
         assert_eq!(p.row, 5);
         assert_eq!(p.scale, 1.0);
     }
 
     #[test]
     fn compute_cursor_scale_default_is_one() {
-        // Without syntax spans, scale should always be 1.0.
         let editor = Editor::default();
         let inner = CellRect::new(0, 0, 80, 24);
-        let pos = compute_cursor_position(&editor, inner, 3, None);
+        let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
         assert_eq!(pos.unwrap().scale, 1.0);
     }
 
     #[test]
-    fn accumulated_scaled_col_matches_draw_styled_at() {
-        // Verify that accumulated_scaled_col produces the same offsets
-        // as draw_styled_at's col_offsets logic for scaled headings.
+    fn cursor_fold_aware_via_layout() {
+        // With a fold, the layout skips folded lines. Cursor on a line after
+        // the fold should have a display_row that accounts for the skip.
+        let mut editor = Editor::new();
+        editor.show_line_numbers = true;
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].insert_text_at(0, "a\nb\nc\nd\ne\nf\ng\nh\n");
+        // Fold lines 2-5 (line 1 is fold start)
+        editor.buffers[idx].folded_ranges.push((1, 5));
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 6;
+        win.cursor_col = 0;
+        win.scroll_offset = 0;
+
+        let buf = &editor.buffers[idx];
+        let win = editor.window_mgr.focused_window();
+        let fl = layout::compute_layout(&editor, buf, win, 0, 0, 80, 20, 16.0, None);
+
+        let inner = CellRect::new(0, 0, 80, 20);
+        let gutter_w = fl.gutter_width;
+        let pos = compute_cursor_position(&editor, Some(&fl), inner, gutter_w, None);
+        assert!(pos.is_some());
+        let p = pos.unwrap();
+        // Visible lines: 0, 1(fold), 5, 6 → cursor on line 6 is display row 3
+        assert_eq!(p.row, 3);
+    }
+
+    #[test]
+    fn scaled_col_via_layout() {
+        // Verify FrameLayout::scaled_col produces correct results.
         let line = "** Heading text";
         let scale = 1.3;
-        // Each ASCII char has width 1, so accumulated offset at col N
-        // should be round(sum of 1.0*scale for each char up to N).
-        let col5 = accumulated_scaled_col(line, 5, scale);
-        // Manual: 5 * 1.3 = 6.5, round = 7 (but accumulated:
-        // 1.3->1, 2.6->3, 3.9->4, 5.2->5, 6.5->7)
-        // The per-char accumulation rounds the running total, not each step.
+        let col5 = FrameLayout::scaled_col(line, 5, scale);
         let mut expected = 0.0f32;
         for ch in line.chars().take(5) {
             expected += char_width(ch) as f32 * scale;
@@ -374,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn accumulated_scaled_col_at_zero_is_zero() {
-        assert_eq!(accumulated_scaled_col("* Heading", 0, 1.5), 0);
+    fn scaled_col_at_zero_is_zero() {
+        assert_eq!(FrameLayout::scaled_col("* Heading", 0, 1.5), 0);
     }
 }

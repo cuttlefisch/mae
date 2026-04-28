@@ -127,6 +127,9 @@ pub struct Buffer {
     /// Detected link spans in the buffer content. Populated lazily by
     /// the renderer for conversation and shell buffers.
     pub link_spans: Vec<crate::link_detect::LinkSpan>,
+    /// Global fold cycle state: 0 = SHOW ALL, 1 = OVERVIEW, 2 = CONTENTS.
+    /// Cycled by Shift-TAB in org/markdown buffers (Doom Emacs pattern).
+    pub global_fold_state: u8,
 }
 
 impl Default for Buffer {
@@ -161,6 +164,7 @@ impl Buffer {
             narrowed_range: None,
             changed_lines: HashSet::new(),
             link_spans: Vec::new(),
+            global_fold_state: 0,
         }
     }
 

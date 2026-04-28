@@ -206,6 +206,14 @@ impl SkiaCanvas {
         self.surface.canvas().clear(bg);
     }
 
+    /// Clip all subsequent drawing to a pixel height.
+    /// Prevents font descenders on the last row from overflowing into
+    /// window decorations or the OS chrome.
+    pub fn set_clip_height(&mut self, pixel_height: f32) {
+        let rect = skia_safe::Rect::from_wh(self.width as f32, pixel_height);
+        self.surface.canvas().clip_rect(rect, None, None);
+    }
+
     /// Get a cached scaled font. Avoids clone + set_size on every call.
     fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
         let key = (scale * 1000.0) as u32;

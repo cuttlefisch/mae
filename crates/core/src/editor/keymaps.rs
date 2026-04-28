@@ -495,6 +495,7 @@ impl Editor {
         // Org-mode keymap
         let mut org = Keymap::new("org");
         org.bind(vec![KeyPress::special(Key::Tab)], "org-cycle");
+        org.bind(vec![KeyPress::special(Key::BackTab)], "org-global-cycle");
         org.bind(parse_key_seq_spaced("S-Left"), "org-todo-prev");
         org.bind(parse_key_seq_spaced("S-Right"), "org-todo-next");
         org.bind(parse_key_seq_spaced("S-Up"), "org-priority-up");
@@ -524,6 +525,7 @@ impl Editor {
         org.bind(parse_key_seq("M-k"), "org-move-subtree-up");
         // Narrow/widen
         org.bind(parse_key_seq_spaced("SPC m s n"), "org-narrow-subtree");
+        org.bind(parse_key_seq_spaced("SPC m s N"), "org-widen");
         org.bind(parse_key_seq_spaced("SPC m s w"), "org-widen");
         org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
@@ -555,6 +557,7 @@ impl Editor {
         // Markdown keymap (mirrors org keybindings with md-* commands)
         let mut markdown = Keymap::new("markdown");
         markdown.bind(vec![KeyPress::special(Key::Tab)], "md-cycle");
+        markdown.bind(vec![KeyPress::special(Key::BackTab)], "md-global-cycle");
         // Promote/demote headings
         markdown.bind(
             vec![KeyPress {
@@ -596,6 +599,7 @@ impl Editor {
 
         // Narrow/widen
         markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
+        markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
         markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
@@ -617,6 +621,28 @@ mod tests {
         ed.syntax.set_language(0, Language::Org);
         let names = ed.current_keymap_names();
         assert_eq!(names, Some(("org", Some("normal"))));
+    }
+
+    #[test]
+    fn org_keymap_spc_m_s_n_widens() {
+        let ed = Editor::new();
+        let org_map = ed.keymaps.get("org").unwrap();
+        let keys = parse_key_seq_spaced("SPC m s N");
+        assert!(matches!(
+            org_map.lookup(&keys),
+            crate::keymap::LookupResult::Exact("org-widen")
+        ));
+    }
+
+    #[test]
+    fn md_keymap_spc_m_s_n_widens() {
+        let ed = Editor::new();
+        let md_map = ed.keymaps.get("markdown").unwrap();
+        let keys = parse_key_seq_spaced("SPC m s N");
+        assert!(matches!(
+            md_map.lookup(&keys),
+            crate::keymap::LookupResult::Exact("md-widen")
+        ));
     }
 
     #[test]

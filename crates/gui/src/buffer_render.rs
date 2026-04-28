@@ -1,7 +1,7 @@
 //! Text buffer rendering: gutter, syntax highlighting, selection, search,
 //! cursorline, hex color preview, tilde lines past EOF.
 
-use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
+use mae_core::wrap::{char_width, leading_indent_len};
 use mae_core::{Editor, HighlightSpan, Mode, Window};
 use skia_safe::Color4f;
 
@@ -10,45 +10,7 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
-/// Maps logical display rows to pixel Y positions.
-///
-/// The buffer renderer populates this as it processes lines. Cursor and popup
-/// rendering use it to convert row-based positions to exact pixel coordinates.
-pub struct PixelYMap {
-    /// pixel Y for each display row, indexed by `display_row`.
-    entries: Vec<f32>,
-    /// The absolute row of the first entry (area_row).
-    base_row: usize,
-    /// Fallback cell height for rows not in the map.
-    cell_height: f32,
-}
-
-impl PixelYMap {
-    /// Look up the pixel Y for a given absolute screen row.
-    pub fn pixel_y_for_row(&self, abs_row: usize) -> f32 {
-        let idx = abs_row.saturating_sub(self.base_row);
-        self.entries
-            .get(idx)
-            .copied()
-            .unwrap_or(abs_row as f32 * self.cell_height)
-    }
-
-    /// Look up the line height (in pixels) for a given absolute screen row.
-    #[allow(dead_code)]
-    pub fn line_height_for_row(&self, abs_row: usize) -> f32 {
-        let idx = abs_row.saturating_sub(self.base_row);
-        if let Some(&y) = self.entries.get(idx) {
-            // Height = next row's Y - this row's Y
-            if let Some(&next_y) = self.entries.get(idx + 1) {
-                next_y - y
-            } else {
-                self.cell_height
-            }
-        } else {
-            self.cell_height
-        }
-    }
-}
+// PixelYMap removed — superseded by layout::FrameLayout.
 
 /// Compute the font scale for an org heading level.
 /// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
@@ -164,32 +126,25 @@ pub fn heading_extra_rows(
     extra
 }
 
-/// Render a text buffer's content into a cell region.
-/// `area_row/area_col` are the top-left of the text area (after border).
-/// `area_width/area_height` are the available cell dimensions.
+/// Render a text buffer's content using a pre-computed `FrameLayout`.
 ///
-/// Returns a `PixelYMap` mapping display rows to pixel Y positions,
-/// used by cursor and popup rendering for pixel-accurate positioning.
+/// The layout (computed by `layout::compute_layout()`) provides all line
+/// positions, scales, and fold information. This function only draws —
+/// no position computation happens here.
 pub fn render_buffer_content(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
     buf: &mae_core::Buffer,
     win: &Window,
     focused: bool,
-    area_row: usize,
-    area_col: usize,
-    area_width: usize,
-    area_height: usize,
+    frame_layout: &crate::layout::FrameLayout,
     syntax_spans: Option<&[HighlightSpan]>,
-) -> PixelYMap {
+) {
     let (_, cell_height) = canvas.cell_size();
-
-    let display_lines = buf.display_line_count();
-    let gutter_w = if editor.show_line_numbers {
-        gutter::gutter_width(display_lines)
-    } else {
-        2
-    };
+    let area_col = frame_layout.area_col;
+    let gutter_w = frame_layout.gutter_width;
+    let text_col = frame_layout.text_col;
+    let text_width = frame_layout.text_width;
 
     let text_fg = theme::ts_fg(editor, "ui.text");
     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
@@ -221,195 +176,146 @@ pub fn render_buffer_content(
     let stopped_line_fg = theme::ts_fg(editor, "debug.current_line");
 
     let col_offset = win.col_offset;
-    let text_width = area_width.saturating_sub(gutter_w);
 
-    let wrap = editor.word_wrap && text_width > 0;
+    let wrap = editor.word_wrap;
     let show_break_width = if wrap {
         unicode_width::UnicodeWidthStr::width(editor.show_break.as_str())
     } else {
         0
     };
 
-    // Pixel Y accumulator — exact positioning for variable-height lines.
-    let mut pixel_y = area_row as f32 * cell_height;
-    let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
-
-    // PixelYMap: record pixel_y for each display_row so cursor/popup can look it up.
-    let mut y_map_entries: Vec<f32> = Vec::with_capacity(area_height + 1);
-
-    let mut line_idx = win.scroll_offset;
     // Hoisted allocations — reused across lines to avoid ~160 allocs/frame.
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
 
-    // Narrow range: if set, clamp rendering to visible lines.
-    let narrow = buf.narrowed_range;
-    if let Some((ns, _)) = narrow {
-        if line_idx < ns {
-            line_idx = ns;
-        }
-    }
+    // Iterate over the pre-computed layout lines.
+    // Layout already handled fold skipping, pixel_y accumulation, and heading scale.
+    let mut prev_buf_row: Option<usize> = None;
+    for ll in &frame_layout.lines {
+        let line_idx = ll.buf_row;
+        let pixel_y = ll.pixel_y;
+        let org_heading_scale = ll.scale;
+        let line_height = ll.line_height;
+        let is_wrap_cont = ll.is_wrap_continuation;
 
-    while pixel_y < pixel_y_limit && line_idx < display_lines {
-        // Skip lines outside narrowed range
-        if let Some((_, ne)) = narrow {
-            if line_idx >= ne {
-                break;
-            }
+        // Only re-collect chars/styles when we move to a new buffer line.
+        if prev_buf_row != Some(line_idx) {
+            let line_text = buf.rope().line(line_idx);
+            full_chars.clear();
+            full_chars.extend(line_text.chars().filter(|c| *c != '\n' && *c != '\r'));
+            prev_buf_row = Some(line_idx);
         }
-        // Skip folded lines
-        let mut is_folded = false;
-        for (start, end) in &buf.folded_ranges {
-            if line_idx > *start && line_idx < *end {
-                is_folded = true;
-                break;
-            }
-        }
-        if is_folded {
-            line_idx += 1;
-            continue;
-        }
-
-        let line_text = buf.rope().line(line_idx);
-        // Reuse hoisted vec — collect chars directly, skip intermediate String.
-        full_chars.clear();
-        full_chars.extend(line_text.chars().filter(|c| *c != '\n' && *c != '\r'));
 
         let is_cursor_line = focused && line_idx == win.cursor_row;
         let is_stopped_line = stopped_line == Some(line_idx as u32);
-        let text_col = area_col + gutter_w;
 
         let full_count = full_chars.len();
-        // Cache rope boundaries once per line (used by org heading check + syntax spans).
         let line_char_start = buf.rope().line_to_char(line_idx);
         let line_char_end = line_char_start + full_count;
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
         let line_byte_end = buf.rope().char_to_byte(line_char_end);
-
-        // Org headings: determine heading level from the star prefix.
-        // `*` = level 1, `**` = level 2, `***` = level 3, deeper = no scaling.
-        // Emacs pattern: org-level-1 is largest, org-level-3 is slightly enlarged.
-        let org_heading_level: u8 = if needs_spans {
-            let has_heading = syntax_spans
-                .map(|spans| {
-                    let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
-                    spans[start_idx..]
-                        .iter()
-                        .take_while(|s| s.byte_start < line_byte_end)
-                        .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start)
-                })
-                .unwrap_or(false);
-            if has_heading {
-                // Count leading stars or hashes to determine level.
-                let level = if full_chars.first() == Some(&'*') {
-                    full_chars.iter().take_while(|&&c| c == '*').count()
-                } else if full_chars.first() == Some(&'#') {
-                    full_chars.iter().take_while(|&&c| c == '#').count()
-                } else {
-                    0
-                };
-                level.min(255) as u8
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        let org_heading_scale = if editor.heading_scale {
-            org_heading_scale_for_level(org_heading_level)
-        } else {
-            1.0
-        };
         let base_fg = if is_stopped_line {
             stopped_line_fg
         } else {
             text_fg
         };
 
-        // Reuse hoisted style vec.
-        char_styles.clear();
-        let init_bg = if !needs_spans && show_cursorline && is_cursor_line {
-            cursorline_style.bg.map(|c| theme::theme_color_to_skia(&c))
-        } else {
-            None
-        };
-        char_styles.resize(
-            full_count,
-            CharStyle {
-                fg: base_fg,
-                bg: init_bg,
-                bold: false,
-                italic: false,
-                underline: false,
-            },
-        );
+        // Only rebuild char_styles for the first segment of each line.
+        if !is_wrap_cont {
+            char_styles.clear();
+            let init_bg = if !needs_spans && show_cursorline && is_cursor_line {
+                cursorline_style.bg.map(|c| theme::theme_color_to_skia(&c))
+            } else {
+                None
+            };
+            char_styles.resize(
+                full_count,
+                CharStyle {
+                    fg: base_fg,
+                    bg: init_bg,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            );
 
-        if needs_spans {
-            // Layer 1: Tree-sitter syntax spans.
-            // Spans are sorted by byte_start — binary search to skip irrelevant ones.
-            if let Some(spans) = syntax_spans {
-                let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                // Find first span that could overlap this line (byte_end > line_byte_start).
-                let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
-                for span in &spans[start_idx..] {
-                    if span.byte_start >= line_byte_end {
-                        break; // all remaining spans are past this line
+            if needs_spans {
+                // Layer 1: Tree-sitter syntax spans.
+                if let Some(spans) = syntax_spans {
+                    let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
+                    for span in &spans[start_idx..] {
+                        if span.byte_start >= line_byte_end {
+                            break;
+                        }
+                        let sb = span.byte_start.max(line_byte_start);
+                        let eb = span.byte_end.min(line_byte_end);
+                        let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                        let ec = buf
+                            .rope()
+                            .byte_to_char(eb)
+                            .saturating_sub(line_char_start)
+                            .min(full_count);
+
+                        if editor.org_hide_emphasis_markers
+                            && (span.theme_key == "markup.bold.marker"
+                                || span.theme_key == "markup.italic.marker")
+                        {
+                            continue;
+                        }
+
+                        let ts = editor.theme.style(span.theme_key);
+                        let fg = theme::color_or(ts.fg, base_fg);
+                        for cs in char_styles[sc..ec].iter_mut() {
+                            cs.fg = fg;
+                            if ts.bold {
+                                cs.bold = true;
+                            }
+                            if ts.italic {
+                                cs.italic = true;
+                            }
+                            if ts.underline {
+                                cs.underline = true;
+                            }
+                            if let Some(bg) = ts.bg {
+                                cs.bg = Some(theme::theme_color_to_skia(&bg));
+                            }
+                        }
                     }
-                    let sb = span.byte_start.max(line_byte_start);
-                    let eb = span.byte_end.min(line_byte_end);
-                    let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
-                    let ec = buf
-                        .rope()
-                        .byte_to_char(eb)
-                        .saturating_sub(line_char_start)
-                        .min(full_count);
+                }
 
-                    if editor.org_hide_emphasis_markers
-                        && (span.theme_key == "markup.bold.marker"
-                            || span.theme_key == "markup.italic.marker")
-                    {
-                        continue;
-                    }
+                // Layer 2: Hex color preview.
+                apply_hex_color_preview(&full_chars, &mut char_styles);
 
-                    let ts = editor.theme.style(span.theme_key);
-                    let fg = theme::color_or(ts.fg, base_fg);
-                    for cs in char_styles[sc..ec].iter_mut() {
-                        cs.fg = fg;
-                        if ts.bold {
-                            cs.bold = true;
-                        }
-                        if ts.italic {
-                            cs.italic = true;
-                        }
-                        if ts.underline {
-                            cs.underline = true;
-                        }
-                        if let Some(bg) = ts.bg {
-                            cs.bg = Some(theme::theme_color_to_skia(&bg));
+                // Layer 3: Cursorline bg.
+                if show_cursorline && is_cursor_line {
+                    if let Some(bg_tc) = cursorline_style.bg {
+                        let bg = theme::theme_color_to_skia(&bg_tc);
+                        for cs in char_styles.iter_mut() {
+                            cs.bg = Some(bg);
                         }
                     }
                 }
-            }
 
-            // Layer 2: Hex color preview.
-            apply_hex_color_preview(&full_chars, &mut char_styles);
-
-            // Layer 3: Cursorline bg.
-            if show_cursorline && is_cursor_line {
-                if let Some(bg_tc) = cursorline_style.bg {
-                    let bg = theme::theme_color_to_skia(&bg_tc);
-                    for cs in char_styles.iter_mut() {
-                        cs.bg = Some(bg);
+                // Layer 4: Visual selection.
+                if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
+                    if line_idx >= br_min && line_idx <= br_max {
+                        let s = bc_min.min(full_count);
+                        let e = (bc_max + 1).min(full_count);
+                        let sel_fg = theme::color_or(selection_style.fg, text_fg);
+                        let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
+                        for cs in char_styles[s..e].iter_mut() {
+                            cs.fg = sel_fg;
+                            if let Some(bg) = sel_bg {
+                                cs.bg = Some(bg);
+                            }
+                        }
                     }
-                }
-            }
-
-            // Layer 4: Visual selection.
-            if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
-                // Block visual: highlight column range on rows within the rectangle.
-                if line_idx >= br_min && line_idx <= br_max {
-                    let s = bc_min.min(full_count);
-                    let e = (bc_max + 1).min(full_count);
+                } else if highlight_selection
+                    && sel_start < line_char_end
+                    && sel_end > line_char_start
+                {
+                    let s = sel_start.saturating_sub(line_char_start);
+                    let e = (sel_end - line_char_start).min(full_count);
                     let sel_fg = theme::color_or(selection_style.fg, text_fg);
                     let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
                     for cs in char_styles[s..e].iter_mut() {
@@ -419,156 +325,116 @@ pub fn render_buffer_content(
                         }
                     }
                 }
-            } else if highlight_selection && sel_start < line_char_end && sel_end > line_char_start
-            {
-                let s = sel_start.saturating_sub(line_char_start);
-                let e = (sel_end - line_char_start).min(full_count);
-                let sel_fg = theme::color_or(selection_style.fg, text_fg);
-                let sel_bg = selection_style.bg.map(|c| theme::theme_color_to_skia(&c));
-                for cs in char_styles[s..e].iter_mut() {
-                    cs.fg = sel_fg;
-                    if let Some(bg) = sel_bg {
-                        cs.bg = Some(bg);
-                    }
-                }
-            }
 
-            // Layer 5: Search highlights (highest priority).
-            if highlight_search {
-                let search_fg = theme::color_or(search_style.fg, text_fg);
-                let search_bg = search_style.bg.map(|c| theme::theme_color_to_skia(&c));
-                for m in &editor.search_state.matches {
-                    if m.end <= line_char_start || m.start >= line_char_end {
-                        continue;
-                    }
-                    let ms = m.start.saturating_sub(line_char_start);
-                    let me = (m.end - line_char_start).min(full_count);
-                    for cs in char_styles[ms..me].iter_mut() {
-                        cs.fg = search_fg;
-                        if let Some(bg) = search_bg {
-                            cs.bg = Some(bg);
+                // Layer 5: Search highlights (highest priority).
+                if highlight_search {
+                    let search_fg = theme::color_or(search_style.fg, text_fg);
+                    let search_bg = search_style.bg.map(|c| theme::theme_color_to_skia(&c));
+                    for m in &editor.search_state.matches {
+                        if m.end <= line_char_start || m.start >= line_char_end {
+                            continue;
+                        }
+                        let ms = m.start.saturating_sub(line_char_start);
+                        let me = (m.end - line_char_start).min(full_count);
+                        for cs in char_styles[ms..me].iter_mut() {
+                            cs.fg = search_fg;
+                            if let Some(bg) = search_bg {
+                                cs.bg = Some(bg);
+                            }
                         }
                     }
                 }
             }
         }
 
-        if wrap {
+        // --- Drawing ---
+        if is_wrap_cont {
+            // Wrap continuation segment: draw showbreak prefix + chunk.
             let indent_len = if editor.break_indent {
                 leading_indent_len(&full_chars)
             } else {
                 0
             };
-            let cont_prefix_w = indent_len + show_break_width;
-            let cont_text_w = if text_width > cont_prefix_w {
-                text_width - cont_prefix_w
-            } else {
-                text_width
-            };
 
-            let mut pos = 0;
-            let mut is_first = true;
-            loop {
-                if pixel_y >= pixel_y_limit {
-                    break;
-                }
-                // Record this display row's pixel Y.
-                y_map_entries.push(pixel_y);
+            // Continuation line gutter.
+            let padding = " ".repeat(gutter_w);
+            canvas.draw_text_at_y(pixel_y, area_col, &padding, gutter_fg, 1.0);
 
-                // Line height: first segment scaled, continuations normal.
-                let seg_scale = if is_first { org_heading_scale } else { 1.0 };
-                let seg_height = seg_scale * cell_height;
-
-                if is_first {
-                    // Gutter at pixel Y with scaling.
-                    gutter::render_gutter_line_at_y(
-                        canvas,
-                        editor,
-                        buf,
-                        pixel_y,
-                        area_col,
-                        line_idx,
-                        gutter_w,
-                        win.cursor_row,
-                        is_cursor_line,
-                        seg_height,
-                        seg_scale,
-                        &breakpoint_lines,
-                        stopped_line,
-                        &line_severities,
-                    );
-                } else {
-                    // Continuation line gutter.
-                    let gutter_fg = theme::ts_fg(editor, "ui.gutter");
-                    let padding = " ".repeat(gutter_w);
-                    canvas.draw_text_at_y(pixel_y, area_col, &padding, gutter_fg, 1.0);
-                }
-
-                let base_avail = if is_first { text_width } else { cont_text_w };
-                // Scale down available width for heading lines so scaled glyphs
-                // don't overflow into adjacent split windows.
-                let avail = if seg_scale > 1.0 {
-                    (base_avail as f32 / seg_scale).floor() as usize
-                } else {
-                    base_avail
-                };
-                let end = find_wrap_break(&full_chars, pos, avail);
-                let chunk_chars = &full_chars[pos..end];
-                let chunk_styles = &char_styles[pos..end];
-
-                // If cursorline is active, fill the background for the whole line.
-                if show_cursorline && is_cursor_line {
-                    if let Some(bg_tc) = cursorline_style.bg {
-                        let bg = theme::theme_color_to_skia(&bg_tc);
-                        canvas.draw_rect_at_y(pixel_y, text_col, text_width, seg_height, bg);
-                    }
-                }
-
-                let mut current_col = text_col;
-                if !is_first {
-                    // Indent + showbreak prefix
-                    let prefix_fg = theme::ts_fg(editor, "ui.gutter");
-                    if indent_len > 0 {
-                        let indent = " ".repeat(indent_len);
-                        canvas.draw_text_at_y(pixel_y, current_col, &indent, prefix_fg, 1.0);
-                        current_col += indent_len;
-                    }
-                    if !editor.show_break.is_empty() {
-                        canvas.draw_text_at_y(
-                            pixel_y,
-                            current_col,
-                            &editor.show_break,
-                            prefix_fg,
-                            1.0,
-                        );
-                        current_col += show_break_width;
-                    }
-                }
-
-                draw_styled_at(
-                    canvas,
-                    pixel_y,
-                    current_col,
-                    chunk_chars,
-                    chunk_styles,
-                    seg_scale,
-                    seg_height,
-                );
-
-                pixel_y += seg_height;
-                is_first = false;
-                pos = end;
-                if pos >= full_count {
-                    break;
+            if show_cursorline && is_cursor_line {
+                if let Some(bg_tc) = cursorline_style.bg {
+                    let bg = theme::theme_color_to_skia(&bg_tc);
+                    canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, bg);
                 }
             }
+
+            let char_start = ll.char_start;
+            let char_end = (char_start + ll.char_count).min(full_count);
+            let chunk_chars = &full_chars[char_start..char_end];
+            let chunk_styles = &char_styles[char_start..char_end];
+
+            let mut current_col = text_col;
+            let prefix_fg = theme::ts_fg(editor, "ui.gutter");
+            if indent_len > 0 {
+                let indent = " ".repeat(indent_len);
+                canvas.draw_text_at_y(pixel_y, current_col, &indent, prefix_fg, 1.0);
+                current_col += indent_len;
+            }
+            if !editor.show_break.is_empty() {
+                canvas.draw_text_at_y(pixel_y, current_col, &editor.show_break, prefix_fg, 1.0);
+                current_col += show_break_width;
+            }
+
+            draw_styled_at(
+                canvas,
+                pixel_y,
+                current_col,
+                chunk_chars,
+                chunk_styles,
+                1.0,
+                line_height,
+            );
+        } else if wrap {
+            // First segment of a wrapped line.
+            gutter::render_gutter_line_at_y(
+                canvas,
+                editor,
+                buf,
+                pixel_y,
+                area_col,
+                line_idx,
+                gutter_w,
+                win.cursor_row,
+                is_cursor_line,
+                line_height,
+                org_heading_scale,
+                &breakpoint_lines,
+                stopped_line,
+                &line_severities,
+            );
+
+            if show_cursorline && is_cursor_line {
+                if let Some(bg_tc) = cursorline_style.bg {
+                    let bg = theme::theme_color_to_skia(&bg_tc);
+                    canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, bg);
+                }
+            }
+
+            let char_start = ll.char_start;
+            let char_end = (char_start + ll.char_count).min(full_count);
+            let chunk_chars = &full_chars[char_start..char_end];
+            let chunk_styles = &char_styles[char_start..char_end];
+
+            draw_styled_at(
+                canvas,
+                pixel_y,
+                text_col,
+                chunk_chars,
+                chunk_styles,
+                org_heading_scale,
+                line_height,
+            );
         } else {
-            // No wrap.
-            let line_height = org_heading_scale * cell_height;
-
-            // Record this display row's pixel Y.
-            y_map_entries.push(pixel_y);
-
+            // No wrap: single segment per line.
             gutter::render_gutter_line_at_y(
                 canvas,
                 editor,
@@ -595,24 +461,7 @@ pub fn render_buffer_content(
             }
 
             let visible_start = col_offset.min(full_count);
-            // Scale down available width for heading lines so scaled glyphs
-            // don't overflow into adjacent split windows.
-            let effective_width = if org_heading_scale > 1.0 {
-                (text_width as f32 / org_heading_scale).floor() as usize
-            } else {
-                text_width
-            };
-            // Walk from visible_start accumulating display width to find visible_end.
-            let mut vis_width = 0;
-            let mut visible_end = visible_start;
-            for &ch in &full_chars[visible_start..] {
-                let w = char_width(ch);
-                if vis_width + w > effective_width {
-                    break;
-                }
-                vis_width += w;
-                visible_end += 1;
-            }
+            let visible_end = (visible_start + ll.char_count).min(full_count);
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];
 
@@ -627,10 +476,17 @@ pub fn render_buffer_content(
             );
 
             // Fold indicator: show "... N lines" after fold start lines.
-            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
-                let folded_count = end - line_idx - 1;
-                let indicator = format!(" ··· {} lines", folded_count);
-                let indicator_col = text_col + vis_width;
+            // Use scaled column offset so the indicator appears after the scaled heading.
+            if ll.is_fold_start && ll.folded_line_count > 0 {
+                let indicator = format!(" ··· {} lines", ll.folded_line_count);
+                let vis_char_count = visible_end - visible_start;
+                let line_str: String = visible_chars.iter().collect();
+                let scaled_vis_width = crate::layout::FrameLayout::scaled_col(
+                    &line_str,
+                    vis_char_count,
+                    org_heading_scale,
+                );
+                let indicator_col = text_col + scaled_vis_width;
                 let fold_fg = theme::ts_fg(editor, "comment");
                 canvas.draw_text_run_at_y(
                     pixel_y,
@@ -639,32 +495,28 @@ pub fn render_buffer_content(
                     fold_fg,
                     false,
                     true,
-                    1.0,
+                    org_heading_scale,
                 );
             }
-
-            pixel_y += line_height;
         }
-
-        line_idx += 1;
     }
+
     // Tilde lines past EOF.
-    while pixel_y < pixel_y_limit {
-        y_map_entries.push(pixel_y);
+    let last_pixel_y = frame_layout
+        .lines
+        .last()
+        .map(|ll| ll.pixel_y + ll.line_height)
+        .unwrap_or(frame_layout.area_row as f32 * cell_height);
+    let mut tilde_y = last_pixel_y;
+    while tilde_y < frame_layout.pixel_y_limit {
         canvas.draw_text_at_y(
-            pixel_y,
+            tilde_y,
             area_col,
             &format!("{}{}", " ".repeat(gutter_w.saturating_sub(1)), "~"),
             gutter_fg,
             1.0,
         );
-        pixel_y += cell_height;
-    }
-
-    PixelYMap {
-        entries: y_map_entries,
-        base_row: area_row,
-        cell_height,
+        tilde_y += cell_height;
     }
 }
 
@@ -967,57 +819,6 @@ mod tests {
         };
         assert!(!cs.bold);
         assert!(cs.bg.is_none());
-    }
-
-    // --- Pixel-Y / variable-height regression tests ---
-
-    #[test]
-    fn pixel_y_map_lookup_basic() {
-        let map = PixelYMap {
-            entries: vec![0.0, 20.0, 40.0, 70.0], // row 3 is taller (heading)
-            base_row: 0,
-            cell_height: 20.0,
-        };
-        assert_eq!(map.pixel_y_for_row(0), 0.0);
-        assert_eq!(map.pixel_y_for_row(1), 20.0);
-        assert_eq!(map.pixel_y_for_row(2), 40.0);
-        assert_eq!(map.pixel_y_for_row(3), 70.0);
-    }
-
-    #[test]
-    fn pixel_y_map_fallback_for_missing_row() {
-        let map = PixelYMap {
-            entries: vec![0.0, 20.0],
-            base_row: 0,
-            cell_height: 20.0,
-        };
-        // Row 5 is not in the map — falls back to row * cell_height.
-        assert_eq!(map.pixel_y_for_row(5), 100.0);
-    }
-
-    #[test]
-    fn pixel_y_map_with_base_row_offset() {
-        let map = PixelYMap {
-            entries: vec![100.0, 120.0, 140.0],
-            base_row: 5,
-            cell_height: 20.0,
-        };
-        assert_eq!(map.pixel_y_for_row(5), 100.0);
-        assert_eq!(map.pixel_y_for_row(6), 120.0);
-        assert_eq!(map.pixel_y_for_row(7), 140.0);
-    }
-
-    #[test]
-    fn pixel_y_map_line_height() {
-        let map = PixelYMap {
-            entries: vec![0.0, 30.0, 50.0], // first line is 30px (heading), second is 20px
-            base_row: 0,
-            cell_height: 20.0,
-        };
-        assert_eq!(map.line_height_for_row(0), 30.0);
-        assert_eq!(map.line_height_for_row(1), 20.0);
-        // Last row falls back to cell_height.
-        assert_eq!(map.line_height_for_row(2), 20.0);
     }
 
     #[test]

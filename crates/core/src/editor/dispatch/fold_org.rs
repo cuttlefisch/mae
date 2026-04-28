@@ -61,6 +61,12 @@ impl Editor {
             "widen" | "org-widen" | "md-widen" => {
                 self.widen();
             }
+            "org-global-cycle" => {
+                self.heading_global_cycle(crate::syntax::Language::Org);
+            }
+            "md-global-cycle" => {
+                self.heading_global_cycle(crate::syntax::Language::Markdown);
+            }
             _ => return None,
         }
         Some(true)
