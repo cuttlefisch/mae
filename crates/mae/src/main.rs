@@ -1168,10 +1168,26 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
                     });
             } else {
-                self.editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll(vh);
+                let buf_idx = self.editor.active_buffer_idx();
+                let folded = self.editor.buffers[buf_idx].folded_ranges.clone();
+                if folded.is_empty() {
+                    self.editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll(vh);
+                } else {
+                    self.editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_wrapped(vh, |line| {
+                            for (start, end) in &folded {
+                                if line > *start && line < *end {
+                                    return 0;
+                                }
+                            }
+                            1
+                        });
+                }
             }
         }
 

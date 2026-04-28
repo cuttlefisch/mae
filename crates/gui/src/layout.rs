@@ -119,6 +119,25 @@ impl FrameLayout {
         }
     }
 
+    /// Exact fractional scaled column offset (no rounding).
+    /// Returns value in cell-width units (multiply by cell_width for pixels).
+    /// Used by cursor rendering to avoid column-grid quantization on scaled lines.
+    pub fn scaled_col_precise(line_text: &str, target_col: usize, scale: f32) -> f32 {
+        if scale == 1.0 {
+            line_text
+                .chars()
+                .take(target_col)
+                .map(|ch| char_width(ch) as f32)
+                .sum()
+        } else {
+            line_text
+                .chars()
+                .take(target_col)
+                .map(|ch| char_width(ch) as f32 * scale)
+                .sum()
+        }
+    }
+
     /// Return all display row indices for a buffer row (including wrap continuations).
     pub fn display_rows_for(&self, buf_row: usize) -> Vec<usize> {
         self.lines
@@ -245,6 +264,11 @@ pub fn compute_layout(
                 let seg_scale = if is_first { org_heading_scale } else { 1.0 };
                 let seg_height = seg_scale * cell_height;
 
+                // Don't emit lines whose bottom overflows the viewport.
+                if pixel_y + seg_height > pixel_y_limit {
+                    break;
+                }
+
                 let base_avail = if is_first { text_width } else { cont_text_w };
                 let avail = if seg_scale > 1.0 {
                     (base_avail as f32 / seg_scale).floor() as usize
@@ -275,6 +299,12 @@ pub fn compute_layout(
         } else {
             // No wrap — single entry per line.
             let line_height = org_heading_scale * cell_height;
+
+            // Don't emit lines whose bottom overflows the viewport.
+            if pixel_y + line_height > pixel_y_limit {
+                break;
+            }
+
             let col_offset = win.col_offset;
             let visible_start = col_offset.min(full_count);
 
@@ -432,5 +462,45 @@ mod tests {
     fn scaled_col_empty() {
         assert_eq!(FrameLayout::scaled_col("", 0, 1.3), 0);
         assert_eq!(FrameLayout::scaled_col("abc", 0, 1.3), 0);
+    }
+
+    #[test]
+    fn scaled_col_precise_no_rounding() {
+        // "## Hello" at scale 1.3, cursor at char 5:
+        // 5 * 1.3 = 6.5 exactly (no rounding).
+        let result = FrameLayout::scaled_col_precise("## Hello", 5, 1.3);
+        assert!((result - 6.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scaled_col_precise_identity() {
+        let result = FrameLayout::scaled_col_precise("hello", 5, 1.0);
+        assert!((result - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scaled_col_precise_zero() {
+        assert_eq!(FrameLayout::scaled_col_precise("abc", 0, 1.5), 0.0);
+    }
+
+    #[test]
+    fn layout_no_overflow_scaled_heading() {
+        // With a scaled heading at the bottom, the layout should not emit
+        // a line whose bottom exceeds the pixel limit.
+        let mut e = make_editor("line 1\nline 2\nline 3\nline 4\nline 5\n");
+        e.heading_scale = true;
+        let idx = e.active_buffer_idx();
+        let buf = &e.buffers[idx];
+        let win = e.window_mgr.focused_window();
+        // Use a tight area: 3 rows * 16px = 48px limit.
+        let layout = compute_layout(&e, buf, win, 0, 0, 80, 3, 16.0, None);
+        for ll in &layout.lines {
+            assert!(
+                ll.pixel_y + ll.line_height <= 48.0,
+                "line at pixel_y={} height={} overflows limit 48.0",
+                ll.pixel_y,
+                ll.line_height
+            );
+        }
     }
 }

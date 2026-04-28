@@ -793,6 +793,7 @@ fn render_gui_cursor(
 
         let (_, ch) = canvas.cell_size();
 
+        let (cw, _) = canvas.cell_size();
         if editor.mode == mae_core::Mode::Command {
             // Command line cursor — always cell-based (no scaling).
             let cursor_col = editor.command_line
@@ -800,11 +801,13 @@ fn render_gui_cursor(
                 .chars()
                 .count();
             let pixel_y = cmd_row as f32 * ch;
-            cursor::render_cursor(canvas, editor, pixel_y, 1 + cursor_col, 1.0);
+            let pixel_x = (1 + cursor_col) as f32 * cw;
+            cursor::render_cursor(canvas, editor, pixel_y, pixel_x, 1.0);
         } else if editor.mode == mae_core::Mode::Search {
             let col = 1 + editor.search_input.len();
             let pixel_y = cmd_row as f32 * ch;
-            cursor::render_cursor(canvas, editor, pixel_y, col, 1.0);
+            let pixel_x = col as f32 * cw;
+            cursor::render_cursor(canvas, editor, pixel_y, pixel_x, 1.0);
         } else if let Some(pos) = cursor::compute_cursor_position(
             editor,
             frame_layout,
@@ -816,13 +819,13 @@ fn render_gui_cursor(
         ) {
             // Use FrameLayout for exact pixel-Y positioning (fold-aware, scale-aware).
             let cursor_pixel_y = pos.pixel_y.unwrap_or((inner_row + pos.row) as f32 * ch);
-            cursor::render_cursor(
-                canvas,
-                editor,
-                cursor_pixel_y,
-                inner_col + pos.col,
-                pos.scale,
-            );
+            // Use exact fractional pixel X for scaled lines, integer col for normal.
+            let cursor_pixel_x = if let Some(frac_col) = pos.pixel_x_col {
+                (inner_col as f32 + frac_col) * cw
+            } else {
+                (inner_col + pos.col) as f32 * cw
+            };
+            cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
     }
 }

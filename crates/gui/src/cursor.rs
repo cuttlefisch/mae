@@ -27,6 +27,10 @@ pub struct CursorPos {
     pub col: usize,
     /// Exact pixel Y from the layout. None for Command/Search modes.
     pub pixel_y: Option<f32>,
+    /// Exact fractional column offset (cell-width units) for scaled lines.
+    /// When set, the cursor renderer uses this instead of integer `col` to
+    /// eliminate column-grid quantization error on scaled headings.
+    pub pixel_x_col: Option<f32>,
     /// Font scale at the cursor's line (1.0 for normal, >1.0 for org headings).
     pub scale: f32,
 }
@@ -54,6 +58,7 @@ pub fn compute_cursor_position(
                 row: 0,
                 col: 1 + cursor_col,
                 pixel_y: None,
+                pixel_x_col: None,
                 scale: 1.0,
             })
         }
@@ -63,6 +68,7 @@ pub fn compute_cursor_position(
                 row: 0,
                 col: 1 + col,
                 pixel_y: None,
+                pixel_x_col: None,
                 scale: 1.0,
             })
         }
@@ -76,6 +82,7 @@ pub fn compute_cursor_position(
                         row: input_y,
                         col: 2 + cursor_col,
                         pixel_y: None,
+                        pixel_x_col: None,
                         scale: 1.0,
                     });
                 }
@@ -127,7 +134,16 @@ pub fn compute_cursor_position(
                     } else {
                         0
                     };
-                    let scaled_col = FrameLayout::scaled_col(&line_text, prefix_w + col, scale);
+                    let target = prefix_w + col;
+                    let scaled_col = FrameLayout::scaled_col(&line_text, target, scale);
+                    let precise_col = if scale != 1.0 {
+                        Some(
+                            gutter_w as f32
+                                + FrameLayout::scaled_col_precise(&line_text, target, scale),
+                        )
+                    } else {
+                        None
+                    };
 
                     let actual_pixel_y = layout.pixel_y_for_display_row(screen_row);
 
@@ -136,6 +152,7 @@ pub fn compute_cursor_position(
                             row: screen_row,
                             col: gutter_w + scaled_col,
                             pixel_y: actual_pixel_y,
+                            pixel_x_col: precise_col,
                             scale,
                         })
                     } else {
@@ -154,12 +171,25 @@ pub fn compute_cursor_position(
                         .collect();
                     let scaled_col =
                         FrameLayout::scaled_col(&visible_text, cursor_char_in_visible, scale);
+                    let precise_col = if scale != 1.0 {
+                        Some(
+                            gutter_w as f32
+                                + FrameLayout::scaled_col_precise(
+                                    &visible_text,
+                                    cursor_char_in_visible,
+                                    scale,
+                                ),
+                        )
+                    } else {
+                        None
+                    };
 
                     if screen_row < win_inner.height {
                         Some(CursorPos {
                             row: screen_row,
                             col: gutter_w + scaled_col,
                             pixel_y: pix_y,
+                            pixel_x_col: precise_col,
                             scale,
                         })
                     } else {
@@ -180,6 +210,7 @@ pub fn compute_cursor_position(
                         row: screen_row,
                         col: gutter_w + visible_col,
                         pixel_y: None,
+                        pixel_x_col: None,
                         scale: 1.0,
                     })
                 } else {
@@ -199,13 +230,13 @@ pub fn cursor_shape(editor: &Editor) -> CursorShape {
 }
 
 /// Render the cursor onto the canvas at a pixel Y position.
-/// `pixel_y` is the exact pixel Y from the FrameLayout. `abs_col` is cell-based.
-/// `scale` is the font scale at the cursor line (1.0 for normal, >1.0 for headings).
+/// `pixel_y` is the exact pixel Y from the FrameLayout. `pixel_x` is the exact
+/// pixel X position. `scale` is the font scale at the cursor line.
 pub fn render_cursor(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
     pixel_y: f32,
-    abs_col: usize,
+    pixel_x: f32,
     scale: f32,
 ) {
     let cursor_style = editor.theme.style("ui.cursor");
@@ -215,7 +246,6 @@ pub fn render_cursor(
     let shape = cursor_shape(editor);
 
     let scaled_ch = ch * scale;
-    let pixel_x = abs_col as f32 * cw;
     let cursor_cw = cw * scale;
 
     match shape {
@@ -243,7 +273,7 @@ pub fn render_cursor(
             };
             if let Some(c) = ch_under {
                 let bold = scale > 1.0;
-                canvas.draw_char_at_y(pixel_y, abs_col, c, cursor_fg, bold, false, scale);
+                canvas.draw_char_at_pixel(pixel_x, pixel_y, c, cursor_fg, bold, scale);
             }
         }
         CursorShape::Bar => {

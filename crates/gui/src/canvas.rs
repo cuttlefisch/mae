@@ -351,6 +351,35 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, pixel_y, pw, pixel_h), &paint);
     }
 
+    /// Draw a single character at exact pixel (X, Y) coordinates.
+    pub fn draw_char_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        ch: char,
+        fg: Color4f,
+        bold: bool,
+        scale: f32,
+    ) {
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+        let text = ch.to_string();
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
+            self.bold_font.clone()
+        } else {
+            self.font.clone()
+        };
+        let (_, metrics) = font.metrics();
+        let baseline = pixel_y - metrics.ascent;
+        if font.unichar_to_glyph(ch as i32) != 0 {
+            self.surface
+                .canvas()
+                .draw_str(&text, (pixel_x, baseline), &font, &paint);
+        }
+    }
+
     /// Draw a single character at pixel Y. Column is cell-based.
     pub fn draw_char_at_y(
         &mut self,
