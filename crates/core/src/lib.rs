@@ -6,6 +6,7 @@ pub mod conversation;
 pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
+pub mod diff;
 pub mod editor;
 pub mod event_record;
 pub mod file_browser;

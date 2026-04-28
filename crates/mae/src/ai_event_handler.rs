@@ -519,18 +519,25 @@ fn render_changes_to_diff(changes: &serde_json::Value) -> String {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let content = change
+            let new_content = change
                 .get("new_content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            out.push_str(&format!("--- a/{}\n", path));
-            out.push_str(&format!("+++ b/{}\n", path));
-            out.push_str("@@ -1,1 +1,1 @@\n");
-            // Simplified: just show the new content
-            out.push_str(content);
-            if !content.ends_with('\n') {
-                out.push('\n');
-            }
+
+            // Read old file content for diff comparison.
+            let old_content = if std::path::Path::new(path).exists() {
+                std::fs::read_to_string(path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            out.push_str(&mae_core::diff::unified_diff_string(
+                &old_content,
+                new_content,
+                path,
+                path,
+                3,
+            ));
         }
     }
     out
