@@ -724,6 +724,40 @@ fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("guidance") {
+        categories.push(serde_json::json!({
+            "name": "guidance",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "command_list",
+                    "args": {"format": "names"},
+                    "assert": "Returns list containing define-key, describe-key (keybinding discovery)"
+                },
+                {
+                    "tool": "kb_search",
+                    "args": {"query": "keybinding"},
+                    "assert": "Returns at least 1 result about keybindings"
+                },
+                {
+                    "tool": "command_list",
+                    "args": {"format": "names"},
+                    "assert": "Returns list containing split-vertical, split-horizontal, focus-left, close-window, window-grow, window-maximize (window management discovery)"
+                },
+                {
+                    "tool": "editor_state",
+                    "args": {},
+                    "assert": "Returns JSON with theme field (validates AI can inspect configuration)"
+                },
+                {
+                    "tool": "kb_search",
+                    "args": {"query": "init.scm configuration"},
+                    "assert": "Returns at least 1 result about configuration"
+                }
+            ]
+        }));
+    }
+
     let plan = serde_json::json!({
         "version": 2,
         "description": "MAE self-test plan. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test.",
@@ -1945,5 +1979,22 @@ mod tests {
             "Self-test plan references tools not in registry: {:?}",
             missing
         );
+    }
+
+    #[test]
+    fn guidance_category_exists() {
+        let plan_json = build_self_test_plan("guidance");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0]["name"], "guidance");
+    }
+
+    #[test]
+    fn guidance_category_has_expected_test_count() {
+        let plan_json = build_self_test_plan("guidance");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let tests = plan["categories"][0]["tests"].as_array().unwrap();
+        assert_eq!(tests.len(), 5, "Guidance category should have 5 tests");
     }
 }
