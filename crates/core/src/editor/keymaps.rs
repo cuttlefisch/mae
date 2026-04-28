@@ -550,3 +550,34 @@ impl Editor {
         maps
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::Language;
+
+    #[test]
+    fn org_buffer_keymap_names() {
+        let mut ed = Editor::new();
+        ed.syntax.set_language(0, Language::Org);
+        let names = ed.current_keymap_names();
+        assert_eq!(names, Some(("org", Some("normal"))));
+    }
+
+    #[test]
+    fn org_keymap_fallback_to_normal() {
+        // A key not in org keymap (e.g. `u` for undo) should resolve via
+        // normal keymap fallback.
+        let ed = Editor::new();
+        let org_map = ed.keymaps.get("org").unwrap();
+        let normal_map = ed.keymaps.get("normal").unwrap();
+        let u_key = crate::keymap::parse_key_seq("u");
+        // `u` is not bound in org keymap
+        assert_eq!(org_map.lookup(&u_key), crate::keymap::LookupResult::None);
+        // but is bound in normal keymap (undo)
+        assert!(matches!(
+            normal_map.lookup(&u_key),
+            crate::keymap::LookupResult::Exact("undo")
+        ));
+    }
+}

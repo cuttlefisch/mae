@@ -375,6 +375,28 @@ mod tests {
     }
 
     #[test]
+    fn render_segments_relative_file_path() {
+        let segs = render_segments("See ./src/file.rs for details");
+        assert!(
+            segs.iter()
+                .any(|s| s.link_target.as_deref() == Some("./src/file.rs")),
+            "Expected linked segment for ./src/file.rs, got: {:?}",
+            segs
+        );
+    }
+
+    #[test]
+    fn render_segments_home_file_path() {
+        let segs = render_segments("Config at ~/config/init.scm here");
+        assert!(
+            segs.iter()
+                .any(|s| s.link_target.as_deref() == Some("~/config/init.scm")),
+            "Expected linked segment for ~/config/init.scm, got: {:?}",
+            segs
+        );
+    }
+
+    #[test]
     fn render_segments_plain_url() {
         let segs = render_segments("Visit https://example.com for info");
         assert_eq!(segs.len(), 3);

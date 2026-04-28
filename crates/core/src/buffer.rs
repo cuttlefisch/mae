@@ -983,6 +983,34 @@ mod tests {
         assert_eq!(win.cursor_col, 0);
     }
 
+    // --- Change markers for deletions ---
+
+    #[test]
+    fn delete_char_forward_marks_line_changed() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "abc");
+        buf.changed_lines.clear();
+        win.cursor_col = 1;
+        buf.delete_char_forward(&mut win);
+        assert!(
+            buf.changed_lines.contains(&0),
+            "delete_char_forward should mark line as changed"
+        );
+    }
+
+    #[test]
+    fn delete_char_backward_marks_line_changed() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "abc");
+        buf.changed_lines.clear();
+        win.cursor_col = 2;
+        buf.delete_char_backward(&mut win);
+        assert!(
+            buf.changed_lines.contains(&0),
+            "delete_char_backward should mark line as changed"
+        );
+    }
+
     // --- Delete line ---
 
     #[test]
