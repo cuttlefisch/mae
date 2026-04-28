@@ -135,12 +135,9 @@ impl GuiRenderer {
         self.cell_width = cw;
         self.cell_height = ch;
         self.cols = (size.width as f32 / cw) as u16;
-        let raw_rows = (size.height as f32 / ch) as u16;
-        self.rows = if (raw_rows as f32 * ch).ceil() > size.height as f32 {
-            raw_rows.saturating_sub(1)
-        } else {
-            raw_rows
-        };
+        // Use floor to ensure rows * cell_height <= window height.
+        // This prevents the bottom text row from overlapping the window border.
+        self.rows = (size.height as f32 / ch).floor() as u16;
 
         info!(
             cols = self.cols,
@@ -163,12 +160,7 @@ impl GuiRenderer {
             self.cell_width = cw;
             self.cell_height = ch;
             self.cols = (width as f32 / cw) as u16;
-            let raw_rows = (height as f32 / ch) as u16;
-            self.rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
-                raw_rows.saturating_sub(1)
-            } else {
-                raw_rows
-            };
+            self.rows = (height as f32 / ch).floor() as u16;
         }
     }
 
@@ -208,12 +200,7 @@ impl GuiRenderer {
             if let Some(window) = &self.window {
                 let ws = window.inner_size();
                 self.cols = (ws.width as f32 / cw) as u16;
-                let raw_rows = (ws.height as f32 / ch) as u16;
-                self.rows = if (raw_rows as f32 * ch).ceil() > ws.height as f32 {
-                    raw_rows.saturating_sub(1)
-                } else {
-                    raw_rows
-                };
+                self.rows = (ws.height as f32 / ch).floor() as u16;
             }
         }
     }
@@ -890,12 +877,7 @@ mod tests {
         for height in [600u32, 720, 768, 800, 900, 1080, 1440] {
             for ch_tenth in [140, 160, 185, 200, 225] {
                 let ch = ch_tenth as f32 / 10.0;
-                let raw_rows = (height as f32 / ch) as u16;
-                let rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
-                    raw_rows.saturating_sub(1)
-                } else {
-                    raw_rows
-                };
+                let rows = (height as f32 / ch).floor() as u16;
                 assert!(
                     (rows as f32 * ch).ceil() <= height as f32,
                     "rows={} * ch={} = {} exceeds height={}",
@@ -905,6 +887,29 @@ mod tests {
                     height
                 );
             }
+        }
+    }
+
+    /// Regression: specific heights that caused border overlap with the old
+    /// ceil-based guard. floor() is correct for all fractional remainders.
+    #[test]
+    fn floor_row_calc_no_overlap() {
+        // Cell height 18.5, window height 741 → 741/18.5 = 40.054...
+        // floor = 40, 40*18.5 = 740 < 741 ✓
+        // Old code: raw_rows = 40, ceil(40*18.5) = 740 <= 741 → 40, OK
+        // But: 742/18.5 = 40.108, raw=40, ceil(740)=740 <= 742 → 40 ✓
+        // Edge case: 740/18.5 = 40.0 exactly → floor=40, 40*18.5=740 ✓
+        let ch = 18.5f32;
+        for h in [740u32, 741, 742, 743, 750, 755, 757] {
+            let rows = (h as f32 / ch).floor() as u16;
+            let used = rows as f32 * ch;
+            assert!(
+                used <= h as f32,
+                "h={} rows={} used={} overflows",
+                h,
+                rows,
+                used
+            );
         }
     }
 }

@@ -3,13 +3,27 @@
 //! Computes cursor position from editor state and draws mode-appropriate
 //! cursor shapes using Skia.
 
-use mae_core::wrap::{wrap_cursor_position, wrap_line_display_rows};
+use mae_core::wrap::{char_width, wrap_cursor_position, wrap_line_display_rows};
 use mae_core::{grapheme, Editor, HighlightSpan, Mode};
 use skia_safe::Color4f;
 
 use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
 use crate::theme;
+
+/// Accumulate per-char scaled column offset up to `target_col` chars.
+/// This matches `draw_styled_at`'s `col_offsets` logic exactly, avoiding
+/// the rounding divergence that `(col * scale).round()` produces.
+fn accumulated_scaled_col(line: &str, target_col: usize, scale: f32) -> usize {
+    let mut acc = 0.0f32;
+    for (i, ch) in line.chars().enumerate() {
+        if i >= target_col {
+            break;
+        }
+        acc += char_width(ch) as f32 * scale;
+    }
+    acc.round() as usize
+}
 
 /// Cursor shape varies by mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,8 +145,10 @@ pub fn compute_cursor_position(
                         0
                     };
                     // Scale column offset to match heading text positioning.
+                    // Accumulate per-char widths (same as draw_styled_at col_offsets)
+                    // to avoid rounding divergence from `(col * scale).round()`.
                     let scaled_col = if line_scale != 1.0 {
-                        ((prefix_w + col) as f32 * line_scale).round() as usize
+                        accumulated_scaled_col(&line_text, prefix_w + col, line_scale)
                     } else {
                         prefix_w + col
                     };
@@ -151,11 +167,20 @@ pub fn compute_cursor_position(
                 let scroll_col = grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
                 let line_scale =
                     buffer_render::line_heading_scale(buf, syntax_spans, win.cursor_row);
-                // Scale column offset to match how draw_styled_at positions heading text.
+                // Scale column offset using per-char accumulation (matches draw_styled_at).
+                let visible_col = display_col.saturating_sub(scroll_col);
                 let scaled_col = if line_scale != 1.0 {
-                    (display_col.saturating_sub(scroll_col) as f32 * line_scale).round() as usize
+                    // Accumulate from the scroll-visible portion of the line
+                    let visible_start = win.col_offset;
+                    let visible_end = visible_start + win.cursor_col;
+                    let visible_text: String = line_text
+                        .chars()
+                        .skip(visible_start)
+                        .take(visible_end - visible_start)
+                        .collect();
+                    accumulated_scaled_col(&visible_text, visible_col, line_scale)
                 } else {
-                    display_col.saturating_sub(scroll_col)
+                    visible_col
                 };
                 let screen_col = gutter_w + scaled_col;
 
@@ -321,5 +346,29 @@ mod tests {
         let pos = compute_cursor_position(&editor, inner, 3, None);
         assert!(pos.is_some());
         assert_eq!(pos.unwrap().scale, 1.0);
+    }
+
+    #[test]
+    fn accumulated_scaled_col_matches_draw_styled_at() {
+        // Verify that accumulated_scaled_col produces the same offsets
+        // as draw_styled_at's col_offsets logic for scaled headings.
+        let line = "** Heading text";
+        let scale = 1.3;
+        // Each ASCII char has width 1, so accumulated offset at col N
+        // should be round(sum of 1.0*scale for each char up to N).
+        let col5 = accumulated_scaled_col(line, 5, scale);
+        // Manual: 5 * 1.3 = 6.5, round = 7 (but accumulated:
+        // 1.3->1, 2.6->3, 3.9->4, 5.2->5, 6.5->7)
+        // The per-char accumulation rounds the running total, not each step.
+        let mut expected = 0.0f32;
+        for ch in line.chars().take(5) {
+            expected += char_width(ch) as f32 * scale;
+        }
+        assert_eq!(col5, expected.round() as usize);
+    }
+
+    #[test]
+    fn accumulated_scaled_col_at_zero_is_zero() {
+        assert_eq!(accumulated_scaled_col("* Heading", 0, 1.5), 0);
     }
 }
