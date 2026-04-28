@@ -486,8 +486,28 @@ impl Editor {
                     _ => {
                         let buf = &self.buffers[idx];
                         let vh = self.viewport_height;
+                        let wrap = self.word_wrap && self.text_area_width > 0;
+                        let tw = self.text_area_width;
+                        let bi = self.break_indent;
+                        let sb_w = self.show_break.chars().count();
                         for _ in 0..n {
-                            self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
+                            if wrap {
+                                let rope = buf.rope().clone();
+                                self.window_mgr.focused_window_mut().scroll_up_line_wrapped(
+                                    buf,
+                                    vh,
+                                    |line| {
+                                        if line >= rope.len_lines() {
+                                            return 1;
+                                        }
+                                        let text: String = rope.line(line).chars().collect();
+                                        let text = text.trim_end_matches('\n');
+                                        crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                                    },
+                                );
+                            } else {
+                                self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
+                            }
                         }
                     }
                 }

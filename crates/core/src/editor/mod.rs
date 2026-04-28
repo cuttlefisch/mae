@@ -1809,14 +1809,45 @@ impl Editor {
                     win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
                 }
 
-                // Clamp cursor into visible viewport.
+                // Clamp cursor into visible viewport (wrap-aware).
                 if win.cursor_row < win.scroll_offset {
                     win.cursor_row = win.scroll_offset;
                 }
-                let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
-                let max_row = buf_line_count.saturating_sub(1);
-                if win.cursor_row > bottom.min(max_row) {
-                    win.cursor_row = bottom.min(max_row);
+
+                // Compute the bottom visible buffer row, accounting for
+                // word-wrap where one buffer line may use multiple visual rows.
+                let bottom = {
+                    let max_row = buf_line_count.saturating_sub(1);
+                    if self.word_wrap && self.text_area_width > 0 {
+                        let tw = self.text_area_width;
+                        let bi = self.break_indent;
+                        let sb_w = self.show_break.chars().count();
+                        let buf = &self.buffers[buf_idx];
+                        let rope = buf.rope();
+                        let mut visual = 0;
+                        let mut last_fit = win.scroll_offset;
+                        for line in win.scroll_offset..=max_row {
+                            let rows = if line < rope.len_lines() {
+                                let text: String = rope.line(line).chars().collect();
+                                let text = text.trim_end_matches('\n');
+                                crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                            } else {
+                                1
+                            };
+                            if visual + rows > viewport_height {
+                                break;
+                            }
+                            visual += rows;
+                            last_fit = line;
+                        }
+                        last_fit
+                    } else {
+                        (win.scroll_offset + viewport_height.saturating_sub(1)).min(max_row)
+                    }
+                };
+
+                if win.cursor_row > bottom {
+                    win.cursor_row = bottom;
                 }
                 win.clamp_cursor(&self.buffers[buf_idx]);
             }

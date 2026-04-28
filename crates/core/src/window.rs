@@ -296,14 +296,43 @@ impl Window {
 
     /// Scroll up one line (C-y). Cursor stays on screen.
     pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
+        self.scroll_up_line_wrapped(buf, viewport_height, |_| 1);
+    }
+
+    /// Scroll up one line (C-y) with wrap-aware cursor clamping.
+    ///
+    /// `line_visual_rows` returns how many display rows a buffer line occupies.
+    /// The cursor is clamped to the last buffer line whose visual rows fit
+    /// within the viewport, preventing `ensure_scroll_wrapped` from undoing
+    /// the scroll on the next frame.
+    pub fn scroll_up_line_wrapped<F>(
+        &mut self,
+        buf: &crate::buffer::Buffer,
+        viewport_height: usize,
+        line_visual_rows: F,
+    ) where
+        F: Fn(usize) -> usize,
+    {
         self.scroll_offset = self.scroll_offset.saturating_sub(1);
-        // If cursor scrolled below the viewport, pull it up to the bottom visible line.
-        if viewport_height > 0 {
-            let bottom = self.scroll_offset + viewport_height - 1;
-            if self.cursor_row > bottom {
-                self.cursor_row = bottom;
-                self.clamp_cursor(buf);
+        if viewport_height == 0 {
+            return;
+        }
+        // Walk forward from scroll_offset, counting visual rows, to find
+        // the last buffer row that fits entirely in the viewport.
+        let max_row = buf.display_line_count().saturating_sub(1);
+        let mut visual = 0;
+        let mut bottom = self.scroll_offset;
+        for line in self.scroll_offset..=max_row {
+            let rows = line_visual_rows(line);
+            if visual + rows > viewport_height {
+                break;
             }
+            visual += rows;
+            bottom = line;
+        }
+        if self.cursor_row > bottom {
+            self.cursor_row = bottom;
+            self.clamp_cursor(buf);
         }
     }
 
@@ -1393,6 +1422,30 @@ mod tests {
         assert_eq!(win.scroll_offset, 30);
         // Cursor should be at top of viewport.
         assert_eq!(win.cursor_row, 30);
+    }
+
+    #[test]
+    fn scroll_up_line_wrapped_clamps_to_visual_bottom() {
+        // Simulate: 100-line buffer where line 44 wraps to 3 visual rows.
+        // With viewport_height=20, naive bottom = scroll_offset + 19 = 44,
+        // but visually only fits through line 42 because line 44 takes 3 rows.
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 50;
+        win.scroll_offset = 40;
+        // Scroll up 15 with a closure that reports line 44 as 3 visual rows.
+        for _ in 0..15 {
+            win.scroll_up_line_wrapped(&buf, 20, |line| if line == 44 { 3 } else { 1 });
+        }
+        assert_eq!(win.scroll_offset, 25);
+        // With line 44 being 3 rows, the viewport from 25 fits:
+        // lines 25..43 = 19 lines * 1 row = 19 rows, then line 44 = 3 rows
+        // = 22 rows > 20. So bottom should be 43, not 44.
+        assert!(
+            win.cursor_row <= 43,
+            "cursor={} should be <= 43",
+            win.cursor_row
+        );
     }
 
     // --- WindowManager tests ---
