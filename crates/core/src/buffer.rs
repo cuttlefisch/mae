@@ -254,7 +254,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
-            self.changed_lines.clear();
+            // changed_lines persist across saves — cleared on revert/reload.
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
         } else {
@@ -304,6 +304,7 @@ impl Buffer {
         let content = fs::read_to_string(&path)?;
         self.rope = Rope::from_str(&content);
         self.modified = false;
+        self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -478,6 +479,7 @@ impl Buffer {
         } else {
             win.cursor_col -= 1;
         }
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
     }
@@ -494,6 +496,7 @@ impl Buffer {
         self.rope.remove(pos..pos + 1);
         self.push_undo(EditAction::DeleteChar { pos, ch });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
         win.clamp_cursor(self);
@@ -521,6 +524,7 @@ impl Buffer {
             text: text.clone(),
         });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
         win.clamp_cursor(self);
@@ -1561,7 +1565,7 @@ mod tests {
     }
 
     #[test]
-    fn buffer_clears_on_save() {
+    fn buffer_changed_lines_persist_across_save() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("change_test.txt");
         std::fs::write(&path, "original").unwrap();
@@ -1570,6 +1574,20 @@ mod tests {
         buf.insert_char(&mut win, '!');
         assert!(!buf.changed_lines.is_empty());
         buf.save().unwrap();
+        // changed_lines persist across saves — cleared on revert/reload
+        assert!(!buf.changed_lines.is_empty());
+    }
+
+    #[test]
+    fn buffer_changed_lines_clear_on_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reload_test.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut buf = Buffer::from_file(&path).unwrap();
+        let mut win = Window::new(0, 0);
+        buf.insert_char(&mut win, '!');
+        assert!(!buf.changed_lines.is_empty());
+        buf.reload_from_disk().unwrap();
         assert!(buf.changed_lines.is_empty());
     }
 }

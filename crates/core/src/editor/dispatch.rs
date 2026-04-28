@@ -891,27 +891,35 @@ impl Editor {
 
             // Mode changes
             "enter-insert-mode" => {
-                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Shell {
                     self.set_mode(Mode::ShellInsert);
                 } else {
+                    self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }
             }
             "enter-insert-mode-after" => {
-                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Shell {
                     self.set_mode(Mode::ShellInsert);
                 } else {
-                    let buf = &self.buffers[self.active_buffer_idx()];
-                    self.window_mgr.focused_window_mut().move_right(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_right(&self.buffers[idx]);
+                    self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }
             }
             "enter-insert-mode-eol" => {
-                if self.buffers[self.active_buffer_idx()].kind == crate::BufferKind::Shell {
+                let idx = self.active_buffer_idx();
+                if self.buffers[idx].kind == crate::BufferKind::Shell {
                     self.set_mode(Mode::ShellInsert);
                 } else {
-                    let buf = &self.buffers[self.active_buffer_idx()];
-                    self.window_mgr.focused_window_mut().move_to_line_end(buf);
+                    self.window_mgr
+                        .focused_window_mut()
+                        .move_to_line_end(&self.buffers[idx]);
+                    self.buffers[idx].begin_undo_group();
                     self.set_mode(Mode::Insert);
                 }
             }
@@ -984,6 +992,10 @@ impl Editor {
                         }
                         // Close the undo group opened when I/A entered block-insert.
                         // This groups the first-row typed chars + replication into one undo.
+                        self.buffers[idx].end_undo_group();
+                    } else {
+                        // Close the undo group opened when i/a/A/o/O/c/s entered insert.
+                        let idx = self.active_buffer_idx();
                         self.buffers[idx].end_undo_group();
                     }
 

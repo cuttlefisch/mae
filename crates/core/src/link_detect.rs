@@ -193,15 +193,26 @@ pub struct TextSegment {
 }
 
 /// Split a line of text into segments, replacing markdown `[label](url)`
-/// and org `[[target][label]]` with their rendered labels.
-/// Plain URLs and file paths are kept as-is (no label replacement).
+/// and org `[[target][label]]` with their rendered labels, and highlighting
+/// plain URLs and file paths.
 pub fn render_segments(text: &str) -> Vec<TextSegment> {
-    // Collect markdown and org links that have labels
+    // Collect markdown links, org links, and plain URLs/paths.
     let mut md = detect_markdown_links(text);
     let mut org = detect_org_links(text);
+    let mut plain = detect_links(text);
     let mut all_links: Vec<LinkSpan> = Vec::new();
+    // Markdown/org links take priority over plain URL detection.
     all_links.append(&mut md);
     all_links.append(&mut org);
+    all_links.sort_by_key(|s| s.byte_start);
+    dedup_overlapping(&mut all_links);
+    // Add plain links that don't overlap with markdown/org
+    plain.retain(|p| {
+        !all_links
+            .iter()
+            .any(|a| p.byte_start < a.byte_end && p.byte_end > a.byte_start)
+    });
+    all_links.append(&mut plain);
     all_links.sort_by_key(|s| s.byte_start);
     dedup_overlapping(&mut all_links);
 
@@ -361,5 +372,15 @@ mod tests {
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[1].text, "https://docs.rs");
         assert_eq!(segs[1].link_target.as_deref(), Some("https://docs.rs"));
+    }
+
+    #[test]
+    fn render_segments_plain_url() {
+        let segs = render_segments("Visit https://example.com for info");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].text, "Visit ");
+        assert_eq!(segs[1].text, "https://example.com");
+        assert!(segs[1].link_target.is_some());
+        assert_eq!(segs[2].text, " for info");
     }
 }

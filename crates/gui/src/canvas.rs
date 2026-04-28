@@ -427,7 +427,13 @@ impl SkiaCanvas {
             return;
         }
 
-        let baseline = pixel_y + self.ascent;
+        // Use font-specific ascent for baseline to avoid bold/regular misalignment.
+        let baseline = if bold {
+            let (_, m) = font.metrics();
+            pixel_y - m.ascent
+        } else {
+            pixel_y + self.ascent
+        };
         if italic {
             self.surface.canvas().save();
             let mut skew = skia_safe::Matrix::new_identity();
@@ -697,7 +703,13 @@ impl SkiaCanvas {
             return;
         }
 
-        let baseline = y + self.ascent;
+        // Use font-specific ascent for baseline to avoid bold/regular misalignment.
+        let baseline = if bold {
+            let (_, m) = font.metrics();
+            y - m.ascent
+        } else {
+            y + self.ascent
+        };
         if italic {
             self.surface.canvas().save();
             let mut skew = skia_safe::Matrix::new_identity();

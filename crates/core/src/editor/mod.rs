@@ -656,33 +656,40 @@ impl Editor {
         }
     }
 
-    /// Get the keymap for the current mode.
-    pub fn current_keymap(&self) -> Option<&Keymap> {
+    /// Returns the primary keymap name and optional fallback for the current mode.
+    /// Org/git-status modes overlay on top of "normal" — if the overlay has no
+    /// match, the caller should retry with the fallback.
+    pub fn current_keymap_names(&self) -> Option<(&'static str, Option<&'static str>)> {
         let idx = self.active_buffer_idx();
         let kind = self.buffers[idx].kind;
         let lang = self.syntax.language_of(idx);
 
-        let name = match self.mode {
+        match self.mode {
             Mode::Normal => {
                 if kind == crate::buffer::BufferKind::GitStatus {
-                    "git-status"
+                    Some(("git-status", Some("normal")))
                 } else if lang == Some(Language::Org) {
-                    "org"
+                    Some(("org", Some("normal")))
                 } else {
-                    "normal"
+                    Some(("normal", None))
                 }
             }
-            Mode::Insert => "insert",
-            Mode::Visual(_) => "visual",
+            Mode::Insert => Some(("insert", None)),
+            Mode::Visual(_) => Some(("visual", None)),
             Mode::Command
             | Mode::ConversationInput
             | Mode::Search
             | Mode::FilePicker
             | Mode::FileBrowser
-            | Mode::CommandPalette => "command",
-            Mode::GitStatus => "git-status",
-            Mode::ShellInsert => return None, // Keys handled by binary shell layer
-        };
+            | Mode::CommandPalette => Some(("command", None)),
+            Mode::GitStatus => Some(("git-status", Some("normal"))),
+            Mode::ShellInsert => None,
+        }
+    }
+
+    /// Get the keymap for the current mode.
+    pub fn current_keymap(&self) -> Option<&Keymap> {
+        let (name, _) = self.current_keymap_names()?;
         self.keymaps.get(name)
     }
 

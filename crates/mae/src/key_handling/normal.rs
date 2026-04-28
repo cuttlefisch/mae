@@ -21,25 +21,29 @@ pub(super) fn handle_keymap_mode(
 
     pending_keys.push(kp);
 
-    let mode_name = match editor.mode {
-        Mode::Normal => "normal",
-        Mode::Insert => "insert",
-        Mode::Visual(_) => "visual",
-        Mode::Command
-        | Mode::ConversationInput
-        | Mode::Search
-        | Mode::FilePicker
-        | Mode::FileBrowser
-        | Mode::CommandPalette => "command",
-        Mode::GitStatus => "git-status",
-        Mode::ShellInsert => return, // Handled by main.rs handle_shell_key
+    let Some((mode_name, fallback_name)) = editor.current_keymap_names() else {
+        return; // ShellInsert — handled by main.rs handle_shell_key
     };
 
-    let result = editor
+    let mut result = editor
         .keymaps
         .get(mode_name)
         .map(|km| km.lookup(pending_keys))
         .unwrap_or(LookupResult::None);
+
+    // Overlay keymaps (org, git-status) fall back to normal if no match.
+    if matches!(result, LookupResult::None) {
+        if let Some(fb) = fallback_name {
+            let fb_result = editor
+                .keymaps
+                .get(fb)
+                .map(|km| km.lookup(pending_keys))
+                .unwrap_or(LookupResult::None);
+            if !matches!(fb_result, LookupResult::None) {
+                result = fb_result;
+            }
+        }
+    }
 
     match result {
         LookupResult::Exact(cmd) => {
@@ -74,20 +78,27 @@ pub(super) fn handle_keymap_mode(
             // E.g. `dgg` → split at 1: `d` (operator-delete) + `gg`
             //       `ysw` → split at 2: `ys` (operator-surround) + `w`
             // Longest match wins (try from len-1 down to 1).
+            // For operator splitting, check both the overlay and fallback keymaps.
+            let lookup_names: Vec<&str> = std::iter::once(mode_name).chain(fallback_name).collect();
             let mut split_at = 0;
             let mut split_cmd = String::new();
             if pending_keys.len() > 1 {
                 for i in (1..pending_keys.len()).rev() {
-                    if let Some(cmd) = editor
-                        .keymaps
-                        .get(mode_name)
-                        .and_then(|km| km.exact_match(&pending_keys[..i]))
-                    {
-                        if is_operator_command(cmd) {
-                            split_at = i;
-                            split_cmd = cmd.to_string();
-                            break;
+                    for &km_name in &lookup_names {
+                        if let Some(cmd) = editor
+                            .keymaps
+                            .get(km_name)
+                            .and_then(|km| km.exact_match(&pending_keys[..i]))
+                        {
+                            if is_operator_command(cmd) {
+                                split_at = i;
+                                split_cmd = cmd.to_string();
+                                break;
+                            }
                         }
+                    }
+                    if split_at > 0 {
+                        break;
                     }
                 }
             }
@@ -132,11 +143,18 @@ pub(super) fn handle_keymap_mode(
                     return;
                 }
 
-                let result2 = editor
-                    .keymaps
-                    .get(mode_name)
-                    .map(|km| km.lookup(pending_keys))
-                    .unwrap_or(LookupResult::None);
+                let mut result2 = LookupResult::None;
+                for &km_name in &lookup_names {
+                    let r = editor
+                        .keymaps
+                        .get(km_name)
+                        .map(|km| km.lookup(pending_keys))
+                        .unwrap_or(LookupResult::None);
+                    if !matches!(r, LookupResult::None) {
+                        result2 = r;
+                        break;
+                    }
+                }
                 match result2 {
                     LookupResult::Exact(cmd) => {
                         let cmd = cmd.to_string();
