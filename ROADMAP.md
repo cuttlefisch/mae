@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.1 (1,673 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix). v0.5.1: cached lazy theme resolution (org heading colors change on theme cycle), scaled heading overflow fix in splits.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,840+ tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, GUI cursor/border fixes, unified diff display, AI guidance self-tests.
 
 ---
 
@@ -78,9 +78,14 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
 - [ ] **Org Table Styling**: Column alignment with `|` delimiters, Tab to next cell, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection. Emacs `org-table-align` equivalent. Prerequisite for org-mode spreadsheet features.
-- [ ] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files.
-- [ ] **Org Heading Depth Manipulation**: `M-Left`/`M-Right` (or `<<`/`>>` on heading lines) to decrease/increase heading depth (remove/add `*` prefix). Evil-org parity.
-- [ ] **Org Heading Movement**: `M-j`/`M-k` to move heading (and its subtree) down/up past sibling headings. `M-h`/`M-l` for promote/demote. Evil-org parity for structural editing.
+- [x] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files. (v0.6.0)
+- [x] **Org Heading Depth Manipulation**: `M-h`/`M-l` and `M-Left`/`M-Right` to promote/demote heading depth. Evil-org parity. (v0.6.0)
+- [x] **Org Heading Movement**: `M-j`/`M-k` and `M-Up`/`M-Down` to move heading subtree up/down. Fold-aware (clears folds in affected range). (v0.6.0)
+- [x] **Three-State Org Heading Cycle**: TAB cycles SUBTREE→FOLDED→CHILDREN→SUBTREE (Doom Emacs parity). Leaf headings two-state toggle. (v0.6.0)
+- [x] **Org/Markdown Narrow/Widen**: `SPC m s n` narrows to subtree, `SPC m s w` widens. Cursor clamped, status bar shows `[Narrowed]`. (v0.6.0)
+- [x] **Markdown Structural Editing Parity**: `#` headings get the same UX as org `*` headings — three-state cycle, promote/demote, move subtree, fold-all, narrow/widen, heading font scaling. Markdown keymap with normal fallback. (v0.6.0)
+- [x] **heading_scale Option**: `:set heading_scale false` to disable heading font scaling. (v0.6.0)
+- [x] **zM/zR for Org and Markdown**: `close-all-folds`/`open-all-folds` dispatch to heading scan for org/markdown buffers. (v0.6.0)
 
 ### Rendering Infrastructure
 - [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `PixelYMap`. Enables zero-gap heading rendering, future inline images, code block padding.
@@ -1117,10 +1122,12 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
 Full org-mode editing support — MAE as a first-class org-mode environment.
 Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 
-### M1: Structural Editing
-- [ ] Heading promotion/demotion (M-Left/M-Right or TAB cycling)
-- [ ] Heading folding (TAB to cycle visibility: folded → children → subtree)
-- [ ] Move subtree up/down (M-Up/M-Down)
+### M1: Structural Editing ✅ (v0.6.0)
+- [x] Heading promotion/demotion (`M-h`/`M-l`, `M-Left`/`M-Right`)
+- [x] Heading folding — three-state TAB cycle (SUBTREE→FOLDED→CHILDREN)
+- [x] Move subtree up/down (`M-j`/`M-k`, `M-Up`/`M-Down`) — fold-aware
+- [x] Narrow/widen subtree (`SPC m s n`/`SPC m s w`)
+- [x] zM/zR fold-all/unfold-all for org headings
 - [ ] Insert heading (M-Enter respects level)
 
 ### M2: TODO & Agenda

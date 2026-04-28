@@ -536,23 +536,74 @@ See also: [[concept:project]], [[concept:terminal]]\n";
 
 const CONCEPT_ORG_MODE: &str = "\
 **Org-mode** in MAE provides structural editing and task management \
-capabilities for `.org` files.\n\n\
+capabilities for `.org` files, inspired by Doom Emacs evil-org.\n\n\
 ## Core Features\n\n\
-### 1. Structural Folding\n\
-Press `TAB` on a heading to cycle its visibility:\n\
-**Folded** (heading only) -> **Children** (subheadings) -> **Subtree** (everything).\n\n\
-### 2. Task Management\n\
+### 1. Three-State Heading Cycle (TAB)\n\
+Press `TAB` on a heading to cycle its visibility through three states:\n\
+**Subtree** (everything visible) -> **Folded** (heading only) -> \
+**Children** (body + child headings visible, child bodies folded) -> **Subtree**.\n\
+Leaf headings (no children) toggle between **Subtree** and **Folded**.\n\n\
+### 2. Fold All / Unfold All\n\
+- `zM` (`close-all-folds`): Fold all headings in the buffer.\n\
+- `zR` (`open-all-folds`): Unfold all headings.\n\
+- `za`: Toggle fold at cursor (tree-sitter or heading).\n\n\
+### 3. Structural Editing\n\
+- `M-h` / `M-Left`: **Promote** heading (remove one `*` prefix).\n\
+- `M-l` / `M-Right`: **Demote** heading (add one `*` prefix).\n\
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.\n\
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.\n\
+Moving a subtree automatically clears any folds in the affected range.\n\n\
+### 4. Narrow / Widen\n\
+- `SPC m s n` (`org-narrow-subtree`): Narrow buffer to current heading's subtree. \
+Only lines in that subtree are visible; cursor is clamped to the range. \
+Status bar shows `[Narrowed]`.\n\
+- `SPC m s w` (`org-widen`): Restore full buffer visibility.\n\n\
+### 5. Heading Font Scaling\n\
+Org headings render at scaled font sizes for visual hierarchy:\n\
+`*` = 1.5x, `**` = 1.3x, `***` = 1.15x.\n\
+Disable with `:set heading_scale false`.\n\n\
+### 6. Task Management\n\
 - `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).\n\
 - `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).\n\n\
-### 3. Links\n\
+### 7. Links\n\
 Press `Enter` on a `[[link]]` to follow it. Internal links jump to headings; \
 external links open in your browser.\n\n\
-### 4. Rich Rendering\n\
+### 8. Rich Rendering\n\
 - `*bold*` text is rendered in bold.\n\
 - `/italic/` text is rendered in italics.\n\
 - **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide \
 the surrounding `*` and `/` characters.\n\n\
-See also: [[concept:knowledge-base]], [[concept:options]]\n";
+See also: [[concept:markdown]], [[concept:knowledge-base]], [[concept:options]]\n";
+
+const CONCEPT_MARKDOWN: &str = "\
+**Markdown** in MAE provides structural editing for `.md` files, \
+with the same UX as [[concept:org-mode|org-mode]] adapted for `#` headings.\n\n\
+## Core Features\n\n\
+### 1. Three-State Heading Cycle (TAB)\n\
+Press `TAB` on a heading to cycle its visibility:\n\
+**Subtree** (everything visible) -> **Folded** (heading only) -> \
+**Children** (body + child headings visible, child bodies folded) -> **Subtree**.\n\
+Leaf headings (no children) toggle between **Subtree** and **Folded**.\n\n\
+### 2. Fold All / Unfold All\n\
+- `zM` (`close-all-folds`): Fold all headings in the buffer.\n\
+- `zR` (`open-all-folds`): Unfold all headings.\n\n\
+### 3. Structural Editing\n\
+- `M-h` / `M-Left`: **Promote** heading (remove one `#` prefix).\n\
+- `M-l` / `M-Right`: **Demote** heading (add one `#` prefix).\n\
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.\n\
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.\n\n\
+### 4. Narrow / Widen\n\
+- `SPC m s n` (`md-narrow-subtree`): Narrow buffer to current heading's subtree.\n\
+- `SPC m s w` (`md-widen`): Restore full buffer visibility.\n\n\
+### 5. Heading Font Scaling\n\
+Markdown headings render at scaled font sizes:\n\
+`#` = 1.5x, `##` = 1.3x, `###` = 1.15x.\n\
+Disable with `:set heading_scale false`.\n\n\
+### 6. Markdown Keymap\n\
+The `markdown` keymap activates automatically for `.md` files and falls back \
+to the `normal` keymap for unbound keys. All structural editing keys mirror \
+the org-mode keymap.\n\n\
+See also: [[concept:org-mode]], [[concept:options]]\n";
 
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
@@ -784,6 +835,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_ORG_MODE,
         )
         .with_tags(["org", "editing"]),
+        Node::new(
+            "concept:markdown",
+            "Concept: Markdown",
+            NodeKind::Concept,
+            CONCEPT_MARKDOWN,
+        )
+        .with_tags(["markdown", "editing"]),
     ]
 }
 
@@ -809,7 +867,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:introspect|Introspect]] — AI diagnostic snapshot (threads/perf/locks/buffers)
 - [[concept:gui|GUI Backend]] — dual rendering (terminal + GUI), mouse, font config
 - [[concept:git-status|Git Status]] — Magit-lite porcelain UI
-- [[concept:org-mode|Org-mode]] — Interactivity, folding, and task management
+- [[concept:org-mode|Org-mode]] — Structural editing, folding, narrowing, and task management\n\
+- [[concept:markdown|Markdown]] — Structural editing parity with org-mode for `#` headings
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -1045,10 +1104,32 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 ### Org-mode\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
-| `TAB` | [[cmd:org-cycle]] | Cycle folding |\n\
+| `TAB` | [[cmd:org-cycle]] | Three-state fold cycle |\n\
+| `M-h` / `M-Left` | [[cmd:org-promote]] | Promote heading |\n\
+| `M-l` / `M-Right` | [[cmd:org-demote]] | Demote heading |\n\
+| `M-k` / `M-Up` | [[cmd:org-move-subtree-up]] | Move subtree up |\n\
+| `M-j` / `M-Down` | [[cmd:org-move-subtree-down]] | Move subtree down |\n\
 | `S-Left` | [[cmd:org-todo-prev]] | Prev TODO state |\n\
 | `S-Right` | [[cmd:org-todo-next]] | Next TODO state |\n\
 | `Enter` | [[cmd:org-open-link]] | Follow link |\n\n\
+### SPC m — +mode (org)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s n` | [[cmd:org-narrow-subtree]] | Narrow to subtree |\n\
+| `s w` | [[cmd:org-widen]] | Widen (restore full buffer) |\n\n\
+### Markdown\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `TAB` | [[cmd:md-cycle]] | Three-state fold cycle |\n\
+| `M-h` / `M-Left` | [[cmd:md-promote]] | Promote heading |\n\
+| `M-l` / `M-Right` | [[cmd:md-demote]] | Demote heading |\n\
+| `M-k` / `M-Up` | [[cmd:md-move-subtree-up]] | Move subtree up |\n\
+| `M-j` / `M-Down` | [[cmd:md-move-subtree-down]] | Move subtree down |\n\n\
+### SPC m — +mode (markdown)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s n` | [[cmd:md-narrow-subtree]] | Narrow to subtree |\n\
+| `s w` | [[cmd:md-widen]] | Widen (restore full buffer) |\n\n\
 ### SPC h — +help\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
