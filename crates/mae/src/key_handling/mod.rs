@@ -186,21 +186,21 @@ pub fn handle_key(
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let count = mae_renderer::splash_render::splash_action_count();
+                let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
                     editor.splash_selection = (editor.splash_selection + 1) % count;
                 }
                 return;
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let count = mae_renderer::splash_render::splash_action_count();
+                let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
                     editor.splash_selection = (editor.splash_selection + count - 1) % count;
                 }
                 return;
             }
             KeyCode::Enter => {
-                let actions = mae_renderer::splash_render::QUICK_ACTIONS;
+                let actions = mae_core::render_common::splash::QUICK_ACTIONS;
                 if let Some(&(_, _, cmd)) = actions.get(editor.splash_selection) {
                     // Dismiss splash by inserting a space then clearing it,
                     // so the splash condition no longer holds.

@@ -5,7 +5,7 @@ use ratatui::prelude::*;
 
 use mae_core::wrap::{wrap_cursor_position, wrap_line_display_rows};
 
-use crate::buffer_render::gutter_width;
+use mae_core::render_common::gutter::gutter_width;
 
 /// Compute and set the terminal cursor position for the current mode.
 pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: Rect) {

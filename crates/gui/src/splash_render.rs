@@ -1,63 +1,16 @@
 //! Splash screen rendering for the GUI backend.
+//!
+//! Shared constants and data live in `mae_core::render_common::splash`.
+//! This module handles Skia-specific rendering.
 
+use mae_core::render_common::splash::{ALL_ARTS, MAE_LOGO, QUICK_ACTIONS};
+use mae_core::render_common::status::truncate_path;
 use mae_core::Editor;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
 
-const ART_BAT: &str = r#"
-               _-.                       .-_
-            _..-'(                       )`-.._
-         ./'. '||\.       (\_/)       .//||` .'\.
-      ./'.|'.'||||\\|..    )o o(    ..|//||||`.'|.'\.
-   ./'..|'.|| |||||\'''''  `"'  ''''''/ ||||| ||.'|..'\.
- ./'.||'.|||| ||||||||||||.     .|||||||||||| |||||.'||.'\.
-/'|||'.|||||| ||||||||||||{     }|||||||||||| ||||||.'|||\`\
- '.||| ||||||| |||||||||||{     }||||||||||| |||||||.'|||.'
-'.||| |||||||| |/' `\`\||``     ``||/'' `\| ||||||||| |||.'
-|/' \./'    `\./        \!|\   /|!/        \./' `   `\./ `\|
-V    V        V          }' `V' `{          V        V    V
-`    `        `              V              '        '    '
-"#;
-
-struct SplashArt {
-    name: &'static str,
-    art: &'static str,
-    accent_lines: &'static [usize],
-}
-
-const ALL_ARTS: &[SplashArt] = &[SplashArt {
-    name: "bat",
-    art: ART_BAT,
-    accent_lines: &[],
-}];
-
-const MAE_LOGO: &str = r#"
-     __  __    _     _____
-    |  \/  |  / \   | ____|
-    | |\/| | / _ \  |  _|
-    | |  | |/ ___ \ | |___
-    |_|  |_/_/   \_\|_____|
-"#;
-
-const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
-    ("SPC f f", "Find file", "find-file"),
-    ("SPC f d", "File browser", "file-browser"),
-    ("SPC f c", "Edit config", "edit-config"),
-    ("SPC SPC", "Commands", "command-palette"),
-    ("SPC :", "Command line", "command-mode"),
-    ("SPC a a", "AI agent", "open-ai-agent"),
-    ("SPC a p", "AI prompt", "ai-prompt"),
-    ("SPC h h", "Help", "help"),
-    ("SPC h t", "Tutorial", "tutor"),
-    ("SPC t s", "Set theme", "theme-picker"),
-    ("SPC q q", "Quit", "quit"),
-];
-
-/// Returns true if the splash should be displayed.
-pub fn should_show_splash(editor: &Editor) -> bool {
-    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
-}
+pub use mae_core::render_common::splash::should_show_splash;
 
 /// Render the splash screen centered in the available area.
 pub fn render_splash(
@@ -193,41 +146,4 @@ pub fn render_splash(
     }
 }
 
-fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len() - max_len + 3..])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn splash_shows_for_dashboard() {
-        let mut editor = Editor::default();
-        editor.install_dashboard();
-        assert!(should_show_splash(&editor));
-    }
-
-    #[test]
-    fn splash_hidden_on_scratch() {
-        let mut editor = Editor::default();
-        editor.install_dashboard();
-        // Switch to scratch buffer (index 1).
-        editor.window_mgr.focused_window_mut().buffer_idx = 1;
-        assert!(!should_show_splash(&editor));
-    }
-
-    #[test]
-    fn splash_shows_after_returning_to_dashboard() {
-        let mut editor = Editor::default();
-        editor.install_dashboard();
-        editor.window_mgr.focused_window_mut().buffer_idx = 1;
-        assert!(!should_show_splash(&editor));
-        editor.window_mgr.focused_window_mut().buffer_idx = 0;
-        assert!(should_show_splash(&editor));
-    }
-}
+// Tests for shared splash logic live in mae_core::render_common::splash::tests.

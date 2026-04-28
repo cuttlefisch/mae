@@ -44,7 +44,7 @@ fn splash_j_increments_selection() {
     assert_eq!(editor.splash_selection, 2);
 
     // Wraps at action count
-    let count = mae_renderer::splash_render::splash_action_count();
+    let count = mae_core::render_common::splash::splash_action_count();
     editor.splash_selection = count - 1;
     dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('j')));
     assert_eq!(editor.splash_selection, 0);
@@ -53,7 +53,7 @@ fn splash_j_increments_selection() {
 #[test]
 fn splash_k_decrements_selection() {
     let (mut editor, mut scheme) = setup_splash();
-    let count = mae_renderer::splash_render::splash_action_count();
+    let count = mae_core::render_common::splash::splash_action_count();
 
     // From 0, k wraps to count-1
     dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('k')));

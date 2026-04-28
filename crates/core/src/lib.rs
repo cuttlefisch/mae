@@ -22,6 +22,7 @@ pub mod lsp_intent;
 pub mod messages;
 pub mod options;
 pub mod project;
+pub mod render_common;
 pub mod search;
 pub mod session;
 pub mod syntax;

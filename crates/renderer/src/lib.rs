@@ -23,8 +23,8 @@ mod status_render;
 mod theme_convert;
 mod which_key_render;
 
-// Re-export gutter_width for external use (e.g. cursor module).
-pub use buffer_render::gutter_width;
+// Re-export gutter_width for external use.
+pub use mae_core::render_common::gutter::gutter_width;
 
 /// Backend-agnostic rendering interface.
 ///
@@ -175,7 +175,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
 
         render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
         which_key_render::render_which_key_popup(frame, chunks[1], editor, &entries);
-    } else if splash_render::should_show_splash(editor) {
+    } else if mae_core::render_common::splash::should_show_splash(editor) {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
@@ -183,7 +183,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         ])
         .split(area);
 
-        splash_render::render_splash(frame, chunks[0], editor);
+        splash_render::render_splash_if_needed(frame, chunks[0], editor);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
     } else {

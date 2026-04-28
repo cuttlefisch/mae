@@ -1,0 +1,9 @@
+//! Shared rendering logic used by both GUI (Skia) and TUI (ratatui) backends.
+//!
+//! This module contains pure-data types and functions that compute *what* to
+//! render without depending on *how* to render it.  Backend-specific code
+//! converts these shared types into Skia draw calls or ratatui Spans.
+
+pub mod gutter;
+pub mod splash;
+pub mod status;
