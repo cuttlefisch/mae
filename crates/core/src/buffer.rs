@@ -154,157 +154,62 @@ impl Buffer {
     /// Create a dashboard buffer (startup splash screen).
     pub fn new_dashboard() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("[dashboard]"),
             kind: BufferKind::Dashboard,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
     /// Create a conversation buffer (AI interaction pane).
     pub fn new_conversation(name: impl Into<String>) -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: name.into(),
             kind: BufferKind::Conversation,
-            read_only: false,
             conversation: Some(Conversation::new()),
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
     /// Create a messages buffer (live view of the in-editor log).
     pub fn new_messages() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Messages*"),
             kind: BufferKind::Messages,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
     /// Create a help buffer viewing a KB node.
     pub fn new_help(start_node_id: impl Into<String>) -> Self {
-        let start = start_node_id.into();
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Help*"),
             kind: BufferKind::Help,
             read_only: true,
-            conversation: None,
-            help_view: Some(HelpView::new(start)),
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            help_view: Some(HelpView::new(start_node_id.into())),
+            ..Self::new()
         }
     }
 
     /// Create a shell (terminal emulator) buffer.
     pub fn new_shell(name: impl Into<String>) -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: name.into(),
             kind: BufferKind::Shell,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
     /// Create a debug panel buffer.
     pub fn new_debug() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Debug*"),
             kind: BufferKind::Debug,
             read_only: true,
-            conversation: None,
-            help_view: None,
             debug_view: Some(DebugView::new()),
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
@@ -320,23 +225,9 @@ impl Buffer {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string()),
             file_path: Some(path.to_path_buf()),
-            modified: false,
-            kind: BufferKind::Text,
-            read_only: false,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
             file_mtime: mtime,
             project_root,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         })
     }
 
