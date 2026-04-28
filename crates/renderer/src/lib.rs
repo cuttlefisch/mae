@@ -4,7 +4,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use mae_core::{Editor, HighlightSpan};
+use mae_core::{Editor, HighlightSpan, SyntaxSpanMap};
 use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -217,7 +217,7 @@ fn render_window_area(
     frame: &mut Frame,
     area: Rect,
     editor: &Editor,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
     shells: &HashMap<usize, ShellTerminal>,
 ) {
     let window_area = mae_core::WinRect {

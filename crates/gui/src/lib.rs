@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
-use mae_core::{BufferKind, Editor, HighlightSpan};
+use mae_core::{BufferKind, Editor, HighlightSpan, SyntaxSpanMap};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
 use tracing::{debug, info, trace_span};
@@ -429,7 +429,7 @@ impl Renderer for GuiRenderer {
 fn render_window_area(
     canvas: &mut canvas::SkiaCanvas,
     editor: &Editor,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
     shells: &HashMap<usize, ShellTerminal>,
     area_row: usize,
     area_col: usize,
@@ -725,7 +725,7 @@ fn render_gui_cursor(
     window_height: usize,
     _status_row: usize,
     cmd_row: usize,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
     pixel_y_map: Option<&buffer_render::PixelYMap>,
 ) {
     let focused_win = editor.window_mgr.focused_window();

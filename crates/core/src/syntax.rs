@@ -287,7 +287,9 @@ struct SyntaxState {
     language: Language,
     tree: Option<Tree>,
     /// Cached highlight spans. Recomputed lazily when buffer generation changes.
-    spans: Option<Vec<HighlightSpan>>,
+    /// Wrapped in `Arc` so `compute_visible_syntax_spans` can return cheap clones
+    /// instead of copying all spans every frame.
+    spans: Option<std::sync::Arc<Vec<HighlightSpan>>>,
     /// Buffer generation at which `spans` was last computed.
     /// Compared against `Buffer::generation` to detect staleness.
     computed_at: u64,
@@ -348,7 +350,7 @@ impl SyntaxMap {
     pub fn cached_spans(&self, buf_idx: usize, generation: u64) -> Option<&[HighlightSpan]> {
         self.entries.get(&buf_idx).and_then(|s| {
             if s.computed_at == generation {
-                s.spans.as_deref()
+                s.spans.as_ref().map(|v| &v[..])
             } else {
                 None
             }
@@ -364,6 +366,21 @@ impl SyntaxMap {
         }
     }
 
+    /// Return a cheap `Arc` clone of cached spans regardless of freshness.
+    /// Returns `(arc, is_fresh)`. Used by `compute_visible_syntax_spans` to
+    /// avoid cloning all spans every frame.
+    pub fn cached_spans_arc(
+        &self,
+        buf_idx: usize,
+        generation: u64,
+    ) -> Option<(std::sync::Arc<Vec<HighlightSpan>>, bool)> {
+        self.entries.get(&buf_idx).and_then(|s| {
+            s.spans
+                .as_ref()
+                .map(|arc| (arc.clone(), s.computed_at == generation))
+        })
+    }
+
     /// Return cached spans regardless of freshness. Returns `(spans, is_fresh)`
     /// where `is_fresh` is true if computed at the given generation.
     /// Always returns spans if any exist (even stale), plus the freshness flag.
@@ -375,8 +392,8 @@ impl SyntaxMap {
     ) -> Option<(&[HighlightSpan], bool)> {
         self.entries.get(&buf_idx).and_then(|s| {
             s.spans
-                .as_deref()
-                .map(|spans| (spans, s.computed_at == generation))
+                .as_ref()
+                .map(|spans| (&spans[..], s.computed_at == generation))
         })
     }
 
@@ -393,11 +410,29 @@ impl SyntaxMap {
         let state = self.entries.get_mut(&buf_idx)?;
         if state.spans.is_none() || state.computed_at != generation {
             let lang = state.language;
-            state.spans = Some(compute_spans_with_cache(lang, source, &mut self.configs));
+            state.spans = Some(std::sync::Arc::new(compute_spans_with_cache(
+                lang,
+                source,
+                &mut self.configs,
+            )));
             state.tree = None; // tree is also stale
             state.computed_at = generation;
         }
-        state.spans.as_deref()
+        state.spans.as_ref().map(|v| &v[..])
+    }
+
+    /// Like `spans_for` but returns a cheap `Arc` clone instead of a borrow.
+    pub fn spans_for_arc(
+        &mut self,
+        buf_idx: usize,
+        source: &str,
+        generation: u64,
+    ) -> Option<std::sync::Arc<Vec<HighlightSpan>>> {
+        // Ensure spans are computed.
+        self.spans_for(buf_idx, source, generation)?;
+        self.entries
+            .get(&buf_idx)
+            .and_then(|s| s.spans.as_ref().cloned())
     }
 
     /// Return a cached (or freshly parsed) tree for the buffer.
@@ -416,10 +451,12 @@ impl SyntaxMap {
 /// and queues buffers for deferred reparse into `editor.syntax_reparse_pending`.
 ///
 /// Synchronous parse only happens on first file open (no cached spans at all).
-pub fn compute_visible_syntax_spans(
-    editor: &mut crate::editor::Editor,
-) -> HashMap<usize, Vec<HighlightSpan>> {
-    let mut out = HashMap::new();
+/// Shared type alias for the per-frame syntax span map.
+/// Uses `Arc` to avoid cloning all highlight spans every frame.
+pub type SyntaxSpanMap = HashMap<usize, std::sync::Arc<Vec<HighlightSpan>>>;
+
+pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> SyntaxSpanMap {
+    let mut out: SyntaxSpanMap = HashMap::new();
     let mut need_first_parse: Vec<(usize, u64)> = Vec::new();
     for win in editor.window_mgr.iter_windows() {
         let idx = win.buffer_idx;
@@ -436,13 +473,14 @@ pub fn compute_visible_syntax_spans(
             continue;
         }
         let gen = buf.generation;
-        match editor.syntax.cached_spans_any(idx, gen) {
-            Some((spans, true)) => {
-                out.insert(idx, spans.to_vec());
+        match editor.syntax.cached_spans_arc(idx, gen) {
+            Some((arc, true)) => {
+                // Fresh cache — cheap Arc clone (no data copy).
+                out.insert(idx, arc);
             }
-            Some((spans, false)) => {
+            Some((arc, false)) => {
                 // Stale cache — use stale spans for this frame, queue reparse.
-                out.insert(idx, spans.to_vec());
+                out.insert(idx, arc);
                 editor.syntax_reparse_pending.insert(idx);
             }
             None => {
@@ -454,8 +492,8 @@ pub fn compute_visible_syntax_spans(
     // Synchronous first-parse only for buffers with no cached spans at all.
     for (idx, gen) in need_first_parse {
         let source: String = editor.buffers[idx].rope().chars().collect();
-        if let Some(spans) = editor.syntax.spans_for(idx, &source, gen) {
-            out.insert(idx, spans.to_vec());
+        if let Some(arc) = editor.syntax.spans_for_arc(idx, &source, gen) {
+            out.insert(idx, arc);
         }
     }
     out

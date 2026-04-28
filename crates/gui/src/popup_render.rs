@@ -1,8 +1,6 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
-use std::collections::HashMap;
-
-use mae_core::{Editor, HighlightSpan, PalettePurpose};
+use mae_core::{Editor, PalettePurpose, SyntaxSpanMap};
 use skia_safe::Color4f;
 use unicode_width::UnicodeWidthChar;
 
@@ -64,7 +62,7 @@ pub fn render_completion_popup(
     _area_col: usize,
     area_width: usize,
     area_height: usize,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
