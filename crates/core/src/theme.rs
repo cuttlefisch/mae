@@ -300,16 +300,16 @@ impl Theme {
     /// Falls back through dot-notation hierarchy:
     /// "ui.statusline.mode.normal" → "ui.statusline.mode" → "ui.statusline" → "ui.text" → default
     pub fn style(&self, key: &str) -> ThemeStyle {
+        // Fast path: exact match (avoids String allocation — hot path, ~250+ calls/frame)
+        if let Some(style) = self.resolved_cache.get(key) {
+            return style.clone();
+        }
+        // Slow path: walk dot-notation hierarchy
         let mut lookup = key.to_string();
-        loop {
+        while let Some(pos) = lookup.rfind('.') {
+            lookup.truncate(pos);
             if let Some(style) = self.resolved_cache.get(&lookup) {
                 return style.clone();
-            }
-            // Strip last component
-            if let Some(pos) = lookup.rfind('.') {
-                lookup.truncate(pos);
-            } else {
-                break;
             }
         }
         // Final fallback: "ui.text" for ui keys, default otherwise

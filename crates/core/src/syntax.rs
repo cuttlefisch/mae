@@ -421,7 +421,6 @@ pub fn compute_visible_syntax_spans(
 ) -> HashMap<usize, Vec<HighlightSpan>> {
     let mut out = HashMap::new();
     let mut need_first_parse: Vec<(usize, u64)> = Vec::new();
-
     for win in editor.window_mgr.iter_windows() {
         let idx = win.buffer_idx;
         if out.contains_key(&idx) || need_first_parse.iter().any(|(i, _)| *i == idx) {
@@ -439,7 +438,6 @@ pub fn compute_visible_syntax_spans(
         let gen = buf.generation;
         match editor.syntax.cached_spans_any(idx, gen) {
             Some((spans, true)) => {
-                // Fresh cache — use directly.
                 out.insert(idx, spans.to_vec());
             }
             Some((spans, false)) => {
@@ -448,7 +446,6 @@ pub fn compute_visible_syntax_spans(
                 editor.syntax_reparse_pending.insert(idx);
             }
             None => {
-                // No spans at all (first open) — must parse synchronously.
                 need_first_parse.push((idx, gen));
             }
         }

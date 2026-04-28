@@ -1,8 +1,12 @@
 //! Debug panel rendering for the GUI backend.
 //!
-//! Styles the `*Debug*` buffer lines based on `DebugView::line_map` items.
+//! Shared logic (title, style resolution, scroll offset) lives in
+//! `mae_core::render_common::debug`. This module handles Skia-specific rendering.
 
-use mae_core::{DebugLineItem, Editor, Window};
+use mae_core::render_common::debug::{
+    debug_line_style, debug_scroll_offset, debug_style_theme_key, debug_title, DebugLineStyle,
+};
+use mae_core::{Editor, Window};
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -20,20 +24,7 @@ pub fn render_debug_window(
     area_width: usize,
     area_height: usize,
 ) {
-    // Border + title.
-    let title = match &editor.debug_state {
-        Some(state) => match &state.target {
-            mae_core::debug::DebugTarget::Dap {
-                adapter_name,
-                program,
-            } => {
-                let short = program.rsplit('/').next().unwrap_or(program);
-                format!(" *Debug* [{}: {}] ", adapter_name, short)
-            }
-            mae_core::debug::DebugTarget::SelfDebug => " *Debug* [self] ".to_string(),
-        },
-        None => " *Debug* ".to_string(),
-    };
+    let title = debug_title(editor);
 
     let border_fg = if focused {
         theme::ts_fg(editor, "ui.statusline")
@@ -71,20 +62,11 @@ pub fn render_debug_window(
         return;
     }
 
-    // Scroll to keep cursor visible.
     let cursor_idx = view.cursor_index;
-    let scroll_offset = if cursor_idx >= inner_height {
-        cursor_idx - inner_height + 1
-    } else {
-        0
-    };
+    let scroll_offset = debug_scroll_offset(cursor_idx, inner_height);
 
-    let default_fg = theme::ts_fg(editor, "ui.text");
-    let section_fg = theme::ts_fg(editor, "ui.text");
-    let active_thread_fg = theme::ts_fg(editor, "markup.heading");
-    let active_frame_fg = theme::ts_fg(editor, "markup.heading");
-    let var_fg = theme::ts_fg(editor, "variable");
-    let output_fg = theme::ts_fg(editor, "comment");
+    let active_thread_id = editor.debug_state.as_ref().map(|s| s.active_thread_id);
+    let selected_frame_id = view.selected_frame_id;
     let cursor_bg = theme::ts_bg(editor, "ui.selection");
 
     for row in 0..inner_height {
@@ -106,36 +88,13 @@ pub fn render_debug_window(
 
         let item = view.line_map.get(line_idx);
         let is_cursor_line = focused && line_idx == cursor_idx;
-
-        let fg = match item {
-            Some(DebugLineItem::SectionHeader(_)) => section_fg,
-            Some(DebugLineItem::Thread(tid)) => {
-                if let Some(state) = &editor.debug_state {
-                    if *tid == state.active_thread_id {
-                        active_thread_fg
-                    } else {
-                        default_fg
-                    }
-                } else {
-                    default_fg
-                }
-            }
-            Some(DebugLineItem::Frame(fid)) => {
-                if view.selected_frame_id == Some(*fid) {
-                    active_frame_fg
-                } else {
-                    default_fg
-                }
-            }
-            Some(DebugLineItem::Variable { .. }) => var_fg,
-            Some(DebugLineItem::OutputLine(_)) => output_fg,
-            Some(DebugLineItem::Blank) | None => default_fg,
-        };
+        let style_cat = debug_line_style(item, active_thread_id, selected_frame_id);
+        let theme_key = debug_style_theme_key(style_cat);
+        let fg = theme::ts_fg(editor, theme_key);
+        let is_bold = style_cat == DebugLineStyle::SectionHeader;
 
         let screen_row = inner_row + row;
-        let is_bold = matches!(item, Some(DebugLineItem::SectionHeader(_)));
 
-        // Cursor line background.
         if let (true, Some(bg)) = (is_cursor_line, cursor_bg) {
             canvas.draw_rect_fill(screen_row, inner_col, inner_width, 1, bg);
         }
@@ -145,31 +104,6 @@ pub fn render_debug_window(
             canvas.draw_text_bold(screen_row, inner_col, &display, fg);
         } else {
             canvas.draw_text_at(screen_row, inner_col, &display, fg);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn section_header_is_bold() {
-        let item = DebugLineItem::SectionHeader("Threads".to_string());
-        assert!(matches!(item, DebugLineItem::SectionHeader(_)));
-    }
-
-    #[test]
-    fn variable_item_fields() {
-        let item = DebugLineItem::Variable {
-            scope: "Locals".to_string(),
-            name: "x".to_string(),
-            depth: 0,
-            variables_reference: 42,
-        };
-        if let DebugLineItem::Variable { name, depth, .. } = &item {
-            assert_eq!(name, "x");
-            assert_eq!(*depth, 0);
         }
     }
 }
