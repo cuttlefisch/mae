@@ -416,4 +416,33 @@ mod tests {
     fn scaled_col_at_zero_is_zero() {
         assert_eq!(FrameLayout::scaled_col("* Heading", 0, 1.5), 0);
     }
+
+    /// Regression: cursor pixel_x must use the same formula as text rendering
+    /// pixel_offsets. Both use `char_width(ch) * glyph_advance` accumulated
+    /// without intermediate rounding. This ensures cursor tracks text exactly
+    /// on multi-run scaled lines (org headings with tags).
+    #[test]
+    fn cursor_and_text_pixel_x_agree() {
+        // Simulate org heading: "* Section :tag:" with glyph_advance=13
+        let line = "* Section :tag:";
+        let glyph_advance = 13.0_f32;
+
+        // Cursor uses pixel_x_for_col:
+        for target_col in 0..line.len() {
+            let cursor_px = FrameLayout::pixel_x_for_col(line, target_col, glyph_advance);
+
+            // Text rendering uses the same accumulation in pixel_offsets:
+            let text_px: f32 = line
+                .chars()
+                .take(target_col)
+                .map(|ch| char_width(ch) as f32 * glyph_advance)
+                .sum();
+
+            assert_eq!(
+                cursor_px, text_px,
+                "col={}: cursor_px={} != text_px={}",
+                target_col, cursor_px, text_px,
+            );
+        }
+    }
 }

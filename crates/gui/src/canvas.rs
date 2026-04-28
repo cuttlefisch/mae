@@ -248,12 +248,17 @@ impl SkiaCanvas {
     /// Example: base=14px → cell_width=8; scale=1.5 → size=21px →
     /// actual advance=13, NOT 8*1.5=12. This function returns 13.
     ///
+    /// Uses the BOLD font since `markup.heading` renders bold in all themes.
+    /// For monospace fonts, bold and regular should have identical advances,
+    /// but we measure bold to be safe against font-specific hinting.
+    ///
     /// For scale=1.0, returns `cell_width` (no scaled font lookup needed).
     pub fn scaled_cell_width(&mut self, scale: f32) -> f32 {
         if scale == 1.0 {
             return self.cell_width;
         }
-        let font = self.get_scaled_font(false, scale).clone();
+        // Measure bold advance since headings are rendered bold.
+        let font = self.get_scaled_font(true, scale).clone();
         let (advance, _) = font.measure_str("M", None);
         advance
     }
@@ -562,6 +567,103 @@ impl SkiaCanvas {
         self.surface
             .canvas()
             .draw_line((x, underline_y), (x + width, underline_y), &paint);
+    }
+
+    /// Draw a text run at exact pixel X/Y. Used for scaled lines to avoid
+    /// column-grid quantization that causes multi-run drift.
+    pub fn draw_text_run_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        text: &str,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+
+        if scale != 1.0 {
+            let scaled = self.get_scaled_font(bold, scale).clone();
+            let (_, m) = scaled.metrics();
+            let baseline = pixel_y - m.ascent;
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((pixel_x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface
+                    .canvas()
+                    .draw_str(text, (0, 0), &scaled, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &scaled, &paint);
+            }
+        } else {
+            let font = if bold { &self.bold_font } else { &self.font };
+            let baseline = if bold {
+                let (_, m) = font.metrics();
+                pixel_y - m.ascent
+            } else {
+                pixel_y + self.ascent
+            };
+            let font = font.clone();
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((pixel_x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface.canvas().draw_str(text, (0, 0), &font, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &font, &paint);
+            }
+        }
+    }
+
+    /// Draw a background rect at exact pixel coordinates.
+    pub fn draw_rect_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        pixel_h: f32,
+        color: Color4f,
+    ) {
+        let paint = fill_paint(color);
+        self.surface.canvas().draw_rect(
+            skia_safe::Rect::from_xywh(pixel_x, pixel_y, pixel_w, pixel_h),
+            &paint,
+        );
+    }
+
+    /// Draw an underline span at exact pixel coordinates.
+    pub fn draw_underline_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let underline_y = pixel_y + self.ascent + 1.0;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface.canvas().draw_line(
+            (pixel_x, underline_y),
+            (pixel_x + pixel_w, underline_y),
+            &paint,
+        );
     }
 
     /// Draw text at pixel Y. ASCII uses a single run; mixed/CJK falls back per-char.
@@ -997,6 +1099,43 @@ mod tests {
         }
         assert_eq!(call_count, 1);
         assert_eq!(cache.len(), 1);
+    }
+
+    /// Verify bold vs regular advances match for monospace fonts.
+    /// If they diverge, heading text (bold) won't match cursor (which uses
+    /// the measured advance).
+    #[test]
+    fn bold_and_regular_advances_match() {
+        let fm = FontMgr::new();
+        let tf_regular = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have monospace regular");
+        let tf_bold = fm
+            .match_family_style("monospace", FontStyle::bold())
+            .expect("must have monospace bold");
+
+        let base_size = 14.0;
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let regular = Font::from_typeface(&tf_regular, base_size * scale);
+            let bold = Font::from_typeface(&tf_bold, base_size * scale);
+            let (reg_advance, _) = regular.measure_str("M", None);
+            let (bold_advance, _) = bold.measure_str("M", None);
+            eprintln!(
+                "scale={:.2}: regular_advance={:.2}, bold_advance={:.2}, diff={:.2}",
+                scale,
+                reg_advance,
+                bold_advance,
+                bold_advance - reg_advance,
+            );
+            // For monospace fonts, bold and regular must have same advance.
+            // If this fails, the font isn't truly monospace or bold uses a
+            // different typeface with different metrics.
+            assert_eq!(
+                reg_advance, bold_advance,
+                "scale={}: bold advance ({}) != regular advance ({})",
+                scale, bold_advance, reg_advance
+            );
+        }
     }
 
     /// Verify: cursor position using `pixel_x_for_col(glyph_advance)` matches

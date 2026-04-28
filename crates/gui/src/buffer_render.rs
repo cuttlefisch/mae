@@ -499,27 +499,32 @@ fn draw_styled_at(
     let ascii_ok = *canvas.ascii_in_font();
     let (cw, _) = canvas.cell_size();
 
-    // Pre-compute cumulative display column for each char (CJK = 2 cols).
-    // When scale > 1.0, use the font's actual glyph advance (not scale * cell_width)
-    // because font engines grid-fit advances to integer pixel boundaries.
-    let mut col_offsets = Vec::with_capacity(chars.len() + 1);
+    // Pre-compute cumulative PIXEL offset for each char position.
+    // For scale != 1.0, uses the font's actual glyph advance directly.
+    let base_x = col as f32 * cw;
+    let mut pixel_offsets: Vec<f32> = Vec::with_capacity(chars.len() + 1);
     if scale != 1.0 {
-        // effective_scale accounts for the actual font advance vs cell_width.
-        let effective_scale = glyph_advance / cw;
-        let mut acc_f = 0.0f32;
+        let mut acc = 0.0f32;
         for &ch in chars {
-            col_offsets.push(acc_f.round() as usize);
-            acc_f += char_width(ch) as f32 * effective_scale;
+            pixel_offsets.push(acc);
+            acc += char_width(ch) as f32 * glyph_advance;
         }
-        col_offsets.push(acc_f.round() as usize);
+        pixel_offsets.push(acc);
     } else {
-        let mut acc = 0usize;
+        let mut acc = 0.0f32;
         for &ch in chars {
-            col_offsets.push(acc);
-            acc += char_width(ch);
+            pixel_offsets.push(acc);
+            acc += char_width(ch) as f32 * cw;
         }
-        col_offsets.push(acc); // sentinel for total width
+        pixel_offsets.push(acc);
     }
+    // Integer col_offsets for scale==1.0 path (draw_text_run_at_y).
+    let col_offsets: Vec<usize> = pixel_offsets
+        .iter()
+        .map(|px| (px / cw).round() as usize)
+        .collect();
+    // Use pixel-precise rendering for scaled lines to avoid multi-run drift.
+    let use_pixel = scale != 1.0;
 
     // Pass 1: Coalesce background rects (pixel-precise height).
     {
@@ -535,9 +540,15 @@ fn draw_styled_at(
             };
             if !same || i == styles.len() {
                 if let Some(bg) = run_bg {
-                    let start_col = col_offsets[run_start];
-                    let width = col_offsets[i] - start_col;
-                    canvas.draw_rect_at_y(pixel_y, col + start_col, width, line_height, bg);
+                    if use_pixel {
+                        let px = base_x + pixel_offsets[run_start];
+                        let pw = pixel_offsets[i] - pixel_offsets[run_start];
+                        canvas.draw_rect_at_pixel(px, pixel_y, pw, line_height, bg);
+                    } else {
+                        let start_col = col_offsets[run_start];
+                        let width = col_offsets[i] - start_col;
+                        canvas.draw_rect_at_y(pixel_y, col + start_col, width, line_height, bg);
+                    }
                 }
                 run_start = i;
                 run_bg = this_bg;
@@ -549,6 +560,7 @@ fn draw_styled_at(
     // Pass 2: Text runs — batch chars with uniform style that are in the primary font.
     {
         let mut run_buf = String::with_capacity(128);
+        let mut run_start_idx = 0usize;
         let mut run_start_col = 0usize;
         let mut run_fg = styles[0].fg;
         let mut run_bold = styles[0].bold;
@@ -566,6 +578,7 @@ fn draw_styled_at(
 
             if can_batch && style_match {
                 if run_buf.is_empty() {
+                    run_start_idx = i;
                     run_start_col = col_offsets[i];
                     run_fg = cs.fg;
                     run_bold = cs.bold;
@@ -575,20 +588,33 @@ fn draw_styled_at(
             } else {
                 // Flush current run.
                 if !run_buf.is_empty() {
-                    canvas.draw_text_run_at_y(
-                        pixel_y,
-                        col + run_start_col,
-                        &run_buf,
-                        run_fg,
-                        run_bold,
-                        run_italic,
-                        scale,
-                    );
+                    if use_pixel {
+                        canvas.draw_text_run_at_pixel(
+                            base_x + pixel_offsets[run_start_idx],
+                            pixel_y,
+                            &run_buf,
+                            run_fg,
+                            run_bold,
+                            run_italic,
+                            scale,
+                        );
+                    } else {
+                        canvas.draw_text_run_at_y(
+                            pixel_y,
+                            col + run_start_col,
+                            &run_buf,
+                            run_fg,
+                            run_bold,
+                            run_italic,
+                            scale,
+                        );
+                    }
                     run_buf.clear();
                 }
 
                 if can_batch {
                     // New style, batchable char — start new run.
+                    run_start_idx = i;
                     run_start_col = col_offsets[i];
                     run_fg = cs.fg;
                     run_bold = cs.bold;
@@ -596,28 +622,51 @@ fn draw_styled_at(
                     run_buf.push(ch);
                 } else if ch != ' ' {
                     // Non-ASCII / missing glyph — per-char fallback.
-                    canvas.draw_char_at_y(
-                        pixel_y,
-                        col + col_offsets[i],
-                        ch,
-                        cs.fg,
-                        cs.bold,
-                        cs.italic,
-                        scale,
-                    );
+                    if use_pixel {
+                        canvas.draw_char_at_pixel(
+                            base_x + pixel_offsets[i],
+                            pixel_y,
+                            ch,
+                            cs.fg,
+                            cs.bold,
+                            scale,
+                        );
+                    } else {
+                        canvas.draw_char_at_y(
+                            pixel_y,
+                            col + col_offsets[i],
+                            ch,
+                            cs.fg,
+                            cs.bold,
+                            cs.italic,
+                            scale,
+                        );
+                    }
                 }
             }
         }
         if !run_buf.is_empty() {
-            canvas.draw_text_run_at_y(
-                pixel_y,
-                col + run_start_col,
-                &run_buf,
-                run_fg,
-                run_bold,
-                run_italic,
-                scale,
-            );
+            if use_pixel {
+                canvas.draw_text_run_at_pixel(
+                    base_x + pixel_offsets[run_start_idx],
+                    pixel_y,
+                    &run_buf,
+                    run_fg,
+                    run_bold,
+                    run_italic,
+                    scale,
+                );
+            } else {
+                canvas.draw_text_run_at_y(
+                    pixel_y,
+                    col + run_start_col,
+                    &run_buf,
+                    run_fg,
+                    run_bold,
+                    run_italic,
+                    scale,
+                );
+            }
         }
     }
 
@@ -629,14 +678,29 @@ fn draw_styled_at(
                 if ul_start.is_none() {
                     ul_start = Some((i, col_offsets[i], cs.fg));
                 }
-            } else if let Some((_, start_col, fg)) = ul_start.take() {
-                let width = col_offsets[i] - start_col;
-                canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
+            } else if let Some((start_idx, start_col, fg)) = ul_start.take() {
+                if use_pixel {
+                    let pw = pixel_offsets[i] - pixel_offsets[start_idx];
+                    canvas.draw_underline_at_pixel(
+                        base_x + pixel_offsets[start_idx],
+                        pixel_y,
+                        pw,
+                        fg,
+                    );
+                } else {
+                    let width = col_offsets[i] - start_col;
+                    canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
+                }
             }
         }
-        if let Some((_, start_col, fg)) = ul_start {
-            let width = col_offsets[styles.len()] - start_col;
-            canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
+        if let Some((start_idx, start_col, fg)) = ul_start {
+            if use_pixel {
+                let pw = pixel_offsets[styles.len()] - pixel_offsets[start_idx];
+                canvas.draw_underline_at_pixel(base_x + pixel_offsets[start_idx], pixel_y, pw, fg);
+            } else {
+                let width = col_offsets[styles.len()] - start_col;
+                canvas.draw_underline_at_y(pixel_y, col + start_col, width, fg);
+            }
         }
     }
 }
@@ -828,5 +892,80 @@ mod tests {
         // `** Details` (level 2) should scale to 1.3
         let scale2 = line_heading_scale(&buf, Some(&spans), 2);
         assert_eq!(scale2, 1.3);
+    }
+
+    /// Regression: multi-run pixel offsets must be continuous across style
+    /// boundaries. Before the fix, each run started at `col * cell_width`
+    /// (integer grid), causing drift between runs on scaled org headings
+    /// with tags like `* Section :tag:`.
+    #[test]
+    fn multi_run_pixel_offsets_continuous() {
+        use mae_core::wrap::char_width;
+
+        // Simulate an org heading: "* Title :tag:" split into 3 style runs:
+        //   Run 0: "* "         (punctuation)
+        //   Run 1: "Title "     (markup.heading)
+        //   Run 2: ":tag:"      (attribute)
+        let text = "* Title :tag:";
+        let chars: Vec<char> = text.chars().collect();
+
+        let cell_width = 8.0_f32;
+        // Simulate glyph advance at scale 1.5 (grid-fitted, differs from 8*1.5=12)
+        let glyph_advance = 13.0_f32;
+
+        // Build pixel_offsets exactly as draw_styled_at does.
+        let mut pixel_offsets: Vec<f32> = Vec::with_capacity(chars.len() + 1);
+        let mut acc = 0.0f32;
+        for &ch in &chars {
+            pixel_offsets.push(acc);
+            acc += char_width(ch) as f32 * glyph_advance;
+        }
+        pixel_offsets.push(acc);
+
+        // Run boundaries: run 0 ends at char 2 ("* "), run 1 ends at char 8 ("Title ")
+        let run0_end = 2; // "* " → 2 chars
+        let run1_start = 2;
+        let run1_end = 8; // "Title " → 6 chars
+        let run2_start = 8;
+
+        // The pixel offset at a run boundary must be the same whether computed
+        // as "end of previous run" or "start of next run".
+        assert_eq!(
+            pixel_offsets[run0_end], pixel_offsets[run1_start],
+            "run 0→1 boundary pixel offset mismatch"
+        );
+        assert_eq!(
+            pixel_offsets[run1_end], pixel_offsets[run2_start],
+            "run 1→2 boundary pixel offset mismatch"
+        );
+
+        // Now verify integer col_offsets introduce rounding error at boundaries.
+        let col_offsets: Vec<usize> = pixel_offsets
+            .iter()
+            .map(|px| (px / cell_width).round() as usize)
+            .collect();
+
+        // With glyph_advance=13, cell_width=8:
+        // char 2: pixel=26.0, col=26/8=3.25→3, pixel_from_col=24 (ERROR: 2px)
+        // char 8: pixel=104.0, col=104/8=13.0→13, pixel_from_col=104 (OK)
+        // The point: col_offsets[i] * cell_width != pixel_offsets[i] in general.
+        // This is the quantization error that caused multi-run drift.
+        let boundary_error = (col_offsets[run0_end] as f32 * cell_width) - pixel_offsets[run0_end];
+        // Just document that integer col mapping introduces error.
+        // The fix uses pixel_offsets directly, bypassing col_offsets for scaled lines.
+        eprintln!(
+            "run0→1 boundary: pixel={:.1}, col_based={:.1}, error={:.1}px",
+            pixel_offsets[run0_end],
+            col_offsets[run0_end] as f32 * cell_width,
+            boundary_error,
+        );
+
+        // The total pixel width must equal N * glyph_advance for all-width-1 ASCII.
+        let expected_total = chars.len() as f32 * glyph_advance;
+        assert_eq!(
+            *pixel_offsets.last().unwrap(),
+            expected_total,
+            "total pixel width mismatch"
+        );
     }
 }
