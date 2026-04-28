@@ -478,29 +478,51 @@ fn render_window_area(
                     );
                 }
                 BufferKind::Help => {
-                    // Help buffers: convert link spans to highlight spans.
-                    let help_spans: Vec<HighlightSpan> = buf
-                        .help_view
-                        .as_ref()
-                        .map(|view| {
-                            view.rendered_links
-                                .iter()
-                                .enumerate()
-                                .map(|(i, link)| {
-                                    let is_focused_link = view.focused_link == Some(i);
-                                    HighlightSpan {
-                                        byte_start: link.byte_start,
-                                        byte_end: link.byte_end,
-                                        theme_key: if is_focused_link {
-                                            "ui.selection"
-                                        } else {
-                                            "markup.link"
-                                        },
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    // Help buffers: generate heading + link highlight spans.
+                    let mut help_spans: Vec<HighlightSpan> = Vec::new();
+
+                    // Heading spans from leading `*` chars in rope lines.
+                    let rope = buf.rope();
+                    for line_idx in 0..buf.line_count() {
+                        let line = rope.line(line_idx);
+                        let star_count = line.chars().take_while(|&c| c == '*').count();
+                        if star_count > 0
+                            && line.len_chars() > star_count
+                            && line.char(star_count) == ' '
+                        {
+                            let line_start = rope.line_to_char(line_idx);
+                            let line_len = line.len_chars();
+                            let text_len = if line_idx + 1 < buf.line_count() {
+                                line_len.saturating_sub(1)
+                            } else {
+                                line_len
+                            };
+                            let byte_start = rope.char_to_byte(line_start);
+                            let byte_end = rope.char_to_byte(line_start + text_len);
+                            help_spans.push(HighlightSpan {
+                                byte_start,
+                                byte_end,
+                                theme_key: "markup.heading",
+                            });
+                        }
+                    }
+
+                    // Link spans from help view.
+                    if let Some(view) = buf.help_view.as_ref() {
+                        for (i, link) in view.rendered_links.iter().enumerate() {
+                            let is_focused_link = view.focused_link == Some(i);
+                            help_spans.push(HighlightSpan {
+                                byte_start: link.byte_start,
+                                byte_end: link.byte_end,
+                                theme_key: if is_focused_link {
+                                    "ui.selection"
+                                } else {
+                                    "markup.link"
+                                },
+                            });
+                        }
+                    }
+                    help_spans.sort_by_key(|s| s.byte_start);
 
                     // Render with border.
                     let border_fg = if is_focused {

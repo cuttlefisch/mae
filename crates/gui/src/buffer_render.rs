@@ -994,4 +994,78 @@ mod tests {
         assert_eq!(extra_rows_for_scale(1.3), 1);
         assert_eq!(extra_rows_for_scale(1.5), 1);
     }
+
+    #[test]
+    fn help_buffer_heading_scale_with_markup_spans() {
+        // Simulate help buffer with markup.heading spans generated from `*` prefix lines.
+        let mut buf = mae_core::Buffer::new();
+        buf.insert_text_at(0, "* Welcome\nSome text\n** Details\n");
+
+        // Build heading spans the same way lib.rs does for help buffers.
+        let rope = buf.rope();
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        for line_idx in 0..buf.line_count() {
+            let line = rope.line(line_idx);
+            let star_count = line.chars().take_while(|&c| c == '*').count();
+            if star_count > 0 && line.len_chars() > star_count && line.char(star_count) == ' ' {
+                let line_start = rope.line_to_char(line_idx);
+                let line_len = line.len_chars();
+                let text_len = if line_idx + 1 < buf.line_count() {
+                    line_len.saturating_sub(1)
+                } else {
+                    line_len
+                };
+                let byte_start = rope.char_to_byte(line_start);
+                let byte_end = rope.char_to_byte(line_start + text_len);
+                spans.push(HighlightSpan {
+                    byte_start,
+                    byte_end,
+                    theme_key: "markup.heading",
+                });
+            }
+        }
+
+        // `* Welcome` (level 1) should scale to 1.5
+        let scale0 = line_heading_scale(&buf, Some(&spans), 0);
+        assert_eq!(scale0, 1.5);
+
+        // `Some text` should not scale
+        let scale1 = line_heading_scale(&buf, Some(&spans), 1);
+        assert_eq!(scale1, 1.0);
+
+        // `** Details` (level 2) should scale to 1.3
+        let scale2 = line_heading_scale(&buf, Some(&spans), 2);
+        assert_eq!(scale2, 1.3);
+    }
+
+    #[test]
+    fn help_buffer_heading_extra_rows() {
+        let mut buf = mae_core::Buffer::new();
+        buf.insert_text_at(0, "* H1\ntext\n** H2\n");
+        let rope = buf.rope();
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        for line_idx in 0..buf.line_count() {
+            let line = rope.line(line_idx);
+            let star_count = line.chars().take_while(|&c| c == '*').count();
+            if star_count > 0 && line.len_chars() > star_count && line.char(star_count) == ' ' {
+                let line_start = rope.line_to_char(line_idx);
+                let line_len = line.len_chars();
+                let text_len = if line_idx + 1 < buf.line_count() {
+                    line_len.saturating_sub(1)
+                } else {
+                    line_len
+                };
+                let byte_start = rope.char_to_byte(line_start);
+                let byte_end = rope.char_to_byte(line_start + text_len);
+                spans.push(HighlightSpan {
+                    byte_start,
+                    byte_end,
+                    theme_key: "markup.heading",
+                });
+            }
+        }
+        // Lines 0 and 2 are headings. Extra rows should be > 0.
+        let extra = heading_extra_rows(&buf, Some(&spans), 0, 3);
+        assert!(extra > 0, "expected extra rows for 2 headings, got 0");
+    }
 }
