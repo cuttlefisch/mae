@@ -562,13 +562,17 @@ Status bar shows `[Narrowed]`.\n\
 Org headings render at scaled font sizes for visual hierarchy:\n\
 `*` = 1.5x, `**` = 1.3x, `***` = 1.15x.\n\
 Disable with `:set heading_scale false`.\n\n\
-### 6. Task Management\n\
+### 6. Insert Heading (M-Enter)\n\
+- On a heading line: Insert a new heading at the **same level** after the current subtree.\n\
+- Not on a heading: Insert a level-1 heading below the current line.\n\
+- Automatically enters insert mode with cursor after the heading prefix.\n\n\
+### 7. Task Management\n\
 - `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).\n\
 - `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).\n\n\
-### 7. Links\n\
+### 8. Links\n\
 Press `Enter` on a `[[link]]` to follow it. Internal links jump to headings; \
 external links open in your browser.\n\n\
-### 8. Rich Rendering\n\
+### 9. Rich Rendering\n\
 - `*bold*` text is rendered in bold.\n\
 - `/italic/` text is rendered in italics.\n\
 - **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide \
@@ -595,15 +599,91 @@ Leaf headings (no children) toggle between **Subtree** and **Folded**.\n\n\
 ### 4. Narrow / Widen\n\
 - `SPC m s n` (`md-narrow-subtree`): Narrow buffer to current heading's subtree.\n\
 - `SPC m s w` (`md-widen`): Restore full buffer visibility.\n\n\
-### 5. Heading Font Scaling\n\
+### 5. Insert Heading (M-Enter)\n\
+- On a heading line: Insert a new heading at the **same level** after the current subtree.\n\
+- Not on a heading: Insert a level-1 heading below the current line.\n\
+- Automatically enters insert mode with cursor after the heading prefix.\n\n\
+### 6. Heading Font Scaling\n\
 Markdown headings render at scaled font sizes:\n\
 `#` = 1.5x, `##` = 1.3x, `###` = 1.15x.\n\
 Disable with `:set heading_scale false`.\n\n\
-### 6. Markdown Keymap\n\
+### 7. Markdown Keymap\n\
 The `markdown` keymap activates automatically for `.md` files and falls back \
 to the `normal` keymap for unbound keys. All structural editing keys mirror \
 the org-mode keymap.\n\n\
 See also: [[concept:org-mode]], [[concept:options]]\n";
+
+const CONCEPT_EX_COMMANDS: &str = "\
+**Ex-command grammar** for write/quit compound commands.\n\n\
+MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than \
+hardcoded match arms. This means all valid vim compound forms work \
+automatically.\n\n\
+## Grammar\n\n\
+**Verbs:** `w` (write), `q` (quit), `x` (write-if-modified + quit)\n\
+**Modifiers:** `a` (all — applies to preceding verb), `!` (force, must be terminal)\n\n\
+## Valid Combinations\n\n\
+| Command | Effect |\n\
+|---------|--------|\n\
+| `:w`    | Write current buffer |\n\
+| `:wa`   | Write all buffers |\n\
+| `:q`    | Quit (check modified) |\n\
+| `:q!`   | Quit (force, discard changes) |\n\
+| `:qa`   | Quit all |\n\
+| `:qa!`  | Force quit all |\n\
+| `:wq`   | Write + quit |\n\
+| `:wq!`  | Write + force quit |\n\
+| `:wqa`  | Write all + quit all |\n\
+| `:wqa!` | Write all + force quit all |\n\
+| `:x`    | Write-if-modified + quit |\n\
+| `:xa`   | Write-if-modified all + quit all |\n\
+| `:xa!`  | Write-if-modified all + force quit all |\n\n\
+## Implementation\n\
+The tokenizer lives in `crates/core/src/editor/ex_parse.rs`. \
+`parse_write_quit()` returns `Option<Vec<ExWriteQuit>>` — None for non-matching \
+commands, Some for valid compound commands.\n\n\
+See also: [[concept:command]], [[concept:options]]\n";
+
+const CONCEPT_SET_SYNTAX: &str = "\
+**`:set` option syntax** — vim-style option configuration.\n\n\
+## Syntax Forms\n\n\
+| Syntax | Effect |\n\
+|--------|--------|\n\
+| `:set option` | Enable (bool) or query (non-bool) |\n\
+| `:set nooption` | Disable bool option |\n\
+| `:set option!` | Toggle bool option |\n\
+| `:set option?` | Query current value |\n\
+| `:set option value` | Assign value |\n\
+| `:set option \"value with spaces\"` | Quoted value |\n\n\
+## Tab Completion\n\n\
+- `:set <Tab>` completes option names\n\
+- `:set option <Tab>` completes values:\n\
+  - Bool options: `true`, `false`\n\
+  - Enum options: cycles through valid values\n\
+  - Theme options: lists bundled themes\n\n\
+## Implementation\n\
+The parser lives in `crates/core/src/editor/ex_parse.rs` (`parse_set_args()`). \
+Value completion is in `crates/core/src/editor/file_ops.rs` (`complete_set_value()`).\n\n\
+See also: [[concept:options]], [[concept:command]]\n";
+
+const CONCEPT_SCROLLBAR: &str = "\
+**Vertical scrollbar** for the GUI rendering backend.\n\n\
+## Configuration\n\
+- `:set scrollbar true` (default: enabled)\n\
+- `:set scrollbar false` to disable\n\n\
+## Layout\n\
+The scrollbar occupies 1 column at the right edge of the text area. \
+Space is allocated in `FrameLayout::compute_layout()` *before* wrap/layout \
+computation, so text wrapping respects the reduced width.\n\n\
+## Rendering\n\
+- **Track**: full content-area height, theme color `ui.scrollbar.track`\n\
+- **Thumb**: proportional to viewport/total ratio, theme color `ui.scrollbar.thumb`\n\
+- Minimum thumb height: 1 cell\n\n\
+## Mouse Interaction\n\
+Click in the scrollbar column to jump to that scroll position.\n\n\
+## Nyan Mode\n\
+`:set nyan_mode true` enables a rainbow progress bar in the status line, \
+showing scroll position as a filled bar with a cat marker.\n\n\
+See also: [[concept:gui]], [[concept:options]]\n";
 
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
@@ -842,6 +922,27 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_MARKDOWN,
         )
         .with_tags(["markdown", "editing"]),
+        Node::new(
+            "concept:ex-commands",
+            "Concept: Ex-Command Grammar",
+            NodeKind::Concept,
+            CONCEPT_EX_COMMANDS,
+        )
+        .with_tags(["commands", "vim"]),
+        Node::new(
+            "concept:set-syntax",
+            "Concept: :set Option Syntax",
+            NodeKind::Concept,
+            CONCEPT_SET_SYNTAX,
+        )
+        .with_tags(["options", "configuration", "vim"]),
+        Node::new(
+            "concept:scrollbar",
+            "Concept: Scrollbar",
+            NodeKind::Concept,
+            CONCEPT_SCROLLBAR,
+        )
+        .with_tags(["gui", "rendering"]),
     ]
 }
 
@@ -868,7 +969,10 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:gui|GUI Backend]] — dual rendering (terminal + GUI), mouse, font config
 - [[concept:git-status|Git Status]] — Magit-lite porcelain UI
 - [[concept:org-mode|Org-mode]] — Structural editing, folding, narrowing, and task management\n\
-- [[concept:markdown|Markdown]] — Structural editing parity with org-mode for `#` headings
+- [[concept:markdown|Markdown]] — Structural editing parity with org-mode for `#` headings\n\
+- [[concept:ex-commands|Ex-Command Grammar]] — Tokenizer for w/q/x compound commands\n\
+- [[concept:set-syntax|:set Syntax]] — Vim-style option configuration (no-prefix, toggle, query)\n\
+- [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]

@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,891 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,949 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode.
 
 ---
 
@@ -67,7 +67,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Vim Parity
 - [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
 - [x] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15) (v0.5.0).
-- [ ] **Chained Ex Command Abbreviations**: Parse compound ex commands like `:wqa` (write-quit-all), `:xa` (save-all-quit), `:wqa!` (force variant). Tokenize the command string into a sequence of known abbreviations (`w`→write, `q`→quit, `a`→all, `!`→force) and execute in order. Also: `:wa` (write-all), `:qa!` (quit-all-force). Vim users expect these as muscle memory.
+- [x] **Chained Ex Command Abbreviations**: Tokenizer framework in `ex_parse.rs` — parses `w`/`q`/`x`/`a`/`!` grammar into structured `ExWriteQuit` actions. Supports `:wq`, `:wq!`, `:wqa`, `:wqa!`, `:xa`, `:xa!` and all combinations (v0.6.0).
 
 ### Setup & Onboarding
 - [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
@@ -92,7 +92,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [x] **FrameLayout Unified Layout Pass**: Single source of truth for text positioning (`layout.rs`). `compute_layout()` runs once per frame per window; renderer, cursor, and completion popup all consume the same `FrameLayout`. Fold-aware, scale-aware, wrap-aware. Eliminated `PixelYMap`, `accumulated_scaled_col()`, `heading_extra_rows()`.
 - [x] **Popup Pixel-Y Migration**: Completion popup now uses `FrameLayout::display_row_of()` for fold/scale-aware cursor positioning.
 - [x] **Canvas Clip**: `set_clip_height()` prevents descender overflow at window bottom edge.
-- [ ] **Mouse Click FrameLayout**: Mouse handler uses cell-based coordinates — clicks near scaled headings/folds land on wrong line. Requires reverse lookup from FrameLayout across crate boundary (gui→core). Tracked as follow-up.
+- [x] **Mouse Click FrameLayout**: `pixel_to_buffer_position()` in FrameLayout for pixel-precise mouse conversion. GUI caches `last_focused_layout`, falls back to grid math. Scrollbar click detection included (v0.6.0).
 
 ### Buffer Safety
 - [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
@@ -107,7 +107,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,891 tests)
+### What We Have (1,949 tests)
 
 | Category | Features |
 |----------|----------|
@@ -121,7 +121,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **Scroll** | Ctrl-U/D/F/B, zz/zt/zb, horizontal scroll in split windows |
 | **Windows** | split v/h, close, focus hjkl, binary tree layout |
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
-| **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
+| **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker), ex-command tokenizer (w/q/x/a/! compounds) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
 | **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard, tool tiers (Core/Extended), 10 tool categories, `request_tools`, editor state save/restore, 107 AI tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
@@ -131,7 +131,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
 | **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 13 AI debug tools |
 | **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
-| **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
+| **GUI** | winit+Skia, mouse (click+scroll, FrameLayout pixel-precise), splash screen, font config/zoom, FPS overlay, desktop launcher, vertical scrollbar, nyan mode |
 | **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
 | **CI** | GitHub Actions (check/test/clippy/fmt/e2e), tag-based release, dependabot, git-cliff changelog, `--check-config` validation |
 
@@ -175,9 +175,14 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
 | 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
 | 31 | Org table styling: column alignment, Tab-to-cell, auto-align, horizontal rules, cell highlighting | future |
-| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | future |
+| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | v0.6.0 ✅ |
 | 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | v0.5.1 ✅ |
-| 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — compound command parsing | future |
+| 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — ex-command tokenizer framework | v0.6.0 ✅ |
+| 35 | Vertical scrollbar: pixel-precise track+thumb, theme-aware, 1-col allocation | v0.6.0 ✅ |
+| 36 | Nyan mode: rainbow progress bar in status line (`:set nyan_mode true`) | v0.6.0 ✅ |
+| 37 | `:set` vim-style parsing: `no`-prefix, `!` toggle, `?` query, quoted values, value tab completion | v0.6.0 ✅ |
+| 38 | Mouse click FrameLayout: pixel-precise positioning for scaled/folded lines | v0.6.0 ✅ |
+| 39 | Insert heading (M-Enter): respects level, inserts after subtree | v0.6.0 ✅ |
 | 35 | Cached lazy theme resolution: unresolved style strings → palette-aware cache rebuild on theme cycle/mutation | v0.5.1 ✅ |
 
 ---
@@ -1114,7 +1119,7 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
 ### M9: Mouse & Selection
 - [x] Click to place cursor (done in M3)
 - [x] Click-drag to select text (mouse press/drag/release → visual selection)
-- [ ] Scrollbar (vertical)
+- [x] Scrollbar (vertical) — pixel-precise track+thumb in `scrollbar.rs`, theme-aware colors, allocates 1 col from text area (v0.6.0)
 - [x] Mouse wheel scroll (done in M3)
 - [x] Selection highlighting (done in M3 — visual mode bg/fg in buffer_render.rs)
 
@@ -1131,7 +1136,7 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 - [x] Move subtree up/down (`M-j`/`M-k`, `M-Up`/`M-Down`) — fold-aware
 - [x] Narrow/widen subtree (`SPC m s n`/`SPC m s w`)
 - [x] zM/zR fold-all/unfold-all for org headings
-- [ ] Insert heading (M-Enter respects level)
+- [x] Insert heading (M-Enter respects level) — inserts at same level after subtree, enters insert mode (v0.6.0)
 
 ### M2: TODO & Agenda
 - [ ] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked)
