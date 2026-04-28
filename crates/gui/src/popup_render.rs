@@ -1,11 +1,11 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
-use mae_core::{Editor, PalettePurpose, SyntaxSpanMap};
+use mae_core::{Editor, PalettePurpose};
 use skia_safe::Color4f;
 use unicode_width::UnicodeWidthChar;
 
-use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
+use crate::layout::FrameLayout;
 use crate::theme;
 
 /// Truncate `s` from the start, keeping the last `max_cols - 1` display columns
@@ -62,7 +62,7 @@ pub fn render_completion_popup(
     _area_col: usize,
     area_width: usize,
     area_height: usize,
-    syntax_spans: &SyntaxSpanMap,
+    frame_layout: Option<&FrameLayout>,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
@@ -70,14 +70,10 @@ pub fn render_completion_popup(
     }
 
     let win = editor.window_mgr.focused_window();
-    let buf = &editor.buffers[win.buffer_idx];
-    let heading_extra = buffer_render::heading_extra_rows(
-        buf,
-        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
-        win.scroll_offset,
-        win.cursor_row,
-    );
-    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) + heading_extra;
+    // Use FrameLayout's fold/scale-aware display_row_of for cursor screen position.
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
     let cursor_screen_col = win.cursor_col;
 
     const MAX_ITEMS: usize = 10;

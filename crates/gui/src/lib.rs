@@ -386,7 +386,7 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    &syntax_spans,
+                    focused_frame_layout.as_ref(),
                 );
             }
         }

@@ -10,8 +10,6 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
-// PixelYMap removed — superseded by layout::FrameLayout.
-
 /// Compute the font scale for an org heading level.
 /// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
 pub fn org_heading_scale_for_level(level: u8) -> f32 {
@@ -20,15 +18,6 @@ pub fn org_heading_scale_for_level(level: u8) -> f32 {
         2 => 1.3,
         3 => 1.15,
         _ => 1.0,
-    }
-}
-
-/// Compute the number of extra display rows a scaled heading consumes.
-fn extra_rows_for_scale(scale: f32) -> usize {
-    if scale > 1.0 {
-        (scale - 1.0 + 0.5).ceil() as usize
-    } else {
-        0
     }
 }
 
@@ -76,54 +65,6 @@ pub fn line_heading_scale(
     } else {
         1.0
     }
-}
-
-/// Count extra display rows consumed by scaled org headings in a range of lines.
-/// Used by cursor positioning and popup rendering to offset screen coordinates.
-pub fn heading_extra_rows(
-    buf: &mae_core::Buffer,
-    syntax_spans: Option<&[HighlightSpan]>,
-    from_line: usize,
-    to_line: usize,
-) -> usize {
-    let spans = match syntax_spans {
-        Some(s) if !s.is_empty() => s,
-        _ => return 0,
-    };
-    let rope = buf.rope();
-    let line_count = buf.line_count();
-    let mut extra = 0;
-    for ln in from_line..to_line.min(line_count) {
-        let line_char_start = rope.line_to_char(ln);
-        let line_len = rope.line(ln).len_chars();
-        // Exclude trailing newline from char count for byte range.
-        let text_len = if ln + 1 < line_count {
-            line_len.saturating_sub(1)
-        } else {
-            line_len
-        };
-        let line_byte_start = rope.char_to_byte(line_char_start);
-        let line_byte_end = rope.char_to_byte(line_char_start + text_len);
-
-        let start_idx = spans.partition_point(|s| s.byte_end <= line_byte_start);
-        let has_heading = spans[start_idx..]
-            .iter()
-            .take_while(|s| s.byte_start < line_byte_end)
-            .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
-        if has_heading {
-            let line_chars: Vec<char> = rope.line(ln).chars().collect();
-            let level = if line_chars.first() == Some(&'*') {
-                line_chars.iter().take_while(|&&c| c == '*').count()
-            } else if line_chars.first() == Some(&'#') {
-                line_chars.iter().take_while(|&&c| c == '#').count()
-            } else {
-                0
-            };
-            let scale = org_heading_scale_for_level(level.min(255) as u8);
-            extra += extra_rows_for_scale(scale);
-        }
-    }
-    extra
 }
 
 /// Render a text buffer's content using a pre-computed `FrameLayout`.
@@ -832,14 +773,6 @@ mod tests {
     }
 
     #[test]
-    fn extra_rows_for_scale_values() {
-        assert_eq!(extra_rows_for_scale(1.0), 0);
-        assert_eq!(extra_rows_for_scale(1.15), 1);
-        assert_eq!(extra_rows_for_scale(1.3), 1);
-        assert_eq!(extra_rows_for_scale(1.5), 1);
-    }
-
-    #[test]
     fn help_buffer_heading_scale_with_markup_spans() {
         // Simulate help buffer with markup.heading spans generated from `*` prefix lines.
         let mut buf = mae_core::Buffer::new();
@@ -880,36 +813,5 @@ mod tests {
         // `** Details` (level 2) should scale to 1.3
         let scale2 = line_heading_scale(&buf, Some(&spans), 2);
         assert_eq!(scale2, 1.3);
-    }
-
-    #[test]
-    fn help_buffer_heading_extra_rows() {
-        let mut buf = mae_core::Buffer::new();
-        buf.insert_text_at(0, "* H1\ntext\n** H2\n");
-        let rope = buf.rope();
-        let mut spans: Vec<HighlightSpan> = Vec::new();
-        for line_idx in 0..buf.line_count() {
-            let line = rope.line(line_idx);
-            let star_count = line.chars().take_while(|&c| c == '*').count();
-            if star_count > 0 && line.len_chars() > star_count && line.char(star_count) == ' ' {
-                let line_start = rope.line_to_char(line_idx);
-                let line_len = line.len_chars();
-                let text_len = if line_idx + 1 < buf.line_count() {
-                    line_len.saturating_sub(1)
-                } else {
-                    line_len
-                };
-                let byte_start = rope.char_to_byte(line_start);
-                let byte_end = rope.char_to_byte(line_start + text_len);
-                spans.push(HighlightSpan {
-                    byte_start,
-                    byte_end,
-                    theme_key: "markup.heading",
-                });
-            }
-        }
-        // Lines 0 and 2 are headings. Extra rows should be > 0.
-        let extra = heading_extra_rows(&buf, Some(&spans), 0, 3);
-        assert!(extra > 0, "expected extra rows for 2 headings, got 0");
     }
 }

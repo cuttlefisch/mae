@@ -89,7 +89,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Rendering Infrastructure
 - [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `PixelYMap`. Enables zero-gap heading rendering, future inline images, code block padding.
-- [ ] **Popup Pixel-Y Migration**: Migrate `popup_render.rs` from `heading_extra_rows()` integer-row estimation to `PixelYMap`-based pixel-Y positioning. Popups (completion, file picker, command palette) should anchor to exact pixel positions near variable-height lines.
+- [x] **Popup Pixel-Y Migration**: Completion popup now uses `FrameLayout::display_row_of()` for fold/scale-aware cursor positioning. `heading_extra_rows()` removed.
 
 ### Buffer Safety
 - [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
