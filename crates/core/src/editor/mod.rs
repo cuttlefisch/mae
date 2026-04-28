@@ -125,6 +125,13 @@ pub struct EditorStateSnapshot {
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub window_mgr: WindowManager,
+    /// Saved layout state for window maximize/restore toggle.
+    pub saved_maximize_layout: Option<(
+        std::collections::HashMap<crate::window::WindowId, crate::window::Window>,
+        crate::window::LayoutNode,
+        crate::window::WindowId,
+        crate::window::WindowId,
+    )>,
     pub mode: Mode,
     pub running: bool,
     pub status_msg: String,
@@ -491,6 +498,7 @@ impl Editor {
         Editor {
             buffers: vec![Buffer::new()],
             window_mgr: WindowManager::new(0),
+            saved_maximize_layout: None,
             mode: Mode::Normal,
             running: true,
             status_msg: String::new(),

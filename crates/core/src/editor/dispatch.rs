@@ -1052,6 +1052,36 @@ impl Editor {
             "focus-right" => self.focus_direction(Direction::Right),
             "focus-up" => self.focus_direction(Direction::Up),
             "focus-down" => self.focus_direction(Direction::Down),
+            "window-grow" => {
+                self.window_mgr.adjust_ratio(Direction::Right, 0.05);
+            }
+            "window-shrink" => {
+                self.window_mgr.adjust_ratio(Direction::Left, 0.05);
+            }
+            "window-balance" => {
+                self.window_mgr.balance();
+            }
+            "window-maximize" => {
+                let mut saved = self.saved_maximize_layout.take();
+                self.window_mgr.maximize_toggle(&mut saved);
+                self.saved_maximize_layout = saved;
+            }
+            "window-move-left" => {
+                let area = self.default_area();
+                self.window_mgr.move_window(Direction::Left, area);
+            }
+            "window-move-right" => {
+                let area = self.default_area();
+                self.window_mgr.move_window(Direction::Right, area);
+            }
+            "window-move-up" => {
+                let area = self.default_area();
+                self.window_mgr.move_window(Direction::Up, area);
+            }
+            "window-move-down" => {
+                let area = self.default_area();
+                self.window_mgr.move_window(Direction::Down, area);
+            }
 
             // Diagnostics
             "view-messages" => {

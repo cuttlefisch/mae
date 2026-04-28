@@ -810,6 +810,158 @@ impl WindowManager {
         }
     }
 
+    // --- Resize / Balance / Maximize / Move ---
+
+    /// Adjust the split ratio of the split containing the focused window.
+    /// `delta` is ±0.05 typically. Direction: `Left`/`Up` adjust the first
+    /// child, `Right`/`Down` adjust the second.
+    pub fn adjust_ratio(&mut self, direction: Direction, delta: f32) {
+        Self::adjust_ratio_recursive(&mut self.layout, self.focused, direction, delta);
+    }
+
+    fn adjust_ratio_recursive(
+        node: &mut LayoutNode,
+        target: WindowId,
+        direction: Direction,
+        delta: f32,
+    ) -> bool {
+        match node {
+            LayoutNode::Leaf(_) => false,
+            LayoutNode::Split {
+                direction: split_dir,
+                ratio,
+                first,
+                second,
+            } => {
+                let in_first = Self::contains_leaf(first, target);
+                let in_second = Self::contains_leaf(second, target);
+                if !in_first && !in_second {
+                    return false;
+                }
+                // Only adjust if the split orientation matches the direction.
+                let matching = matches!(
+                    (split_dir, direction),
+                    (SplitDirection::Vertical, Direction::Left | Direction::Right)
+                        | (SplitDirection::Horizontal, Direction::Up | Direction::Down)
+                );
+                if matching && (in_first || in_second) {
+                    // "grow" = increase focused side. If focused is in first, grow means more ratio.
+                    let grow = matches!(direction, Direction::Right | Direction::Down);
+                    if in_first {
+                        *ratio = (*ratio + if grow { delta } else { -delta }).clamp(0.1, 0.9);
+                    } else {
+                        *ratio = (*ratio + if grow { -delta } else { delta }).clamp(0.1, 0.9);
+                    }
+                    return true;
+                }
+                // Recurse into the subtree that contains the target.
+                if in_first {
+                    Self::adjust_ratio_recursive(first, target, direction, delta)
+                } else {
+                    Self::adjust_ratio_recursive(second, target, direction, delta)
+                }
+            }
+        }
+    }
+
+    /// Set all split ratios to 0.5 recursively.
+    pub fn balance(&mut self) {
+        Self::balance_recursive(&mut self.layout);
+    }
+
+    fn balance_recursive(node: &mut LayoutNode) {
+        if let LayoutNode::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } = node
+        {
+            *ratio = 0.5;
+            Self::balance_recursive(first);
+            Self::balance_recursive(second);
+        }
+    }
+
+    /// Toggle maximize: save layout and replace with single focused leaf,
+    /// or restore the saved layout.
+    pub fn maximize_toggle(
+        &mut self,
+        saved_layout: &mut Option<(HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId)>,
+    ) {
+        if let Some((windows, layout, focused, next_id)) = saved_layout.take() {
+            // Restore.
+            self.windows = windows;
+            self.layout = layout;
+            self.focused = focused;
+            self.next_id = next_id;
+        } else {
+            // Save and maximize.
+            *saved_layout = Some(self.snapshot());
+            // Keep only the focused window.
+            let focused = self.focused;
+            self.layout = LayoutNode::Leaf(focused);
+            self.windows.retain(|&id, _| id == focused);
+        }
+    }
+
+    /// Move the focused window in the given direction by swapping it with its
+    /// neighbor. Returns true if a swap occurred.
+    pub fn move_window(&mut self, dir: Direction, total: Rect) -> bool {
+        let rects = self.layout_rects(total);
+        let focused_rect = match rects.iter().find(|(id, _)| *id == self.focused) {
+            Some((_, r)) => *r,
+            None => return false,
+        };
+        let fx = focused_rect.x as i32 + focused_rect.width as i32 / 2;
+        let fy = focused_rect.y as i32 + focused_rect.height as i32 / 2;
+
+        let mut best: Option<(WindowId, i32)> = None;
+        for &(id, rect) in &rects {
+            if id == self.focused {
+                continue;
+            }
+            let cx = rect.x as i32 + rect.width as i32 / 2;
+            let cy = rect.y as i32 + rect.height as i32 / 2;
+            let is_valid = match dir {
+                Direction::Left => cx < fx,
+                Direction::Right => cx > fx,
+                Direction::Up => cy < fy,
+                Direction::Down => cy > fy,
+            };
+            if is_valid {
+                let dist = (cx - fx).abs() + (cy - fy).abs();
+                if best.is_none() || dist < best.unwrap().1 {
+                    best = Some((id, dist));
+                }
+            }
+        }
+
+        if let Some((neighbor_id, _)) = best {
+            // Swap the two window IDs in the layout tree.
+            Self::swap_leaves(&mut self.layout, self.focused, neighbor_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn swap_leaves(node: &mut LayoutNode, a: WindowId, b: WindowId) {
+        match node {
+            LayoutNode::Leaf(id) => {
+                if *id == a {
+                    *id = b;
+                } else if *id == b {
+                    *id = a;
+                }
+            }
+            LayoutNode::Split { first, second, .. } => {
+                Self::swap_leaves(first, a, b);
+                Self::swap_leaves(second, a, b);
+            }
+        }
+    }
+
     /// Take a snapshot of the window manager state (layout, windows, focus).
     pub fn snapshot(&self) -> (HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId) {
         (
@@ -1301,5 +1453,129 @@ mod tests {
         win.ensure_scroll_horizontal(80);
         // One past edge — needs shift
         assert_eq!(win.col_offset, 1);
+    }
+
+    // --- Resize / Balance / Maximize / Move tests ---
+
+    #[test]
+    fn adjust_ratio_grows_and_shrinks() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Initial ratio is 0.5
+        assert!(
+            matches!(&wm.layout, LayoutNode::Split { ratio, .. } if (*ratio - 0.5).abs() < 0.01)
+        );
+        wm.adjust_ratio(Direction::Right, 0.05);
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!((*ratio - 0.55).abs() < 0.01, "ratio should grow: {}", ratio);
+        }
+        wm.adjust_ratio(Direction::Left, 0.05);
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!(
+                (*ratio - 0.5).abs() < 0.01,
+                "ratio should shrink back: {}",
+                ratio
+            );
+        }
+    }
+
+    #[test]
+    fn adjust_ratio_clamps() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Shrink many times — should clamp at 0.1
+        for _ in 0..100 {
+            wm.adjust_ratio(Direction::Left, 0.05);
+        }
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!(*ratio >= 0.1, "ratio should clamp at 0.1: {}", ratio);
+        }
+    }
+
+    #[test]
+    fn balance_resets_all_ratios() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.adjust_ratio(Direction::Right, 0.2);
+        wm.balance();
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!((*ratio - 0.5).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn maximize_and_restore() {
+        let mut wm = WindowManager::new(0);
+        let new_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert_eq!(wm.window_count(), 2);
+
+        let mut saved = None;
+        // Maximize — saves layout, leaves only focused window.
+        wm.maximize_toggle(&mut saved);
+        assert!(saved.is_some(), "layout should be saved");
+        assert_eq!(wm.window_count(), 1);
+        assert!(matches!(wm.layout, LayoutNode::Leaf(id) if id == 0));
+
+        // Restore.
+        wm.maximize_toggle(&mut saved);
+        assert!(saved.is_none(), "saved should be consumed");
+        assert_eq!(wm.window_count(), 2);
+        assert!(wm.window(new_id).is_some());
+    }
+
+    #[test]
+    fn move_window_swaps_positions() {
+        let mut wm = WindowManager::new(0);
+        let new_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Window 0 is left (first), new_id is right (second).
+        assert_eq!(wm.focused_id(), 0);
+
+        wm.move_window(Direction::Right, default_area());
+        // After swap, window 0 should be on the right side of the layout.
+        // The layout tree's first child should now be new_id, second = 0.
+        if let LayoutNode::Split { first, second, .. } = &wm.layout {
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == new_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_window_at_boundary_is_noop() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Window 0 is already at leftmost — moving left should be noop.
+        let moved = wm.move_window(Direction::Left, default_area());
+        assert!(!moved);
+    }
+
+    #[test]
+    fn single_window_resize_noop() {
+        let mut wm = WindowManager::new(0);
+        // No split → adjust_ratio should be harmless noop.
+        wm.adjust_ratio(Direction::Right, 0.05);
+        assert!(matches!(wm.layout, LayoutNode::Leaf(0)));
+    }
+
+    #[test]
+    fn single_window_maximize_noop() {
+        let mut wm = WindowManager::new(0);
+        let mut saved = None;
+        wm.maximize_toggle(&mut saved);
+        // Single window — save still works but it's already maximized.
+        assert_eq!(wm.window_count(), 1);
     }
 }

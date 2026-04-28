@@ -224,6 +224,20 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC w j"), "focus-down");
         normal.bind(parse_key_seq_spaced("SPC w k"), "focus-up");
         normal.bind(parse_key_seq_spaced("SPC w l"), "focus-right");
+        // Resize: +/-/= (Doom parity)
+        normal.bind(parse_key_seq_spaced("SPC w +"), "window-grow");
+        normal.bind(parse_key_seq_spaced("SPC w -"), "window-shrink");
+        normal.bind(parse_key_seq_spaced("SPC w ="), "window-balance");
+        normal.bind(parse_key_seq_spaced("SPC w m"), "window-maximize");
+        // Move: H/J/K/L (uppercase = move window, lowercase = focus)
+        normal.bind(parse_key_seq_spaced("SPC w H"), "window-move-left");
+        normal.bind(parse_key_seq_spaced("SPC w J"), "window-move-down");
+        normal.bind(parse_key_seq_spaced("SPC w K"), "window-move-up");
+        normal.bind(parse_key_seq_spaced("SPC w L"), "window-move-right");
+        // Ctrl-W resize shortcuts
+        normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
+        normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
+        normal.bind(parse_key_seq_spaced("C-w ="), "window-balance");
         // +ai
         normal.bind(parse_key_seq_spaced("SPC a a"), "open-ai-agent");
         normal.bind(parse_key_seq_spaced("SPC a p"), "ai-prompt");
