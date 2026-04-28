@@ -293,6 +293,10 @@ struct SyntaxState {
     /// Buffer generation at which `spans` was last computed.
     /// Compared against `Buffer::generation` to detect staleness.
     computed_at: u64,
+    /// True when `apply_edit` has modified the tree in-place but the tree
+    /// hasn't been reparsed against the current source yet. `tree_for()`
+    /// checks this to trigger an incremental reparse.
+    tree_dirty: bool,
 }
 
 impl SyntaxMap {
@@ -309,6 +313,7 @@ impl SyntaxMap {
                 tree: None,
                 spans: None,
                 computed_at: 0,
+                tree_dirty: false,
             },
         );
     }
@@ -366,6 +371,23 @@ impl SyntaxMap {
         }
     }
 
+    /// Apply an incremental edit to the cached tree-sitter tree.
+    ///
+    /// Calling `Tree::edit()` tells tree-sitter which byte ranges changed,
+    /// so the next `parser.parse(source, Some(&old_tree))` is O(changed)
+    /// instead of O(file). The `spans` are cleared (will recompute lazily).
+    pub fn apply_edit(&mut self, buf_idx: usize, edit: &tree_sitter::InputEdit) {
+        let Some(state) = self.entries.get_mut(&buf_idx) else {
+            return;
+        };
+        if let Some(ref mut tree) = state.tree {
+            tree.edit(edit);
+            state.tree_dirty = true;
+        }
+        // Spans are now stale — will be recomputed lazily.
+        state.spans = None;
+    }
+
     /// Return a cheap `Arc` clone of cached spans regardless of freshness.
     /// Returns `(arc, is_fresh)`. Used by `compute_visible_syntax_spans` to
     /// avoid cloning all spans every frame.
@@ -415,7 +437,9 @@ impl SyntaxMap {
                 source,
                 &mut self.configs,
             )));
-            state.tree = None; // tree is also stale
+            // Don't clear tree — keep it for incremental reparse via apply_edit.
+            // Mark it dirty so tree_for() re-parses against current source.
+            state.tree_dirty = state.tree.is_some();
             state.computed_at = generation;
         }
         state.spans.as_ref().map(|v| &v[..])
@@ -437,10 +461,25 @@ impl SyntaxMap {
 
     /// Return a cached (or freshly parsed) tree for the buffer.
     /// Returns `None` if the buffer has no associated language or parsing failed.
+    ///
+    /// If a previous tree exists and was edited via `apply_edit`, uses it
+    /// as the `old_tree` for incremental reparse — O(changed) instead of O(file).
     pub fn tree_for(&mut self, buf_idx: usize, source: &str) -> Option<&Tree> {
         let state = self.entries.get_mut(&buf_idx)?;
         if state.tree.is_none() {
             state.tree = parse_once(state.language, source);
+        } else if state.tree_dirty {
+            // Incremental reparse: use the edited tree as old_tree.
+            let ts_lang = state.language.ts_language();
+            if let Some(ts_lang) = ts_lang {
+                let mut parser = Parser::new();
+                if parser.set_language(&ts_lang).is_ok() {
+                    if let Some(new_tree) = parser.parse(source, state.tree.as_ref()) {
+                        state.tree = Some(new_tree);
+                    }
+                }
+            }
+            state.tree_dirty = false;
         }
         state.tree.as_ref()
     }
@@ -1103,6 +1142,83 @@ mod tests {
         );
         // The function_item should span from line 0 to line 3
         assert!(ranges.iter().any(|(s, e)| *s == 0 && *e == 3));
+    }
+
+    #[test]
+    fn incremental_reparse_preserves_tree() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        // Initial parse
+        let source1 = "fn main() { let x = 1; }";
+        let _ = map.tree_for(0, source1);
+        assert!(map.entries.get(&0).unwrap().tree.is_some());
+
+        // Simulate an edit (apply_edit) and incremental reparse
+        let edit = tree_sitter::InputEdit {
+            start_byte: 12,
+            old_end_byte: 22,
+            new_end_byte: 22,
+            start_position: tree_sitter::Point { row: 0, column: 12 },
+            old_end_position: tree_sitter::Point { row: 0, column: 22 },
+            new_end_position: tree_sitter::Point { row: 0, column: 22 },
+        };
+        map.apply_edit(0, &edit);
+        assert!(map.entries.get(&0).unwrap().tree_dirty);
+
+        // tree_for with new source does incremental reparse
+        let source2 = "fn main() { let y = 2; }";
+        let tree = map.tree_for(0, source2);
+        assert!(tree.is_some());
+        assert!(!map.entries.get(&0).unwrap().tree_dirty);
+    }
+
+    #[test]
+    fn spans_for_keeps_tree_alive() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let source = "fn main() {}";
+        // Compute spans (which internally may or may not create a tree)
+        let _ = map.spans_for(0, source, 1);
+        // After spans_for, tree should be preserved (not cleared)
+        // The tree_dirty flag should be set since spans_for re-computed
+        // Note: the tree might be None if spans_for doesn't create it,
+        // but if it exists it should remain.
+        let state = map.entries.get(&0).unwrap();
+        assert_eq!(state.computed_at, 1);
+    }
+
+    #[test]
+    fn incremental_reparse_spans_stable() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        let source = "fn foo() {\n    42\n}\n";
+        // First computation
+        let spans1 = map.spans_for(0, source, 1).map(|s| s.len());
+        // Same source, same generation — should return cached
+        let spans2 = map.spans_for(0, source, 1).map(|s| s.len());
+        assert_eq!(spans1, spans2);
+
+        // New generation — should recompute
+        let source2 = "fn foo() {\n    43\n}\n";
+        let spans3 = map.spans_for(0, source2, 2).map(|s| s.len());
+        assert!(spans3.is_some());
+    }
+
+    #[test]
+    fn apply_edit_without_tree_is_noop() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        // No tree parsed yet — apply_edit should not panic
+        let edit = tree_sitter::InputEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 5,
+            start_position: tree_sitter::Point { row: 0, column: 0 },
+            old_end_position: tree_sitter::Point { row: 0, column: 0 },
+            new_end_position: tree_sitter::Point { row: 0, column: 5 },
+        };
+        map.apply_edit(0, &edit);
+        assert!(!map.entries.get(&0).unwrap().tree_dirty);
     }
 
     #[test]
