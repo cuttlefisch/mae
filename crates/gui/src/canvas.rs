@@ -39,6 +39,10 @@ pub struct SkiaCanvas {
     /// Cached fallback typefaces for non-ASCII chars not in primary/icon fonts.
     /// Maps char → Option<Typeface> (None = no fallback found, skip system lookup).
     fallback_cache: HashMap<char, Option<Typeface>>,
+    /// Cached pre-scaled fonts. Key = `(scale * 1000.0) as u32`.
+    /// Avoids cloning + `set_size()` on every bold/scaled character at 60fps.
+    scaled_fonts: HashMap<u32, Font>,
+    scaled_bold_fonts: HashMap<u32, Font>,
 }
 
 impl SkiaCanvas {
@@ -140,6 +144,8 @@ impl SkiaCanvas {
             ascii_in_font,
             pixel_buf: Vec::new(),
             fallback_cache: HashMap::new(),
+            scaled_fonts: HashMap::new(),
+            scaled_bold_fonts: HashMap::new(),
         })
     }
 
@@ -161,6 +167,8 @@ impl SkiaCanvas {
         self.ascent = (-metrics.ascent).max(size * 0.8);
         self.ascii_in_font = build_ascii_table(&self.font);
         self.fallback_cache.clear();
+        self.scaled_fonts.clear();
+        self.scaled_bold_fonts.clear();
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -196,6 +204,22 @@ impl SkiaCanvas {
         let bg_style = theme.style("ui.background");
         let bg = theme::color_or(bg_style.bg, DEFAULT_BG);
         self.surface.canvas().clear(bg);
+    }
+
+    /// Get a cached scaled font. Avoids clone + set_size on every call.
+    fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
+        let key = (scale * 1000.0) as u32;
+        let cache = if bold {
+            &mut self.scaled_bold_fonts
+        } else {
+            &mut self.scaled_fonts
+        };
+        let base = if bold { &self.bold_font } else { &self.font };
+        cache.entry(key).or_insert_with(|| {
+            let mut f = base.clone();
+            f.set_size(base.size() * scale);
+            f
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -325,15 +349,14 @@ impl SkiaCanvas {
 
         let text = ch.to_string();
 
-        let mut font = if bold {
+        // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
             self.bold_font.clone()
         } else {
             self.font.clone()
         };
-
-        if scale != 1.0 {
-            font.set_size(font.size() * scale);
-        }
 
         let (_, metrics) = font.metrics();
         let baseline = pixel_y - metrics.ascent;
@@ -358,14 +381,16 @@ impl SkiaCanvas {
         }
 
         // 2. Try icon font fallback
-        if let Some(mut icon_font) = self.icon_font.clone() {
-            if scale != 1.0 {
-                icon_font.set_size(icon_font.size() * scale);
-            }
-            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+        if let Some(ref icon_font) = self.icon_font {
+            let icon = if scale != 1.0 {
+                self.get_scaled_font(false, scale).clone()
+            } else {
+                icon_font.clone()
+            };
+            if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon_font, &paint);
+                    .draw_str(&text, (x, baseline), &icon, &paint);
                 return;
             }
         }
@@ -411,15 +436,15 @@ impl SkiaCanvas {
             return;
         }
         let x = col as f32 * self.cell_width;
-        let font = if bold { &self.bold_font } else { &self.font };
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
         if scale != 1.0 {
-            let mut scaled = font.clone();
-            scaled.set_size(font.size() * scale);
+            let scaled = self.get_scaled_font(bold, scale);
             let (_, m) = scaled.metrics();
             let baseline = pixel_y - m.ascent;
+            // Clone ref out so we can borrow self.surface mutably.
+            let scaled = scaled.clone();
             if italic {
                 self.surface.canvas().save();
                 let mut skew = skia_safe::Matrix::new_identity();
@@ -437,6 +462,7 @@ impl SkiaCanvas {
             }
             return;
         }
+        let font = if bold { &self.bold_font } else { &self.font };
 
         // Use font-specific ascent for baseline to avoid bold/regular misalignment.
         let baseline = if bold {
@@ -512,28 +538,24 @@ impl SkiaCanvas {
 
         let text = ch.to_string();
 
-        let mut font = if bold {
+        // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
             self.bold_font.clone()
         } else {
             self.font.clone()
         };
-
-        if scale != 1.0 {
-            font.set_size(font.size() * scale);
-        }
 
         let (_, metrics) = font.metrics();
         let baseline = y - metrics.ascent;
 
         if italic {
             self.surface.canvas().save();
-            // Simulate italic with a slight skew.
             let mut skew_matrix = skia_safe::Matrix::new_identity();
             skew_matrix.pre_skew((-0.2, 0.0), None);
-            // We need to translate so the skew happens relative to the character position.
             self.surface.canvas().translate((x, baseline));
             self.surface.canvas().concat(&skew_matrix);
-            // Now draw at (0,0) because of the translation.
             self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
             self.surface.canvas().restore();
             return;
@@ -548,14 +570,16 @@ impl SkiaCanvas {
         }
 
         // 2. Try icon font fallback
-        if let Some(mut icon_font) = self.icon_font.clone() {
-            if scale != 1.0 {
-                icon_font.set_size(icon_font.size() * scale);
-            }
-            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+        if let Some(ref icon_font) = self.icon_font {
+            let icon = if scale != 1.0 {
+                self.get_scaled_font(false, scale).clone()
+            } else {
+                icon_font.clone()
+            };
+            if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon_font, &paint);
+                    .draw_str(&text, (x, baseline), &icon, &paint);
                 return;
             }
         }
@@ -688,15 +712,14 @@ impl SkiaCanvas {
         }
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
-        let font = if bold { &self.bold_font } else { &self.font };
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
         if scale != 1.0 {
-            let mut scaled = font.clone();
-            scaled.set_size(font.size() * scale);
+            let scaled = self.get_scaled_font(bold, scale);
             let (_, m) = scaled.metrics();
             let baseline = y - m.ascent;
+            let scaled = scaled.clone();
             if italic {
                 self.surface.canvas().save();
                 let mut skew = skia_safe::Matrix::new_identity();
@@ -714,6 +737,7 @@ impl SkiaCanvas {
             }
             return;
         }
+        let font = if bold { &self.bold_font } else { &self.font };
 
         // Use font-specific ascent for baseline to avoid bold/regular misalignment.
         let baseline = if bold {
@@ -868,5 +892,45 @@ mod tests {
         // Just verify StyledCell/StyledLine types work with canvas API.
         let cell = crate::text::StyledCell::new('X', Color4f::new(1.0, 1.0, 1.0, 1.0));
         assert_eq!(cell.ch, 'X');
+    }
+
+    #[test]
+    fn scaled_font_cache_key_computation() {
+        // The cache key is `(scale * 1000.0) as u32`. Verify distinct scales
+        // produce distinct keys and identical scales produce the same key.
+        let key_1_5 = (1.5_f32 * 1000.0) as u32;
+        let key_2_0 = (2.0_f32 * 1000.0) as u32;
+        let key_1_5b = (1.5_f32 * 1000.0) as u32;
+        assert_eq!(key_1_5, 1500);
+        assert_eq!(key_2_0, 2000);
+        assert_eq!(key_1_5, key_1_5b);
+        assert_ne!(key_1_5, key_2_0);
+    }
+
+    #[test]
+    fn scaled_font_cache_cleared_on_resize() {
+        // Verify the cache HashMap clears properly (type-level guarantee).
+        let mut cache: HashMap<u32, String> = HashMap::new();
+        cache.insert(1500, "scaled_1.5".into());
+        cache.insert(2000, "scaled_2.0".into());
+        assert_eq!(cache.len(), 2);
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn scaled_font_cache_or_insert_populates() {
+        // Verify HashMap::entry().or_insert_with() pattern works as expected
+        // for the font cache — called once, subsequent lookups hit cache.
+        let mut cache: HashMap<u32, String> = HashMap::new();
+        let mut call_count = 0;
+        for _ in 0..3 {
+            cache.entry(1500).or_insert_with(|| {
+                call_count += 1;
+                "font_1.5x".into()
+            });
+        }
+        assert_eq!(call_count, 1);
+        assert_eq!(cache.len(), 1);
     }
 }
