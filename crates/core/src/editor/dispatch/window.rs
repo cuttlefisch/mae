@@ -71,6 +71,13 @@ impl Editor {
                 let area = self.default_area();
                 self.window_mgr.move_window(Direction::Down, area);
             }
+            "focus-next-window" => {
+                self.fire_hook("focus-out");
+                self.save_mode_to_buffer();
+                self.window_mgr.focus_next();
+                self.sync_mode_to_buffer();
+                self.fire_hook("focus-in");
+            }
             _ => return None,
         }
         Some(true)

@@ -433,6 +433,12 @@ pub struct Editor {
     pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
+    /// Pending file deletion: (path, close_buffer_after_delete).
+    /// Set by `file-tree-delete` or `delete-this-file`, consumed by `y`/`n` key handler.
+    pub pending_file_delete: Option<(std::path::PathBuf, bool)>,
+    /// Pending file tree action (rename/create). The command-line submit
+    /// path checks this after the user types a new name.
+    pub file_tree_action: Option<crate::file_tree::FileTreeAction>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -637,6 +643,8 @@ impl Editor {
             ai_target_buffer_idx: None,
             conversation_pair: None,
             file_tree_window_id: None,
+            pending_file_delete: None,
+            file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,

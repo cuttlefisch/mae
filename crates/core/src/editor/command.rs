@@ -194,6 +194,30 @@ impl Editor {
                 }
                 true
             }
+            "copy" => {
+                if let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let idx = self.active_buffer_idx();
+                    if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                        let new = std::path::PathBuf::from(new_path);
+                        match std::fs::copy(&old_path, &new) {
+                            Ok(_) => {
+                                self.open_file(new.display().to_string());
+                                self.set_status(format!(
+                                    "Copied: {} → {}",
+                                    old_path.display(),
+                                    new.display()
+                                ));
+                            }
+                            Err(e) => self.set_status(format!("Copy failed: {}", e)),
+                        }
+                    } else {
+                        self.set_status("Buffer has no file path");
+                    }
+                } else {
+                    self.set_status("Usage: :copy <new-path>");
+                }
+                true
+            }
             "saveas" => {
                 if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
                     let idx = self.active_buffer_idx();

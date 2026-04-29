@@ -159,6 +159,8 @@ impl Editor {
         normal.bind(vec![KeyPress::ctrl('=')], "increase-font-size");
         normal.bind(vec![KeyPress::ctrl('-')], "decrease-font-size");
         normal.bind(vec![KeyPress::ctrl('0')], "reset-font-size");
+        // File info (vim Ctrl-G)
+        normal.bind(vec![KeyPress::ctrl('g')], "file-info");
         // Alternate file
         normal.bind(vec![KeyPress::ctrl('6')], "alternate-file");
         // Dot repeat
@@ -211,6 +213,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
         normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
         normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
+        normal.bind(parse_key_seq_spaced("SPC b k"), "kill-buffer");
+        normal.bind(parse_key_seq_spaced("SPC b i"), "file-info");
         // +file
         normal.bind(parse_key_seq_spaced("SPC f f"), "find-file");
         // Ranger/dired-style directory browser: spatial traversal
@@ -238,6 +242,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC w J"), "window-move-down");
         normal.bind(parse_key_seq_spaced("SPC w K"), "window-move-up");
         normal.bind(parse_key_seq_spaced("SPC w L"), "window-move-right");
+        normal.bind(parse_key_seq_spaced("SPC w w"), "focus-next-window");
+        normal.bind(parse_key_seq_spaced("SPC w d"), "close-window");
         // Ctrl-W resize shortcuts
         normal.bind(parse_key_seq_spaced("C-w +"), "window-grow");
         normal.bind(parse_key_seq_spaced("C-w -"), "window-shrink");
@@ -279,6 +285,8 @@ impl Editor {
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
+        normal.bind(parse_key_seq_spaced("SPC q s"), "save-and-quit");
+        normal.bind(parse_key_seq_spaced("SPC q S"), "save-all-and-quit");
         // +search/syntax (tree-sitter structural selection + search)
         normal.bind(parse_key_seq_spaced("SPC s s"), "search-buffer");
         normal.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
@@ -300,13 +308,17 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC p d"), "project-browse");
         normal.bind(parse_key_seq_spaced("SPC p r"), "project-recent-files");
         normal.bind(parse_key_seq_spaced("SPC p p"), "project-switch");
+        normal.bind(parse_key_seq_spaced("SPC p a"), "add-project");
         // +file expansions
         normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
         normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
         normal.bind(parse_key_seq_spaced("SPC f R"), "rename-file");
+        normal.bind(parse_key_seq_spaced("SPC f n"), "new-buffer");
         normal.bind(parse_key_seq_spaced("SPC f c"), "edit-config");
-        normal.bind(parse_key_seq_spaced("SPC f C"), "edit-settings");
+        normal.bind(parse_key_seq_spaced("SPC f C"), "copy-this-file");
+        normal.bind(parse_key_seq_spaced("SPC f P"), "edit-settings");
         normal.bind(parse_key_seq_spaced("SPC f S"), "save-as");
+        normal.bind(parse_key_seq_spaced("SPC f D"), "delete-this-file");
         // +buffer expansions
         normal.bind(parse_key_seq_spaced("SPC b o"), "kill-other-buffers");
         normal.bind(parse_key_seq_spaced("SPC b S"), "save-all-buffers");
@@ -323,9 +335,13 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
         // +git
         normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
+        normal.bind(parse_key_seq_spaced("SPC g g"), "git-status");
         normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");
         normal.bind(parse_key_seq_spaced("SPC g d"), "git-diff");
         normal.bind(parse_key_seq_spaced("SPC g l"), "git-log");
+        normal.bind(parse_key_seq_spaced("SPC g c"), "git-commit");
+        normal.bind(parse_key_seq_spaced("SPC g S"), "git-stage-all");
+        normal.bind(parse_key_seq_spaced("SPC g U"), "git-unstage-all");
         // +open
         normal.bind(parse_key_seq_spaced("SPC o t"), "terminal");
         normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
@@ -673,6 +689,71 @@ mod tests {
             md_map.lookup(&keys),
             crate::keymap::LookupResult::Exact("md-widen")
         ));
+    }
+
+    #[test]
+    fn all_spc_bindings_resolve_to_registered_commands() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let spc = parse_key_seq("SPC");
+        let mut missing = Vec::new();
+        for (keys, cmd) in normal.bindings() {
+            // Only check SPC-prefixed bindings (leader key)
+            if keys.first() != spc.first() {
+                continue;
+            }
+            if !ed.commands.contains(cmd) {
+                missing.push(cmd.clone());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "SPC bindings target unregistered commands: {:?}",
+            missing
+        );
+    }
+
+    #[test]
+    fn new_spc_bindings_resolve_correctly() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let cases = vec![
+            ("SPC w w", "focus-next-window"),
+            ("SPC w d", "close-window"),
+            ("SPC b k", "kill-buffer"),
+            ("SPC b i", "file-info"),
+            ("SPC g c", "git-commit"),
+            ("SPC g S", "git-stage-all"),
+            ("SPC g U", "git-unstage-all"),
+            ("SPC g g", "git-status"),
+            ("SPC f n", "new-buffer"),
+            ("SPC f C", "copy-this-file"),
+            ("SPC f P", "edit-settings"),
+            ("SPC p a", "add-project"),
+            ("SPC q s", "save-and-quit"),
+            ("SPC q S", "save-all-and-quit"),
+        ];
+        for (seq, expected) in cases {
+            let keys = parse_key_seq_spaced(seq);
+            assert_eq!(
+                normal.lookup(&keys),
+                crate::keymap::LookupResult::Exact(expected),
+                "{} should resolve to {}",
+                seq,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_g_resolves_to_file_info() {
+        let ed = Editor::new();
+        let normal = ed.keymaps.get("normal").unwrap();
+        let keys = vec![KeyPress::ctrl('g')];
+        assert_eq!(
+            normal.lookup(&keys),
+            crate::keymap::LookupResult::Exact("file-info")
+        );
     }
 
     #[test]

@@ -18,6 +18,10 @@ impl Editor {
             "save-and-quit" => {
                 self.execute_command("wq");
             }
+            "save-all-and-quit" => {
+                self.dispatch_builtin("save-all-buffers");
+                self.execute_command("q");
+            }
             "next-buffer" => {
                 if self.buffers.len() <= 1 {
                     return Some(true);
@@ -132,6 +136,20 @@ impl Editor {
                     self.command_line = format!("rename {}", ps);
                     self.command_cursor = self.command_line.len();
                     self.set_status("Rename file: edit path and press Enter");
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+            }
+            "copy-this-file" => {
+                let path_str = self
+                    .active_buffer()
+                    .file_path()
+                    .map(|p| p.display().to_string());
+                if let Some(ps) = path_str {
+                    self.set_mode(crate::Mode::Command);
+                    self.command_line = format!("copy {}", ps);
+                    self.command_cursor = self.command_line.len();
+                    self.set_status("Copy file to: edit path and press Enter");
                 } else {
                     self.set_status("Buffer has no file path");
                 }

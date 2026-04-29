@@ -22,6 +22,16 @@ const SKIP_DIRS: &[&str] = &[
     ".direnv",
 ];
 
+/// Pending file tree action for rename/create confirmation via the command line.
+#[derive(Debug, Clone)]
+pub enum FileTreeAction {
+    /// Rename the file at the given path. Command-line is pre-filled with the current name.
+    Rename(PathBuf),
+    /// Create a new file or directory inside the given parent dir.
+    /// If the user's input ends with `/`, a directory is created.
+    Create(PathBuf),
+}
+
 /// A single entry in the file tree.
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
@@ -138,6 +148,76 @@ impl FileTree {
         }
     }
 
+    /// Move selection to the first entry.
+    pub fn move_to_first(&mut self) {
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Move selection to the last entry.
+    pub fn move_to_last(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = self.entries.len() - 1;
+        }
+    }
+
+    /// Collapse the parent directory of the selected entry and move selection to it.
+    pub fn close_parent(&mut self) {
+        if self.selected >= self.entries.len() {
+            return;
+        }
+        let entry = &self.entries[self.selected];
+        let parent = entry.path.parent().map(|p| p.to_path_buf());
+        if let Some(parent_path) = parent {
+            if parent_path == self.root {
+                return; // Already at root level
+            }
+            self.expanded_dirs.remove(&parent_path);
+            self.refresh();
+            // Move selection to the parent entry
+            if let Some(idx) = self.entries.iter().position(|e| e.path == parent_path) {
+                self.selected = idx;
+            }
+        }
+    }
+
+    /// Change the tree root to a new directory.
+    pub fn change_root(&mut self, new_root: &Path) {
+        self.root = new_root.to_path_buf();
+        self.expanded_dirs.clear();
+        self.expanded_dirs.insert(new_root.to_path_buf());
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.refresh();
+    }
+
+    /// Move the tree root up to the parent directory.
+    pub fn go_parent_root(&mut self) {
+        if let Some(parent) = self.root.parent().map(|p| p.to_path_buf()) {
+            self.change_root(&parent);
+        }
+    }
+
+    /// Reveal a file path in the tree: expand all ancestor directories and select it.
+    /// No-op if the path is not under this tree's root.
+    pub fn reveal(&mut self, path: &Path) {
+        let rel = match path.strip_prefix(&self.root) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        // Expand each ancestor directory
+        let mut current = self.root.clone();
+        for component in rel.parent().into_iter().flat_map(|p| p.components()) {
+            current = current.join(component);
+            self.expanded_dirs.insert(current.clone());
+        }
+        self.refresh();
+        // Select the entry matching the path
+        if let Some(idx) = self.entries.iter().position(|e| e.path == path) {
+            self.selected = idx;
+        }
+    }
+
     /// Ensure scroll_offset keeps selected visible within viewport_height.
     pub fn ensure_visible(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
@@ -234,6 +314,105 @@ mod tests {
         );
         assert_eq!(icon_for_path(Path::new("dir"), true, false), "\u{1F4C1}");
         assert_eq!(icon_for_path(Path::new("dir"), true, true), "\u{1F4C2}");
+    }
+
+    #[test]
+    fn move_to_first_and_last() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "").unwrap();
+        fs::write(dir.path().join("b.txt"), "").unwrap();
+        fs::write(dir.path().join("c.txt"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        assert!(tree.entries.len() >= 3);
+
+        tree.move_to_last();
+        assert_eq!(tree.selected, tree.entries.len() - 1);
+
+        tree.move_to_first();
+        assert_eq!(tree.selected, 0);
+        assert_eq!(tree.scroll_offset, 0);
+    }
+
+    #[test]
+    fn close_parent_collapses_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        // Expand src
+        let src_idx = tree.entries.iter().position(|e| e.name == "src").unwrap();
+        tree.selected = src_idx;
+        tree.toggle_expand();
+        // Select the child file
+        let lib_idx = tree
+            .entries
+            .iter()
+            .position(|e| e.name == "lib.rs")
+            .unwrap();
+        tree.selected = lib_idx;
+        tree.close_parent();
+        // Parent should be collapsed now, selection on "src"
+        assert!(!tree.expanded_dirs.contains(&dir.path().join("src")));
+        assert_eq!(tree.entries[tree.selected].name, "src");
+    }
+
+    #[test]
+    fn change_root_resets_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("sub/file.txt"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        let sub = dir.path().join("sub");
+        tree.change_root(&sub);
+        assert_eq!(tree.root, sub);
+        assert_eq!(tree.selected, 0);
+        assert!(tree.entries.iter().any(|e| e.name == "file.txt"));
+    }
+
+    #[test]
+    fn go_parent_root_moves_up() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("other.txt"), "").unwrap();
+
+        let mut tree = FileTree::open(&dir.path().join("sub"));
+        tree.go_parent_root();
+        assert_eq!(tree.root, dir.path());
+        assert!(tree.entries.iter().any(|e| e.name == "sub"));
+    }
+
+    #[test]
+    fn reveal_expands_ancestors_and_selects() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/util")).unwrap();
+        fs::write(dir.path().join("src/util/helpers.rs"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        // Initially only root level visible, src not expanded
+        assert!(!tree.expanded_dirs.contains(&dir.path().join("src")));
+
+        let target = dir.path().join("src/util/helpers.rs");
+        tree.reveal(&target);
+
+        // Both src and src/util should be expanded now
+        assert!(tree.expanded_dirs.contains(&dir.path().join("src")));
+        assert!(tree.expanded_dirs.contains(&dir.path().join("src/util")));
+        // Selected entry should be helpers.rs
+        assert_eq!(tree.entries[tree.selected].name, "helpers.rs");
+    }
+
+    #[test]
+    fn reveal_outside_root_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        let before = tree.selected;
+        tree.reveal(Path::new("/nonexistent/path.txt"));
+        assert_eq!(tree.selected, before);
     }
 
     #[test]

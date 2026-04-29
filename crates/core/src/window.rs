@@ -584,6 +584,18 @@ impl WindowManager {
         self.windows.len()
     }
 
+    /// Cycle focus to the next window (by ID order, wrapping around).
+    pub fn focus_next(&mut self) {
+        if self.windows.len() <= 1 {
+            return;
+        }
+        let mut ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        ids.sort();
+        let pos = ids.iter().position(|&id| id == self.focused).unwrap_or(0);
+        let next = (pos + 1) % ids.len();
+        self.focused = ids[next];
+    }
+
     /// Iterate over all windows.
     pub fn iter_windows(&self) -> impl Iterator<Item = &Window> {
         self.windows.values()
@@ -1226,6 +1238,29 @@ mod tests {
 
         // Moving up should also do nothing (horizontal split doesn't exist)
         wm.focus_direction(Direction::Up, default_area());
+        assert_eq!(wm.focused_id(), 0);
+    }
+
+    #[test]
+    fn focus_next_cycles_windows() {
+        let mut wm = WindowManager::new(0);
+        let id1 = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert_eq!(wm.focused_id(), 0);
+
+        wm.focus_next();
+        assert_eq!(wm.focused_id(), id1);
+
+        // Wraps around
+        wm.focus_next();
+        assert_eq!(wm.focused_id(), 0);
+    }
+
+    #[test]
+    fn focus_next_single_window_noop() {
+        let mut wm = WindowManager::new(0);
+        wm.focus_next();
         assert_eq!(wm.focused_id(), 0);
     }
 

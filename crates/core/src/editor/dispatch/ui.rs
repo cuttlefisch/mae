@@ -60,6 +60,23 @@ impl Editor {
                 }
             }
 
+            "file-info" => {
+                let idx = self.active_buffer_idx();
+                let buf = &self.buffers[idx];
+                let total = buf.line_count();
+                let row = self.window_mgr.focused_window().cursor_row + 1;
+                let pct = if total > 0 { row * 100 / total } else { 0 };
+                let name = buf
+                    .file_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| buf.name.clone());
+                let modified = if buf.modified { " [+]" } else { "" };
+                self.set_status(format!(
+                    "\"{}\"{}  line {} of {} --{}%--",
+                    name, modified, row, total, pct
+                ));
+            }
+
             // Help / KB
             "help" => self.open_help_at("index"),
             "help-follow-link" => self.help_follow_link(),

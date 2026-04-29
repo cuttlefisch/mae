@@ -1,8 +1,0 @@
-This line stays the same.
-Another unchanged line.
-This is a brand new added line.
-Here is another addition.
-Keep this one.
-And this stays too, but modified slightly.
-Final unchanged line.
-One more new line at the end.

@@ -314,6 +314,9 @@ impl CommandRegistry {
         reg.register_builtin("quit", "Quit editor");
         reg.register_builtin("force-quit", "Quit without saving");
         reg.register_builtin("save-and-quit", "Save and quit");
+        reg.register_builtin("save-all-and-quit", "Save all buffers and quit (SPC q S)");
+        reg.register_builtin("copy-this-file", "Copy current file to new path (SPC f C)");
+        reg.register_builtin("file-info", "Show file info in status bar (Ctrl-G)");
 
         // Window management
         reg.register_builtin("split-vertical", "Split window vertically (left/right)");
@@ -331,6 +334,7 @@ impl CommandRegistry {
         reg.register_builtin("window-move-right", "Move window right (SPC w L)");
         reg.register_builtin("window-move-up", "Move window up (SPC w K)");
         reg.register_builtin("window-move-down", "Move window down (SPC w J)");
+        reg.register_builtin("focus-next-window", "Cycle focus to next window (SPC w w)");
 
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
@@ -352,6 +356,41 @@ impl CommandRegistry {
         reg.register_builtin("file-tree-open", "Open selected file from tree");
         reg.register_builtin("file-tree-expand", "Expand/collapse directory in tree");
         reg.register_builtin("file-tree-refresh", "Refresh file tree");
+        reg.register_builtin("file-tree-first", "Move to first entry in file tree (gg)");
+        reg.register_builtin("file-tree-last", "Move to last entry in file tree (G)");
+        reg.register_builtin(
+            "file-tree-close-parent",
+            "Collapse parent directory in file tree (x)",
+        );
+        reg.register_builtin(
+            "file-tree-cd",
+            "Change file tree root to selected directory (C)",
+        );
+        reg.register_builtin(
+            "file-tree-parent",
+            "Move file tree root up one directory (u)",
+        );
+        reg.register_builtin(
+            "file-tree-delete",
+            "Delete selected file/dir in tree (d, confirm y/n)",
+        );
+        reg.register_builtin("file-tree-rename", "Rename selected file/dir in tree (r)");
+        reg.register_builtin(
+            "file-tree-create",
+            "Create new file/dir in tree (a, trailing / = dir)",
+        );
+        reg.register_builtin(
+            "file-tree-open-vsplit",
+            "Open file from tree in vertical split (s)",
+        );
+        reg.register_builtin(
+            "file-tree-open-hsplit",
+            "Open file from tree in horizontal split (i)",
+        );
+        reg.register_builtin(
+            "delete-this-file",
+            "Delete current buffer's file (SPC f D, confirm y/n)",
+        );
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("new-buffer", "Create a new empty scratch buffer");

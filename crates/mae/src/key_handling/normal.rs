@@ -476,6 +476,53 @@ pub(super) fn handle_normal_mode(
         }
     }
 
+    // Pending file delete confirmation (y/n). Shared by file-tree-delete and delete-this-file.
+    if editor.pending_file_delete.is_some() && pending_keys.is_empty() {
+        if let KeyCode::Char('y') = key.code {
+            if let Some((path, close_buf)) = editor.pending_file_delete.take() {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+                match result {
+                    Ok(()) => {
+                        if close_buf {
+                            // Close buffer associated with this file
+                            let idx = editor.active_buffer_idx();
+                            editor.dispatch_builtin("force-kill-buffer");
+                            let _ = idx; // buffer closed
+                        }
+                        // Refresh file tree if open
+                        let tree_idx = editor
+                            .buffers
+                            .iter()
+                            .position(|b| b.kind == BufferKind::FileTree);
+                        if let Some(ti) = tree_idx {
+                            if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                                ft.refresh();
+                            }
+                        }
+                        editor.set_status(format!("Deleted {}", name));
+                    }
+                    Err(e) => {
+                        editor.set_status(format!("Delete failed: {}", e));
+                    }
+                }
+            }
+        } else {
+            editor.pending_file_delete = None;
+            editor.set_status("Delete cancelled");
+        }
+        editor.count_prefix = None;
+        return;
+    }
+
     // File tree sidebar: intercept navigation and action keys.
     // j/k navigate, Enter opens file or toggles dir, o expands, R refreshes, q closes.
     let is_file_tree = {
@@ -505,6 +552,11 @@ pub(super) fn handle_normal_mode(
                 editor.count_prefix = None;
                 return;
             }
+            KeyCode::Tab => {
+                editor.dispatch_builtin("file-tree-expand");
+                editor.count_prefix = None;
+                return;
+            }
             KeyCode::Char('R') if !ctrl => {
                 editor.dispatch_builtin("file-tree-refresh");
                 editor.count_prefix = None;
@@ -512,6 +564,66 @@ pub(super) fn handle_normal_mode(
             }
             KeyCode::Char('q') if !ctrl => {
                 editor.dispatch_builtin("file-tree-toggle");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('G') if !ctrl => {
+                editor.dispatch_builtin("file-tree-last");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('g') if !ctrl => {
+                editor.dispatch_builtin("file-tree-first");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('>') if !ctrl => {
+                editor.dispatch_builtin("window-grow");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('<') if !ctrl => {
+                editor.dispatch_builtin("window-shrink");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('x') if !ctrl => {
+                editor.dispatch_builtin("file-tree-close-parent");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('C') if !ctrl => {
+                editor.dispatch_builtin("file-tree-cd");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('u') if !ctrl => {
+                editor.dispatch_builtin("file-tree-parent");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('d') if !ctrl => {
+                editor.dispatch_builtin("file-tree-delete");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('r') if !ctrl => {
+                editor.dispatch_builtin("file-tree-rename");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('a') if !ctrl => {
+                editor.dispatch_builtin("file-tree-create");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('s') if !ctrl => {
+                editor.dispatch_builtin("file-tree-open-vsplit");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('i') if !ctrl => {
+                editor.dispatch_builtin("file-tree-open-hsplit");
                 editor.count_prefix = None;
                 return;
             }

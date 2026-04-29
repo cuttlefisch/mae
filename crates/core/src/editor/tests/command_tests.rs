@@ -962,4 +962,181 @@ fn autosave_idle_debounce_skips_during_edit() {
     assert!(ed.buffers[idx].modified, "buffer should still be modified");
 }
 
+// ===== Dispatch-level tests for v0.6.0 which-key parity =====
+
+#[test]
+fn focus_next_window_dispatch_cycles_focus() {
+    let mut ed = Editor::new();
+    ed.dispatch_builtin("split-vertical");
+    assert_eq!(ed.window_mgr.window_count(), 2);
+    let first = ed.window_mgr.focused_id();
+
+    ed.dispatch_builtin("focus-next-window");
+    let second = ed.window_mgr.focused_id();
+    assert_ne!(first, second);
+
+    // Wrap around
+    ed.dispatch_builtin("focus-next-window");
+    assert_eq!(ed.window_mgr.focused_id(), first);
+}
+
+#[test]
+fn focus_next_window_single_window_noop() {
+    let mut ed = Editor::new();
+    let before = ed.window_mgr.focused_id();
+    ed.dispatch_builtin("focus-next-window");
+    assert_eq!(ed.window_mgr.focused_id(), before);
+}
+
+#[test]
+fn file_info_shows_status() {
+    let mut ed = Editor::new();
+    ed.dispatch_builtin("file-info");
+    assert!(ed.status_msg.contains("line 1 of"));
+    assert!(ed.status_msg.contains("[scratch]"));
+}
+
+#[test]
+fn file_info_shows_modified_flag() {
+    let mut ed = Editor::new();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[0].insert_char(win, 'x');
+    ed.dispatch_builtin("file-info");
+    assert!(ed.status_msg.contains("[+]"));
+}
+
+#[test]
+fn file_info_shows_file_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.txt");
+    fs::write(&path, "hello\nworld\n").unwrap();
+    let buf = Buffer::from_file(&path).unwrap();
+    let mut ed = Editor::with_buffer(buf);
+    ed.dispatch_builtin("file-info");
+    assert!(ed.status_msg.contains("test.txt"));
+    assert!(ed.status_msg.contains("line 1 of"));
+}
+
+#[test]
+fn save_all_and_quit_saves_then_quits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.txt");
+    fs::write(&path, "original").unwrap();
+    let buf = Buffer::from_file(&path).unwrap();
+    let mut ed = Editor::with_buffer(buf);
+    // Modify the buffer
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[0].insert_char(win, '!');
+    assert!(ed.buffers[0].modified);
+
+    ed.dispatch_builtin("save-all-and-quit");
+    // Should have saved and set running = false
+    assert!(!ed.running);
+    let content = fs::read_to_string(&path).unwrap();
+    assert!(content.contains("!"));
+}
+
+#[test]
+fn copy_this_file_enters_command_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("original.txt");
+    fs::write(&path, "content").unwrap();
+    let buf = Buffer::from_file(&path).unwrap();
+    let mut ed = Editor::with_buffer(buf);
+
+    ed.dispatch_builtin("copy-this-file");
+    assert_eq!(ed.mode, Mode::Command);
+    assert!(ed.command_line.starts_with("copy "));
+    assert!(ed.command_line.contains("original.txt"));
+}
+
+#[test]
+fn copy_this_file_no_path_shows_error() {
+    let mut ed = Editor::new();
+    ed.dispatch_builtin("copy-this-file");
+    assert!(ed.status_msg.contains("no file path"));
+}
+
+#[test]
+fn copy_ex_command_copies_and_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("src.txt");
+    fs::write(&path, "hello").unwrap();
+    let buf = Buffer::from_file(&path).unwrap();
+    let mut ed = Editor::with_buffer(buf);
+
+    let dest = dir.path().join("dst.txt");
+    ed.execute_command(&format!("copy {}", dest.display()));
+    assert!(dest.exists());
+    assert_eq!(fs::read_to_string(&dest).unwrap(), "hello");
+    // Should have opened the copy
+    assert!(ed.buffers.iter().any(|b| {
+        b.file_path()
+            .map(|p| p.ends_with("dst.txt"))
+            .unwrap_or(false)
+    }));
+}
+
+#[test]
+fn file_tree_open_vsplit_opens_in_split() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("test.rs"), "fn main() {}").unwrap();
+    let mut ed = Editor::new();
+
+    // Manually set up a file tree buffer
+    let tree_buf = Buffer::new_file_tree(dir.path());
+    let tree_buf_idx = ed.buffers.len();
+    ed.buffers.push(tree_buf);
+    ed.window_mgr.focused_window_mut().buffer_idx = tree_buf_idx;
+    ed.file_tree_window_id = Some(ed.window_mgr.focused_id());
+
+    // Split to have a content window
+    ed.dispatch_builtin("split-vertical");
+    let content_win_count = ed.window_mgr.window_count();
+
+    // Select the test.rs file in the tree
+    let ft = ed.buffers[tree_buf_idx].file_tree.as_mut().unwrap();
+    if let Some(idx) = ft.entries.iter().position(|e| e.name == "test.rs") {
+        ft.selected = idx;
+    }
+
+    // Switch back to tree window for dispatch
+    ed.window_mgr.set_focused(ed.file_tree_window_id.unwrap());
+
+    ed.dispatch_builtin("file-tree-open-vsplit");
+    // Should have created a new split
+    assert!(ed.window_mgr.window_count() > content_win_count);
+}
+
+#[test]
+fn file_tree_reveal_on_toggle() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("src/util")).unwrap();
+    let file_path = dir.path().join("src/util/deep.rs");
+    fs::write(&file_path, "fn deep() {}").unwrap();
+
+    let buf = Buffer::from_file(&file_path).unwrap();
+    let mut ed = Editor::with_buffer(buf);
+    // Editor needs a project root for file tree
+    ed.project = Some(crate::project::Project::from_root(dir.path().to_path_buf()));
+
+    ed.dispatch_builtin("file-tree-toggle");
+
+    // Find the tree buffer
+    let tree_idx = ed
+        .buffers
+        .iter()
+        .position(|b| b.kind == crate::BufferKind::FileTree);
+    if let Some(ti) = tree_idx {
+        let ft = ed.buffers[ti].file_tree.as_ref().unwrap();
+        // Should have expanded src and src/util
+        assert!(ft.expanded_dirs.contains(&dir.path().join("src")));
+        assert!(ft.expanded_dirs.contains(&dir.path().join("src/util")));
+        // Selected entry should be our deep file
+        assert_eq!(ft.entries[ft.selected].name, "deep.rs");
+    } else {
+        panic!("File tree buffer not created");
+    }
+}
+
 // ===== Operator-pending mode tests (WU0) =====

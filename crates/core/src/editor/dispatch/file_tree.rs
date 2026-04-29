@@ -56,7 +56,7 @@ impl Editor {
                         SplitDirection::Vertical,
                         original_buf_idx,
                         area,
-                        0.8,
+                        0.2,
                     ) {
                         Ok(new_win_id) => {
                             // After split: focused window (left) shows original_buf_idx,
@@ -70,6 +70,16 @@ impl Editor {
                             // The new window already has original_buf_idx, so focus it.
                             self.window_mgr.set_focused(new_win_id);
                             self.file_tree_window_id = Some(focused_id);
+                            // Auto-reveal the current file in the tree.
+                            if let Some(current_path) = self
+                                .buffers
+                                .get(original_buf_idx)
+                                .and_then(|b| b.file_path().map(|p| p.to_path_buf()))
+                            {
+                                if let Some(ref mut ft) = self.buffers[tree_buf_idx].file_tree {
+                                    ft.reveal(&current_path);
+                                }
+                            }
                             self.set_status("File tree opened");
                         }
                         Err(e) => {
@@ -130,11 +140,168 @@ impl Editor {
                 }
                 Some(true)
             }
+            "file-tree-first" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.move_to_first();
+                }
+                Some(true)
+            }
+            "file-tree-last" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.move_to_last();
+                }
+                Some(true)
+            }
+            "file-tree-close-parent" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.close_parent();
+                }
+                Some(true)
+            }
+            "file-tree-cd" => {
+                let idx = self.active_buffer_idx();
+                let path = self.buffers[idx]
+                    .file_tree
+                    .as_ref()
+                    .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
+                if let Some(path) = path {
+                    if path.is_dir() {
+                        let display = path.display().to_string();
+                        if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                            ft.change_root(&path);
+                        }
+                        self.buffers[idx].name = format!("[Tree] {}", display);
+                        self.set_status(format!("Root: {}", display));
+                    } else {
+                        self.set_status("Not a directory");
+                    }
+                }
+                Some(true)
+            }
+            "file-tree-parent" => {
+                let idx = self.active_buffer_idx();
+                let new_root = self.buffers[idx]
+                    .file_tree
+                    .as_ref()
+                    .and_then(|ft| ft.root.parent().map(|p| p.to_path_buf()));
+                if let Some(new_root) = new_root {
+                    let display = new_root.display().to_string();
+                    if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                        ft.go_parent_root();
+                    }
+                    self.buffers[idx].name = format!("[Tree] {}", display);
+                    self.set_status(format!("Root: {}", display));
+                }
+                Some(true)
+            }
+            "file-tree-delete" => {
+                let idx = self.active_buffer_idx();
+                let path = self.buffers[idx]
+                    .file_tree
+                    .as_ref()
+                    .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
+                if let Some(path) = path {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.set_status(format!("Delete {}? (y/n)", name));
+                    self.pending_file_delete = Some((path, false));
+                }
+                Some(true)
+            }
+            "file-tree-rename" => {
+                let idx = self.active_buffer_idx();
+                let path = self.buffers[idx]
+                    .file_tree
+                    .as_ref()
+                    .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
+                if let Some(path) = path {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    self.file_tree_action = Some(crate::file_tree::FileTreeAction::Rename(path));
+                    self.set_mode(crate::Mode::Command);
+                    self.command_line = name;
+                    self.command_cursor = self.command_line.len();
+                    self.set_status("Rename to:");
+                }
+                Some(true)
+            }
+            "file-tree-create" => {
+                let idx = self.active_buffer_idx();
+                // Use selected dir, or parent of selected file
+                let parent = self.buffers[idx].file_tree.as_ref().and_then(|ft| {
+                    ft.selected_path().map(|p| {
+                        if p.is_dir() {
+                            p.to_path_buf()
+                        } else {
+                            p.parent()
+                                .unwrap_or_else(|| std::path::Path::new("."))
+                                .to_path_buf()
+                        }
+                    })
+                });
+                if let Some(parent) = parent {
+                    self.file_tree_action = Some(crate::file_tree::FileTreeAction::Create(parent));
+                    self.set_mode(crate::Mode::Command);
+                    self.command_line = String::new();
+                    self.command_cursor = 0;
+                    self.set_status("Create (end with / for dir):");
+                }
+                Some(true)
+            }
+            "delete-this-file" => {
+                let idx = self.active_buffer_idx();
+                if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    self.set_status(format!("Delete {}? (y/n)", name));
+                    self.pending_file_delete = Some((path, true));
+                } else {
+                    self.set_status("Buffer has no file");
+                }
+                Some(true)
+            }
             "file-tree-refresh" => {
                 let idx = self.active_buffer_idx();
                 if let Some(ref mut ft) = self.buffers[idx].file_tree {
                     ft.refresh();
                     self.set_status("File tree refreshed");
+                }
+                Some(true)
+            }
+            "file-tree-open-vsplit" | "file-tree-open-hsplit" => {
+                let idx = self.active_buffer_idx();
+                let path = self.buffers[idx]
+                    .file_tree
+                    .as_ref()
+                    .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
+                if let Some(path) = path {
+                    if path.is_file() {
+                        // Focus a non-tree window first
+                        let tree_win_id = self.file_tree_window_id;
+                        let target_win = self
+                            .window_mgr
+                            .iter_windows()
+                            .find(|w| Some(w.id) != tree_win_id)
+                            .map(|w| w.id);
+                        if let Some(win_id) = target_win {
+                            self.window_mgr.set_focused(win_id);
+                        }
+                        // Split then open
+                        if name == "file-tree-open-vsplit" {
+                            self.dispatch_builtin("split-vertical");
+                        } else {
+                            self.dispatch_builtin("split-horizontal");
+                        }
+                        self.open_file(&path);
+                    } else if path.is_dir() {
+                        if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                            ft.toggle_expand();
+                        }
+                    }
                 }
                 Some(true)
             }

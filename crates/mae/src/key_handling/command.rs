@@ -32,6 +32,7 @@ pub fn handle_command_mode(
     pending_keys.clear();
     match key.code {
         KeyCode::Esc => {
+            editor.file_tree_action = None;
             editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
@@ -41,6 +42,71 @@ pub fn handle_command_mode(
             editor.set_mode(Mode::Normal);
             editor.command_line.clear();
             editor.command_cursor = 0;
+
+            // File tree action (rename/create) — intercept before normal dispatch.
+            if let Some(action) = editor.file_tree_action.take() {
+                match action {
+                    mae_core::file_tree::FileTreeAction::Rename(old_path) => {
+                        if cmd.is_empty() {
+                            editor.set_status("Rename cancelled");
+                            return;
+                        }
+                        let new_path = old_path
+                            .parent()
+                            .unwrap_or(std::path::Path::new("."))
+                            .join(&cmd);
+                        match std::fs::rename(&old_path, &new_path) {
+                            Ok(()) => {
+                                // Refresh file tree
+                                let tree_idx = editor
+                                    .buffers
+                                    .iter()
+                                    .position(|b| b.kind == mae_core::BufferKind::FileTree);
+                                if let Some(ti) = tree_idx {
+                                    if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                                        ft.refresh();
+                                    }
+                                }
+                                editor.set_status(format!("Renamed to {}", cmd));
+                            }
+                            Err(e) => editor.set_status(format!("Rename failed: {}", e)),
+                        }
+                        return;
+                    }
+                    mae_core::file_tree::FileTreeAction::Create(parent) => {
+                        if cmd.is_empty() {
+                            editor.set_status("Create cancelled");
+                            return;
+                        }
+                        let target = parent.join(&cmd);
+                        let result = if cmd.ends_with('/') {
+                            std::fs::create_dir_all(&target)
+                        } else {
+                            // Ensure parent dirs exist
+                            if let Some(p) = target.parent() {
+                                let _ = std::fs::create_dir_all(p);
+                            }
+                            std::fs::write(&target, "")
+                        };
+                        match result {
+                            Ok(()) => {
+                                let tree_idx = editor
+                                    .buffers
+                                    .iter()
+                                    .position(|b| b.kind == mae_core::BufferKind::FileTree);
+                                if let Some(ti) = tree_idx {
+                                    if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                                        ft.refresh();
+                                    }
+                                }
+                                editor.set_status(format!("Created {}", cmd));
+                            }
+                            Err(e) => editor.set_status(format!("Create failed: {}", e)),
+                        }
+                        return;
+                    }
+                }
+            }
 
             // Record in command history before executing
             editor.push_command_history(&cmd);
