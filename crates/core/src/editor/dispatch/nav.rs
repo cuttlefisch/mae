@@ -186,8 +186,8 @@ impl Editor {
                 } else {
                     let buf = &self.buffers[idx];
                     if let Some(target) = count {
-                        let row =
-                            (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
+                        let row = (target.saturating_sub(1))
+                            .min(buf.display_line_count().saturating_sub(1));
                         self.window_mgr.focused_window_mut().cursor_row = row;
                         self.window_mgr.focused_window_mut().clamp_cursor(buf);
                     } else {
@@ -210,8 +210,8 @@ impl Editor {
                 } else {
                     let buf = &self.buffers[idx];
                     if let Some(target) = count {
-                        let row =
-                            (target.saturating_sub(1)).min(buf.line_count().saturating_sub(1));
+                        let row = (target.saturating_sub(1))
+                            .min(buf.display_line_count().saturating_sub(1));
                         self.window_mgr.focused_window_mut().cursor_row = row;
                         self.window_mgr.focused_window_mut().clamp_cursor(buf);
                     } else {

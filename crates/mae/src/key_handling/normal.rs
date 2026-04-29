@@ -476,6 +476,49 @@ pub(super) fn handle_normal_mode(
         }
     }
 
+    // File tree sidebar: intercept navigation and action keys.
+    // j/k navigate, Enter opens file or toggles dir, o expands, R refreshes, q closes.
+    let is_file_tree = {
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].kind == BufferKind::FileTree
+    };
+    if is_file_tree && pending_keys.is_empty() {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('j') if !ctrl => {
+                editor.dispatch_builtin("file-tree-down");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('k') if !ctrl => {
+                editor.dispatch_builtin("file-tree-up");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Enter => {
+                editor.dispatch_builtin("file-tree-open");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('o') if !ctrl => {
+                editor.dispatch_builtin("file-tree-expand");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('R') if !ctrl => {
+                editor.dispatch_builtin("file-tree-refresh");
+                editor.count_prefix = None;
+                return;
+            }
+            KeyCode::Char('q') if !ctrl => {
+                editor.dispatch_builtin("file-tree-toggle");
+                editor.count_prefix = None;
+                return;
+            }
+            _ => {} // Fall through to normal keymap
+        }
+    }
+
     // In the *AI* output buffer, `i`/`a` redirect focus to the input window
     // --- Conversation pair intercepts ---
     // Output buffer (*AI*): i/a redirect to input window. Double-Esc returns to input.

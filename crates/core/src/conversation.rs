@@ -577,13 +577,15 @@ impl Conversation {
             self.cached_lines.extend(new_lines);
         }
 
-        // Add trailing separator (matches compute_rendered_lines which adds one
-        // after every entry).
-        self.cached_lines.push(RenderedLine {
-            text: String::new(),
-            style: LineStyle::Separator,
-            entry_index: None,
-        });
+        // Only add trailing separator if this is NOT the last entry
+        // (matches compute_rendered_lines which skips separator after last).
+        if last_entry_idx + 1 < self.entries.len() {
+            self.cached_lines.push(RenderedLine {
+                text: String::new(),
+                style: LineStyle::Separator,
+                entry_index: None,
+            });
+        }
 
         self.cached_screen_counts.clear();
         self.screen_counts_dirty = true;
@@ -762,12 +764,14 @@ impl Conversation {
                 continue; // no separator between stacked tool lines
             }
 
-            // Separator between entries
-            lines.push(RenderedLine {
-                text: String::new(),
-                style: LineStyle::Separator,
-                entry_index: None,
-            });
+            // Separator between entries (skip after last entry to avoid phantom line)
+            if i + 1 < self.entries.len() {
+                lines.push(RenderedLine {
+                    text: String::new(),
+                    style: LineStyle::Separator,
+                    entry_index: None,
+                });
+            }
         }
 
         // (Input prompt is now rendered separately in the *ai-input* split buffer.)
@@ -961,6 +965,45 @@ mod tests {
     }
 
     #[test]
+    fn no_trailing_separator_after_last_entry() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let lines = conv.rendered_lines();
+        assert!(!lines.is_empty());
+        let last = lines.last().unwrap();
+        // Last line should be content, not an empty separator
+        assert!(
+            !matches!(last.style, LineStyle::Separator) || !last.text.is_empty(),
+            "trailing empty separator found after last entry"
+        );
+        // flat_text should not end with a newline (which would cause phantom line)
+        let flat = conv.flat_text();
+        assert!(
+            !flat.ends_with('\n'),
+            "flat_text ends with trailing newline"
+        );
+    }
+
+    #[test]
+    fn separator_between_non_last_entries() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        conv.push_user("again");
+        let lines = conv.rendered_lines();
+        // Should have separators between entries but not after the last
+        let separator_count = lines
+            .iter()
+            .filter(|l| matches!(l.style, LineStyle::Separator) && l.text.is_empty())
+            .count();
+        assert_eq!(
+            separator_count, 2,
+            "expected separator between each pair of entries"
+        );
+    }
+
+    #[test]
     fn flat_text_empty_conversation() {
         let conv = Conversation::new();
         let flat = conv.flat_text();
@@ -1017,8 +1060,8 @@ mod tests {
 
         let mut conv = Conversation::new();
         conv.push_user("hello");
-        // [You] + "hello" + separator
-        assert!(conv.line_count() >= 3);
+        // [You] + "hello" (no trailing separator after last entry)
+        assert!(conv.line_count() >= 2);
     }
 
     #[test]

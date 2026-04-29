@@ -37,6 +37,8 @@ pub enum BufferKind {
     GitStatus,
     /// Visual scene-graph buffer (Phase 1 Visual Debugger).
     Visual,
+    /// File tree sidebar — project-level directory browser.
+    FileTree,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -90,6 +92,8 @@ pub struct Buffer {
     pub git_status: Option<GitStatusView>,
     /// Visual scene-graph state. Present iff `kind == BufferKind::Visual`.
     pub visual: Option<VisualBuffer>,
+    /// File tree sidebar state. Present iff `kind == BufferKind::FileTree`.
+    pub file_tree: Option<crate::file_tree::FileTree>,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// When non-None, edits accumulate here instead of the undo stack directly.
@@ -152,6 +156,7 @@ impl Buffer {
             debug_view: None,
             git_status: None,
             visual: None,
+            file_tree: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_group_acc: None,
@@ -215,6 +220,17 @@ impl Buffer {
             name: name.into(),
             kind: BufferKind::Shell,
             read_only: true,
+            ..Self::new()
+        }
+    }
+
+    /// Create a file tree sidebar buffer.
+    pub fn new_file_tree(root: &std::path::Path) -> Self {
+        Buffer {
+            name: String::from(" File Tree "),
+            kind: BufferKind::FileTree,
+            read_only: true,
+            file_tree: Some(crate::file_tree::FileTree::open(root)),
             ..Self::new()
         }
     }
@@ -357,12 +373,29 @@ impl Buffer {
 
     // --- Metrics ---
 
+    /// Total rope line count, including the phantom empty line that ropey
+    /// adds after a trailing `\n`.
+    ///
+    /// Use for: **cursor clamping** (cursor may sit on the phantom line after
+    /// inserting `\n` at EOF), rope char/byte index lookups, and search
+    /// iteration over all rope lines.
+    ///
+    /// Do NOT use for: scroll bounds, layout iteration, movement limits,
+    /// gutter width, or "go to last line" — use `display_line_count()` instead.
     pub fn line_count(&self) -> usize {
         self.rope.len_lines()
     }
 
     /// Line count excluding the phantom empty line that ropey adds after
-    /// a trailing newline. Use for display (line numbers, gutter width).
+    /// a trailing `\n`.
+    ///
+    /// Use for: **display and navigation** — scroll bounds, viewport limits,
+    /// layout iteration, gutter width (line numbering), movement bounds
+    /// (`move_down`, `G`, `goto-line`), mouse click clamping, and any context
+    /// where the user shouldn't land on or see the phantom line.
+    ///
+    /// Do NOT use for: cursor clamping after `\n` insertion at EOF (that needs
+    /// `line_count()`), or rope char/byte index lookups.
     pub fn display_line_count(&self) -> usize {
         let n = self.rope.len_lines();
         if n > 1 && self.rope.len_chars() > 0 && self.rope.char(self.rope.len_chars() - 1) == '\n' {

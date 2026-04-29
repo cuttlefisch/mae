@@ -96,3 +96,8 @@ crust = "#11111b"
 "namespace" = { fg = "blue" }
 "punctuation" = { fg = "overlay2" }
 "markup.link" = { fg = "sapphire", underline = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "mauve" }
+"diff.header" = { fg = "teal", bold = true }

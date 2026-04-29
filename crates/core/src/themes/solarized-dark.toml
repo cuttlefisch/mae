@@ -77,3 +77,8 @@ green = "#859900"
 "namespace" = { fg = "yellow" }
 "punctuation" = { fg = "base01" }
 "markup.link" = { fg = "blue", underline = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "magenta" }
+"diff.header" = { fg = "cyan", bold = true }

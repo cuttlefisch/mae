@@ -65,6 +65,10 @@
 ;; Auto-restore previous session on startup
 ;; (set-option! "restore-session" "false")
 
+;; Autosave: interval in seconds (0 = disabled).
+;; Saves all modified file-backed buffers after idle timeout.
+;; (set-option! "autosave-interval" "300")
+
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; 4. Keybindings
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

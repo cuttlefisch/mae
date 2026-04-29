@@ -239,6 +239,9 @@ fn main() -> io::Result<()> {
     if let Some(restore) = app_config.editor.restore_session {
         editor.restore_session = restore;
     }
+    if let Some(interval) = app_config.editor.autosave_interval {
+        editor.autosave_interval = interval;
+    }
 
     // Apply font settings from config early (init.scm can override).
     if let Some(size) = app_config.editor.font_size {
@@ -1192,12 +1195,22 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
-                let gutter_w = if self.editor.show_line_numbers {
+                let gutter_w = if buf.kind == mae_core::BufferKind::Conversation {
+                    0
+                } else if self.editor.show_line_numbers {
                     mae_renderer::gutter_width(buf.display_line_count())
                 } else {
                     2 // marker column + padding
                 };
-                self.editor.text_area_width = inner_w.saturating_sub(gutter_w);
+                let scrollbar_w: usize = if self.editor.scrollbar { 1 } else { 0 };
+                let text_w = inner_w.saturating_sub(gutter_w).saturating_sub(scrollbar_w);
+                self.editor.text_area_width = text_w;
+                if !self.editor.word_wrap {
+                    self.editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_horizontal(text_w);
+                }
             }
 
             {

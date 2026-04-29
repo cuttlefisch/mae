@@ -82,3 +82,8 @@ yellow = "#f1fa8c"
 "namespace" = { fg = "cyan" }
 "punctuation" = { fg = "fg" }
 "markup.link" = { fg = "cyan", underline = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "purple" }
+"diff.header" = { fg = "cyan", bold = true }

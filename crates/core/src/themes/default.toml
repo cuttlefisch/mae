@@ -92,3 +92,8 @@ gray = "#a89984"
 "markup.italic" = { fg = "white", italic = true }
 "markup.list" = { fg = "magenta" }
 "markup.quote" = { fg = "gray", italic = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "magenta" }
+"diff.header" = { fg = "cyan", bold = true }

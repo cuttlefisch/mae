@@ -230,6 +230,41 @@ fn build_hunks(
     result
 }
 
+/// Generate highlight spans for a diff buffer (already rendered as text).
+///
+/// Scans each rope line for the leading character (`+`, `-`, `@@`, `---`/`+++`)
+/// and maps to the appropriate `diff.*` theme key.
+pub fn diff_highlight_spans(rope: &ropey::Rope) -> Vec<crate::syntax::HighlightSpan> {
+    let mut spans = Vec::new();
+    for line_idx in 0..rope.len_lines() {
+        let line = rope.line(line_idx);
+        let text: std::borrow::Cow<str> = line.into();
+        let trimmed = text.trim_end_matches('\n');
+        if trimmed.is_empty() {
+            continue;
+        }
+        let byte_start = rope.line_to_byte(line_idx);
+        let byte_end = byte_start + trimmed.len();
+        let theme_key: &'static str = if trimmed.starts_with("@@") {
+            "diff.hunk"
+        } else if trimmed.starts_with("---") || trimmed.starts_with("+++") {
+            "diff.header"
+        } else if trimmed.starts_with('+') {
+            "diff.added"
+        } else if trimmed.starts_with('-') {
+            "diff.removed"
+        } else {
+            continue;
+        };
+        spans.push(crate::syntax::HighlightSpan {
+            byte_start,
+            byte_end,
+            theme_key,
+        });
+    }
+    spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +335,36 @@ mod tests {
         assert!(s.contains("@@"));
         assert!(s.contains("-line2"));
         assert!(s.contains("+line2_modified"));
+    }
+
+    #[test]
+    fn diff_highlight_spans_assigns_correct_keys() {
+        let text = "--- a/foo.rs\n+++ b/foo.rs\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n";
+        let rope = ropey::Rope::from_str(text);
+        let spans = diff_highlight_spans(&rope);
+        // Should have: header (---), header (+++), hunk (@@), removed (-old), added (+new)
+        assert!(
+            spans.iter().any(|s| s.theme_key == "diff.header"),
+            "missing diff.header"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "diff.hunk"),
+            "missing diff.hunk"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "diff.removed"),
+            "missing diff.removed"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "diff.added"),
+            "missing diff.added"
+        );
+        // Context lines (starting with space) should NOT have spans
+        assert_eq!(
+            spans.len(),
+            5,
+            "expected 5 spans: 2 header + 1 hunk + 1 removed + 1 added"
+        );
     }
 
     #[test]

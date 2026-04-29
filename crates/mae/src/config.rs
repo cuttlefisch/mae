@@ -75,6 +75,8 @@ pub struct EditorSection {
     pub org_hide_emphasis_markers: Option<bool>,
     /// Restore previous session on startup (per-project).
     pub restore_session: Option<bool>,
+    /// Autosave interval in seconds (0 = disabled). Requires 5s idle after last edit.
+    pub autosave_interval: Option<u64>,
 }
 
 fn default_true() -> bool {
@@ -418,6 +420,7 @@ pub fn persist_editor_preference(key: &str, value: &str) {
         "font_size" => cfg.editor.font_size = value.parse().ok(),
         "org_hide_emphasis_markers" => cfg.editor.org_hide_emphasis_markers = Some(value == "true"),
         "restore_session" => cfg.editor.restore_session = Some(value == "true"),
+        "autosave_interval" => cfg.editor.autosave_interval = value.parse().ok(),
         _ => {
             warn!(key, value, "unknown editor preference key");
             return;

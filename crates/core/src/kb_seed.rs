@@ -222,6 +222,7 @@ A [[concept:buffer|buffer]] is the unit of editable content in MAE.\n\n\
 ### Leader shortcuts\n\
   `SPC f f` — find file (fuzzy picker)\n\
   `SPC f d` — file browser\n\
+  `SPC f t` — file tree sidebar\n\
   `SPC b b` — switch buffer (palette)\n\
   `SPC b d` — close buffer\n\n\
 **Prev:** [[lesson:editing|Lesson 3]]  |  \
@@ -254,6 +255,10 @@ Key tools:\n\
 - `editor_save_state` / `editor_restore_state` — deterministic session state capture.\n\
 - `web_fetch` — fetch raw content from URLs.\n\
 - `introspect` — inspect threads, performance stats, lock contention.\n\n\
+### Diff Display\n\
+When the AI proposes changes via `propose_changes`, a `*AI-Diff*` buffer shows \
+a [[concept:diff-display|syntax-highlighted unified diff]]. Use `:ai-accept` to apply \
+or `:ai-reject` to discard.\n\n\
 ### Self-Diagnosis\n\
 The AI can introspect the editor's health. You can ask it to \"introspect\" \
 to see thread states, performance stats, and lock contention.\n\n\
@@ -685,6 +690,63 @@ Click in the scrollbar column to jump to that scroll position.\n\n\
 showing scroll position as a filled bar with a cat marker.\n\n\
 See also: [[concept:gui]], [[concept:options]]\n";
 
+const CONCEPT_AUTOSAVE: &str = "\
+**Autosave** periodically saves all modified file-backed buffers in the background.\n\n\
+## Configuration\n\
+- `:set autosave_interval 300` — save every 5 minutes (0 = disabled)\n\
+- `config.toml`: `autosave_interval = 300` under `[editor]`\n\
+- Scheme: `(set-option! \"autosave-interval\" \"300\")`\n\n\
+## Idle Debounce\n\
+Autosave waits at least **5 seconds** after the last edit before saving. \
+This prevents saving mid-typing. The timer resets with each keystroke.\n\n\
+## Behavior\n\
+- Only file-backed buffers (not scratch, conversation, or shell) are saved.\n\
+- Status bar shows \"Autosaved N buffer(s)\" on each save.\n\
+- Errors are reported but don't interrupt editing.\n\n\
+See also: [[concept:options]], [[cmd:save]]\n";
+
+const CONCEPT_FILE_TREE: &str = "\
+**File Tree** is a sidebar showing the project directory structure with file-type icons.\n\n\
+## Keybindings\n\
+| Key | Action |\n\
+|---|---|\n\
+| `SPC f t` | Toggle file tree sidebar |\n\
+| `j` / `k` | Navigate entries |\n\
+| `Enter` | Open file / toggle directory |\n\
+| `o` | Toggle expand/collapse directory |\n\
+| `R` | Refresh tree from disk |\n\
+| `q` | Close file tree |\n\n\
+## Project Root\n\
+The tree roots at the detected project root (`.git`, `Cargo.toml`, etc.). \
+Falls back to the current working directory.\n\n\
+## Icons\n\
+File type icons are Unicode emoji by default (no font dependency):\n\
+- Directories: open/closed folder\n\
+- `.rs` → crab, `.py` → snake, `.js` → lightning, `.toml`/`.json` → gear\n\n\
+## Filtering\n\
+Build artifacts and VCS directories (`target/`, `node_modules/`, `.git/`) \
+are hidden automatically.\n\n\
+See also: [[cmd:find-file]], [[concept:buffer]], [[concept:project]]\n";
+
+const CONCEPT_DIFF_DISPLAY: &str = "\
+**Diff Display** renders unified diffs with syntax-highlighted lines.\n\n\
+## Flow\n\
+1. AI calls `propose_changes` tool with edits\n\
+2. MAE computes a unified diff (LCS-based) between old and new content\n\
+3. The diff is displayed in the `*AI-Diff*` buffer\n\
+4. Lines are colored by type:\n\
+   - `+` lines → `diff.added` (green)\n\
+   - `-` lines → `diff.removed` (red)\n\
+   - `@@` headers → `diff.hunk` (magenta)\n\
+   - `---`/`+++` headers → `diff.header` (cyan, bold)\n\n\
+## Commands\n\
+- `:ai-accept` — apply the proposed changes\n\
+- `:ai-reject` — discard the proposed changes\n\n\
+## Theme Keys\n\
+All 8 bundled themes include `diff.added`, `diff.removed`, `diff.hunk`, \
+and `diff.header` style definitions.\n\n\
+See also: [[concept:ai-as-peer]], [[concept:options]]\n";
+
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
@@ -943,6 +1005,27 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_SCROLLBAR,
         )
         .with_tags(["gui", "rendering"]),
+        Node::new(
+            "concept:autosave",
+            "Concept: Autosave",
+            NodeKind::Concept,
+            CONCEPT_AUTOSAVE,
+        )
+        .with_tags(["files", "configuration"]),
+        Node::new(
+            "concept:file-tree",
+            "Concept: File Tree",
+            NodeKind::Concept,
+            CONCEPT_FILE_TREE,
+        )
+        .with_tags(["files", "navigation", "gui"]),
+        Node::new(
+            "concept:diff-display",
+            "Concept: Diff Display",
+            NodeKind::Concept,
+            CONCEPT_DIFF_DISPLAY,
+        )
+        .with_tags(["ai", "diff", "rendering"]),
     ]
 }
 
@@ -972,6 +1055,9 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:markdown|Markdown]] — Structural editing parity with org-mode for `#` headings\n\
 - [[concept:ex-commands|Ex-Command Grammar]] — Tokenizer for w/q/x compound commands\n\
 - [[concept:set-syntax|:set Syntax]] — Vim-style option configuration (no-prefix, toggle, query)\n\
+- [[concept:autosave|Autosave]] — interval-based background save with idle debounce\n\
+- [[concept:file-tree|File Tree]] — project sidebar with icons and directory expansion\n\
+- [[concept:diff-display|Diff Display]] — syntax-highlighted unified diffs for AI changes\n\
 - [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode
 
 ## Reference

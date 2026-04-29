@@ -38,7 +38,7 @@ fn clear_input_buffer(editor: &mut Editor) {
 pub fn scroll_output_to_bottom(editor: &mut Editor) {
     if let Some(ref pair) = editor.conversation_pair {
         if pair.output_buffer_idx < editor.buffers.len() {
-            let total_lines = editor.buffers[pair.output_buffer_idx].line_count();
+            let total_lines = editor.buffers[pair.output_buffer_idx].display_line_count();
             if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                 win.cursor_row = total_lines.saturating_sub(1);
                 win.scroll_offset = total_lines.saturating_sub(editor.viewport_height);
@@ -311,7 +311,7 @@ pub(super) fn handle_conversation_input(
         }
         KeyCode::PageDown => {
             if let Some(ref pair) = editor.conversation_pair {
-                let total = editor.buffers[pair.output_buffer_idx].line_count();
+                let total = editor.buffers[pair.output_buffer_idx].display_line_count();
                 if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                     win.scroll_offset = (win.scroll_offset + 10).min(total.saturating_sub(1));
                     win.cursor_row = (win.cursor_row + 10).min(total.saturating_sub(1));

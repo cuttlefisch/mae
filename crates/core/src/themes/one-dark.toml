@@ -83,3 +83,8 @@ gutter = "#4b5263"
 "namespace" = { fg = "yellow" }
 "punctuation" = { fg = "fg" }
 "markup.link" = { fg = "blue", underline = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "purple" }
+"diff.header" = { fg = "cyan", bold = true }

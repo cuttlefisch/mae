@@ -49,6 +49,9 @@ clipboard = "unnamed"
 # Automatically restore the previous session on startup (per-project)
 restore_session = false
 
+# Autosave interval in seconds (0 = disabled). Requires 5s idle after last edit.
+# autosave_interval = 300
+
 [ai]
 # AI provider: "claude", "openai", "gemini", "ollama", or "deepseek"
 provider = "claude"

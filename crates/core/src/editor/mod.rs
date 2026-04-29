@@ -431,6 +431,8 @@ pub struct Editor {
     /// Linked output+input buffer pair for the split-view conversation UI.
     /// `None` until the user opens the conversation buffer.
     pub conversation_pair: Option<ConversationPair>,
+    /// Window ID of the file tree sidebar, if open. Used to track and close it.
+    pub file_tree_window_id: Option<crate::window::WindowId>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -634,6 +636,7 @@ impl Editor {
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
             conversation_pair: None,
+            file_tree_window_id: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
@@ -1630,7 +1633,7 @@ impl Editor {
     pub fn set_cursor_position(&mut self, buf_row: usize, char_col: usize) {
         let win = self.window_mgr.focused_window();
         let buf = &self.buffers[win.buffer_idx];
-        let max_row = buf.line_count().saturating_sub(1);
+        let max_row = buf.display_line_count().saturating_sub(1);
         let target_row = buf_row.min(max_row);
         let line_len = buf.line_len(target_row);
         let target_col = char_col.min(if line_len > 0 { line_len - 1 } else { 0 });
@@ -1852,15 +1855,17 @@ impl Editor {
 
         match kind {
             crate::BufferKind::Conversation => {
-                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
-                    let amount = lines * scroll_speed;
-                    if delta > 0 {
-                        // Scroll wheel up = show older content = increase scroll
-                        conv.scroll_up(amount);
-                    } else {
-                        // Scroll wheel down = show newer content = decrease scroll
-                        conv.scroll_down(amount);
-                    }
+                // Conversation buffers use win.scroll_offset (rope line index)
+                // via the standard FrameLayout pipeline.
+                let total = self.buffers[buf_idx].display_line_count();
+                let vh = self.viewport_height;
+                let amount = lines * scroll_speed;
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(amount);
+                } else {
+                    let max = total.saturating_sub(vh);
+                    win.scroll_offset = (win.scroll_offset + amount).min(max);
                 }
             }
             crate::BufferKind::Shell => {

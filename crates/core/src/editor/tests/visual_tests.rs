@@ -513,3 +513,41 @@ fn search_word_backward_hash() {
         col
     );
 }
+
+#[test]
+fn visual_line_selection_range_conversation_buffer() {
+    // Regression: V-line in *AI* output buffer should produce correct
+    // char offsets from visual_selection_range(), matching the rope lines
+    // synced from the conversation.
+    let mut ed = Editor::new();
+    // Create a conversation buffer with a few rendered lines.
+    let idx = ed.ensure_conversation_buffer_idx();
+    {
+        let buf = &mut ed.buffers[idx];
+        let conv = buf.conversation.as_mut().unwrap();
+        conv.push_user("hello");
+        conv.push_assistant("world\nsecond line");
+    }
+    ed.buffers[idx].sync_conversation_rope();
+    // Point the focused window at the conversation buffer.
+    let win = ed.window_mgr.focused_window_mut();
+    win.buffer_idx = idx;
+    win.cursor_row = 0;
+    win.cursor_col = 0;
+
+    // Enter V-line mode on row 0, then move down one line.
+    ed.enter_visual_mode(VisualType::Line);
+    ed.dispatch_builtin("move-down");
+
+    let (start, end) = ed.visual_selection_range();
+    // Two full lines selected — offsets should span at least 2 lines of rope.
+    assert!(end > start, "selection range should be non-empty");
+    let rope = ed.buffers[idx].rope();
+    let text = rope.slice(start..end).to_string();
+    // Should contain content from both selected lines.
+    assert!(
+        text.contains('\n'),
+        "V-line across 2 rows should span a newline, got: {:?}",
+        text
+    );
+}

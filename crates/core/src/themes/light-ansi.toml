@@ -80,3 +80,8 @@
 "markup.italic" = { fg = "black", italic = true }
 "markup.list" = { fg = "magenta" }
 "markup.quote" = { fg = "dark_gray", italic = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "magenta" }
+"diff.header" = { fg = "cyan", bold = true }

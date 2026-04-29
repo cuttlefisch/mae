@@ -74,3 +74,8 @@ gray = "#928374"
 "variable" = { fg = "blue" }
 "constant" = { fg = "purple" }
 "markup.link" = { fg = "aqua", underline = true }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "purple" }
+"diff.header" = { fg = "aqua", bold = true }

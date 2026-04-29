@@ -39,6 +39,10 @@ impl Editor {
         if elapsed < self.autosave_interval {
             return 0;
         }
+        // Don't save mid-typing: require 5s idle since last edit.
+        if self.last_edit_time.elapsed().as_secs() < 5 {
+            return 0;
+        }
         let (saved, errors) = self.save_all_modified_buffers();
         if saved > 0 {
             if errors.is_empty() {

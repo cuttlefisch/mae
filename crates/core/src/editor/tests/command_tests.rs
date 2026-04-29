@@ -910,8 +910,9 @@ fn try_autosave_saves_modified() {
     assert!(ed.buffers[idx].modified);
 
     ed.autosave_interval = 1;
-    // Force last_autosave to be old enough
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    // Force last_autosave and last_edit_time to be old enough
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
     let saved = ed.try_autosave();
     assert_eq!(saved, 1);
     assert!(!ed.buffers[idx].modified);
@@ -921,7 +922,8 @@ fn try_autosave_saves_modified() {
 fn try_autosave_skips_clean() {
     let mut ed = Editor::new();
     ed.autosave_interval = 1;
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
     let saved = ed.try_autosave();
     assert_eq!(saved, 0);
 }
@@ -933,10 +935,31 @@ fn try_autosave_skips_non_file() {
     let win = ed.window_mgr.focused_window_mut();
     ed.buffers[0].insert_char(win, 'x');
     ed.autosave_interval = 1;
-    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    ed.last_edit_time = std::time::Instant::now() - std::time::Duration::from_secs(10);
     let saved = ed.try_autosave();
     assert_eq!(saved, 0);
     assert!(ed.buffers[0].modified); // still modified, not saved
+}
+
+#[test]
+fn autosave_idle_debounce_skips_during_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("debounce.txt");
+    fs::write(&p, "original").unwrap();
+
+    let mut ed = Editor::new();
+    ed.open_file(p.to_str().unwrap());
+    let idx = ed.active_buffer_idx();
+    let win = ed.window_mgr.focused_window_mut();
+    ed.buffers[idx].insert_char(win, '!');
+
+    ed.autosave_interval = 1;
+    ed.last_autosave = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    // last_edit_time is very recent (just edited above) — should skip
+    let saved = ed.try_autosave();
+    assert_eq!(saved, 0, "should skip autosave when editing recently");
+    assert!(ed.buffers[idx].modified, "buffer should still be modified");
 }
 
 // ===== Operator-pending mode tests (WU0) =====

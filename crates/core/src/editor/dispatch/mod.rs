@@ -165,7 +165,7 @@ impl Editor {
         // so the user sees the most recent content (not stranded at row 0).
         let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::buffer::BufferKind::Conversation {
-            let last_line = self.buffers[idx].line_count().saturating_sub(1);
+            let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
             let win = self.window_mgr.focused_window_mut();
             if win.cursor_row == 0 && last_line > 0 {
                 win.cursor_row = last_line;

@@ -11,6 +11,7 @@ pub mod editor;
 pub mod event_record;
 pub mod file_browser;
 pub mod file_picker;
+pub mod file_tree;
 pub mod git_status;
 pub mod grapheme;
 pub mod heading;

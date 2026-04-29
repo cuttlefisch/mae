@@ -84,7 +84,11 @@ pub fn compute_cursor_position(
 
             // Use FrameLayout for fold-aware positioning when available.
             if let Some(layout) = frame_layout {
-                let text_width = win_inner.width.saturating_sub(gutter_w);
+                let text_width = if let Some(fl) = frame_layout {
+                    fl.text_width
+                } else {
+                    win_inner.width.saturating_sub(gutter_w)
+                };
                 let wrap = editor.word_wrap && text_width > 0;
 
                 // Look up the display row from the layout (fold-aware).

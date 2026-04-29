@@ -1,6 +1,12 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,949 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,885 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode, autosave config+idle debounce, diff syntax highlighting (8 themes), file tree sidebar with icons, V-line conversation bugfix.
+
+---
+
+## Known Bugs
+
+- [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause suspected: buffer type / component info plumbing mismatch — the conversation buffer doesn't provide the same layout metadata (line count, cursor position, scroll state) that the cursor renderer expects. Likely needs a refactor of how buffer types expose state to FrameLayout and cursor computation. Low priority (output buffer is read-only, navigation still works).
 
 ---
 
@@ -107,7 +113,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.
 
 ### Test Infrastructure
-- [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
+- [x] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code (v0.5.0).
 
 ---
 
@@ -190,6 +196,10 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 38 | Mouse click FrameLayout: pixel-precise positioning for scaled/folded lines | v0.6.0 ✅ |
 | 39 | Insert heading (M-Enter): respects level, inserts after subtree | v0.6.0 ✅ |
 | 35 | Cached lazy theme resolution: unresolved style strings → palette-aware cache rebuild on theme cycle/mutation | v0.5.1 ✅ |
+| 40 | V-line conversation buffer fix: sync viewport start with `win.scroll_offset` for visual-mode selection | v0.6.0 ✅ |
+| 41 | Autosave config.toml + idle debounce: `autosave_interval` in config, 5s idle guard | v0.6.0 ✅ |
+| 42 | Diff display syntax highlighting: `diff.added`/`removed`/`hunk`/`header` theme keys, all 8 themes | v0.6.0 ✅ |
+| 43 | File tree sidebar: `SPC f t`, icons, expand/collapse, j/k/Enter/o/R/q, AI `toggle_file_tree` tool | v0.6.0 ✅ |
 
 ---
 

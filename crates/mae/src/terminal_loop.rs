@@ -126,12 +126,15 @@ pub(crate) async fn run_terminal_loop(
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
-                let gutter_w = if editor.show_line_numbers {
+                let gutter_w = if buf.kind == mae_core::BufferKind::Conversation {
+                    0
+                } else if editor.show_line_numbers {
                     mae_renderer::gutter_width(buf.display_line_count())
                 } else {
                     2
                 };
-                let text_w = inner_w.saturating_sub(gutter_w);
+                let scrollbar_w: usize = if editor.scrollbar { 1 } else { 0 };
+                let text_w = inner_w.saturating_sub(gutter_w).saturating_sub(scrollbar_w);
                 editor.text_area_width = text_w;
                 if !editor.word_wrap {
                     editor

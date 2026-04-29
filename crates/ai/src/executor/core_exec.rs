@@ -53,6 +53,10 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "editor_save_state" => execute_editor_save_state(editor),
         "editor_restore_state" => execute_editor_restore_state(editor),
         "eval_scheme" => execute_eval_scheme(editor, &call.arguments),
+        "toggle_file_tree" => {
+            editor.dispatch_builtin("file-tree-toggle");
+            Ok("File tree toggled".into())
+        }
         _ => return None,
     };
     Some(result)

@@ -1076,5 +1076,16 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- UI ---
+        ToolDefinition {
+            name: "toggle_file_tree".into(),
+            description: "Toggle the file tree sidebar. Opens a project directory browser on the left side of the editor, or closes it if already open. Use this to browse the project structure.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }
