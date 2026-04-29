@@ -1510,6 +1510,46 @@ impl Editor {
         self.count_prefix.take().unwrap_or(1)
     }
 
+    /// Single source of truth for how many visual cell-rows a buffer line occupies.
+    ///
+    /// Accounts for folds (0 rows), word wrap (>= 1 rows), and heading scale
+    /// (ceil of scale factor). All scroll paths — `ensure_scroll_wrapped`,
+    /// `scroll_up_line_wrapped`, mouse scroll bottom computation — must use this
+    /// instead of computing visual rows independently, to prevent the scroll guard
+    /// from fighting with scroll commands.
+    pub fn line_visual_rows(&self, buf_idx: usize, line: usize) -> usize {
+        let buf = &self.buffers[buf_idx];
+        // Folded lines are invisible.
+        if buf.is_line_folded(line) {
+            return 0;
+        }
+        let rope = buf.rope();
+        if line >= rope.len_lines() {
+            return 1;
+        }
+        let chars: Vec<char> = rope
+            .line(line)
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+
+        let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
+
+        if self.word_wrap && self.text_area_width > 0 {
+            let text: String = chars.iter().collect();
+            let sb_w = self.show_break.chars().count();
+            crate::wrap::wrap_line_display_rows(
+                &text,
+                self.text_area_width,
+                self.break_indent,
+                sb_w,
+            )
+            .max(heading_rows)
+        } else {
+            heading_rows
+        }
+    }
+
     /// Calculate the actual inner height (text rows) for the focused window.
     /// This accounts for the window manager layout AND window borders.
     pub fn focused_window_viewport_height(&self, total_area: Rect) -> usize {
@@ -1800,93 +1840,67 @@ impl Editor {
             _ => {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
                 let viewport_height = self.viewport_height;
-                let buf = &self.buffers[buf_idx];
 
-                // Fold-aware scroll: step by visible lines, not raw indices.
-                let win = self.window_mgr.focused_window_mut();
-                let steps = lines * scroll_speed;
-                if delta > 0 {
-                    // Scroll up.
-                    for _ in 0..steps {
-                        let prev = buf.prev_visible_line(win.scroll_offset);
-                        if prev >= win.scroll_offset {
-                            break; // at top
-                        }
-                        win.scroll_offset = prev;
-                    }
-                } else {
-                    // Scroll down.
-                    let max_scroll = buf_line_count.saturating_sub(viewport_height);
-                    for _ in 0..steps {
-                        if win.scroll_offset >= max_scroll {
-                            break;
-                        }
-                        let next = buf.next_visible_line(win.scroll_offset);
-                        if next <= win.scroll_offset {
-                            break; // safety
-                        }
-                        win.scroll_offset = next.min(max_scroll);
-                    }
-                }
-
-                // Clamp cursor into visible viewport (wrap-aware).
-                if win.cursor_row < win.scroll_offset {
-                    win.cursor_row = win.scroll_offset;
-                }
-
-                // Compute the bottom visible buffer row, accounting for
-                // word-wrap and folds.
-                let bottom = {
-                    let max_row = buf_line_count.saturating_sub(1);
-                    if self.word_wrap && self.text_area_width > 0 {
-                        let tw = self.text_area_width;
-                        let bi = self.break_indent;
-                        let sb_w = self.show_break.chars().count();
-                        let rope = buf.rope();
-                        let mut visual = 0;
-                        let mut last_fit = win.scroll_offset;
-                        let mut line = win.scroll_offset;
-                        while line <= max_row {
-                            if !buf.is_line_folded(line) {
-                                let rows = if line < rope.len_lines() {
-                                    let text: String = rope.line(line).chars().collect();
-                                    let text = text.trim_end_matches('\n');
-                                    crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
-                                } else {
-                                    1
-                                };
-                                if visual + rows > viewport_height {
-                                    break;
-                                }
-                                visual += rows;
-                                last_fit = line;
-                            }
-                            line = buf.next_visible_line(line);
-                            if line <= last_fit {
-                                break; // safety
-                            }
-                        }
-                        last_fit
-                    } else {
-                        // No wrap: walk visible lines to find bottom.
-                        let mut count = 0;
-                        let mut last_fit = win.scroll_offset;
-                        let mut line = win.scroll_offset;
-                        while line <= max_row && count < viewport_height {
-                            if !buf.is_line_folded(line) {
-                                count += 1;
-                                last_fit = line;
-                            }
-                            let next = buf.next_visible_line(line);
-                            if next <= line {
+                // Phase 1: Fold-aware scroll stepping (needs &mut win + &buf).
+                {
+                    let buf = &self.buffers[buf_idx];
+                    let win = self.window_mgr.focused_window_mut();
+                    let steps = lines * scroll_speed;
+                    if delta > 0 {
+                        for _ in 0..steps {
+                            let prev = buf.prev_visible_line(win.scroll_offset);
+                            if prev >= win.scroll_offset {
                                 break;
                             }
-                            line = next;
+                            win.scroll_offset = prev;
                         }
-                        last_fit
+                    } else {
+                        let max_scroll = buf_line_count.saturating_sub(viewport_height);
+                        for _ in 0..steps {
+                            if win.scroll_offset >= max_scroll {
+                                break;
+                            }
+                            let next = buf.next_visible_line(win.scroll_offset);
+                            if next <= win.scroll_offset {
+                                break;
+                            }
+                            win.scroll_offset = next.min(max_scroll);
+                        }
                     }
+                }
+
+                // Phase 2: Compute bottom visible row using canonical line_visual_rows.
+                // (needs &self for line_visual_rows — no mutable borrow active)
+                let scroll_off = self.window_mgr.focused_window().scroll_offset;
+                let bottom = {
+                    let buf = &self.buffers[buf_idx];
+                    let max_row = buf_line_count.saturating_sub(1);
+                    let mut visual = 0;
+                    let mut last_fit = scroll_off;
+                    let mut line = scroll_off;
+                    while line <= max_row {
+                        let rows = self.line_visual_rows(buf_idx, line);
+                        if rows > 0 {
+                            if visual + rows > viewport_height {
+                                break;
+                            }
+                            visual += rows;
+                            last_fit = line;
+                        }
+                        line = buf.next_visible_line(line);
+                        if line <= last_fit {
+                            break;
+                        }
+                    }
+                    last_fit
                 };
 
+                // Phase 3: Clamp cursor (needs &mut win again).
+                let buf = &self.buffers[buf_idx];
+                let win = self.window_mgr.focused_window_mut();
+                if win.cursor_row < scroll_off {
+                    win.cursor_row = scroll_off;
+                }
                 if win.cursor_row > bottom {
                     win.cursor_row = bottom;
                 }

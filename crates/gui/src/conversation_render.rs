@@ -354,6 +354,19 @@ pub fn render_conversation_window(
             }
             viewport_row += 1;
         }
+
+        // Scrollbar for the conversation buffer.
+        let scrollbar_col = inner_col + inner_width; // right edge of inner area
+        crate::scrollbar::render_scrollbar_raw(
+            canvas,
+            editor,
+            scrollbar_col,
+            inner_row,
+            inner_height,
+            total,
+            viewport_height,
+            start,
+        );
     }
 }
 

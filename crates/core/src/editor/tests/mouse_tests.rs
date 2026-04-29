@@ -309,4 +309,30 @@ fn fold_navigation_prev_visible_skips_fold() {
     assert_eq!(buf.prev_visible_line(0), 0); // already at 0
 }
 
+#[test]
+fn line_visual_rows_single_source_of_truth() {
+    let mut editor = Editor::new();
+    let content = "# Heading 1\nplain line\n## Heading 2\nanother line\nfolded inner\nmore\n";
+    editor.buffers[0].replace_contents(content);
+
+    // Without heading scale: all visible lines = 1 row.
+    editor.heading_scale = false;
+    assert_eq!(editor.line_visual_rows(0, 0), 1);
+    assert_eq!(editor.line_visual_rows(0, 1), 1);
+    assert_eq!(editor.line_visual_rows(0, 2), 1);
+
+    // With heading scale: headings take ceil(scale) rows.
+    editor.heading_scale = true;
+    assert_eq!(editor.line_visual_rows(0, 0), 2); // # = level 1, scale 1.5 → 2
+    assert_eq!(editor.line_visual_rows(0, 1), 1); // plain
+    assert_eq!(editor.line_visual_rows(0, 2), 2); // ## = level 2, scale 1.3 → 2
+    assert_eq!(editor.line_visual_rows(0, 3), 1); // plain
+
+    // Folded lines = 0 rows.
+    editor.buffers[0].folded_ranges.push((2, 5)); // lines 3,4 hidden
+    assert_eq!(editor.line_visual_rows(0, 3), 0);
+    assert_eq!(editor.line_visual_rows(0, 4), 0);
+    assert_eq!(editor.line_visual_rows(0, 2), 2); // fold start still visible
+}
+
 // --- Debug mode tests ---

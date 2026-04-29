@@ -85,6 +85,62 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     );
 }
 
+/// Render a scrollbar without a FrameLayout — for conversation buffers and other
+/// custom-scroll views that don't use the standard layout pass.
+pub fn render_scrollbar_raw(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_col: usize,
+    area_row: usize,
+    area_height: usize,
+    total_lines: usize,
+    viewport_lines: usize,
+    scroll_offset: usize,
+) {
+    if !editor.scrollbar || total_lines == 0 || viewport_lines >= total_lines {
+        return;
+    }
+
+    let (cw, ch) = canvas.cell_size();
+    let col_x = area_col as f32 * cw;
+    let bar_x = col_x + (cw - SCROLLBAR_WIDTH) / 2.0;
+    let track_y_start = area_row as f32 * ch;
+    let track_height = area_height as f32 * ch;
+
+    if track_height <= 0.0 {
+        return;
+    }
+
+    let track_color = resolve_track_color(editor);
+    canvas.draw_pixel_rrect(
+        bar_x,
+        track_y_start,
+        SCROLLBAR_WIDTH,
+        track_height,
+        THUMB_RADIUS,
+        track_color,
+    );
+
+    let thumb_ratio = (viewport_lines as f32 / total_lines as f32).min(1.0);
+    let thumb_height = (thumb_ratio * track_height).max(MIN_THUMB_HEIGHT);
+    let scroll_ratio = if total_lines > viewport_lines {
+        scroll_offset as f32 / (total_lines - viewport_lines) as f32
+    } else {
+        0.0
+    };
+    let thumb_y = track_y_start + scroll_ratio * (track_height - thumb_height);
+
+    let thumb_color = resolve_thumb_color(editor);
+    canvas.draw_pixel_rrect(
+        bar_x,
+        thumb_y,
+        SCROLLBAR_WIDTH,
+        thumb_height,
+        THUMB_RADIUS,
+        thumb_color,
+    );
+}
+
 /// Resolve the track background color from the theme or derive a sensible default.
 ///
 /// Uses `style_exact` to avoid inheriting `ui.text` fg via dot-notation fallback.

@@ -142,30 +142,27 @@ pub(crate) async fn run_terminal_loop(
             }
         }
 
-        if editor.word_wrap && editor.text_area_width > 0 {
-            let tw = editor.text_area_width;
-            let bi = editor.break_indent;
-            let sb_w = editor.show_break.chars().count();
+        {
             let buf_idx = editor.active_buffer_idx();
-            let rope = editor.buffers[buf_idx].rope().clone();
-            let line_count = rope.len_lines();
+            let cursor_row = editor.window_mgr.focused_window().cursor_row;
+            let scroll = editor.window_mgr.focused_window().scroll_offset;
+            let range_start = scroll.min(cursor_row);
+            let range_end = (scroll.max(cursor_row) + viewport_height + 2)
+                .min(editor.buffers[buf_idx].display_line_count());
+            let row_cache: Vec<(usize, usize)> = (range_start..range_end)
+                .map(|l| (l, editor.line_visual_rows(buf_idx, l)))
+                .collect();
+
             editor
                 .window_mgr
                 .focused_window_mut()
                 .ensure_scroll_wrapped(viewport_height, |line| {
-                    if line >= line_count {
-                        return 1;
-                    }
-                    let rope_line = rope.line(line);
-                    let text: String = rope_line.chars().collect();
-                    let text = text.trim_end_matches('\n');
-                    mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                    row_cache
+                        .iter()
+                        .find(|(l, _)| *l == line)
+                        .map(|(_, r)| *r)
+                        .unwrap_or(1)
                 });
-        } else {
-            editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll(viewport_height);
         }
 
         // Debounced syntax reparse: drain pending reparses after 50ms idle.

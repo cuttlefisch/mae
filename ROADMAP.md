@@ -77,7 +77,13 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
-- [ ] **Org Table Styling**: Column alignment with `|` delimiters, Tab to next cell, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection. Emacs `org-table-align` equivalent. Prerequisite for org-mode spreadsheet features.
+- [ ] **Org Table Mode** (Emacs `org-table-mode` parity): Full table editing and formatting.
+  - **Styling**: Column alignment with `|` delimiters, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection
+  - **Navigation**: Tab to next cell, S-Tab to previous cell, RET to next row, auto-create new row at end
+  - **Structure editing**: `M-Left`/`M-Right` move column, `M-Up`/`M-Down` move row, `M-S-Left` delete column, `M-S-Right` insert column, `M-S-Up` delete row, `M-S-Down` insert row
+  - **Sorting**: Sort by column (alphabetic, numeric, time)
+  - **Formulas**: `#+TBLFM:` field/column formulas with Calc-like syntax, recalculation
+  - **Import/Export**: Convert region to table, export to CSV/TSV, org table → markdown table
 - [x] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files. (v0.6.0)
 - [x] **Org Heading Depth Manipulation**: `M-h`/`M-l` and `M-Left`/`M-Right` to promote/demote heading depth. Evil-org parity. (v0.6.0)
 - [x] **Org Heading Movement**: `M-j`/`M-k` and `M-Up`/`M-Down` to move heading subtree up/down. Fold-aware (clears folds in affected range). (v0.6.0)
@@ -174,7 +180,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
 | 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
 | 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
-| 31 | Org table styling: column alignment, Tab-to-cell, auto-align, horizontal rules, cell highlighting | future |
+| 31 | Org table mode: alignment, Tab-to-cell, structure editing, sorting, formulas, import/export | future |
 | 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | v0.6.0 ✅ |
 | 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | v0.5.1 ✅ |
 | 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — ex-command tokenizer framework | v0.6.0 ✅ |
@@ -1145,7 +1151,7 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 - [ ] Agenda view: query across org files for TODO items
 
 ### M3: Tables & Lists
-- [ ] Org table alignment (Tab to next cell, auto-align)
+- [ ] Org table mode (alignment, navigation, structure editing, sorting, formulas)
 - [ ] Checkbox lists (`- [ ]` / `- [x]`) with toggle
 - [ ] Ordered/unordered list continuation on Enter
 

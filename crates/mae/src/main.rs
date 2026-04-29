@@ -1179,51 +1179,27 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
 
             {
+                // Pre-compute visual rows for the viewport range so the
+                // ensure_scroll_wrapped closure doesn't need &self.editor.
                 let buf_idx = self.editor.active_buffer_idx();
-                let rope = self.editor.buffers[buf_idx].rope().clone();
-                let line_count = rope.len_lines();
-                let folded = self.editor.buffers[buf_idx].folded_ranges.clone();
-                let heading_scale = self.editor.heading_scale;
-                let word_wrap = self.editor.word_wrap && self.editor.text_area_width > 0;
-                let tw = self.editor.text_area_width;
-                let bi = self.editor.break_indent;
-                let sb_w = self.editor.show_break.chars().count();
+                let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
+                let scroll = self.editor.window_mgr.focused_window().scroll_offset;
+                let range_start = scroll.min(cursor_row);
+                let range_end = (scroll.max(cursor_row) + vh + 2)
+                    .min(self.editor.buffers[buf_idx].display_line_count());
+                let row_cache: Vec<(usize, usize)> = (range_start..range_end)
+                    .map(|l| (l, self.editor.line_visual_rows(buf_idx, l)))
+                    .collect();
 
                 self.editor
                     .window_mgr
                     .focused_window_mut()
                     .ensure_scroll_wrapped(vh, |line| {
-                        if line >= line_count {
-                            return 1;
-                        }
-                        // Folded lines are invisible.
-                        for (start, end) in &folded {
-                            if line > *start && line < *end {
-                                return 0;
-                            }
-                        }
-                        let rope_line = rope.line(line);
-                        let chars: Vec<char> = rope_line.chars().collect();
-                        let trimmed: Vec<char> = chars
+                        row_cache
                             .iter()
-                            .filter(|c| **c != '\n' && **c != '\r')
-                            .copied()
-                            .collect();
-
-                        // Heading scale: ceil(scale) extra visual rows.
-                        let heading_rows =
-                            mae_core::heading::line_heading_visual_rows(&trimmed, heading_scale);
-
-                        if word_wrap {
-                            let text: String = trimmed.iter().collect();
-                            let wrap_rows =
-                                mae_core::wrap::wrap_line_display_rows(&text, tw, bi, sb_w);
-                            // For wrapped headings: each wrap segment gets heading height,
-                            // but at minimum use heading_rows (ceil of scale).
-                            wrap_rows.max(heading_rows)
-                        } else {
-                            heading_rows
-                        }
+                            .find(|(l, _)| *l == line)
+                            .map(|(_, r)| *r)
+                            .unwrap_or(1)
                     });
             }
         }

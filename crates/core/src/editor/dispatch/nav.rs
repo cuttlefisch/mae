@@ -484,33 +484,41 @@ impl Editor {
                         }
                     }
                     _ => {
-                        let buf = &self.buffers[idx];
                         let vh = self.viewport_height;
-                        let wrap = self.word_wrap && self.text_area_width > 0;
-                        let tw = self.text_area_width;
-                        let bi = self.break_indent;
-                        let sb_w = self.show_break.chars().count();
-                        let has_folds = !buf.folded_ranges.is_empty();
+                        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
+                        let needs_wrapped = (self.word_wrap && self.text_area_width > 0)
+                            || has_folds
+                            || self.heading_scale;
                         for _ in 0..n {
-                            if wrap || has_folds {
-                                let rope = buf.rope().clone();
+                            if needs_wrapped {
+                                // Pre-compute visual rows for the viewport range so
+                                // the closure doesn't need &self (borrow conflict).
+                                let buf = &self.buffers[idx];
+                                let max_line = buf.display_line_count();
+                                let scroll = self.window_mgr.focused_window().scroll_offset;
+                                // Pre-compute for lines around scroll_offset ± viewport.
+                                let range_start = scroll.saturating_sub(1);
+                                let range_end = (scroll + vh + 2).min(max_line);
+                                let mut row_cache: Vec<(usize, usize)> =
+                                    Vec::with_capacity(range_end - range_start + 1);
+                                for l in range_start..range_end {
+                                    row_cache.push((l, self.line_visual_rows(idx, l)));
+                                }
+                                let buf = &self.buffers[idx];
                                 self.window_mgr.focused_window_mut().scroll_up_line_wrapped(
                                     buf,
                                     vh,
                                     |line| {
-                                        // Folded lines are invisible (0 visual rows).
-                                        if buf.is_line_folded(line) {
-                                            return 0;
-                                        }
-                                        if !wrap || line >= rope.len_lines() {
-                                            return 1;
-                                        }
-                                        let text: String = rope.line(line).chars().collect();
-                                        let text = text.trim_end_matches('\n');
-                                        crate::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                                        // Look up from pre-computed cache; fallback to 1.
+                                        row_cache
+                                            .iter()
+                                            .find(|(l, _)| *l == line)
+                                            .map(|(_, r)| *r)
+                                            .unwrap_or(1)
                                     },
                                 );
                             } else {
+                                let buf = &self.buffers[idx];
                                 self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
                             }
                         }
