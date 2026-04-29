@@ -15,20 +15,164 @@
 //! regenerating the KB on every startup keeps help docs and commands in
 //! lockstep with the code that ships.
 
+use std::collections::HashMap;
+
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
 use crate::commands::CommandRegistry;
+use crate::hooks::HookRegistry;
+use crate::keymap::{serialize_macro, Keymap};
 use crate::options::OptionRegistry;
 
 /// Build the initial KB: hand-authored concept/index nodes + generated
-/// `cmd:*` nodes derived from the command registry.
-pub fn seed_kb(registry: &CommandRegistry) -> KnowledgeBase {
+/// `cmd:*` nodes derived from the command registry, enriched with
+/// keybinding and hook information.
+pub fn seed_kb(
+    registry: &CommandRegistry,
+    keymaps: &HashMap<String, Keymap>,
+    hooks: &HookRegistry,
+) -> KnowledgeBase {
     let mut kb = KnowledgeBase::new();
     install_static_nodes(&mut kb);
     install_tutor_nodes(&mut kb);
-    install_command_nodes(&mut kb, registry);
+    let keybinding_map = collect_keybindings(keymaps);
+    install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
+    install_category_nodes(&mut kb, registry, &keybinding_map);
     install_option_nodes(&mut kb);
     kb
+}
+
+/// Convenience for tests: seed with empty keymaps and hooks.
+pub fn seed_kb_default(registry: &CommandRegistry) -> KnowledgeBase {
+    seed_kb(registry, &HashMap::new(), &HookRegistry::new())
+}
+
+/// Build a reverse index: command_name → [(mode_name, key_display_string)].
+pub fn collect_keybindings(
+    keymaps: &HashMap<String, Keymap>,
+) -> HashMap<String, Vec<(String, String)>> {
+    let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (mode_name, keymap) in keymaps {
+        for (keys, command) in keymap.bindings() {
+            let display = serialize_macro(keys);
+            map.entry(command.clone())
+                .or_default()
+                .push((mode_name.clone(), display));
+        }
+    }
+    // Sort each command's bindings by mode name for consistency
+    for bindings in map.values_mut() {
+        bindings.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    }
+    map
+}
+
+/// Single-command variant: return bindings for one command.
+pub fn collect_keybindings_for(
+    keymaps: &HashMap<String, Keymap>,
+    cmd_name: &str,
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for (mode_name, keymap) in keymaps {
+        for (keys, command) in keymap.bindings() {
+            if command == cmd_name {
+                let display = serialize_macro(keys);
+                result.push((mode_name.clone(), display));
+            }
+        }
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    result
+}
+
+/// Infer a category from a command name based on prefix conventions.
+pub fn infer_category(name: &str) -> &'static str {
+    if name.starts_with("move-")
+        || name.starts_with("scroll-")
+        || name.starts_with("goto-")
+        || name.starts_with("jump-")
+        || name == "center-cursor-vertically"
+    {
+        "movement"
+    } else if name.starts_with("delete-")
+        || name.starts_with("change-")
+        || name.starts_with("insert-")
+        || name.starts_with("yank")
+        || name.starts_with("paste")
+        || name.starts_with("indent")
+        || name == "undo"
+        || name == "redo"
+        || name == "join-lines"
+        || name == "open-line-below"
+        || name == "open-line-above"
+        || name == "replace-char"
+        || name == "dot-repeat"
+    {
+        "editing"
+    } else if name.starts_with("git-") {
+        "git"
+    } else if name.starts_with("lsp-") {
+        "lsp"
+    } else if name.starts_with("debug-") || name.starts_with("dap-") {
+        "debug"
+    } else if name.starts_with("window-")
+        || name.starts_with("split-")
+        || name.starts_with("focus-")
+    {
+        "window"
+    } else if name.starts_with("file-tree-") {
+        "file-tree"
+    } else if name.starts_with("visual-")
+        || name.starts_with("enter-visual")
+        || name.starts_with("block-visual")
+    {
+        "visual"
+    } else if name.starts_with("ai-") || name.starts_with("open-ai") {
+        "ai"
+    } else if name.starts_with("help")
+        || name.starts_with("describe-")
+        || name.starts_with("kb-")
+        || name == "tutor"
+    {
+        "help"
+    } else if name.starts_with("org-")
+        || name.starts_with("md-")
+        || name.starts_with("insert-heading")
+    {
+        "org"
+    } else if name.starts_with("toggle-") {
+        "toggle"
+    } else if name.starts_with("enter-") {
+        "mode"
+    } else if name.starts_with("search") || name.starts_with("find-") || name == "nohlsearch" {
+        "search"
+    } else if name.starts_with("save")
+        || name.starts_with("open-file")
+        || name.starts_with("close-buffer")
+        || name.starts_with("kill-buffer")
+        || name == "quit"
+        || name == "force-quit"
+        || name.starts_with("next-buffer")
+        || name.starts_with("prev-buffer")
+        || name == "new-buffer"
+    {
+        "file"
+    } else if name.starts_with("shell")
+        || name.starts_with("terminal")
+        || name.starts_with("send-to-shell")
+        || name.starts_with("send-region")
+    {
+        "shell"
+    } else if name.starts_with("macro-")
+        || name.starts_with("record-")
+        || name.starts_with("play-macro")
+    {
+        "macro"
+    } else if name.starts_with("register-") {
+        "register"
+    } else {
+        "general"
+    }
 }
 
 /// Install the hand-authored index + concept + key nodes.
@@ -750,7 +894,12 @@ See also: [[concept:ai-as-peer]], [[concept:options]]\n";
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
-fn install_command_nodes(kb: &mut KnowledgeBase, registry: &CommandRegistry) {
+fn install_command_nodes(
+    kb: &mut KnowledgeBase,
+    registry: &CommandRegistry,
+    keybinding_map: &HashMap<String, Vec<(String, String)>>,
+    hooks: &HookRegistry,
+) {
     for cmd in registry.list_commands() {
         let source_line = match &cmd.source {
             crate::commands::CommandSource::Builtin => "**Source:** built-in (Rust)".to_string(),
@@ -758,14 +907,71 @@ fn install_command_nodes(kb: &mut KnowledgeBase, registry: &CommandRegistry) {
                 format!("**Source:** Scheme (`{}`)", fn_name)
             }
         };
+        let category = infer_category(&cmd.name);
+
+        let keybindings_section = match keybinding_map.get(&cmd.name) {
+            Some(bindings) if !bindings.is_empty() => {
+                let mut lines = String::from("\n\n**Keybindings:**\n");
+                for (mode, key) in bindings {
+                    lines.push_str(&format!("  {}: `{}`\n", mode, key));
+                }
+                lines
+            }
+            _ => String::new(),
+        };
+
+        let hook_names = hooks.hooks_containing(&cmd.name);
+        let hooks_section = if hook_names.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n**Hooks:** {}", hook_names.join(", "))
+        };
+
         let body = format!(
-            "{doc}\n\n{source_line}\n\nSee also: [[index]], [[concept:command]], [[concept:ai-as-peer]]",
+            "{doc}\n\n**Category:** {category}\n{source_line}{keybindings}{hooks}\n\nSee also: [[index]], [[concept:command]], [[category:{category}]]",
             doc = cmd.doc,
+            category = category,
             source_line = source_line,
+            keybindings = keybindings_section,
+            hooks = hooks_section,
         );
         let id = format!("cmd:{}", cmd.name);
         let title = format!("Command: {}", cmd.name);
         kb.insert(Node::new(id, title, NodeKind::Command, body));
+    }
+}
+
+/// Install one `category:<name>` index node per distinct category.
+fn install_category_nodes(
+    kb: &mut KnowledgeBase,
+    registry: &CommandRegistry,
+    keybinding_map: &HashMap<String, Vec<(String, String)>>,
+) {
+    let mut categories: HashMap<&str, Vec<&str>> = HashMap::new();
+    for cmd in registry.list_commands() {
+        let cat = infer_category(&cmd.name);
+        categories.entry(cat).or_default().push(&cmd.name);
+    }
+    for (cat, mut commands) in categories {
+        commands.sort();
+        let mut body = format!("Commands in the **{}** category:\n\n", cat);
+        for name in &commands {
+            let binding_hint = match keybinding_map.get(*name) {
+                Some(bindings) if !bindings.is_empty() => {
+                    let keys: Vec<String> = bindings
+                        .iter()
+                        .map(|(m, k)| format!("{}: `{}`", m, k))
+                        .collect();
+                    format!(" ({})", keys.join(", "))
+                }
+                _ => String::new(),
+            };
+            body.push_str(&format!("- [[cmd:{}]]{}\n", name, binding_hint));
+        }
+        body.push_str("\nSee also: [[index]], [[concept:command]]");
+        let id = format!("category:{}", cat);
+        let title = format!("Category: {}", cat);
+        kb.insert(Node::new(id, title, NodeKind::Concept, body).with_tags(["category"]));
     }
 }
 
@@ -1065,6 +1271,7 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[key:leader-keys|SPC leader bindings]] (14 groups, Doom Emacs style)
 - [[concept:project|Project management]]
 - Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
+- Browse by category: `category:movement`, `category:editing`, `category:git`, etc.
 
 ## Tutorial
 - [[tutor:index|MAE Tutorial]] — interactive lessons covering all essentials
@@ -1631,7 +1838,7 @@ mod tests {
     #[test]
     fn seed_produces_index_and_commands() {
         let reg = CommandRegistry::with_builtins();
-        let kb = seed_kb(&reg);
+        let kb = seed_kb_default(&reg);
         assert!(kb.contains("index"));
         // Every registered command becomes a node.
         for cmd in reg.list_commands() {
@@ -1642,7 +1849,7 @@ mod tests {
 
     #[test]
     fn seed_includes_core_concepts() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         for required in [
             "concept:buffer",
             "concept:window",
@@ -1670,7 +1877,7 @@ mod tests {
 
     #[test]
     fn index_links_to_concepts() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("index");
         assert!(links.contains(&"concept:buffer".to_string()));
         assert!(links.contains(&"concept:ai-as-peer".to_string()));
@@ -1680,7 +1887,7 @@ mod tests {
 
     #[test]
     fn seed_includes_tutor_lessons() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         assert!(kb.contains("tutor:index"), "missing tutor:index");
         for i in [
             "lesson:navigation",
@@ -1706,7 +1913,7 @@ mod tests {
 
     #[test]
     fn command_node_body_has_source_and_backlinks() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let node = kb.get("cmd:undo").expect("cmd:undo should exist");
         assert!(node.body.contains("built-in"));
         assert!(node.links().contains(&"index".to_string()));
@@ -1714,7 +1921,7 @@ mod tests {
 
     #[test]
     fn concept_ai_as_peer_links_to_tools() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("concept:ai-as-peer");
         // A command referenced in the narrative should appear as a link
         // (the cmd:* targets exist because we generated them).
@@ -1724,10 +1931,191 @@ mod tests {
 
     #[test]
     fn lesson_ai_has_expected_links() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("lesson:ai");
         assert!(links.contains(&"cmd:ai-prompt".to_string()));
         assert!(links.contains(&"cmd:open-ai-agent".to_string()));
         assert!(links.contains(&"cmd:ai-cancel".to_string()));
+    }
+
+    #[test]
+    fn infer_category_known_prefixes() {
+        assert_eq!(infer_category("move-left"), "movement");
+        assert_eq!(infer_category("scroll-down"), "movement");
+        assert_eq!(infer_category("delete-line"), "editing");
+        assert_eq!(infer_category("undo"), "editing");
+        assert_eq!(infer_category("git-status"), "git");
+        assert_eq!(infer_category("lsp-hover"), "lsp");
+        assert_eq!(infer_category("debug-start"), "debug");
+        assert_eq!(infer_category("window-grow"), "window");
+        assert_eq!(infer_category("file-tree-toggle"), "file-tree");
+        assert_eq!(infer_category("ai-prompt"), "ai");
+        assert_eq!(infer_category("help"), "help");
+        assert_eq!(infer_category("toggle-fold"), "toggle");
+        assert_eq!(infer_category("unknown-thing"), "general");
+    }
+
+    #[test]
+    fn collect_keybindings_reverse_index() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        normal.bind(parse_key_seq("Left"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+
+        let map = collect_keybindings(&keymaps);
+        let bindings = map.get("move-left").unwrap();
+        assert!(bindings.len() >= 2);
+        assert!(bindings.iter().any(|(m, k)| m == "normal" && k == "h"));
+    }
+
+    #[test]
+    fn collect_keybindings_for_single_command() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        normal.bind(parse_key_seq("j"), "move-down");
+        keymaps.insert("normal".to_string(), normal);
+
+        let bindings = collect_keybindings_for(&keymaps, "move-left");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0], ("normal".to_string(), "h".to_string()));
+    }
+
+    #[test]
+    fn seed_kb_with_keymaps_has_categories() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let reg = CommandRegistry::with_builtins();
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&reg, &keymaps, &hooks);
+
+        // Category nodes should exist
+        assert!(
+            kb.contains("category:movement"),
+            "should have movement category"
+        );
+        assert!(
+            kb.contains("category:editing"),
+            "should have editing category"
+        );
+
+        // Command nodes should have category info
+        let node = kb.get("cmd:move-left").unwrap();
+        assert!(node.body.contains("**Category:** movement"));
+    }
+
+    #[test]
+    fn enriched_cmd_node_has_keybindings() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let reg = CommandRegistry::with_builtins();
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&reg, &keymaps, &hooks);
+
+        let node = kb.get("cmd:move-left").unwrap();
+        assert!(
+            node.body.contains("**Keybindings:**"),
+            "should have keybinding section"
+        );
+        assert!(
+            node.body.contains("normal: `h`"),
+            "should show normal mode h binding"
+        );
+    }
+
+    // --- KB Health Tests ---
+
+    #[test]
+    fn kb_health_all_cmd_nodes_have_category() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for cmd in reg.list_commands() {
+            let id = format!("cmd:{}", cmd.name);
+            let node = kb.get(&id).unwrap_or_else(|| panic!("missing {}", id));
+            assert!(
+                node.body.contains("**Category:**"),
+                "{} missing category",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn kb_health_all_category_index_nodes_exist() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        let mut categories = std::collections::HashSet::new();
+        for cmd in reg.list_commands() {
+            categories.insert(infer_category(&cmd.name));
+        }
+        for cat in categories {
+            let id = format!("category:{}", cat);
+            assert!(kb.contains(&id), "missing category node: {}", id);
+        }
+    }
+
+    #[test]
+    fn kb_health_all_category_links_resolve() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for id in kb.list_ids(None) {
+            if id.starts_with("category:") {
+                let links = kb.links_from(&id);
+                for link in &links {
+                    assert!(kb.contains(link), "broken link {} -> {}", id, link);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kb_health_no_orphaned_cmd_nodes() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for cmd in reg.list_commands() {
+            let id = format!("cmd:{}", cmd.name);
+            let cat = infer_category(&cmd.name);
+            let cat_id = format!("category:{}", cat);
+            let links = kb.links_from(&cat_id);
+            assert!(
+                links.contains(&id),
+                "cmd {} not linked from category {}",
+                id,
+                cat_id
+            );
+        }
+    }
+
+    #[test]
+    fn kb_health_coverage_summary() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        let all_ids = kb.list_ids(None);
+        let cmd_count = all_ids.iter().filter(|id| id.starts_with("cmd:")).count();
+        let concept_count = all_ids
+            .iter()
+            .filter(|id| id.starts_with("concept:"))
+            .count();
+        let category_count = all_ids
+            .iter()
+            .filter(|id| id.starts_with("category:"))
+            .count();
+        assert!(all_ids.len() >= 100, "total nodes: {} < 100", all_ids.len());
+        assert!(cmd_count >= 50, "cmd nodes: {} < 50", cmd_count);
+        assert!(concept_count >= 10, "concept nodes: {} < 10", concept_count);
+        assert!(
+            category_count >= 5,
+            "category nodes: {} < 5",
+            category_count
+        );
     }
 }

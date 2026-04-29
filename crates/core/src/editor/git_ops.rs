@@ -295,4 +295,147 @@ impl Editor {
         info!("showing git log");
         self.git_command_to_buffer(&["log", "--oneline", "-50"], "*git-log*");
     }
+
+    /// Parse `git diff HEAD --unified=0` output for a buffer and populate
+    /// its `git_diff_lines` map.
+    pub(crate) fn refresh_git_diff(&mut self, buffer_idx: usize) {
+        let file_path = match self.buffers[buffer_idx].file_path() {
+            Some(p) => p.to_path_buf(),
+            None => return,
+        };
+        let root = self
+            .project
+            .as_ref()
+            .map(|p| p.root.clone())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let output = match std::process::Command::new("git")
+            .args(["diff", "HEAD", "--unified=0", "--"])
+            .arg(&file_path)
+            .current_dir(&root)
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            _ => {
+                self.buffers[buffer_idx].git_diff_lines.clear();
+                return;
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        self.buffers[buffer_idx].git_diff_lines = parse_diff_hunks(&stdout);
+    }
+}
+
+/// Parse `@@ -old_start,old_count +new_start,new_count @@` hunk headers from unified diff output.
+fn parse_diff_hunks(
+    diff_output: &str,
+) -> std::collections::HashMap<usize, crate::render_common::gutter::GitLineStatus> {
+    use crate::render_common::gutter::GitLineStatus;
+    let mut map = std::collections::HashMap::new();
+    for line in diff_output.lines() {
+        if !line.starts_with("@@ ") {
+            continue;
+        }
+        // Parse @@ -old_start[,old_count] +new_start[,new_count] @@
+        let Some(plus_idx) = line.find('+') else {
+            continue;
+        };
+        let rest = &line[plus_idx + 1..];
+        let end = rest.find(' ').unwrap_or(rest.len());
+        let range_str = &rest[..end];
+        let (new_start, new_count) = if let Some(comma) = range_str.find(',') {
+            let start: usize = range_str[..comma].parse().unwrap_or(0);
+            let count: usize = range_str[comma + 1..].parse().unwrap_or(0);
+            (start, count)
+        } else {
+            let start: usize = range_str.parse().unwrap_or(0);
+            (start, 1)
+        };
+
+        // Determine old_count from the minus portion
+        let minus_start = line.find('-').unwrap_or(0) + 1;
+        let minus_rest = &line[minus_start..plus_idx].trim();
+        let old_count = if let Some(comma) = minus_rest.find(',') {
+            minus_rest[comma + 1..].parse::<usize>().unwrap_or(1)
+        } else {
+            1
+        };
+
+        if new_count == 0 {
+            // Deletion: mark the line at new_start (0-indexed) as deleted
+            if new_start > 0 {
+                map.insert(new_start - 1, GitLineStatus::Deleted);
+            }
+        } else if old_count == 0 {
+            // Pure addition
+            for i in 0..new_count {
+                map.insert(new_start - 1 + i, GitLineStatus::Added);
+            }
+        } else {
+            // Modification
+            for i in 0..new_count {
+                map.insert(new_start - 1 + i, GitLineStatus::Modified);
+            }
+        }
+    }
+    map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_diff_hunks_added() {
+        let diff = "@@ -0,0 +1,3 @@\n+line1\n+line2\n+line3\n";
+        let map = parse_diff_hunks(diff);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map[&0], crate::render_common::gutter::GitLineStatus::Added);
+        assert_eq!(map[&1], crate::render_common::gutter::GitLineStatus::Added);
+        assert_eq!(map[&2], crate::render_common::gutter::GitLineStatus::Added);
+    }
+
+    #[test]
+    fn parse_diff_hunks_modified() {
+        let diff = "@@ -5,2 +5,2 @@\n-old1\n-old2\n+new1\n+new2\n";
+        let map = parse_diff_hunks(diff);
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map[&4],
+            crate::render_common::gutter::GitLineStatus::Modified
+        );
+        assert_eq!(
+            map[&5],
+            crate::render_common::gutter::GitLineStatus::Modified
+        );
+    }
+
+    #[test]
+    fn parse_diff_hunks_deleted() {
+        let diff = "@@ -3,2 +2,0 @@\n-removed1\n-removed2\n";
+        let map = parse_diff_hunks(diff);
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map[&1],
+            crate::render_common::gutter::GitLineStatus::Deleted
+        );
+    }
+
+    #[test]
+    fn parse_diff_hunks_empty() {
+        let map = parse_diff_hunks("");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn parse_diff_hunks_multiple() {
+        let diff = "@@ -1,1 +1,1 @@\n-old\n+new\n@@ -10,0 +10,2 @@\n+added1\n+added2\n";
+        let map = parse_diff_hunks(diff);
+        assert_eq!(
+            map[&0],
+            crate::render_common::gutter::GitLineStatus::Modified
+        );
+        assert_eq!(map[&9], crate::render_common::gutter::GitLineStatus::Added);
+        assert_eq!(map[&10], crate::render_common::gutter::GitLineStatus::Added);
+    }
 }

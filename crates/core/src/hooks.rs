@@ -88,6 +88,15 @@ impl HookRegistry {
             .collect()
     }
 
+    /// Return names of all hooks that contain the given function name.
+    pub fn hooks_containing(&self, fn_name: &str) -> Vec<&str> {
+        self.hooks
+            .iter()
+            .filter(|(_, fns)| fns.iter().any(|f| f == fn_name))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     /// Check if a hook name is valid.
     pub fn is_valid(name: &str) -> bool {
         HOOK_NAMES.contains(&name)
@@ -157,6 +166,18 @@ mod tests {
         reg.add("mode-change", "fn-b");
         let listed = reg.list();
         assert_eq!(listed.len(), 2);
+    }
+
+    #[test]
+    fn hooks_containing_finds_matches() {
+        let mut reg = HookRegistry::new();
+        reg.add("before-save", "my-fn");
+        reg.add("after-save", "my-fn");
+        reg.add("buffer-open", "other-fn");
+        let mut result = reg.hooks_containing("my-fn");
+        result.sort();
+        assert_eq!(result, vec!["after-save", "before-save"]);
+        assert!(reg.hooks_containing("nonexistent").is_empty());
     }
 
     #[test]

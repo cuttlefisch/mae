@@ -812,6 +812,10 @@ impl CommandRegistry {
             "Ingest org files from directory into knowledge base (:kb-ingest <dir>)",
         );
         reg.register_builtin(
+            "kb-rebuild",
+            "Rebuild the knowledge base with current keybindings and hooks",
+        );
+        reg.register_builtin(
             "ai-save",
             "Save AI conversation to JSON file (:ai-save <path>)",
         );

@@ -157,6 +157,10 @@ pub(crate) fn render_buffer(
         );
         let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
             Some((ch, key)) => (ch, ts(editor, key)),
+            None if gutter_common::git_line_marker(buf, line_idx).is_some() => {
+                let (ch, key) = gutter_common::git_line_marker(buf, line_idx).unwrap();
+                (ch, ts(editor, key))
+            }
             None if gutter_common::is_line_changed(buf, line_idx) => {
                 ('│', ts(editor, "diff.modified"))
             }

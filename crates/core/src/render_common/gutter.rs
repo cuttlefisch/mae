@@ -16,6 +16,24 @@ pub fn gutter_width(line_count: usize) -> usize {
     digits.max(2) + 1 // +1 for marker column
 }
 
+/// Git diff status for a single line (vs HEAD).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitLineStatus {
+    Added,
+    Modified,
+    Deleted, // line was deleted after this line
+}
+
+/// Return a git diff marker character and theme key for the given line,
+/// if the buffer has git diff data for it.
+pub fn git_line_marker(buf: &Buffer, line_idx: usize) -> Option<(char, &'static str)> {
+    buf.git_diff_lines.get(&line_idx).map(|s| match s {
+        GitLineStatus::Added => ('\u{2503}', "diff.added"), // ┃
+        GitLineStatus::Modified => ('\u{2503}', "diff.modified"), // ┃
+        GitLineStatus::Deleted => ('\u{25B8}', "diff.removed"), // ▸
+    })
+}
+
 /// Gutter marker priority: Stopped > Breakpoint > Diagnostic > None.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GutterMarker {
@@ -250,5 +268,28 @@ mod tests {
     #[test]
     fn format_line_number_hidden() {
         assert_eq!(format_line_number(0, 0, 3, false, false), " ");
+    }
+
+    #[test]
+    fn git_line_marker_returns_correct_glyphs() {
+        use crate::render_common::gutter::{git_line_marker, GitLineStatus};
+        let mut buf = crate::Buffer::new();
+        buf.git_diff_lines.insert(0, GitLineStatus::Added);
+        buf.git_diff_lines.insert(1, GitLineStatus::Modified);
+        buf.git_diff_lines.insert(2, GitLineStatus::Deleted);
+
+        let (ch, key) = git_line_marker(&buf, 0).unwrap();
+        assert_eq!(ch, '┃');
+        assert_eq!(key, "diff.added");
+
+        let (ch, key) = git_line_marker(&buf, 1).unwrap();
+        assert_eq!(ch, '┃');
+        assert_eq!(key, "diff.modified");
+
+        let (ch, key) = git_line_marker(&buf, 2).unwrap();
+        assert_eq!(ch, '▸');
+        assert_eq!(key, "diff.removed");
+
+        assert!(git_line_marker(&buf, 3).is_none());
     }
 }

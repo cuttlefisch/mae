@@ -1,5 +1,5 @@
 use ropey::Rope;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -128,6 +128,8 @@ pub struct Buffer {
     /// Line indices modified since the last save. Used by gutter rendering
     /// to show change markers. Cleared on `save()`.
     pub changed_lines: HashSet<usize>,
+    /// Per-line git diff status (vs HEAD). Populated on file open/save.
+    pub git_diff_lines: HashMap<usize, crate::render_common::gutter::GitLineStatus>,
     /// Detected link spans in the buffer content. Populated lazily by
     /// the renderer for conversation and shell buffers.
     pub link_spans: Vec<crate::link_detect::LinkSpan>,
@@ -168,6 +170,7 @@ impl Buffer {
             saved_mode: None,
             narrowed_range: None,
             changed_lines: HashSet::new(),
+            git_diff_lines: HashMap::new(),
             link_spans: Vec::new(),
             global_fold_state: 0,
         }

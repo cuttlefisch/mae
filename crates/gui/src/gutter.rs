@@ -80,6 +80,17 @@ pub fn render_gutter_line_at_y(
             false,
             1.0,
         );
+    } else if let Some((ch, key)) = gutter::git_line_marker(buf, line_idx) {
+        let git_fg = theme::ts_fg(editor, key);
+        canvas.draw_char_at_y(
+            pixel_y,
+            screen_col_offset + gutter_w - 1,
+            ch,
+            git_fg,
+            false,
+            false,
+            1.0,
+        );
     } else if gutter::is_line_changed(buf, line_idx) {
         let change_fg = theme::ts_fg(editor, "diff.modified");
         canvas.draw_char_at_y(

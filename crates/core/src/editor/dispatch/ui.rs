@@ -246,6 +246,11 @@ impl Editor {
             "kb-ingest" => {
                 self.set_status("Usage: :kb-ingest <directory>");
             }
+            "kb-rebuild" => {
+                self.kb = crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
+                let count = self.kb.list_ids(None).len();
+                self.set_status(format!("KB rebuilt: {} nodes", count));
+            }
             "ai-save" => {
                 self.set_status("Usage: :ai-save <path>");
             }

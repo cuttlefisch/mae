@@ -523,7 +523,9 @@ impl Default for Editor {
 impl Editor {
     pub fn new() -> Self {
         let commands = CommandRegistry::with_builtins();
-        let kb = seed_kb(&commands);
+        let keymaps = Self::default_keymaps();
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&commands, &keymaps, &hooks);
         Editor {
             buffers: vec![Buffer::new()],
             window_mgr: WindowManager::new(0),
@@ -533,7 +535,7 @@ impl Editor {
             status_msg: String::new(),
             command_line: String::new(),
             commands,
-            keymaps: Self::default_keymaps(),
+            keymaps,
             which_key_prefix: Vec::new(),
             message_log: MessageLog::new(1000),
             theme: default_theme(),
@@ -585,7 +587,7 @@ impl Editor {
             pending_shell_release: None,
             shell_viewports: HashMap::new(),
             shell_cwds: HashMap::new(),
-            hooks: HookRegistry::new(),
+            hooks,
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             lsp_servers: HashMap::new(),

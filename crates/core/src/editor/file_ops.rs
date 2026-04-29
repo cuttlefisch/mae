@@ -68,6 +68,7 @@ impl Editor {
                 self.set_status(format!("\"{}\" written", name));
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
+                self.refresh_git_diff(idx);
                 self.fire_hook("after-save");
             }
             Err(e) => {
@@ -998,6 +999,7 @@ impl Editor {
                 self.set_status(format!("\"{}\" opened", name));
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
+                self.refresh_git_diff(new_idx);
                 self.fire_hook("buffer-open");
                 Some(new_idx)
             }

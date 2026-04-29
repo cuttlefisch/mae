@@ -72,8 +72,27 @@ pub fn render_file_tree_window(
             let icon = mae_core::file_tree::icon_for_path(&entry.path, entry.is_dir, is_expanded);
             let display = format!("{}{} {}", indent, icon, entry.name);
 
-            let fg = if entry.is_dir { dir_fg } else { file_fg };
-            let truncated: String = display.chars().take(inner_width).collect();
+            let fg = if let Some(gs) = entry.git_status {
+                if gs != mae_core::file_tree::FileGitStatus::Clean {
+                    theme::ts_fg(editor, gs.theme_key())
+                } else if entry.is_dir {
+                    dir_fg
+                } else {
+                    file_fg
+                }
+            } else if entry.is_dir {
+                dir_fg
+            } else {
+                file_fg
+            };
+            let suffix = match entry.git_status {
+                Some(gs) if gs != mae_core::file_tree::FileGitStatus::Clean => {
+                    format!(" [{}]", gs.marker_char())
+                }
+                _ => String::new(),
+            };
+            let full = format!("{}{}", display, suffix);
+            let truncated: String = full.chars().take(inner_width).collect();
             canvas.draw_text_at(row, inner_col, &truncated, fg);
         }
     }

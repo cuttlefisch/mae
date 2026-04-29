@@ -1,6 +1,6 @@
 //! File tree sidebar — project-level directory browser with icons.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Directories to skip (reuses file_browser logic).
@@ -32,6 +32,47 @@ pub enum FileTreeAction {
     Create(PathBuf),
 }
 
+/// Per-file git status for file tree display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileGitStatus {
+    Modified,
+    Staged,
+    Added,
+    Untracked,
+    Conflicted,
+    Renamed,
+    Deleted,
+    Clean,
+}
+
+impl FileGitStatus {
+    /// Single-character marker for display.
+    pub fn marker_char(self) -> char {
+        match self {
+            FileGitStatus::Modified => 'M',
+            FileGitStatus::Staged => 'S',
+            FileGitStatus::Added => 'A',
+            FileGitStatus::Untracked => '?',
+            FileGitStatus::Conflicted => 'C',
+            FileGitStatus::Renamed => 'R',
+            FileGitStatus::Deleted => 'D',
+            FileGitStatus::Clean => ' ',
+        }
+    }
+
+    /// Theme key for colorizing the file name.
+    pub fn theme_key(self) -> &'static str {
+        match self {
+            FileGitStatus::Modified | FileGitStatus::Renamed => "diff.modified",
+            FileGitStatus::Staged => "diff.added",
+            FileGitStatus::Added | FileGitStatus::Untracked => "diff.added",
+            FileGitStatus::Conflicted => "diff.removed",
+            FileGitStatus::Deleted => "diff.removed",
+            FileGitStatus::Clean => "ui.text",
+        }
+    }
+}
+
 /// A single entry in the file tree.
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
@@ -39,6 +80,7 @@ pub struct FileTreeEntry {
     pub name: String,
     pub is_dir: bool,
     pub depth: usize,
+    pub git_status: Option<FileGitStatus>,
 }
 
 /// Persistent file tree state for the sidebar.
@@ -49,6 +91,7 @@ pub struct FileTree {
     pub expanded_dirs: HashSet<PathBuf>,
     pub selected: usize,
     pub scroll_offset: usize,
+    pub git_statuses: HashMap<PathBuf, FileGitStatus>,
 }
 
 impl FileTree {
@@ -60,6 +103,7 @@ impl FileTree {
             expanded_dirs: HashSet::new(),
             scroll_offset: 0,
             selected: 0,
+            git_statuses: HashMap::new(),
         };
         tree.expanded_dirs.insert(root.to_path_buf());
         tree.refresh();
@@ -69,6 +113,7 @@ impl FileTree {
     /// Re-scan the filesystem and rebuild the flat entry list.
     pub fn refresh(&mut self) {
         self.entries.clear();
+        self.refresh_git_status();
         self.scan_dir(&self.root.clone(), 0);
         if self.selected >= self.entries.len() {
             self.selected = self.entries.len().saturating_sub(1);
@@ -98,16 +143,82 @@ impl FileTree {
         });
         for (name, path, is_dir) in children {
             let expanded = is_dir && self.expanded_dirs.contains(&path);
+            let git_status = if is_dir {
+                // Propagate: use the most notable child status
+                self.dir_git_status(&path)
+            } else {
+                self.git_statuses.get(&path).copied()
+            };
             self.entries.push(FileTreeEntry {
                 path: path.clone(),
                 name,
                 is_dir,
                 depth,
+                git_status,
             });
             if expanded {
                 self.scan_dir(&path, depth + 1);
             }
         }
+    }
+
+    /// Parse `git status --porcelain` output and populate git_statuses map.
+    pub fn refresh_git_status(&mut self) {
+        self.git_statuses.clear();
+        let output = match std::process::Command::new("git")
+            .args(["status", "--porcelain=v1"])
+            .current_dir(&self.root)
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            _ => return,
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.len() < 4 {
+                continue;
+            }
+            let x = line.as_bytes()[0];
+            let y = line.as_bytes()[1];
+            let path_str = &line[3..];
+            // Handle renames: "R  old -> new"
+            let path_str = if let Some(arrow) = path_str.find(" -> ") {
+                &path_str[arrow + 4..]
+            } else {
+                path_str
+            };
+            let full_path = self.root.join(path_str);
+            let status = match (x, y) {
+                (b'?', b'?') => FileGitStatus::Untracked,
+                (b'A', _) => FileGitStatus::Added,
+                (b'R', _) => FileGitStatus::Renamed,
+                (b'D', _) | (_, b'D') => FileGitStatus::Deleted,
+                (b'U', _) | (_, b'U') => FileGitStatus::Conflicted,
+                (b'M', _) | (b'T', _) => FileGitStatus::Staged,
+                (_, b'M') | (_, b'T') => FileGitStatus::Modified,
+                _ => continue,
+            };
+            self.git_statuses.insert(full_path, status);
+        }
+    }
+
+    /// Compute git status for a directory by finding the most notable child status.
+    fn dir_git_status(&self, dir: &Path) -> Option<FileGitStatus> {
+        let mut result: Option<FileGitStatus> = None;
+        for (path, status) in &self.git_statuses {
+            if path.starts_with(dir) {
+                let dominated = match (result, *status) {
+                    (None, s) => s,
+                    (Some(_), FileGitStatus::Conflicted) => FileGitStatus::Conflicted,
+                    (Some(FileGitStatus::Conflicted), _) => FileGitStatus::Conflicted,
+                    (Some(_), FileGitStatus::Modified) => FileGitStatus::Modified,
+                    (Some(FileGitStatus::Modified), _) => FileGitStatus::Modified,
+                    (Some(_), s) => s,
+                };
+                result = Some(dominated);
+            }
+        }
+        result
     }
 
     /// Toggle expand/collapse of the selected directory.
@@ -430,5 +541,100 @@ mod tests {
         assert_eq!(tree.selected, 0);
         tree.move_up(); // at 0, stays at 0
         assert_eq!(tree.selected, 0);
+    }
+
+    #[test]
+    fn git_status_marker_chars() {
+        assert_eq!(FileGitStatus::Modified.marker_char(), 'M');
+        assert_eq!(FileGitStatus::Staged.marker_char(), 'S');
+        assert_eq!(FileGitStatus::Added.marker_char(), 'A');
+        assert_eq!(FileGitStatus::Untracked.marker_char(), '?');
+        assert_eq!(FileGitStatus::Conflicted.marker_char(), 'C');
+        assert_eq!(FileGitStatus::Renamed.marker_char(), 'R');
+        assert_eq!(FileGitStatus::Deleted.marker_char(), 'D');
+        assert_eq!(FileGitStatus::Clean.marker_char(), ' ');
+    }
+
+    #[test]
+    fn git_status_theme_keys() {
+        assert_eq!(FileGitStatus::Modified.theme_key(), "diff.modified");
+        assert_eq!(FileGitStatus::Staged.theme_key(), "diff.added");
+        assert_eq!(FileGitStatus::Added.theme_key(), "diff.added");
+        assert_eq!(FileGitStatus::Untracked.theme_key(), "diff.added");
+        assert_eq!(FileGitStatus::Deleted.theme_key(), "diff.removed");
+        assert_eq!(FileGitStatus::Conflicted.theme_key(), "diff.removed");
+        assert_eq!(FileGitStatus::Clean.theme_key(), "ui.text");
+    }
+
+    #[test]
+    fn refresh_git_status_in_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        // git init
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        // Create and commit a file
+        fs::write(dir.path().join("committed.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "committed.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        // Modify the committed file
+        fs::write(dir.path().join("committed.txt"), "modified").unwrap();
+        // Create an untracked file
+        fs::write(dir.path().join("untracked.txt"), "new").unwrap();
+
+        let tree = FileTree::open(dir.path());
+        // Check statuses
+        let committed = tree
+            .entries
+            .iter()
+            .find(|e| e.name == "committed.txt")
+            .unwrap();
+        assert_eq!(committed.git_status, Some(FileGitStatus::Modified));
+        let untracked = tree
+            .entries
+            .iter()
+            .find(|e| e.name == "untracked.txt")
+            .unwrap();
+        assert_eq!(untracked.git_status, Some(FileGitStatus::Untracked));
+    }
+
+    #[test]
+    fn dir_propagation_git_status() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+
+        let tree = FileTree::open(dir.path());
+        let src = tree.entries.iter().find(|e| e.name == "src").unwrap();
+        // The directory should inherit the untracked status from its child
+        assert!(
+            src.git_status.is_some(),
+            "directory should have propagated status"
+        );
     }
 }

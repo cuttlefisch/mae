@@ -53,14 +53,29 @@ pub(crate) fn render_file_tree_window(
             let is_expanded = entry.is_dir && ft.expanded_dirs.contains(&entry.path);
             let icon = mae_core::file_tree::icon_for_path(&entry.path, entry.is_dir, is_expanded);
             let display = format!("{}{} {}", indent, icon, entry.name);
+            let git_suffix = match entry.git_status {
+                Some(gs) if gs != mae_core::file_tree::FileGitStatus::Clean => {
+                    format!(" [{}]", gs.marker_char())
+                }
+                _ => String::new(),
+            };
+            let display_full = format!("{}{}", display, git_suffix);
             let style = if global_idx == ft.selected {
                 sel_style
+            } else if let Some(gs) = entry.git_status {
+                if gs != mae_core::file_tree::FileGitStatus::Clean {
+                    ts(editor, gs.theme_key())
+                } else if entry.is_dir {
+                    dir_style
+                } else {
+                    file_style
+                }
             } else if entry.is_dir {
                 dir_style
             } else {
                 file_style
             };
-            lines.push(Line::from(Span::styled(display, style)));
+            lines.push(Line::from(Span::styled(display_full, style)));
         }
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, inner);

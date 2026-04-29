@@ -135,6 +135,46 @@ fn render_body_line(line: &str, out: &mut String, links: &mut Vec<HelpLinkSpan>)
 }
 
 impl Editor {
+    /// Generate live help text for a command, querying current keymaps and hooks.
+    pub fn describe_command_live(&self, cmd_name: &str) -> Option<String> {
+        let cmd = self.commands.get(cmd_name)?;
+        let mut out = String::new();
+        out.push_str(&format!("# {}\n", cmd_name));
+        out.push_str(&cmd.doc);
+        out.push('\n');
+
+        let category = crate::kb_seed::infer_category(cmd_name);
+        out.push_str(&format!("\n**Category:** {}\n", category));
+
+        let source = match &cmd.source {
+            crate::commands::CommandSource::Builtin => "Builtin".to_string(),
+            crate::commands::CommandSource::Scheme(f) => format!("Scheme (`{}`)", f),
+        };
+        out.push_str(&format!("**Source:** {}\n", source));
+
+        let bindings = crate::kb_seed::collect_keybindings_for(&self.keymaps, cmd_name);
+        if !bindings.is_empty() {
+            out.push_str("\n**Keybindings:**\n");
+            for (mode, key) in &bindings {
+                out.push_str(&format!("  {}: `{}`\n", mode, key));
+            }
+        }
+
+        let hook_names = self.hooks.hooks_containing(cmd_name);
+        if !hook_names.is_empty() {
+            out.push_str(&format!("\n**Hooks:** {}\n", hook_names.join(", ")));
+        } else {
+            out.push_str("\n**Hooks:** (none)\n");
+        }
+
+        out.push_str(&format!(
+            "\nSee also: [[cmd:move-right]], [[category:{}]]\n",
+            category
+        ));
+
+        Some(out)
+    }
+
     /// Open the *Help* buffer on the given KB node, creating it if it
     /// doesn't exist. Falls back to the `index` node if the requested id
     /// isn't found.
@@ -163,7 +203,85 @@ impl Editor {
             Some(v) => v.current.clone(),
             None => return,
         };
-        let (text, link_spans) = render_help_node(&self.kb, &node_id);
+        let (text, link_spans) = if node_id.starts_with("cmd:") {
+            let cmd_name = node_id.strip_prefix("cmd:").unwrap();
+            if let Some(live_text) = self.describe_command_live(cmd_name) {
+                // Re-render links from the live text
+                let mut out = String::new();
+                let mut links = Vec::new();
+                // Add header info from KB node if it exists
+                if let Some(node) = self.kb.get(&node_id) {
+                    out.push_str(&node.title);
+                    out.push('\n');
+                    out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
+                    if !node.tags.is_empty() {
+                        out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
+                    }
+                    out.push('\n');
+                }
+                // Parse the live text for links
+                for body_line in live_text.lines() {
+                    render_body_line(body_line, &mut out, &mut links);
+                    out.push('\n');
+                }
+                // Add neighborhood from KB
+                let outgoing = self.kb.links_from(&node_id);
+                let incoming = self.kb.links_to(&node_id);
+                if !outgoing.is_empty() || !incoming.is_empty() {
+                    out.push('\n');
+                    out.push_str("── Neighborhood ──\n");
+                }
+                if !outgoing.is_empty() {
+                    out.push_str("Outgoing:\n");
+                    for target in &outgoing {
+                        let title_text = self
+                            .kb
+                            .get(target)
+                            .map(|n| n.title.clone())
+                            .unwrap_or_else(|| "(missing)".to_string());
+                        out.push_str("  → ");
+                        let link_start = out.len();
+                        out.push_str(target);
+                        let link_end = out.len();
+                        links.push(HelpLinkSpan {
+                            byte_start: link_start,
+                            byte_end: link_end,
+                            target: target.clone(),
+                        });
+                        out.push_str(&format!("  {}\n", title_text));
+                    }
+                }
+                if !incoming.is_empty() {
+                    out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
+                    for src in &incoming {
+                        let title_text = self
+                            .kb
+                            .get(src)
+                            .map(|n| n.title.clone())
+                            .unwrap_or_else(|| "(missing)".to_string());
+                        out.push_str("  ← ");
+                        let link_start = out.len();
+                        out.push_str(src);
+                        let link_end = out.len();
+                        links.push(HelpLinkSpan {
+                            byte_start: link_start,
+                            byte_end: link_end,
+                            target: src.clone(),
+                        });
+                        out.push_str(&format!("  {}\n", title_text));
+                    }
+                }
+                out.push('\n');
+                out.push_str(
+                    "Tab/S-Tab: focus link · Enter: follow · C-o/C-i: back/forward · q: close\n",
+                );
+                (out, links)
+            } else {
+                render_help_node(&self.kb, &node_id)
+            }
+        } else {
+            render_help_node(&self.kb, &node_id)
+        };
         // Temporarily allow writing to the read-only buffer.
         self.buffers[buf_idx].read_only = false;
         self.buffers[buf_idx].replace_contents(&text);
@@ -647,5 +765,16 @@ mod tests {
         let mut e = Editor::new();
         e.help_reopen();
         assert!(e.status_msg.contains("No previous help session"));
+    }
+
+    #[test]
+    fn describe_command_live_includes_keybindings() {
+        let e = Editor::new();
+        let text = e.describe_command_live("move-left");
+        assert!(text.is_some());
+        let text = text.unwrap();
+        assert!(text.contains("movement"), "should include category");
+        // The default keymaps bind h to move-left
+        assert!(text.contains("normal"), "should include normal mode");
     }
 }
