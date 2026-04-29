@@ -251,7 +251,8 @@ impl AgentSession {
         self.price = crate::pricing::lookup(model_str);
         let limits = crate::context_limits::lookup(model_str);
         self.context_window = limits.context_window;
-        self.max_rounds = limits.max_rounds;
+        // Self-test mode sets max_rounds to 75 — don't let model table override it lower.
+        self.max_rounds = self.max_rounds.max(limits.max_rounds);
         self.model_name = model_str.to_string();
         self.budget = budget;
         // Update transcript metadata with resolved model info

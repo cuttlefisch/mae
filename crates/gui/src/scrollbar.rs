@@ -73,6 +73,13 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
         0.0
     };
     let thumb_y = track_y_start + scroll_ratio * (track_height - thumb_height);
+    // Clamp thumb to track bounds so it never overflows into adjacent windows.
+    let thumb_y = thumb_y.max(track_y_start);
+    let thumb_height = thumb_height.min(track_y_start + track_height - thumb_y);
+
+    if thumb_height <= 0.0 {
+        return;
+    }
 
     let thumb_color = resolve_thumb_color(editor);
     canvas.draw_pixel_rrect(

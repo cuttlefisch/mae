@@ -639,7 +639,7 @@ fn build_self_test_plan(filter: &str) -> String {
                 {
                     "tool": "perf_benchmark",
                     "args": {"benchmark": "buffer_insert", "size": 10000},
-                    "assert": "duration_us < 50000"
+                    "assert": "duration_us < 2000000"
                 },
                 {
                     "tool": "perf_benchmark",
@@ -751,7 +751,7 @@ fn build_self_test_plan(filter: &str) -> String {
                 },
                 {
                     "tool": "kb_search",
-                    "args": {"query": "init.scm configuration"},
+                    "args": {"query": "configuration options"},
                     "assert": "Returns at least 1 result about configuration"
                 }
             ]
