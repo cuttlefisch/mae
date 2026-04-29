@@ -232,9 +232,9 @@ pub fn compute_layout(
     syntax_spans: Option<&[HighlightSpan]>,
     glyph_advance_fn: Option<&dyn Fn(f32) -> f32>,
 ) -> FrameLayout {
-    let display_lines = buf.display_line_count();
+    let total_lines = buf.line_count();
     let gutter_w = if editor.show_line_numbers {
-        gutter::gutter_width(display_lines)
+        gutter::gutter_width(buf.display_line_count())
     } else {
         2
     };
@@ -271,7 +271,7 @@ pub fn compute_layout(
         }
     }
 
-    while pixel_y < pixel_y_limit && line_idx < display_lines {
+    while pixel_y < pixel_y_limit && line_idx < total_lines {
         // Skip lines outside narrowed range.
         if let Some((_, ne)) = narrow {
             if line_idx >= ne {
@@ -451,7 +451,7 @@ pub fn compute_layout(
         area_col,
         pixel_y_limit,
         scrollbar_col,
-        total_lines: display_lines,
+        total_lines: buf.display_line_count(),
         scroll_offset: win.scroll_offset,
     }
 }
