@@ -895,6 +895,59 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
     spans
 }
 
+/// Compute inline markdown-style spans for non-tree-sitter contexts (help buffers,
+/// conversation buffers). Detects **bold**, `code`, and *italic* — intentionally
+/// excludes headings to avoid triggering `line_heading_scale()` in layout.
+pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static BOLD: OnceLock<Regex> = OnceLock::new();
+    static CODE: OnceLock<Regex> = OnceLock::new();
+    static ITALIC: OnceLock<Regex> = OnceLock::new();
+
+    let bold = BOLD.get_or_init(|| Regex::new(r"\*\*([^*\n]+)\*\*").unwrap());
+    let code = CODE.get_or_init(|| Regex::new(r"`([^`\n]+)`").unwrap());
+    // Match *italic* that is NOT part of **bold** — use word boundary approach
+    // instead of look-ahead (unsupported by the regex crate).
+    let italic = ITALIC.get_or_init(|| {
+        Regex::new(r"(?:^|[\s(>])\*([^\s*][^*\n]*)\*(?:\s|[.,;:!?)>\]]|$)").unwrap()
+    });
+
+    let mut spans: Vec<HighlightSpan> = Vec::new();
+
+    for cap in bold.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        spans.push(HighlightSpan {
+            byte_start: full.start(),
+            byte_end: full.end(),
+            theme_key: "markup.bold",
+        });
+    }
+
+    for cap in code.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        spans.push(HighlightSpan {
+            byte_start: full.start(),
+            byte_end: full.end(),
+            theme_key: "markup.literal",
+        });
+    }
+
+    for cap in italic.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start().saturating_sub(1),
+                byte_end: m.end() + 1,
+                theme_key: "markup.italic",
+            });
+        }
+    }
+
+    spans.sort_by_key(|s| s.byte_start);
+    spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,5 +1292,52 @@ mod tests {
             "Expected at least 2 fold ranges, got {}",
             ranges.len()
         );
+    }
+
+    #[test]
+    fn markdown_style_spans_bold() {
+        let spans = compute_markdown_style_spans("This is **bold** text");
+        assert!(spans.iter().any(|s| s.theme_key == "markup.bold"));
+    }
+
+    #[test]
+    fn markdown_style_spans_code() {
+        let spans = compute_markdown_style_spans("Use `code` here");
+        assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
+    }
+
+    #[test]
+    fn markdown_style_spans_italic() {
+        let spans = compute_markdown_style_spans("This is *italic* word");
+        assert!(spans.iter().any(|s| s.theme_key == "markup.italic"));
+    }
+
+    #[test]
+    fn markdown_style_spans_no_headings() {
+        // Critical safety test: compute_markdown_style_spans must NEVER produce
+        // markup.heading spans — those would break layout in conversation buffers.
+        let spans = compute_markdown_style_spans("# Heading\n## Sub\n**bold**");
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "compute_markdown_style_spans must not produce markup.heading spans"
+        );
+    }
+
+    #[test]
+    fn markdown_style_spans_mixed() {
+        let spans = compute_markdown_style_spans("**bold** and `code` and *italic*");
+        assert!(spans.iter().any(|s| s.theme_key == "markup.bold"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.italic"));
+        // Sorted by byte_start
+        for w in spans.windows(2) {
+            assert!(w[0].byte_start <= w[1].byte_start);
+        }
+    }
+
+    #[test]
+    fn markdown_style_spans_empty() {
+        let spans = compute_markdown_style_spans("");
+        assert!(spans.is_empty());
     }
 }

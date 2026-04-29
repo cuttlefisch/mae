@@ -248,9 +248,9 @@ fn render_window_area(
             let is_focused = *win_id == focused_id;
             match buf.kind {
                 mae_core::BufferKind::Conversation => {
-                    // Route through standard render pipeline via highlight spans.
+                    // Route through standard render pipeline with inline markdown.
                     let conv_spans = if let Some(ref conv) = buf.conversation {
-                        conv.highlight_spans(buf.rope())
+                        conv.highlight_spans_with_markup(buf.rope())
                     } else {
                         Vec::new()
                     };
@@ -274,30 +274,62 @@ fn render_window_area(
                     );
                 }
                 mae_core::BufferKind::Help => {
-                    // Help buffers go through the normal render path.
-                    // Convert HelpLinkSpans → HighlightSpans for link styling.
-                    let help_spans: Vec<HighlightSpan> = buf
-                        .help_view
-                        .as_ref()
-                        .map(|view| {
-                            view.rendered_links
-                                .iter()
-                                .enumerate()
-                                .map(|(i, link)| {
-                                    let is_focused_link = view.focused_link == Some(i);
-                                    HighlightSpan {
-                                        byte_start: link.byte_start,
-                                        byte_end: link.byte_end,
-                                        theme_key: if is_focused_link {
-                                            "ui.selection"
-                                        } else {
-                                            "markup.link"
-                                        },
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                    // Help buffers: heading + inline markup + link spans.
+                    let mut help_spans: Vec<HighlightSpan> = Vec::new();
+
+                    // Heading spans from leading `*` or `#` chars.
+                    let rope = buf.rope();
+                    for line_idx in 0..buf.line_count() {
+                        let line = rope.line(line_idx);
+                        let first_char = line.chars().next().unwrap_or(' ');
+                        let (prefix_count, is_heading) = if first_char == '*' {
+                            let c = line.chars().take_while(|&ch| ch == '*').count();
+                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
+                        } else if first_char == '#' {
+                            let c = line.chars().take_while(|&ch| ch == '#').count();
+                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
+                        } else {
+                            (0, false)
+                        };
+                        if is_heading && prefix_count > 0 {
+                            let line_start = rope.line_to_char(line_idx);
+                            let line_len = line.len_chars();
+                            let text_len = if line_idx + 1 < buf.line_count() {
+                                line_len.saturating_sub(1)
+                            } else {
+                                line_len
+                            };
+                            let byte_start = rope.char_to_byte(line_start);
+                            let byte_end = rope.char_to_byte(line_start + text_len);
+                            help_spans.push(HighlightSpan {
+                                byte_start,
+                                byte_end,
+                                theme_key: "markup.heading",
+                            });
+                        }
+                    }
+
+                    // Inline markdown style spans.
+                    let source_text: String = rope.chars().collect();
+                    help_spans.extend(mae_core::compute_markdown_style_spans(&source_text));
+
+                    // Link spans from help view.
+                    if let Some(view) = buf.help_view.as_ref() {
+                        for (i, link) in view.rendered_links.iter().enumerate() {
+                            let is_focused_link = view.focused_link == Some(i);
+                            help_spans.push(HighlightSpan {
+                                byte_start: link.byte_start,
+                                byte_end: link.byte_end,
+                                theme_key: if is_focused_link {
+                                    "ui.selection"
+                                } else {
+                                    "markup.link"
+                                },
+                            });
+                        }
+                    }
+                    help_spans.sort_by_key(|s| s.byte_start);
+
                     buffer_render::render_window(
                         frame,
                         ratatui_rect,

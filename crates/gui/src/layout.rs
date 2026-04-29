@@ -5,6 +5,11 @@
 //! coordinate system (pixel-Y accumulation vs independent cursor computation)
 //! that caused cursor misalignment, fold annotation overlap, and fold-unaware
 //! cursor positioning.
+//!
+//! **Invariant**: The `syntax_spans` passed to `compute_layout()` MUST be the
+//! same slice passed to `render_buffer_content()` and used for cursor
+//! positioning. Layout computes heading scale from `markup.heading` spans —
+//! if the renderer sees different spans, line heights will not match.
 
 use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
 use mae_core::{Buffer, Editor, HighlightSpan, Window};

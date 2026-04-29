@@ -3,6 +3,9 @@
 //! Computes cursor position from editor state and draws mode-appropriate
 //! cursor shapes using Skia. Uses `FrameLayout` as the single source of
 //! truth for line positions and column scaling.
+//!
+//! Cursor pixel positions come from `FrameLayout`, which bakes in heading
+//! scale from `syntax_spans`. No separate span parameter is needed here.
 
 use mae_core::wrap::wrap_cursor_position;
 use mae_core::{Editor, HighlightSpan, Mode};

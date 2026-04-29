@@ -878,6 +878,37 @@ impl Conversation {
         }
         spans
     }
+
+    /// Generate highlight spans with inline markdown styling for assistant text.
+    ///
+    /// Extends the base `highlight_spans()` with `markup.bold`, `markup.literal`,
+    /// and `markup.italic` spans for assistant messages. Intentionally excludes
+    /// `markup.heading` — adding heading spans would trigger `line_heading_scale()`
+    /// in `compute_layout()`, breaking uniform conversation line heights.
+    pub fn highlight_spans_with_markup(
+        &self,
+        rope: &ropey::Rope,
+    ) -> Vec<crate::syntax::HighlightSpan> {
+        let mut spans = self.highlight_spans(rope);
+        let rendered = self.rendered_lines();
+        for (line_idx, rl) in rendered.iter().enumerate() {
+            if line_idx >= rope.len_lines() {
+                break;
+            }
+            if !matches!(rl.style, LineStyle::AssistantText) {
+                continue;
+            }
+            let line_start_byte = rope.char_to_byte(rope.line_to_char(line_idx));
+            let line_text: String = rope.line(line_idx).chars().collect();
+            for mut span in crate::syntax::compute_markdown_style_spans(&line_text) {
+                span.byte_start += line_start_byte;
+                span.byte_end += line_start_byte;
+                spans.push(span);
+            }
+        }
+        spans.sort_by_key(|s| s.byte_start);
+        spans
+    }
 }
 
 #[cfg(test)]
@@ -1445,5 +1476,34 @@ mod tests {
             .iter()
             .find(|s| s.theme_key == "conversation.assistant");
         assert!(ai_span.is_some());
+    }
+
+    #[test]
+    fn highlight_spans_with_markup_adds_inline_styles() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("This is **bold** and `code`");
+
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+
+        // Should contain base conversation spans
+        assert!(spans
+            .iter()
+            .any(|s| s.theme_key == "conversation.assistant.text"));
+        // Should also contain inline markup spans
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold from **bold**"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected markup.literal from `code`"
+        );
+        // Must NOT contain heading spans
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "highlight_spans_with_markup must not produce heading spans"
+        );
     }
 }

@@ -713,7 +713,9 @@ impl Editor {
 
         match self.mode {
             Mode::Normal => {
-                if kind == crate::buffer::BufferKind::GitStatus {
+                if kind == crate::buffer::BufferKind::FileTree {
+                    Some(("file-tree", Some("normal")))
+                } else if kind == crate::buffer::BufferKind::GitStatus {
                     Some(("git-status", Some("normal")))
                 } else if lang == Some(Language::Org) {
                     Some(("org", Some("normal")))

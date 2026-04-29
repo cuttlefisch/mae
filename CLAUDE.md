@@ -49,6 +49,12 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 6. **Runtime redefinability is sacred.** Users must be able to redefine any function while the editor is running. This is the property that makes Emacs irreplaceable. The Scheme layer provides `defadvice`-equivalent, live REPL, and hot reload.
 
+### Rendering Pipeline
+The GUI renderer uses a three-phase pipeline: `compute_layout()` produces
+a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
+positions the cursor. All three MUST consume the same `HighlightSpan` set.
+See `crates/gui/src/RENDERING.md` for detailed rules.
+
 ## Development Priorities
 
 Start terminal-only. Skip GUI until the model works.

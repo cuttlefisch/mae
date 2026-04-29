@@ -83,6 +83,14 @@ pub struct FileTreeEntry {
     pub git_status: Option<FileGitStatus>,
 }
 
+/// Fold cycle state for NERDTree-style S-Tab cycling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldCycleState {
+    Default,
+    AllClosed,
+    AllExpanded,
+}
+
 /// Persistent file tree state for the sidebar.
 #[derive(Debug, Clone)]
 pub struct FileTree {
@@ -92,6 +100,8 @@ pub struct FileTree {
     pub selected: usize,
     pub scroll_offset: usize,
     pub git_statuses: HashMap<PathBuf, FileGitStatus>,
+    pub fold_cycle_state: FoldCycleState,
+    pub default_expanded: HashSet<PathBuf>,
 }
 
 impl FileTree {
@@ -104,6 +114,8 @@ impl FileTree {
             scroll_offset: 0,
             selected: 0,
             git_statuses: HashMap::new(),
+            fold_cycle_state: FoldCycleState::Default,
+            default_expanded: HashSet::new(),
         };
         tree.expanded_dirs.insert(root.to_path_buf());
         tree.refresh();
@@ -339,6 +351,74 @@ impl FileTree {
         }
         if self.selected >= self.scroll_offset + viewport_height {
             self.scroll_offset = self.selected - viewport_height + 1;
+        }
+    }
+
+    /// Scroll viewport down by `count` lines.
+    pub fn scroll_down(&mut self, count: usize, visible_height: usize) {
+        let max_offset = self.entries.len().saturating_sub(visible_height);
+        self.scroll_offset = (self.scroll_offset + count).min(max_offset);
+        // Keep selected within visible range
+        if self.selected < self.scroll_offset {
+            self.selected = self.scroll_offset;
+        }
+    }
+
+    /// Scroll viewport up by `count` lines.
+    pub fn scroll_up(&mut self, count: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(count);
+    }
+
+    /// Scroll half page down.
+    pub fn half_page_down(&mut self, visible_height: usize) {
+        let half = visible_height / 2;
+        self.scroll_down(half, visible_height);
+    }
+
+    /// Scroll half page up.
+    pub fn half_page_up(&mut self, visible_height: usize) {
+        let half = visible_height / 2;
+        self.scroll_up(half);
+    }
+
+    /// NERDTree-style S-Tab fold cycling: Default → AllClosed → AllExpanded → Default.
+    pub fn global_cycle(&mut self) {
+        match self.fold_cycle_state {
+            FoldCycleState::Default => {
+                // Save current state as default_expanded for restore
+                self.default_expanded = self.expanded_dirs.clone();
+                // Close all: keep only root
+                self.expanded_dirs.clear();
+                self.expanded_dirs.insert(self.root.clone());
+                self.fold_cycle_state = FoldCycleState::AllClosed;
+            }
+            FoldCycleState::AllClosed => {
+                // Expand all directories recursively
+                self.expand_all_dirs(&self.root.clone());
+                self.fold_cycle_state = FoldCycleState::AllExpanded;
+            }
+            FoldCycleState::AllExpanded => {
+                // Restore default state
+                self.expanded_dirs = self.default_expanded.clone();
+                self.fold_cycle_state = FoldCycleState::Default;
+            }
+        }
+        self.refresh();
+    }
+
+    /// Recursively expand all directories under `dir`.
+    fn expand_all_dirs(&mut self, dir: &std::path::Path) {
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !SKIP_DIRS.contains(&name.as_str()) {
+                        self.expanded_dirs.insert(path.clone());
+                        self.expand_all_dirs(&path);
+                    }
+                }
+            }
         }
     }
 }
@@ -636,5 +716,75 @@ mod tests {
             src.git_status.is_some(),
             "directory should have propagated status"
         );
+    }
+
+    #[test]
+    fn scroll_down_up() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..20 {
+            fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+        let mut tree = FileTree::open(dir.path());
+        assert!(tree.entries.len() >= 20);
+        assert_eq!(tree.scroll_offset, 0);
+        tree.scroll_down(5, 10);
+        assert_eq!(tree.scroll_offset, 5);
+        tree.scroll_up(3);
+        assert_eq!(tree.scroll_offset, 2);
+        tree.scroll_up(100);
+        assert_eq!(tree.scroll_offset, 0);
+    }
+
+    #[test]
+    fn half_page_scroll() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..20 {
+            fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+        let mut tree = FileTree::open(dir.path());
+        tree.half_page_down(10);
+        assert_eq!(tree.scroll_offset, 5);
+        tree.half_page_up(10);
+        assert_eq!(tree.scroll_offset, 0);
+    }
+
+    #[test]
+    fn global_cycle_three_states() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "").unwrap();
+        fs::create_dir(dir.path().join("tests")).unwrap();
+        fs::write(dir.path().join("tests/test.rs"), "").unwrap();
+
+        let mut tree = FileTree::open(dir.path());
+        // Expand both dirs
+        let src_idx = tree.entries.iter().position(|e| e.name == "src").unwrap();
+        tree.selected = src_idx;
+        tree.toggle_expand();
+        let tests_idx = tree.entries.iter().position(|e| e.name == "tests").unwrap();
+        tree.selected = tests_idx;
+        tree.toggle_expand();
+
+        // Save initial state
+        let initial_expanded = tree.expanded_dirs.clone();
+        assert_eq!(tree.fold_cycle_state, FoldCycleState::Default);
+
+        // Cycle 1: Default -> AllClosed
+        tree.global_cycle();
+        assert_eq!(tree.fold_cycle_state, FoldCycleState::AllClosed);
+        // Only root should be expanded
+        assert_eq!(tree.expanded_dirs.len(), 1);
+        assert!(tree.expanded_dirs.contains(&tree.root));
+
+        // Cycle 2: AllClosed -> AllExpanded
+        tree.global_cycle();
+        assert_eq!(tree.fold_cycle_state, FoldCycleState::AllExpanded);
+        // More dirs should be expanded than just root
+        assert!(tree.expanded_dirs.len() > 1);
+
+        // Cycle 3: AllExpanded -> Default (restores original state)
+        tree.global_cycle();
+        assert_eq!(tree.fold_cycle_state, FoldCycleState::Default);
+        assert_eq!(tree.expanded_dirs, initial_expanded);
     }
 }

@@ -63,7 +63,10 @@ pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
-pub use syntax::{language_for_path, HighlightSpan, Language, SyntaxMap, SyntaxSpanMap};
+pub use syntax::{
+    compute_markdown_style_spans, language_for_path, HighlightSpan, Language, SyntaxMap,
+    SyntaxSpanMap,
+};
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,
     ThemeResolver, ThemeStyle,

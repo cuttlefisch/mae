@@ -482,9 +482,9 @@ fn render_window_area(
 
             match buf.kind {
                 BufferKind::Conversation => {
-                    // Generate highlight spans from conversation styles.
+                    // Generate highlight spans with inline markdown styling.
                     let conv_spans = if let Some(ref conv) = buf.conversation {
-                        conv.highlight_spans(buf.rope())
+                        conv.highlight_spans_with_markup(buf.rope())
                     } else {
                         Vec::new()
                     };
@@ -549,18 +549,24 @@ fn render_window_area(
                     );
                 }
                 BufferKind::Help => {
-                    // Help buffers: generate heading + link highlight spans.
+                    // Help buffers: generate heading + inline markup + link spans.
                     let mut help_spans: Vec<HighlightSpan> = Vec::new();
 
-                    // Heading spans from leading `*` chars in rope lines.
+                    // Heading spans from leading `*` or `#` chars in rope lines.
                     let rope = buf.rope();
                     for line_idx in 0..buf.line_count() {
                         let line = rope.line(line_idx);
-                        let star_count = line.chars().take_while(|&c| c == '*').count();
-                        if star_count > 0
-                            && line.len_chars() > star_count
-                            && line.char(star_count) == ' '
-                        {
+                        let first_char = line.chars().next().unwrap_or(' ');
+                        let (prefix_count, is_heading) = if first_char == '*' {
+                            let c = line.chars().take_while(|&ch| ch == '*').count();
+                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
+                        } else if first_char == '#' {
+                            let c = line.chars().take_while(|&ch| ch == '#').count();
+                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
+                        } else {
+                            (0, false)
+                        };
+                        if is_heading && prefix_count > 0 {
                             let line_start = rope.line_to_char(line_idx);
                             let line_len = line.len_chars();
                             let text_len = if line_idx + 1 < buf.line_count() {
@@ -577,6 +583,11 @@ fn render_window_area(
                             });
                         }
                     }
+
+                    // Inline markdown style spans (bold, code, italic).
+                    let source_text: String = rope.chars().collect();
+                    let inline_spans = mae_core::compute_markdown_style_spans(&source_text);
+                    help_spans.extend(inline_spans);
 
                     // Link spans from help view.
                     if let Some(view) = buf.help_view.as_ref() {
@@ -595,7 +606,8 @@ fn render_window_area(
                     }
                     help_spans.sort_by_key(|s| s.byte_start);
 
-                    // Render with border.
+                    // Render with border — CRITICAL: pass same help_spans to both
+                    // compute_layout() and render_buffer_content() (span parity).
                     let border_fg = if is_focused {
                         theme::ts_fg(editor, "ui.window.border.active")
                     } else {
@@ -630,7 +642,7 @@ fn render_window_area(
                         win,
                         is_focused,
                         &fl,
-                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
+                        Some(&help_spans),
                     );
                     scrollbar::render_scrollbar(canvas, editor, &fl);
                     if is_focused {

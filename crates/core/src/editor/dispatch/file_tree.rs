@@ -305,6 +305,41 @@ impl Editor {
                 }
                 Some(true)
             }
+            "file-tree-scroll-down" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.scroll_down(1, 30); // approximate visible height
+                }
+                Some(true)
+            }
+            "file-tree-scroll-up" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.scroll_up(1);
+                }
+                Some(true)
+            }
+            "file-tree-half-page-down" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.half_page_down(30);
+                }
+                Some(true)
+            }
+            "file-tree-half-page-up" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.half_page_up(30);
+                }
+                Some(true)
+            }
+            "file-tree-global-cycle" => {
+                let idx = self.active_buffer_idx();
+                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    ft.global_cycle();
+                }
+                Some(true)
+            }
             _ => None,
         }
     }

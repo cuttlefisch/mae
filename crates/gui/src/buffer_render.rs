@@ -1,5 +1,8 @@
 //! Text buffer rendering: gutter, syntax highlighting, selection, search,
 //! cursorline, hex color preview, tilde lines past EOF.
+//!
+//! The `syntax_spans` parameter MUST match the spans used by `compute_layout()`
+//! for the same frame. See `crates/gui/src/RENDERING.md` for invariants.
 
 use mae_core::wrap::{char_width, leading_indent_len};
 use mae_core::{Editor, HighlightSpan, Mode, Window};

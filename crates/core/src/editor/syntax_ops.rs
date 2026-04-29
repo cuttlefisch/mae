@@ -414,40 +414,53 @@ impl Editor {
         }
     }
 
-    /// Promote the Org heading at the cursor (remove one `*`). Noop if
-    /// not on a heading or already a single-star heading.
-    pub fn org_promote(&mut self) {
+    /// Promote a heading (remove one prefix char). Works for org (`*`) and markdown (`#`).
+    pub fn heading_promote(&mut self, lang: crate::syntax::Language) {
         let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+        if self.syntax.language_of(buf_idx) != Some(lang) {
             return;
         }
         let row = self.window_mgr.focused_window().cursor_row;
         let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
-        let star_count = line.chars().take_while(|&c| c == '*').count();
-        if star_count <= 1 {
-            return; // single star or not a heading
+        let level = Self::heading_level(&line, lang);
+        if level <= 1 {
+            return;
         }
-        // Remove first star
         let start = self.buffers[buf_idx].rope().line_to_char(row);
         self.buffers[buf_idx].delete_range(start, start + 1);
-        self.set_status(format!("Promoted to level {}", star_count - 1));
+        self.set_status(format!("Promoted to level {}", level - 1));
     }
 
-    /// Demote the Org heading at the cursor (add one `*`). Noop if not on a heading.
-    pub fn org_demote(&mut self) {
+    /// Demote a heading (add one prefix char). Works for org (`*`) and markdown (`#`).
+    pub fn heading_demote(&mut self, lang: crate::syntax::Language) {
         let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+        if self.syntax.language_of(buf_idx) != Some(lang) {
             return;
         }
         let row = self.window_mgr.focused_window().cursor_row;
         let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
-        let star_count = line.chars().take_while(|&c| c == '*').count();
-        if star_count == 0 {
-            return; // not a heading
+        let level = Self::heading_level(&line, lang);
+        if level == 0 {
+            return;
         }
+        let prefix_char = match lang {
+            crate::syntax::Language::Org => "*",
+            crate::syntax::Language::Markdown => "#",
+            _ => return,
+        };
         let start = self.buffers[buf_idx].rope().line_to_char(row);
-        self.buffers[buf_idx].insert_text_at(start, "*");
-        self.set_status(format!("Demoted to level {}", star_count + 1));
+        self.buffers[buf_idx].insert_text_at(start, prefix_char);
+        self.set_status(format!("Demoted to level {}", level + 1));
+    }
+
+    /// Promote Org heading (thin wrapper).
+    pub fn org_promote(&mut self) {
+        self.heading_promote(crate::syntax::Language::Org);
+    }
+
+    /// Demote Org heading (thin wrapper).
+    pub fn org_demote(&mut self) {
+        self.heading_demote(crate::syntax::Language::Org);
     }
 
     /// Calculate the range of lines covered by the subtree rooted at the
@@ -462,176 +475,13 @@ impl Editor {
         self.heading_subtree_range(row, crate::syntax::Language::Org)
     }
 
-    /// Move the subtree at the cursor down past the next sibling subtree.
-    pub fn org_move_subtree_down(&mut self) {
-        let row = self.window_mgr.focused_window().cursor_row;
-        let Some((start, end)) = self.org_subtree_range(row) else {
-            return;
-        };
+    /// Move a heading subtree down past the next sibling. Works for org and markdown.
+    pub fn heading_move_subtree_down(&mut self, lang: crate::syntax::Language) {
         let buf_idx = self.active_buffer_idx();
-        let line_count = self.buffers[buf_idx].line_count();
-        if end >= line_count {
-            return; // already at bottom
-        }
-        // Find the sibling subtree below
-        let sibling_start = end;
-        let sibling_range = self.org_subtree_range(sibling_start);
-        let sibling_end = match sibling_range {
-            Some((_, se)) => se,
-            None => {
-                // Next line is not a heading — treat as single line
-                sibling_start + 1
-            }
-        };
-
-        // Extract both blocks as text
-        let rope = self.buffers[buf_idx].rope();
-        let our_char_start = rope.line_to_char(start);
-        let our_char_end = rope.line_to_char(end);
-        let sib_char_start = rope.line_to_char(sibling_start);
-        let sib_char_end = if sibling_end >= line_count {
-            rope.len_chars()
-        } else {
-            rope.line_to_char(sibling_end)
-        };
-
-        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
-        let sib_text: String = rope.slice(sib_char_start..sib_char_end).chars().collect();
-
-        // Replace: sibling first, then our block
-        self.buffers[buf_idx].delete_range(our_char_start, sib_char_end);
-        let combined = format!("{}{}", sib_text, our_text);
-        self.buffers[buf_idx].insert_text_at(our_char_start, &combined);
-
-        // Invalidate folds in the affected range
-        let min_start = start;
-        let max_end = sibling_end;
-        self.buffers[buf_idx]
-            .folded_ranges
-            .retain(|(s, _)| *s < min_start || *s >= max_end);
-
-        // Move cursor: count newlines in sibling text to find offset
-        let sib_lines = sib_text.chars().filter(|&c| c == '\n').count();
-        self.window_mgr.focused_window_mut().cursor_row = start + sib_lines;
-        self.set_status("Moved subtree down");
-    }
-
-    /// Move the subtree at the cursor up past the previous sibling subtree.
-    pub fn org_move_subtree_up(&mut self) {
-        let row = self.window_mgr.focused_window().cursor_row;
-        let Some((start, end)) = self.org_subtree_range(row) else {
-            return;
-        };
-        if start == 0 {
-            return; // already at top
-        }
-        let buf_idx = self.active_buffer_idx();
-
-        // Find the sibling above: scan upward for a heading at same or higher level
-        let line: String = self.buffers[buf_idx].rope().line(start).chars().collect();
-        let level = line.chars().take_while(|&c| c == '*').count();
-
-        let mut prev_start = start - 1;
-        loop {
-            let l: String = self.buffers[buf_idx]
-                .rope()
-                .line(prev_start)
-                .chars()
-                .collect();
-            let l_level = l.chars().take_while(|&c| c == '*').count();
-            if l_level > 0 && l_level <= level {
-                break;
-            }
-            if prev_start == 0 {
-                return; // no sibling above
-            }
-            prev_start -= 1;
-        }
-
-        // Extract both blocks as text
-        let rope = self.buffers[buf_idx].rope();
-        let prev_char_start = rope.line_to_char(prev_start);
-        let prev_char_end = rope.line_to_char(start);
-        let our_char_start = rope.line_to_char(start);
-        let our_char_end = if end >= self.buffers[buf_idx].line_count() {
-            rope.len_chars()
-        } else {
-            rope.line_to_char(end)
-        };
-
-        let prev_text: String = rope.slice(prev_char_start..prev_char_end).chars().collect();
-        let our_text: String = rope.slice(our_char_start..our_char_end).chars().collect();
-
-        // Replace: our block first, then previous
-        self.buffers[buf_idx].delete_range(prev_char_start, our_char_end);
-        let combined = format!("{}{}", our_text, prev_text);
-        self.buffers[buf_idx].insert_text_at(prev_char_start, &combined);
-
-        // Invalidate folds in the affected range
-        let min_start = prev_start;
-        let max_end = end;
-        self.buffers[buf_idx]
-            .folded_ranges
-            .retain(|(s, _)| *s < min_start || *s >= max_end);
-
-        // Move cursor to new position
-        self.window_mgr.focused_window_mut().cursor_row = prev_start;
-        self.set_status("Moved subtree up");
-    }
-
-    // --- Markdown structural editing ---
-
-    /// Three-state heading cycle for markdown buffers (TAB).
-    pub fn md_cycle(&mut self) {
-        let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
-            return;
-        }
-        self.heading_cycle(crate::syntax::Language::Markdown);
-    }
-
-    /// Promote markdown heading (remove one `#`). Noop if single `#` or not heading.
-    pub fn md_promote(&mut self) {
-        let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+        if self.syntax.language_of(buf_idx) != Some(lang) {
             return;
         }
         let row = self.window_mgr.focused_window().cursor_row;
-        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
-        let level = Self::heading_level(&line, crate::syntax::Language::Markdown);
-        if level <= 1 {
-            return;
-        }
-        let start = self.buffers[buf_idx].rope().line_to_char(row);
-        self.buffers[buf_idx].delete_range(start, start + 1);
-        self.set_status(format!("Promoted to level {}", level - 1));
-    }
-
-    /// Demote markdown heading (add one `#`). Noop if not a heading.
-    pub fn md_demote(&mut self) {
-        let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
-            return;
-        }
-        let row = self.window_mgr.focused_window().cursor_row;
-        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
-        let level = Self::heading_level(&line, crate::syntax::Language::Markdown);
-        if level == 0 {
-            return;
-        }
-        let start = self.buffers[buf_idx].rope().line_to_char(row);
-        self.buffers[buf_idx].insert_text_at(start, "#");
-        self.set_status(format!("Demoted to level {}", level + 1));
-    }
-
-    /// Move markdown subtree down past next sibling.
-    pub fn md_move_subtree_down(&mut self) {
-        let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
-            return;
-        }
-        let row = self.window_mgr.focused_window().cursor_row;
-        let lang = crate::syntax::Language::Markdown;
         let Some((start, end)) = self.heading_subtree_range(row, lang) else {
             return;
         };
@@ -673,20 +523,20 @@ impl Editor {
         self.set_status("Moved subtree down");
     }
 
-    /// Move markdown subtree up past previous sibling.
-    pub fn md_move_subtree_up(&mut self) {
+    /// Move a heading subtree up past the previous sibling. Works for org and markdown.
+    pub fn heading_move_subtree_up(&mut self, lang: crate::syntax::Language) {
         let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+        if self.syntax.language_of(buf_idx) != Some(lang) {
             return;
         }
         let row = self.window_mgr.focused_window().cursor_row;
-        let lang = crate::syntax::Language::Markdown;
         let Some((start, end)) = self.heading_subtree_range(row, lang) else {
             return;
         };
         if start == 0 {
             return;
         }
+
         let line: String = self.buffers[buf_idx].rope().line(start).chars().collect();
         let level = Self::heading_level(&line, lang);
 
@@ -732,6 +582,47 @@ impl Editor {
 
         self.window_mgr.focused_window_mut().cursor_row = prev_start;
         self.set_status("Moved subtree up");
+    }
+
+    /// Move org subtree down (thin wrapper).
+    pub fn org_move_subtree_down(&mut self) {
+        self.heading_move_subtree_down(crate::syntax::Language::Org);
+    }
+
+    /// Move org subtree up (thin wrapper).
+    pub fn org_move_subtree_up(&mut self) {
+        self.heading_move_subtree_up(crate::syntax::Language::Org);
+    }
+
+    // --- Markdown structural editing ---
+
+    /// Three-state heading cycle for markdown buffers (TAB).
+    pub fn md_cycle(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        self.heading_cycle(crate::syntax::Language::Markdown);
+    }
+
+    /// Promote markdown heading (thin wrapper).
+    pub fn md_promote(&mut self) {
+        self.heading_promote(crate::syntax::Language::Markdown);
+    }
+
+    /// Demote markdown heading (thin wrapper).
+    pub fn md_demote(&mut self) {
+        self.heading_demote(crate::syntax::Language::Markdown);
+    }
+
+    /// Move markdown subtree down (thin wrapper).
+    pub fn md_move_subtree_down(&mut self) {
+        self.heading_move_subtree_down(crate::syntax::Language::Markdown);
+    }
+
+    /// Move markdown subtree up (thin wrapper).
+    pub fn md_move_subtree_up(&mut self) {
+        self.heading_move_subtree_up(crate::syntax::Language::Markdown);
     }
 
     // --- Narrow/Widen ---

@@ -388,6 +388,23 @@ impl CommandRegistry {
             "Open file from tree in horizontal split (i)",
         );
         reg.register_builtin(
+            "file-tree-scroll-down",
+            "Scroll file tree down one line (C-e)",
+        );
+        reg.register_builtin("file-tree-scroll-up", "Scroll file tree up one line (C-y)");
+        reg.register_builtin(
+            "file-tree-half-page-down",
+            "Scroll file tree half page down (C-d)",
+        );
+        reg.register_builtin(
+            "file-tree-half-page-up",
+            "Scroll file tree half page up (C-u)",
+        );
+        reg.register_builtin(
+            "file-tree-global-cycle",
+            "Cycle file tree fold state: close all / expand all / default (S-Tab)",
+        );
+        reg.register_builtin(
             "delete-this-file",
             "Delete current buffer's file (SPC f D, confirm y/n)",
         );

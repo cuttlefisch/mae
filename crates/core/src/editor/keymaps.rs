@@ -652,6 +652,38 @@ impl Editor {
 
         maps.insert("markdown".to_string(), markdown);
 
+        // File tree keymap (NERDTree-style)
+        let mut file_tree = Keymap::new("file-tree");
+        // Navigation
+        file_tree.bind(parse_key_seq("j"), "file-tree-down");
+        file_tree.bind(parse_key_seq("k"), "file-tree-up");
+        file_tree.bind(parse_key_seq("gg"), "file-tree-first");
+        file_tree.bind(parse_key_seq("G"), "file-tree-last");
+        // Scroll
+        file_tree.bind(parse_key_seq("C-e"), "file-tree-scroll-down");
+        file_tree.bind(parse_key_seq("C-y"), "file-tree-scroll-up");
+        file_tree.bind(parse_key_seq("C-d"), "file-tree-half-page-down");
+        file_tree.bind(parse_key_seq("C-u"), "file-tree-half-page-up");
+        // Actions
+        file_tree.bind(vec![KeyPress::special(Key::Enter)], "file-tree-open");
+        file_tree.bind(parse_key_seq("o"), "file-tree-open");
+        file_tree.bind(parse_key_seq("s"), "file-tree-open-vsplit");
+        file_tree.bind(parse_key_seq("i"), "file-tree-open-hsplit");
+        file_tree.bind(vec![KeyPress::special(Key::Tab)], "file-tree-expand");
+        file_tree.bind(
+            vec![KeyPress::special(Key::BackTab)],
+            "file-tree-global-cycle",
+        );
+        file_tree.bind(parse_key_seq("x"), "file-tree-close-parent");
+        file_tree.bind(parse_key_seq("u"), "file-tree-parent");
+        file_tree.bind(parse_key_seq("C"), "file-tree-cd");
+        file_tree.bind(parse_key_seq("R"), "file-tree-refresh");
+        file_tree.bind(parse_key_seq("m a"), "file-tree-create");
+        file_tree.bind(parse_key_seq("d"), "file-tree-delete");
+        file_tree.bind(parse_key_seq("r"), "file-tree-rename");
+        file_tree.bind(parse_key_seq("q"), "file-tree-toggle");
+        maps.insert("file-tree".to_string(), file_tree);
+
         maps
     }
 }
@@ -771,5 +803,33 @@ mod tests {
             normal_map.lookup(&u_key),
             crate::keymap::LookupResult::Exact("undo")
         ));
+    }
+
+    #[test]
+    fn file_tree_keymap_exists_with_bindings() {
+        let ed = Editor::new();
+        let ft_map = ed.keymaps.get("file-tree").unwrap();
+        let j_key = parse_key_seq("j");
+        assert_eq!(
+            ft_map.lookup(&j_key),
+            crate::keymap::LookupResult::Exact("file-tree-down")
+        );
+        let q_key = parse_key_seq("q");
+        assert_eq!(
+            ft_map.lookup(&q_key),
+            crate::keymap::LookupResult::Exact("file-tree-toggle")
+        );
+    }
+
+    #[test]
+    fn file_tree_buffer_keymap_names() {
+        let mut ed = Editor::new();
+        let root = std::env::current_dir().unwrap();
+        let tree_buf = crate::buffer::Buffer::new_file_tree(&root);
+        ed.buffers.push(tree_buf);
+        let tree_idx = ed.buffers.len() - 1;
+        ed.window_mgr.focused_window_mut().buffer_idx = tree_idx;
+        let names = ed.current_keymap_names();
+        assert_eq!(names, Some(("file-tree", Some("normal"))));
     }
 }
