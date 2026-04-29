@@ -356,7 +356,7 @@ pub fn render_conversation_window(
         }
 
         // Scrollbar for the conversation buffer.
-        let scrollbar_col = inner_col + inner_width; // right edge of inner area
+        let scrollbar_col = inner_col + inner_width - 1; // inside right border
         crate::scrollbar::render_scrollbar_raw(
             canvas,
             editor,
