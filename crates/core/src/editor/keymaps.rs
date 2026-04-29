@@ -218,6 +218,7 @@ impl Editor {
         // vim/dirvish convention, but it's already bound to
         // `move-line-prev-non-blank` — keep the motion primitive.)
         normal.bind(parse_key_seq_spaced("SPC f d"), "file-browser");
+        normal.bind(parse_key_seq_spaced("SPC f t"), "file-tree-toggle");
         normal.bind(parse_key_seq_spaced("SPC f s"), "save");
         // +window
         normal.bind(parse_key_seq_spaced("SPC w v"), "split-vertical");
@@ -263,7 +264,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");
         // +theme
         normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
-        normal.bind(parse_key_seq_spaced("SPC t s"), "set-theme");
+        normal.bind(parse_key_seq_spaced("SPC t S"), "set-theme");
         // +debug
         normal.bind(parse_key_seq_spaced("SPC d d"), "debug-start");
         normal.bind(parse_key_seq_spaced("SPC d s"), "debug-self");

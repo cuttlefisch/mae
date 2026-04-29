@@ -84,7 +84,9 @@ pub fn format_line_number_with_offset(
     relative_line_numbers: bool,
     display_offset: Option<usize>,
 ) -> String {
-    if !show_line_numbers {
+    if gutter_w == 0 {
+        String::new()
+    } else if !show_line_numbers {
         " ".to_string()
     } else if relative_line_numbers && line_idx != cursor_row {
         let offset = display_offset.unwrap_or_else(|| line_idx.abs_diff(cursor_row));

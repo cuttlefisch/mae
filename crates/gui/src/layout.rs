@@ -233,7 +233,9 @@ pub fn compute_layout(
     glyph_advance_fn: Option<&dyn Fn(f32) -> f32>,
 ) -> FrameLayout {
     let total_lines = buf.line_count();
-    let gutter_w = if editor.show_line_numbers {
+    let gutter_w = if buf.kind == mae_core::BufferKind::Conversation {
+        0
+    } else if editor.show_line_numbers {
         gutter::gutter_width(buf.display_line_count())
     } else {
         2
@@ -472,12 +474,13 @@ mod tests {
 
     #[test]
     fn layout_basic_no_folds() {
+        // 5 lines + trailing newline = 6 rope lines (last is empty)
         let e = make_editor("line 1\nline 2\nline 3\nline 4\nline 5\n");
         let idx = e.active_buffer_idx();
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
         let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
-        assert_eq!(layout.lines.len(), 5);
+        assert_eq!(layout.lines.len(), 6);
         for (i, ll) in layout.lines.iter().enumerate() {
             assert_eq!(ll.buf_row, i);
             assert!(!ll.is_wrap_continuation);
@@ -496,8 +499,8 @@ mod tests {
         let buf = &e.buffers[idx];
         let win = e.window_mgr.focused_window();
         let layout = compute_layout(&e, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
-        // Visible: line 0, line 1 (fold start), line 7, 8, 9
-        assert_eq!(layout.lines.len(), 5);
+        // Visible: line 0, line 1 (fold start), line 7, 8, 9, line 10 (empty trailing)
+        assert_eq!(layout.lines.len(), 6);
         assert_eq!(layout.lines[0].buf_row, 0);
         assert_eq!(layout.lines[1].buf_row, 1);
         assert!(layout.lines[1].is_fold_start);

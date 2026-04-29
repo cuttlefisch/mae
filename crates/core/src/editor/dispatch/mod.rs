@@ -1,6 +1,7 @@
 mod dap;
 mod edit;
 mod file;
+mod file_tree;
 mod fold_org;
 mod git;
 mod lsp;
@@ -60,6 +61,9 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_dap(name) {
+            return v;
+        }
+        if let Some(v) = self.dispatch_file_tree(name) {
             return v;
         }
 
@@ -157,6 +161,20 @@ impl Editor {
         let area = self.default_area();
         self.window_mgr.focus_direction(dir, area);
         self.sync_mode_to_buffer();
+        // When focusing a conversation output buffer, jump cursor to the last line
+        // so the user sees the most recent content (not stranded at row 0).
+        let idx = self.active_buffer_idx();
+        if self.buffers[idx].kind == crate::buffer::BufferKind::Conversation {
+            let last_line = self.buffers[idx].line_count().saturating_sub(1);
+            let win = self.window_mgr.focused_window_mut();
+            if win.cursor_row == 0 && last_line > 0 {
+                win.cursor_row = last_line;
+                win.cursor_col = 0;
+                // scroll_offset is now a rope line index (same as all other buffers).
+                // Set it high; the renderer clamps to total-viewport_height.
+                win.scroll_offset = last_line.saturating_sub(self.viewport_height);
+            }
+        }
         self.fire_hook("focus-in");
     }
 

@@ -183,10 +183,6 @@ impl Editor {
                     win.scroll_offset = 0;
                     win.cursor_row = 0;
                     win.cursor_col = 0;
-                } else if kind == crate::BufferKind::Conversation {
-                    if let Some(ref mut conv) = self.buffers[idx].conversation {
-                        conv.scroll_to_top();
-                    }
                 } else {
                     let buf = &self.buffers[idx];
                     if let Some(target) = count {
@@ -211,19 +207,6 @@ impl Editor {
                     win.scroll_offset = total.saturating_sub(vh);
                     win.cursor_row = last_line;
                     win.cursor_col = 0;
-                } else if kind == crate::BufferKind::Conversation {
-                    if let Some(ref mut conv) = self.buffers[idx].conversation {
-                        if let Some(target) = count {
-                            let rendered_len = conv.rendered_lines().len();
-                            if target <= rendered_len {
-                                conv.scroll = rendered_len.saturating_sub(target);
-                            } else {
-                                conv.scroll_to_top();
-                            }
-                        } else {
-                            conv.scroll_to_bottom();
-                        }
-                    }
                 } else {
                     let buf = &self.buffers[idx];
                     if let Some(target) = count {
@@ -364,14 +347,6 @@ impl Editor {
                 let is_half = name == "scroll-half-up";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
-                    crate::BufferKind::Conversation => {
-                        if let Some(ref mut conv) = self.buffers[idx].conversation {
-                            let c: &mut crate::conversation::Conversation = conv;
-                            for _ in 0..n {
-                                c.scroll_up(amount);
-                            }
-                        }
-                    }
                     crate::BufferKind::Messages => {
                         let win = self.window_mgr.focused_window_mut();
                         for _ in 0..n {
@@ -399,14 +374,6 @@ impl Editor {
                 let is_half = name == "scroll-half-down";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
-                    crate::BufferKind::Conversation => {
-                        if let Some(ref mut conv) = self.buffers[idx].conversation {
-                            let c: &mut crate::conversation::Conversation = conv;
-                            for _ in 0..n {
-                                c.scroll_down(amount);
-                            }
-                        }
-                    }
                     crate::BufferKind::Messages => {
                         let total = self.message_log.len();
                         let line_count = self.buffers[idx].line_count().saturating_sub(1);
@@ -448,13 +415,6 @@ impl Editor {
                             win.scroll_offset = (win.scroll_offset + 1).min(max);
                         }
                     }
-                    crate::BufferKind::Conversation => {
-                        if let Some(ref mut conv) = self.buffers[idx].conversation {
-                            for _ in 0..n {
-                                conv.scroll_down(1);
-                            }
-                        }
-                    }
                     _ => {
                         let buf = &self.buffers[idx];
                         let vh = self.viewport_height;
@@ -474,13 +434,6 @@ impl Editor {
                         let win = self.window_mgr.focused_window_mut();
                         for _ in 0..n {
                             win.scroll_offset = win.scroll_offset.saturating_sub(1);
-                        }
-                    }
-                    crate::BufferKind::Conversation => {
-                        if let Some(ref mut conv) = self.buffers[idx].conversation {
-                            for _ in 0..n {
-                                conv.scroll_up(1);
-                            }
                         }
                     }
                     _ => {

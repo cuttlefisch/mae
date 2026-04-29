@@ -819,6 +819,61 @@ impl Conversation {
         };
         self.scroll = total;
     }
+
+    /// Generate `HighlightSpan`s for the synced conversation rope.
+    ///
+    /// Each rendered line maps 1:1 to a rope line (via `sync_conversation_rope`).
+    /// The span covers the full line and assigns a theme key based on `LineStyle`.
+    pub fn highlight_spans(&self, rope: &ropey::Rope) -> Vec<crate::syntax::HighlightSpan> {
+        let rendered = self.rendered_lines();
+        let mut spans = Vec::with_capacity(rendered.len());
+        for (line_idx, rl) in rendered.iter().enumerate() {
+            if line_idx >= rope.len_lines() {
+                break;
+            }
+            let theme_key: &'static str = match &rl.style {
+                LineStyle::RoleMarker => {
+                    if rl.text.contains("[You]") {
+                        "conversation.user"
+                    } else if rl.text.contains("[AI]") {
+                        "conversation.assistant"
+                    } else {
+                        "conversation.system"
+                    }
+                }
+                LineStyle::UserText => "conversation.user.text",
+                LineStyle::AssistantText => "conversation.assistant.text",
+                LineStyle::ToolCallHeader => "conversation.tool",
+                LineStyle::ToolResultText => "conversation.tool.result",
+                LineStyle::ToolRunning => "conversation.tool",
+                LineStyle::ToolPending => "ui.text.dim",
+                LineStyle::ToolSuccess => "conversation.tool.result",
+                LineStyle::ToolError => "diagnostic.error",
+                LineStyle::SystemText => "conversation.system",
+                LineStyle::Separator => "ui.text",
+                LineStyle::InputPrompt => "conversation.input",
+            };
+            let line_start = rope.line_to_char(line_idx);
+            let line_len = rope.line(line_idx).len_chars();
+            // Strip trailing newline for byte range.
+            let text_len = if line_idx + 1 < rope.len_lines() {
+                line_len.saturating_sub(1)
+            } else {
+                line_len
+            };
+            if text_len == 0 {
+                continue;
+            }
+            let byte_start = rope.char_to_byte(line_start);
+            let byte_end = rope.char_to_byte(line_start + text_len);
+            spans.push(crate::syntax::HighlightSpan {
+                byte_start,
+                byte_end,
+                theme_key,
+            });
+        }
+        spans
+    }
 }
 
 #[cfg(test)]
@@ -1315,5 +1370,37 @@ mod tests {
             "role marker should contain token display: {}",
             marker.unwrap().text
         );
+    }
+
+    #[test]
+    fn highlight_spans_covers_all_lines() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans(&rope);
+        // Every non-empty rendered line should have a span.
+        let non_empty = conv
+            .rendered_lines()
+            .iter()
+            .filter(|l| !l.text.is_empty())
+            .count();
+        assert_eq!(spans.len(), non_empty);
+    }
+
+    #[test]
+    fn highlight_spans_role_markers() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans(&rope);
+        // First span should be [You] role marker → conversation.user
+        assert_eq!(spans[0].theme_key, "conversation.user");
+        // Find the [AI] marker span
+        let ai_span = spans
+            .iter()
+            .find(|s| s.theme_key == "conversation.assistant");
+        assert!(ai_span.is_some());
     }
 }

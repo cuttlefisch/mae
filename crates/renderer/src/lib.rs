@@ -15,6 +15,7 @@ mod buffer_render;
 mod conversation_render;
 mod cursor;
 mod debug_render;
+mod file_tree_render;
 mod help_render;
 mod messages_render;
 mod popup_render;
@@ -247,13 +248,20 @@ fn render_window_area(
             let is_focused = *win_id == focused_id;
             match buf.kind {
                 mae_core::BufferKind::Conversation => {
-                    conversation_render::render_conversation_window(
+                    // Route through standard render pipeline via highlight spans.
+                    let conv_spans = if let Some(ref conv) = buf.conversation {
+                        conv.highlight_spans(buf.rope())
+                    } else {
+                        Vec::new()
+                    };
+                    buffer_render::render_window(
                         frame,
                         ratatui_rect,
                         buf,
                         win,
                         is_focused,
                         editor,
+                        Some(&conv_spans),
                     );
                 }
                 mae_core::BufferKind::Messages => {
@@ -328,8 +336,25 @@ fn render_window_area(
                         render_visual_buffer(frame, ratatui_rect, vb);
                     }
                 }
+                mae_core::BufferKind::FileTree => {
+                    file_tree_render::render_file_tree_window(
+                        frame,
+                        ratatui_rect,
+                        buf,
+                        win,
+                        is_focused,
+                        editor,
+                    );
+                }
                 _ => {
-                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
+                    // Diff buffers get line-level diff highlighting.
+                    let diff_spans_storage;
+                    let spans = if buf.name == "*AI-Diff*" {
+                        diff_spans_storage = mae_core::diff::diff_highlight_spans(buf.rope());
+                        Some(diff_spans_storage.as_slice())
+                    } else {
+                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                    };
                     buffer_render::render_window(
                         frame,
                         ratatui_rect,

@@ -36,6 +36,9 @@ pub fn render_gutter_line_at_y(
     line_severities: &HashMap<u32, DiagnosticSeverity>,
     display_offset: Option<usize>,
 ) {
+    if gutter_w == 0 {
+        return;
+    }
     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
     let cursorline_bg = if is_cursor_line {
         theme::ts_bg(editor, "ui.cursorline")
@@ -106,6 +109,9 @@ pub fn render_gutter_line(
     stopped_line: Option<u32>,
     line_severities: &HashMap<u32, DiagnosticSeverity>,
 ) {
+    if gutter_w == 0 {
+        return;
+    }
     let gutter_fg = theme::ts_fg(editor, "ui.gutter");
     let cursorline_bg = if is_cursor_line {
         theme::ts_bg(editor, "ui.cursorline")

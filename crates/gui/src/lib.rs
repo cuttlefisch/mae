@@ -33,6 +33,7 @@ mod canvas;
 mod conversation_render;
 mod cursor;
 mod debug_render;
+mod file_tree_render;
 mod gutter;
 mod input;
 mod layout;
@@ -257,18 +258,6 @@ impl Renderer for GuiRenderer {
         // Uses stale spans during typing; deferred reparse happens in the event loop.
         let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
 
-        // Pre-compute screen line counts for conversation buffers.
-        // Must happen while we have &mut Editor, before the immutable rebind.
-        {
-            let inner_width = (cols).saturating_sub(2); // border eats 1 col each side
-            for buf in &mut editor.buffers {
-                if buf.kind == BufferKind::Conversation {
-                    if let Some(ref mut conv) = buf.conversation {
-                        conv.ensure_screen_counts(inner_width);
-                    }
-                }
-            }
-        }
         let editor: &Editor = editor;
 
         // Layout: window area = rows-2, status bar = 1, command line = 1.
@@ -493,9 +482,66 @@ fn render_window_area(
 
             match buf.kind {
                 BufferKind::Conversation => {
-                    conversation_render::render_conversation_window(
-                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    // Generate highlight spans from conversation styles.
+                    let conv_spans = if let Some(ref conv) = buf.conversation {
+                        conv.highlight_spans(buf.rope())
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Border + streaming indicator.
+                    let border_fg = if is_focused {
+                        theme::ts_fg(editor, "ui.window.border.active")
+                    } else {
+                        theme::ts_fg(editor, "ui.window.border")
+                    };
+                    let streaming_indicator = if let Some(ref conv) = buf.conversation {
+                        if conv.streaming {
+                            if let Some(start) = conv.streaming_start {
+                                format!(" [waiting... {}s] ", start.elapsed().as_secs())
+                            } else {
+                                " [waiting...] ".to_string()
+                            }
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let title = format!(" {}{} ", buf.name, streaming_indicator);
+                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
+
+                    let inner_row = r_row + 1;
+                    let inner_col = r_col + 1;
+                    let inner_width = r_width.saturating_sub(2);
+                    let inner_height = r_height.saturating_sub(2);
+                    let (_, cell_height) = canvas.cell_size();
+                    let fl = layout::compute_layout(
+                        editor,
+                        buf,
+                        win,
+                        inner_row,
+                        inner_col,
+                        inner_width,
+                        inner_height,
+                        cell_height,
+                        cw,
+                        Some(&conv_spans),
+                        Some(&glyph_advance_fn),
                     );
+                    buffer_render::render_buffer_content(
+                        canvas,
+                        editor,
+                        buf,
+                        win,
+                        is_focused,
+                        &fl,
+                        Some(&conv_spans),
+                    );
+                    scrollbar::render_scrollbar(canvas, editor, &fl);
+                    if is_focused {
+                        focused_layout = Some(fl);
+                    }
                 }
                 BufferKind::Messages => {
                     messages_render::render_messages_window(
@@ -610,6 +656,11 @@ fn render_window_area(
                         render_visual_buffer(canvas, vb, r_row, r_col, r_width, r_height);
                     }
                 }
+                BufferKind::FileTree => {
+                    file_tree_render::render_file_tree_window(
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    );
+                }
                 _ => {
                     // Text (and Preview) buffers: border + syntax-highlighted content.
                     let border_fg = if is_focused {
@@ -625,7 +676,14 @@ fn render_window_area(
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
+                    // Diff buffers get line-level diff highlighting.
+                    let diff_spans_storage;
+                    let spans = if buf.name == "*AI-Diff*" {
+                        diff_spans_storage = mae_core::diff::diff_highlight_spans(buf.rope());
+                        Some(diff_spans_storage.as_slice())
+                    } else {
+                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                    };
                     let (_, cell_height) = canvas.cell_size();
                     let fl = layout::compute_layout(
                         editor,
@@ -822,7 +880,10 @@ fn render_gui_cursor(
         let inner_width = (win_rect.width as usize).saturating_sub(2);
         let inner_height = (win_rect.height as usize).saturating_sub(2);
 
-        let gutter_w = if editor.show_line_numbers {
+        // Conversation buffers render without a gutter — cursor gutter offset must be 0.
+        let gutter_w = if focused_buf.kind == mae_core::BufferKind::Conversation {
+            0
+        } else if editor.show_line_numbers {
             gutter::gutter_width(focused_buf.display_line_count())
         } else {
             2

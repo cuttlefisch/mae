@@ -323,6 +323,14 @@ impl CommandRegistry {
         reg.register_builtin("focus-right", "Focus window to the right");
         reg.register_builtin("focus-up", "Focus window above");
         reg.register_builtin("focus-down", "Focus window below");
+        reg.register_builtin("window-grow", "Increase window size (SPC w +)");
+        reg.register_builtin("window-shrink", "Decrease window size (SPC w -)");
+        reg.register_builtin("window-balance", "Balance all window sizes (SPC w =)");
+        reg.register_builtin("window-maximize", "Maximize current window (SPC w m)");
+        reg.register_builtin("window-move-left", "Move window left (SPC w H)");
+        reg.register_builtin("window-move-right", "Move window right (SPC w L)");
+        reg.register_builtin("window-move-up", "Move window up (SPC w K)");
+        reg.register_builtin("window-move-down", "Move window down (SPC w J)");
 
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
@@ -338,6 +346,12 @@ impl CommandRegistry {
         reg.register_builtin("prev-buffer", "Cycle to previous buffer");
         reg.register_builtin("find-file", "Open a file");
         reg.register_builtin("file-browser", "Open directory browser");
+        reg.register_builtin("file-tree-toggle", "Toggle file tree sidebar (SPC f t)");
+        reg.register_builtin("file-tree-up", "Move file tree selection up");
+        reg.register_builtin("file-tree-down", "Move file tree selection down");
+        reg.register_builtin("file-tree-open", "Open selected file from tree");
+        reg.register_builtin("file-tree-expand", "Expand/collapse directory in tree");
+        reg.register_builtin("file-tree-refresh", "Refresh file tree");
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("new-buffer", "Create a new empty scratch buffer");
@@ -358,6 +372,7 @@ impl CommandRegistry {
         reg.register_builtin("describe-command", "Show command documentation");
         reg.register_builtin("show-registers", "Show named registers");
         reg.register_builtin("prompt-register", "Select a register");
+        reg.register_builtin("paste-from-yank", "Paste from yank register (\"0p)");
 
         // Surrounds (vim-surround ports)
         reg.register_builtin(
@@ -419,6 +434,15 @@ impl CommandRegistry {
         reg.register_builtin("visual-uppercase", "Uppercase visual selection (U)");
         reg.register_builtin("visual-lowercase", "Lowercase visual selection (u)");
         reg.register_builtin("reselect-visual", "Reselect last visual selection (gv)");
+        reg.register_builtin("enter-visual-block", "Enter blockwise visual mode (C-v)");
+        reg.register_builtin(
+            "block-visual-insert",
+            "Insert at start of each line in block selection (I)",
+        );
+        reg.register_builtin(
+            "block-visual-append",
+            "Append at end of each line in block selection (A)",
+        );
 
         // Search
         reg.register_builtin("search-forward-start", "Search forward (/)");
@@ -545,6 +569,49 @@ impl CommandRegistry {
         reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
         reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
 
+        // Folding
+        reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");
+        reg.register_builtin("close-all-folds", "Close all folds (zM)");
+        reg.register_builtin("open-all-folds", "Open all folds (zR)");
+
+        // Org-mode
+        reg.register_builtin("org-cycle", "Cycle org heading visibility (Tab)");
+        reg.register_builtin("org-global-cycle", "Cycle all org headings (S-Tab)");
+        reg.register_builtin("org-todo-next", "Cycle org TODO state forward");
+        reg.register_builtin("org-todo-prev", "Cycle org TODO state backward");
+        reg.register_builtin("org-open-link", "Open org link under cursor");
+        reg.register_builtin("org-promote", "Promote org heading (M-Left)");
+        reg.register_builtin("org-demote", "Demote org heading (M-Right)");
+        reg.register_builtin("org-move-subtree-up", "Move org subtree up (M-Up)");
+        reg.register_builtin("org-move-subtree-down", "Move org subtree down (M-Down)");
+        reg.register_builtin(
+            "org-insert-heading",
+            "Insert org heading after subtree (M-Enter)",
+        );
+        reg.register_builtin("org-narrow-subtree", "Narrow to org subtree");
+        reg.register_builtin("org-widen", "Widen from org narrow");
+
+        // Markdown
+        reg.register_builtin("md-cycle", "Cycle markdown heading visibility (Tab)");
+        reg.register_builtin("md-global-cycle", "Cycle all markdown headings (S-Tab)");
+        reg.register_builtin("md-promote", "Promote markdown heading (M-Left)");
+        reg.register_builtin("md-demote", "Demote markdown heading (M-Right)");
+        reg.register_builtin("md-move-subtree-up", "Move markdown subtree up (M-Up)");
+        reg.register_builtin(
+            "md-move-subtree-down",
+            "Move markdown subtree down (M-Down)",
+        );
+        reg.register_builtin(
+            "md-insert-heading",
+            "Insert markdown heading after subtree (M-Enter)",
+        );
+        reg.register_builtin("md-narrow-subtree", "Narrow to markdown subtree");
+        reg.register_builtin("md-widen", "Widen from markdown narrow");
+
+        // Narrow/widen (generic)
+        reg.register_builtin("narrow-to-subtree", "Narrow buffer to current subtree");
+        reg.register_builtin("widen", "Widen buffer from narrowed view");
+
         // Tree-sitter structural editing (Phase 4b M3)
         reg.register_builtin(
             "syntax-select-node",
@@ -622,6 +689,13 @@ impl CommandRegistry {
         reg.register_builtin("git-blame", "Show git blame for current file (SPC g b)");
         reg.register_builtin("git-diff", "Show git diff in scratch buffer (SPC g d)");
         reg.register_builtin("git-log", "Show git log in scratch buffer (SPC g l)");
+        reg.register_builtin("git-stage", "Stage file under cursor in git status");
+        reg.register_builtin("git-unstage", "Unstage file under cursor in git status");
+        reg.register_builtin("git-stage-all", "Stage all changed files");
+        reg.register_builtin("git-unstage-all", "Unstage all staged files");
+        reg.register_builtin("git-commit", "Commit staged changes (SPC g c)");
+        reg.register_builtin("git-status-toggle", "Toggle git status detail for file");
+        reg.register_builtin("git-status-open", "Open file from git status buffer");
 
         // Notes/KB commands
         reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
@@ -858,6 +932,49 @@ mod tests {
         assert!(reg.contains("record-start"));
         assert!(reg.contains("record-stop"));
         assert!(reg.contains("record-save"));
+    }
+
+    #[test]
+    fn with_builtins_has_window_management() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("window-grow"));
+        assert!(reg.contains("window-shrink"));
+        assert!(reg.contains("window-balance"));
+        assert!(reg.contains("window-maximize"));
+        assert!(reg.contains("window-move-left"));
+    }
+
+    #[test]
+    fn with_builtins_has_folding_org_md() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("toggle-fold"));
+        assert!(reg.contains("close-all-folds"));
+        assert!(reg.contains("open-all-folds"));
+        assert!(reg.contains("org-cycle"));
+        assert!(reg.contains("org-promote"));
+        assert!(reg.contains("org-insert-heading"));
+        assert!(reg.contains("md-cycle"));
+        assert!(reg.contains("md-promote"));
+        assert!(reg.contains("md-insert-heading"));
+        assert!(reg.contains("narrow-to-subtree"));
+        assert!(reg.contains("widen"));
+    }
+
+    #[test]
+    fn with_builtins_has_git_extended() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("git-stage"));
+        assert!(reg.contains("git-unstage"));
+        assert!(reg.contains("git-commit"));
+        assert!(reg.contains("git-status-toggle"));
+    }
+
+    #[test]
+    fn with_builtins_has_visual_block() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("enter-visual-block"));
+        assert!(reg.contains("block-visual-insert"));
+        assert!(reg.contains("block-visual-append"));
     }
 
     #[test]
