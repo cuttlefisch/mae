@@ -11,11 +11,25 @@ use unicode_width::UnicodeWidthStr;
 pub struct Segment {
     pub text: String,
     pub priority: u8,
+    /// Optional theme key for custom styling (e.g. colored AI mode badge).
+    pub style_hint: Option<&'static str>,
 }
 
 impl Segment {
     pub fn new(text: String, priority: u8) -> Self {
-        Self { text, priority }
+        Self {
+            text,
+            priority,
+            style_hint: None,
+        }
+    }
+
+    pub fn with_style(text: String, priority: u8, style_hint: &'static str) -> Self {
+        Self {
+            text,
+            priority,
+            style_hint: Some(style_hint),
+        }
     }
 
     pub fn width(&self) -> usize {
@@ -106,7 +120,7 @@ pub fn mode_theme_key(editor: &Editor) -> &'static str {
         match editor.mode {
             Mode::Normal => "ui.statusline.mode.normal",
             Mode::Insert => "ui.statusline.mode.insert",
-            Mode::Visual(_) => "ui.statusline.mode.normal",
+            Mode::Visual(_) => "ui.statusline.mode.visual",
             Mode::Command => "ui.statusline.mode.command",
             Mode::ConversationInput => "ui.statusline.mode.conversation",
             Mode::ShellInsert => "ui.statusline.mode.insert",
@@ -189,7 +203,25 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(nyan, 6));
     }
 
-    // Priority 7: file type + scroll % + AI tier.
+    // Priority 7a: colored AI mode badge (only when AI session is active).
+    if editor.conversation_pair.is_some()
+        || editor.ai_session_tokens_in > 0
+        || editor.ai_session_tokens_out > 0
+    {
+        let ai_mode_style = match editor.ai_mode.as_str() {
+            "standard" => "ui.statusline.ai.standard",
+            "auto-accept" => "ui.statusline.ai.auto",
+            "plan" => "ui.statusline.ai.plan",
+            _ => "ui.statusline.ai.standard",
+        };
+        segments.push(Segment::with_style(
+            format!(" {} ", editor.ai_mode.to_uppercase()),
+            7,
+            ai_mode_style,
+        ));
+    }
+
+    // Priority 7b: file type + scroll % + AI tier.
     let buf_idx = win.buffer_idx;
     let file_type = editor
         .syntax
@@ -202,7 +234,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         format!(" {}", file_type)
     };
     let pct = compute_scroll_pct(buf, win);
-    let tier_str = format!(" [AI:{}|{}]", editor.ai_mode, editor.ai_permission_tier);
+    let tier_str = format!(" [{}]", editor.ai_permission_tier);
     let combined_7 = format!("{} {}{}", file_type_str, pct, tier_str);
     if !combined_7.trim().is_empty() {
         segments.push(Segment::new(combined_7, 7));
@@ -227,10 +259,22 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     segments
 }
 
+/// A span within the status bar text that should be rendered with a custom style.
+pub struct StyledSpan {
+    /// Byte offset within `right_text`.
+    pub byte_offset: usize,
+    /// Byte length of the span.
+    pub byte_len: usize,
+    /// Theme key for this span's style.
+    pub style_key: &'static str,
+}
+
 /// Result of laying out status bar segments.
 pub struct StatusLayout {
     pub left_text: String,
     pub right_text: String,
+    /// Spans within `right_text` that need custom styling (e.g. colored AI mode).
+    pub right_styled_spans: Vec<StyledSpan>,
 }
 
 /// Elide, truncate, and split segments into left/right text for the status bar.
@@ -272,9 +316,27 @@ pub fn layout_status_segments(
     left_parts.sort_by_key(|s| s.priority);
     right_parts.sort_by_key(|s| s.priority);
 
+    let left_text: String = left_parts.iter().map(|s| s.text.as_str()).collect();
+    let mut right_text = String::new();
+    let mut right_styled_spans = Vec::new();
+    for seg in &right_parts {
+        if let Some(key) = seg.style_hint {
+            let offset = right_text.len();
+            right_text.push_str(&seg.text);
+            right_styled_spans.push(StyledSpan {
+                byte_offset: offset,
+                byte_len: seg.text.len(),
+                style_key: key,
+            });
+        } else {
+            right_text.push_str(&seg.text);
+        }
+    }
+
     StatusLayout {
-        left_text: left_parts.iter().map(|s| s.text.as_str()).collect(),
-        right_text: right_parts.iter().map(|s| s.text.as_str()).collect(),
+        left_text,
+        right_text,
+        right_styled_spans,
     }
 }
 
@@ -541,5 +603,53 @@ mod tests {
     fn mode_label_normal() {
         let editor = Editor::new();
         assert_eq!(mode_label(&editor), " NORMAL ");
+    }
+
+    #[test]
+    fn visual_mode_has_distinct_theme_key() {
+        let mut editor = Editor::new();
+        editor.mode = Mode::Visual(VisualType::Char);
+        assert_eq!(mode_theme_key(&editor), "ui.statusline.mode.visual");
+    }
+
+    #[test]
+    fn ai_mode_badge_has_style_hint() {
+        let mut editor = Editor::new();
+        // Badge only appears when AI session is active.
+        editor.ai_session_tokens_in = 100;
+        let segments = build_status_segments(&editor, None);
+        let ai_seg = segments.iter().find(|s| s.text.contains("STANDARD"));
+        assert!(ai_seg.is_some());
+        assert_eq!(
+            ai_seg.unwrap().style_hint,
+            Some("ui.statusline.ai.standard")
+        );
+    }
+
+    #[test]
+    fn ai_mode_badge_hidden_without_session() {
+        let editor = Editor::new();
+        let segments = build_status_segments(&editor, None);
+        let ai_seg = segments.iter().find(|s| s.text.contains("STANDARD"));
+        assert!(
+            ai_seg.is_none(),
+            "AI badge should not show on splash/no session"
+        );
+    }
+
+    #[test]
+    fn styled_spans_in_layout() {
+        let mut segs = vec![
+            Segment::new("pos".to_string(), 1),
+            Segment::with_style(" MODE ".to_string(), 4, "test.style"),
+        ];
+        let layout = layout_status_segments(&mut segs, 40, "test", false);
+        assert_eq!(layout.right_styled_spans.len(), 1);
+        assert_eq!(layout.right_styled_spans[0].style_key, "test.style");
+        let span = &layout.right_styled_spans[0];
+        assert_eq!(
+            &layout.right_text[span.byte_offset..span.byte_offset + span.byte_len],
+            " MODE "
+        );
     }
 }

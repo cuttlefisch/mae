@@ -428,20 +428,24 @@ fn ai_prompt_creates_conversation_buffer() {
     editor.dispatch_builtin("ai-prompt");
 
     assert_eq!(editor.mode, Mode::ConversationInput);
-    assert_eq!(editor.buffers.len(), 2);
+    // Split pair: *AI* (output) + *ai-input* (input) = 3 buffers total
+    assert_eq!(editor.buffers.len(), 3);
     assert_eq!(
         editor.buffers[1].kind,
         crate::buffer::BufferKind::Conversation
     );
     assert_eq!(editor.buffers[1].name, "*AI*");
-    assert_eq!(editor.active_buffer_idx(), 1);
+    assert_eq!(editor.buffers[2].name, "*ai-input*");
+    // Active buffer is the input buffer
+    assert_eq!(editor.active_buffer_idx(), 2);
 }
 
 #[test]
 fn ai_prompt_reuses_existing_conversation() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
-    assert_eq!(editor.buffers.len(), 2);
+    // Split pair: *AI* + *ai-input* = 3 buffers
+    assert_eq!(editor.buffers.len(), 3);
 
     // Go back to normal mode and switch to scratch buffer
     editor.mode = Mode::Normal;
@@ -449,8 +453,9 @@ fn ai_prompt_reuses_existing_conversation() {
 
     // Second ai-prompt should reuse, not create another
     editor.dispatch_builtin("ai-prompt");
-    assert_eq!(editor.buffers.len(), 2);
-    assert_eq!(editor.active_buffer_idx(), 1);
+    assert_eq!(editor.buffers.len(), 3);
+    // Active buffer is the input buffer
+    assert_eq!(editor.active_buffer_idx(), 2);
     assert_eq!(editor.mode, Mode::ConversationInput);
 }
 
@@ -485,6 +490,132 @@ fn close_window_returns_to_single() {
     assert_eq!(editor.window_mgr.window_count(), 2);
     editor.dispatch_builtin("close-window");
     assert_eq!(editor.window_mgr.window_count(), 1);
+}
+
+#[test]
+fn ai_prompt_creates_split_pair() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    let pair = editor
+        .conversation_pair
+        .as_ref()
+        .expect("pair should exist");
+    assert_eq!(pair.output_buffer_idx, 1);
+    assert_eq!(pair.input_buffer_idx, 2);
+    assert_eq!(editor.buffers[1].name, "*AI*");
+    assert_eq!(editor.buffers[2].name, "*ai-input*");
+    // Two windows: output (top) + input (bottom)
+    assert!(editor.window_mgr.window(pair.output_window_id).is_some());
+    assert!(editor.window_mgr.window(pair.input_window_id).is_some());
+}
+
+#[test]
+fn ai_prompt_input_cursor_follows_text() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+
+    // Should be in ConversationInput mode with focus on input window.
+    assert_eq!(editor.mode, Mode::ConversationInput);
+    assert_eq!(editor.window_mgr.focused_id(), pair.input_window_id);
+    assert_eq!(editor.active_buffer_idx(), pair.input_buffer_idx);
+
+    // Cursor starts at (0, 0).
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 0);
+    assert_eq!(win.cursor_col, 0);
+
+    // Type some characters.
+    let buf = &mut editor.buffers[pair.input_buffer_idx];
+    let win = editor.window_mgr.focused_window_mut();
+    buf.insert_char(win, 'h');
+    buf.insert_char(win, 'i');
+
+    // Cursor should have advanced to col 2.
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 2, "cursor_col should follow typed text");
+    assert_eq!(win.cursor_row, 0);
+
+    // Buffer should contain "hi".
+    assert_eq!(editor.buffers[pair.input_buffer_idx].text(), "hi");
+}
+
+#[test]
+fn ai_input_newline_survives_clamp_all_cursors() {
+    // Regression: clamp_all_cursors used display_line_count() which excluded the
+    // trailing phantom line after '\n', clamping cursor from row 1 back to row 0.
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    let buf = &mut editor.buffers[pair.input_buffer_idx];
+    let win = editor.window_mgr.focused_window_mut();
+    buf.insert_char(win, 'h');
+    buf.insert_char(win, 'i');
+    buf.insert_char(win, '\n');
+    assert_eq!(win.cursor_row, 1);
+
+    editor.clamp_all_cursors(); // pre-render safety net
+
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 1, "newline cursor must survive clamping");
+}
+
+#[test]
+fn ai_input_newline_after_clear_survives_clamp() {
+    // Regression: after clear_input_buffer (submit) + retype + newline,
+    // cursor must stay on the new line through clamp_all_cursors.
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+
+    // Simulate what submit_conversation_prompt does: clear the input buffer.
+    editor.buffers[pair.input_buffer_idx].replace_contents("");
+    if let Some(win) = editor.window_mgr.window_mut(pair.input_window_id) {
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+    }
+
+    // Retype and insert newline.
+    let buf = &mut editor.buffers[pair.input_buffer_idx];
+    let win = editor.window_mgr.window_mut(pair.input_window_id).unwrap();
+    buf.insert_char(win, 'x');
+    buf.insert_char(win, '\n');
+    assert_eq!(win.cursor_row, 1);
+
+    editor.clamp_all_cursors();
+
+    let win = editor.window_mgr.window(pair.input_window_id).unwrap();
+    assert_eq!(
+        win.cursor_row, 1,
+        "post-clear newline cursor must survive clamping"
+    );
+}
+
+#[test]
+fn ai_prompt_i_in_output_redirects_to_input() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+    // Switch to normal mode in the output window.
+    editor.set_mode(Mode::Normal);
+    editor.window_mgr.set_focused(pair.output_window_id);
+    // The output buffer is *AI* (conversation kind).
+    assert_eq!(editor.buffers[editor.active_buffer_idx()].name, "*AI*");
+}
+
+#[test]
+fn kill_conversation_buffer_closes_both() {
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("ai-prompt");
+    assert_eq!(editor.buffers.len(), 3);
+    assert!(editor.conversation_pair.is_some());
+    // Kill the output buffer.
+    editor.set_mode(Mode::Normal);
+    editor.switch_to_buffer(1);
+    editor.dispatch_builtin("force-kill-buffer");
+    // Both buffers and the pair should be gone.
+    assert!(editor.conversation_pair.is_none());
+    assert_eq!(editor.buffers.len(), 1);
 }
 
 #[test]

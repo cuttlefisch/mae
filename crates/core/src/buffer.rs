@@ -1209,6 +1209,31 @@ mod tests {
         assert_eq!(win.cursor_col, 0);
     }
 
+    #[test]
+    fn clamp_cursor_allows_trailing_newline_position() {
+        // Inserting '\n' at end of text should leave cursor on the new empty line.
+        // Regression: clamp_cursor used display_line_count() which excluded the
+        // trailing phantom line, clamping cursor back to row 0.
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello");
+        assert_eq!(win.cursor_row, 0);
+        buf.insert_char(&mut win, '\n');
+        assert_eq!(win.cursor_row, 1);
+        assert_eq!(win.cursor_col, 0);
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 1); // must NOT clamp back to 0
+        assert_eq!(win.cursor_col, 0);
+    }
+
+    #[test]
+    fn clamp_cursor_still_clamps_past_end() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello");
+        win.cursor_row = 5;
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 0); // only 1 line
+    }
+
     // --- Scrolling ---
 
     #[test]

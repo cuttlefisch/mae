@@ -1058,5 +1058,23 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Scheme evaluation ---
+        ToolDefinition {
+            name: "eval_scheme".into(),
+            description: "Evaluate a Scheme expression in the editor's embedded runtime. Returns the result or error. Use this to call editor primitives, inspect state, or perform computations. Examples: '(+ 3 4)', '(buffer-name)', '(define-key \"normal\" \"g t\" \"cycle-theme\")'.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "code".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Scheme expression to evaluate".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["code".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }

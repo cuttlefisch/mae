@@ -26,8 +26,12 @@ gray = "#a89984"
 "ui.statusline.mode.insert" = { fg = "black", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "black", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "black", bg = "magenta", bold = true }
+"ui.statusline.mode.visual" = { fg = "black", bg = "magenta", bold = true }
 "ui.statusline.mode.locked" = { fg = "black", bg = "red", bold = true }
 "ui.statusline.mode.mcp" = { fg = "black", bg = "yellow", bold = true }
+"ui.statusline.ai.standard" = { fg = "black", bg = "green", bold = true }
+"ui.statusline.ai.auto" = { fg = "black", bg = "yellow", bold = true }
+"ui.statusline.ai.plan" = { fg = "black", bg = "blue", bold = true }
 "ui.gutter" = { fg = "dark_gray" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "white" }

@@ -39,6 +39,9 @@ pub fn keypress_to_crossterm(kp: &KeyPress) -> KeyEvent {
     if kp.alt {
         modifiers |= KeyModifiers::ALT;
     }
+    if kp.shift {
+        modifiers |= KeyModifiers::SHIFT;
+    }
 
     KeyEvent {
         code,
@@ -97,10 +100,12 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
         _ => return None,
     };
 
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     Some(KeyPress {
         key: mae_key,
         ctrl,
         alt,
+        shift,
     })
 }
 
@@ -113,7 +118,7 @@ use crate::ai_event_handler::PendingInteractiveEvent;
 
 mod command;
 mod command_palette;
-mod conversation;
+pub(crate) mod conversation;
 mod file_picker;
 mod git_status;
 mod insert;
@@ -236,6 +241,18 @@ pub fn handle_key(
         }
     }
 
+    // --- Normal-mode Enter-to-submit on conversation input buffer ---
+    // handle_normal_mode doesn't have ai_tx, so we intercept here.
+    if editor.mode == Mode::Normal && key.code == KeyCode::Enter {
+        if let Some(ref pair) = editor.conversation_pair.clone() {
+            if editor.active_buffer_idx() == pair.input_buffer_idx {
+                editor.set_mode(Mode::ConversationInput);
+                conversation::submit_conversation_prompt(editor, ai_tx, pending_interactive_event);
+                return;
+            }
+        }
+    }
+
     match editor.mode {
         Mode::Normal => normal::handle_normal_mode(editor, scheme, key, pending_keys),
         Mode::Insert => insert::handle_insert_mode(editor, scheme, key, pending_keys),
@@ -295,6 +312,17 @@ pub fn handle_key(
     // Hook points fire in core (save, open, close) and push (hook_name, fn_name)
     // entries. We eval each function here where the SchemeRuntime is available.
     drain_hook_evals(editor, scheme);
+
+    // --- Suppress gutter change indicators on *ai-input* buffer ---
+    // The input buffer is ephemeral — gutter markers and [+] modified flag are meaningless.
+    // This runs after ALL modes (Normal, ConversationInput, Visual, etc.) to catch every path.
+    if let Some(ref pair) = editor.conversation_pair {
+        if pair.input_buffer_idx < editor.buffers.len() {
+            let buf = &mut editor.buffers[pair.input_buffer_idx];
+            buf.changed_lines.clear();
+            buf.modified = false;
+        }
+    }
 }
 
 /// Evaluate all pending hook functions queued by `fire_hook`.

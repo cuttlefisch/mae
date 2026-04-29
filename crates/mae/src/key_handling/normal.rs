@@ -476,47 +476,118 @@ pub(super) fn handle_normal_mode(
         }
     }
 
-    // In Normal mode, intercept j/k/G/gg for conversation buffer scrolling
-    // and `i` to re-enter ConversationInput mode.
-    let is_conv = {
+    // In the *AI* output buffer, `i`/`a` redirect focus to the input window
+    // --- Conversation pair intercepts ---
+    // Output buffer (*AI*): i/a redirect to input window. Double-Esc returns to input.
+    // Input buffer (*ai-input*): Enter submits, i/a enter ConversationInput mode.
+    if let Some(ref pair) = editor.conversation_pair.clone() {
         let idx = editor.active_buffer_idx();
-        editor.buffers[idx].conversation.is_some()
-    };
-    if is_conv && pending_keys.is_empty() {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let count = editor.count_prefix.unwrap_or(1).max(1);
-        match key.code {
-            KeyCode::Char('j') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_down(count);
+
+        // Output buffer: redirect insert commands to input window.
+        if idx == pair.output_buffer_idx && pending_keys.is_empty() {
+            match key.code {
+                KeyCode::Char('i')
+                | KeyCode::Char('a')
+                | KeyCode::Char('I')
+                | KeyCode::Char('A')
+                | KeyCode::Char('o')
+                | KeyCode::Char('O')
+                    if !ctrl =>
+                {
+                    editor.window_mgr.set_focused(pair.input_window_id);
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
                 }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_up(count);
+                // Double-Esc: return to input prompt (single Esc stays in output for nav).
+                KeyCode::Esc if !ctrl => {
+                    // Use count_prefix as a simple "was previous key also Esc" flag.
+                    // If the last key was Esc (tracked via a transient flag), jump to input.
+                    if editor.conv_esc_pending {
+                        editor.conv_esc_pending = false;
+                        editor.window_mgr.set_focused(pair.input_window_id);
+                        editor.set_mode(Mode::ConversationInput);
+                        editor.count_prefix = None;
+                        return;
+                    }
+                    editor.conv_esc_pending = true;
+                    editor.set_status("Press Esc again to return to prompt");
+                    return;
                 }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('G') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_to_bottom();
+                _ => {
+                    editor.conv_esc_pending = false;
                 }
-                editor.count_prefix = None;
-                return;
             }
-            KeyCode::Char('i') | KeyCode::Char('a') if !ctrl => {
-                editor.set_mode(Mode::ConversationInput);
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {}
         }
+
+        // Input buffer: insert commands enter ConversationInput with vi cursor semantics.
+        // (Enter-to-submit is handled in handle_key before dispatch.)
+        if idx == pair.input_buffer_idx && pending_keys.is_empty() {
+            match key.code {
+                KeyCode::Char('i') if !ctrl => {
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('a') if !ctrl => {
+                    // Append: move cursor right by 1 (past current char).
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    let win = editor.window_mgr.focused_window_mut();
+                    if win.cursor_col < line_len {
+                        win.cursor_col += 1;
+                    }
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('I') if !ctrl => {
+                    // Insert at first non-blank.
+                    editor.window_mgr.focused_window_mut().cursor_col = 0;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('A') if !ctrl => {
+                    // Append at end of line.
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    editor.window_mgr.focused_window_mut().cursor_col = line_len;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('o') if !ctrl => {
+                    // Open line below.
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    let win = editor.window_mgr.focused_window_mut();
+                    win.cursor_col = line_len;
+                    editor.buffers[idx].insert_char(editor.window_mgr.focused_window_mut(), '\n');
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('O') if !ctrl => {
+                    // Open line above.
+                    let win = editor.window_mgr.focused_window_mut();
+                    win.cursor_col = 0;
+                    editor.buffers[idx].insert_char(win, '\n');
+                    let win = editor.window_mgr.focused_window_mut();
+                    if win.cursor_row > 0 {
+                        win.cursor_row -= 1;
+                    }
+                    win.cursor_col = 0;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
+    } else {
+        editor.conv_esc_pending = false;
     }
 
     handle_keymap_mode(editor, scheme, key, pending_keys);

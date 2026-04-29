@@ -179,9 +179,6 @@ pub struct RenderedLine {
 /// Conversation state for an AI interaction pane.
 pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
-    pub input_line: String,
-    /// Byte offset of the editing cursor within `input_line`.
-    pub input_cursor: usize,
     /// Conversation-specific scroll state: 0 = bottom (auto-follow),
     /// positive = scrolled up N lines from the bottom.
     pub scroll: usize,
@@ -221,8 +218,6 @@ impl Conversation {
     pub fn new() -> Self {
         let mut conv = Conversation {
             entries: Vec::new(),
-            input_line: String::new(),
-            input_cursor: 0,
             scroll: 0,
             streaming: false,
             streaming_start: None,
@@ -464,20 +459,6 @@ impl Conversation {
         self.rebuild_entry_start_indices();
     }
 
-    /// O(1) update of just the input prompt line in the cache.
-    /// Used by input editing methods to avoid O(N) full rebuild.
-    fn update_input_in_cache(&mut self) {
-        if let Some(last) = self.cached_lines.last_mut() {
-            if last.style == LineStyle::InputPrompt {
-                last.text = format!("> {}", self.input_line);
-                self.cached_screen_counts.clear();
-                self.screen_counts_dirty = true;
-                return;
-            }
-        }
-        self.rebuild_render_cache();
-    }
-
     /// Return pre-computed rendered lines (zero-allocation on read).
     pub fn rendered_lines(&self) -> &[RenderedLine] {
         &self.cached_lines
@@ -596,15 +577,11 @@ impl Conversation {
             self.cached_lines.extend(new_lines);
         }
 
-        // Separator before input prompt (always present)
+        // Add trailing separator (matches compute_rendered_lines which adds one
+        // after every entry).
         self.cached_lines.push(RenderedLine {
             text: String::new(),
             style: LineStyle::Separator,
-            entry_index: None,
-        });
-        self.cached_lines.push(RenderedLine {
-            text: format!("> {}", self.input_line),
-            style: LineStyle::InputPrompt,
             entry_index: None,
         });
 
@@ -793,12 +770,7 @@ impl Conversation {
             });
         }
 
-        // Input prompt
-        lines.push(RenderedLine {
-            text: format!("> {}", self.input_line),
-            style: LineStyle::InputPrompt,
-            entry_index: None,
-        });
+        // (Input prompt is now rendered separately in the *ai-input* split buffer.)
 
         lines
     }
@@ -816,122 +788,6 @@ impl Conversation {
     /// Total rendered line count (for scroll calculations).
     pub fn line_count(&self) -> usize {
         self.cached_lines.len()
-    }
-
-    /// Split the input prompt into spans for cursor rendering.
-    ///
-    /// Returns `(prefix, before_cursor, cursor_char, after_cursor)` where
-    /// `cursor_char` is the character under the cursor or `" "` at end of line.
-    /// The renderer applies `ui.cursor` style to `cursor_char`.
-    pub fn input_cursor_spans(&self) -> (&str, &str, String, &str) {
-        let input = &self.input_line;
-        let cursor_byte = self.input_cursor.min(input.len());
-        let before = &input[..cursor_byte];
-        if cursor_byte < input.len() {
-            let rest = &input[cursor_byte..];
-            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-            let cursor_ch = input[cursor_byte..cursor_byte + ch_len].to_string();
-            let after = &input[cursor_byte + ch_len..];
-            ("> ", before, cursor_ch, after)
-        } else {
-            ("> ", before, " ".to_string(), "")
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Input readline editing
-    // -----------------------------------------------------------------------
-
-    /// Insert `ch` at `input_cursor`, advancing the cursor.
-    pub fn input_insert_char(&mut self, ch: char) {
-        self.input_line.insert(self.input_cursor, ch);
-        self.input_cursor += ch.len_utf8();
-        self.update_input_in_cache();
-    }
-
-    /// Delete the char immediately before the cursor (Backspace / C-h).
-    pub fn input_backspace(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        let (prev_start, _) = before.char_indices().next_back().unwrap();
-        let removed_len = self.input_cursor - prev_start;
-        self.input_line.remove(prev_start);
-        self.input_cursor -= removed_len;
-        self.update_input_in_cache();
-    }
-
-    /// Delete the char at the cursor (C-d / Delete).
-    pub fn input_delete_forward(&mut self) {
-        if self.input_cursor >= self.input_line.len() {
-            return;
-        }
-        self.input_line.remove(self.input_cursor);
-        self.update_input_in_cache();
-    }
-
-    /// Move cursor to start of input (C-a / Home).
-    pub fn input_move_home(&mut self) {
-        self.input_cursor = 0;
-    }
-
-    /// Move cursor to end of input (C-e / End).
-    pub fn input_move_end(&mut self) {
-        self.input_cursor = self.input_line.len();
-    }
-
-    /// Move cursor one char backward (C-b / Left).
-    pub fn input_move_backward(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        let (prev_start, _) = before.char_indices().next_back().unwrap();
-        self.input_cursor = prev_start;
-    }
-
-    /// Move cursor one char forward (C-f / Right).
-    pub fn input_move_forward(&mut self) {
-        if self.input_cursor >= self.input_line.len() {
-            return;
-        }
-        let ch = self.input_line[self.input_cursor..].chars().next().unwrap();
-        self.input_cursor += ch.len_utf8();
-    }
-
-    /// Delete backward to the last whitespace boundary (C-w, bash-style).
-    pub fn input_kill_word_backward(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        // Strip trailing whitespace, then find last whitespace before the word.
-        let trimmed_end = before.trim_end().len();
-        let word_start = if trimmed_end == 0 {
-            0
-        } else {
-            self.input_line[..trimmed_end]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0)
-        };
-        self.input_line.drain(word_start..self.input_cursor);
-        self.input_cursor = word_start;
-        self.update_input_in_cache();
-    }
-
-    /// Delete from start of input to cursor (C-u).
-    pub fn input_kill_to_start(&mut self) {
-        self.input_line.drain(..self.input_cursor);
-        self.input_cursor = 0;
-        self.update_input_in_cache();
-    }
-
-    /// Delete from cursor to end of input (C-k).
-    pub fn input_kill_to_end(&mut self) {
-        self.input_line.truncate(self.input_cursor);
-        self.update_input_in_cache();
     }
 
     // -----------------------------------------------------------------------
@@ -973,94 +829,9 @@ mod tests {
     fn new_conversation_is_empty() {
         let conv = Conversation::new();
         assert!(conv.entries.is_empty());
-        assert!(conv.input_line.is_empty());
-        assert_eq!(conv.input_cursor, 0);
         assert_eq!(conv.scroll, 0);
         assert!(!conv.streaming);
         assert_eq!(conv.version(), 0);
-    }
-
-    #[test]
-    fn input_insert_and_move() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('h');
-        conv.input_insert_char('i');
-        assert_eq!(conv.input_line, "hi");
-        assert_eq!(conv.input_cursor, 2);
-
-        conv.input_move_home();
-        assert_eq!(conv.input_cursor, 0);
-        conv.input_insert_char('!');
-        assert_eq!(conv.input_line, "!hi");
-        assert_eq!(conv.input_cursor, 1);
-    }
-
-    #[test]
-    fn input_backspace_moves_cursor() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('a');
-        conv.input_insert_char('b');
-        conv.input_insert_char('c');
-        conv.input_backspace();
-        assert_eq!(conv.input_line, "ab");
-        assert_eq!(conv.input_cursor, 2);
-
-        conv.input_move_home();
-        conv.input_backspace(); // no-op at start
-        assert_eq!(conv.input_line, "ab");
-        assert_eq!(conv.input_cursor, 0);
-    }
-
-    #[test]
-    fn input_delete_forward() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('a');
-        conv.input_insert_char('b');
-        conv.input_move_home();
-        conv.input_delete_forward();
-        assert_eq!(conv.input_line, "b");
-        assert_eq!(conv.input_cursor, 0);
-    }
-
-    #[test]
-    fn input_kill_word_backward() {
-        let mut conv = Conversation::new();
-        for ch in "hello world".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_kill_word_backward();
-        assert_eq!(conv.input_line, "hello ");
-        assert_eq!(conv.input_cursor, 6);
-
-        // Kill with trailing spaces
-        for ch in "  ".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_kill_word_backward();
-        assert_eq!(conv.input_line, "");
-    }
-
-    #[test]
-    fn input_kill_to_start_and_end() {
-        let mut conv = Conversation::new();
-        for ch in "abcdef".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_move_home();
-        conv.input_move_forward();
-        conv.input_move_forward();
-        conv.input_move_forward(); // cursor at 3
-        assert_eq!(conv.input_cursor, 3);
-
-        conv.input_kill_to_end();
-        assert_eq!(conv.input_line, "abc");
-
-        conv.input_move_forward(); // still at end, no-op
-        conv.input_move_home();
-        conv.input_move_forward(); // cursor at 1
-        conv.input_kill_to_start();
-        assert_eq!(conv.input_line, "bc");
-        assert_eq!(conv.input_cursor, 0);
     }
 
     #[test]
@@ -1138,8 +909,8 @@ mod tests {
     fn flat_text_empty_conversation() {
         let conv = Conversation::new();
         let flat = conv.flat_text();
-        // Should just be the input prompt
-        assert!(flat.contains("> "));
+        // Empty conversation: no entries, no input prompt (input is in separate buffer)
+        assert!(flat.is_empty());
     }
 
     #[test]
@@ -1184,14 +955,14 @@ mod tests {
     }
 
     #[test]
-    fn line_count_includes_input_prompt() {
+    fn line_count_no_input_prompt() {
         let conv = Conversation::new();
-        // Empty conversation: just the input prompt line
-        assert_eq!(conv.line_count(), 1);
+        // Empty conversation: no entries, no input prompt
+        assert_eq!(conv.line_count(), 0);
 
         let mut conv = Conversation::new();
         conv.push_user("hello");
-        // [You] + "hello" + separator + "> "
+        // [You] + "hello" + separator
         assert!(conv.line_count() >= 3);
     }
 
@@ -1271,62 +1042,6 @@ mod tests {
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"entries\""));
         assert!(json.contains("\"User\""));
-    }
-
-    // ---- input_cursor_spans tests ----
-
-    #[test]
-    fn cursor_spans_empty_input() {
-        let conv = Conversation::new();
-        let (prefix, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(prefix, "> ");
-        assert_eq!(before, "");
-        assert_eq!(cursor, " "); // block cursor at end
-        assert_eq!(after, "");
-    }
-
-    #[test]
-    fn cursor_spans_at_end() {
-        let mut conv = Conversation::new();
-        conv.input_line = "hello".into();
-        conv.input_cursor = 5;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "hello");
-        assert_eq!(cursor, " "); // block at end
-        assert_eq!(after, "");
-    }
-
-    #[test]
-    fn cursor_spans_in_middle() {
-        let mut conv = Conversation::new();
-        conv.input_line = "hello".into();
-        conv.input_cursor = 2;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "he");
-        assert_eq!(cursor, "l");
-        assert_eq!(after, "lo");
-    }
-
-    #[test]
-    fn cursor_spans_at_start() {
-        let mut conv = Conversation::new();
-        conv.input_line = "abc".into();
-        conv.input_cursor = 0;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "");
-        assert_eq!(cursor, "a");
-        assert_eq!(after, "bc");
-    }
-
-    #[test]
-    fn cursor_spans_multibyte() {
-        let mut conv = Conversation::new();
-        conv.input_line = "héllo".into();
-        conv.input_cursor = 1; // before 'é' (byte offset 1)
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "h");
-        assert_eq!(cursor, "é");
-        assert_eq!(after, "llo");
     }
 
     // ---- char_boundary_at tests (migrated from GUI) ----
@@ -1446,11 +1161,8 @@ mod tests {
         assert!(total10 > total80);
     }
 
-    /// Regression: the InputPrompt must be included in screen counts so the
-    /// viewport shows it at scroll=0 (bottom). Previously a width mismatch
-    /// between pre-computation and render caused the prompt to be clipped.
     #[test]
-    fn screen_counts_include_input_prompt() {
+    fn screen_counts_cover_all_rendered_lines() {
         let mut conv = Conversation::new();
         conv.push_user("test");
         conv.push_assistant("response");
@@ -1458,13 +1170,8 @@ mod tests {
 
         let rendered = conv.rendered_lines();
         let (counts, total) = conv.screen_counts_total();
-        // counts must cover all rendered lines including InputPrompt
         assert_eq!(counts.len(), rendered.len());
         assert!(total > 0);
-        // Last rendered line should be the InputPrompt
-        assert_eq!(rendered.last().unwrap().style, LineStyle::InputPrompt,);
-        // Its screen count must be included in the total
-        assert!(*counts.last().unwrap() >= 1);
     }
 
     /// Regression: cached_screen_width must reflect the width used for

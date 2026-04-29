@@ -1,11 +1,10 @@
 //! Conversation (AI chat) buffer rendering for the GUI backend.
 
 use mae_core::conversation::{
-    char_boundary_at, chars_to_display_cols, screen_line_count, wrap_text_into_rows, LineStyle,
+    char_boundary_at, chars_to_display_cols, screen_line_count, LineStyle,
 };
 use mae_core::link_detect::render_segments;
-use mae_core::{Editor, Mode, Window};
-use unicode_width::UnicodeWidthChar;
+use mae_core::{Editor, Window};
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -188,14 +187,7 @@ pub fn render_conversation_window(
             (0, 0)
         };
 
-        // Manual indexing loop so InputPrompt cursor rendering can consume
-        // all wrapped InputPrompt screen lines at once (fixing duplication).
-        let visible: Vec<_> = screen_lines.iter().collect();
-        let mut viewport_row = 0;
-        let mut input_prompt_rendered = false;
-
-        while viewport_row < visible.len() {
-            let sl = visible[viewport_row];
+        for (viewport_row, sl) in screen_lines.iter().enumerate() {
             let row = inner_row + viewport_row;
 
             // Selection background — uses char_offset from wrap phase (no flat_text needed)
@@ -211,102 +203,6 @@ pub fn render_conversation_window(
                     let sel_bg = theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
                     canvas.draw_rect_fill(row, inner_col + s_col, e_col - s_col, 1, sel_bg);
                 }
-            }
-
-            if *sl.style == LineStyle::InputPrompt {
-                let input_fg = theme::ts_fg(editor, "conversation.input");
-
-                // In cursor mode, render ALL InputPrompt rows as a group.
-                if editor.mode == Mode::ConversationInput && focused && !input_prompt_rendered {
-                    if let Some(ref conv) = buf.conversation {
-                        let full_text = format!("> {}", conv.input_line);
-                        let rows = wrap_text_into_rows(&full_text, inner_width);
-                        // Cursor byte position in full_text.
-                        let cursor_byte = 2 + conv.input_cursor.min(conv.input_line.len());
-
-                        let cursor_fg = theme::ts_fg(editor, "ui.cursor");
-                        let cursor_bg = theme::ts_bg(editor, "ui.cursor");
-
-                        let mut byte_offset = 0;
-                        for (ri, row_text) in rows.iter().enumerate() {
-                            let draw_row = row + ri;
-                            if draw_row >= inner_row + inner_height {
-                                break;
-                            }
-                            let row_start = byte_offset;
-                            let row_end = row_start + row_text.len();
-
-                            if cursor_byte >= row_start && cursor_byte < row_end {
-                                let local_cursor = cursor_byte - row_start;
-                                let before = &row_text[..local_cursor];
-                                let rest = &row_text[local_cursor..];
-                                let cursor_ch = if rest.is_empty() {
-                                    " ".to_string()
-                                } else {
-                                    let end = rest
-                                        .char_indices()
-                                        .nth(1)
-                                        .map(|(i, _)| i)
-                                        .unwrap_or(rest.len());
-                                    rest[..end].to_string()
-                                };
-                                let after_cursor = if rest.is_empty() {
-                                    ""
-                                } else {
-                                    let end = rest
-                                        .char_indices()
-                                        .nth(1)
-                                        .map(|(i, _)| i)
-                                        .unwrap_or(rest.len());
-                                    &rest[end..]
-                                };
-
-                                canvas.draw_text_at(draw_row, inner_col, before, input_fg);
-                                let col = inner_col + unicode_width::UnicodeWidthStr::width(before);
-                                let cursor_w = cursor_ch
-                                    .chars()
-                                    .next()
-                                    .and_then(|c| c.width())
-                                    .unwrap_or(1);
-                                if let Some(bg) = cursor_bg {
-                                    canvas.draw_rect_fill(draw_row, col, cursor_w, 1, bg);
-                                }
-                                canvas.draw_text_at(draw_row, col, &cursor_ch, cursor_fg);
-                                let col = col + cursor_w;
-                                canvas.draw_text_at(draw_row, col, after_cursor, input_fg);
-                            } else if cursor_byte == row_end && ri == rows.len() - 1 {
-                                canvas.draw_text_at(draw_row, inner_col, row_text, input_fg);
-                                let col =
-                                    inner_col + unicode_width::UnicodeWidthStr::width(*row_text);
-                                if let Some(bg) = cursor_bg {
-                                    canvas.draw_rect_fill(draw_row, col, 1, 1, bg);
-                                }
-                                canvas.draw_text_at(draw_row, col, " ", cursor_fg);
-                            } else {
-                                canvas.draw_text_at(draw_row, inner_col, row_text, input_fg);
-                            }
-                            byte_offset = row_end;
-                        }
-                        input_prompt_rendered = true;
-                        let mut skip = 1;
-                        while viewport_row + skip < visible.len()
-                            && *visible[viewport_row + skip].style == LineStyle::InputPrompt
-                        {
-                            skip += 1;
-                        }
-                        viewport_row += skip.max(rows.len());
-                        continue;
-                    }
-                }
-
-                if input_prompt_rendered {
-                    viewport_row += 1;
-                    continue;
-                }
-
-                canvas.draw_text_at(row, inner_col, sl.text, input_fg);
-                viewport_row += 1;
-                continue;
             }
 
             let fg = match sl.style {
@@ -352,7 +248,6 @@ pub fn render_conversation_window(
                     }
                 }
             }
-            viewport_row += 1;
         }
 
         // Scrollbar for the conversation buffer.
@@ -373,6 +268,7 @@ pub fn render_conversation_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mae_core::conversation::wrap_text_into_rows;
 
     #[test]
     fn role_marker_styles_differ() {

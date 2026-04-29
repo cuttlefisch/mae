@@ -51,8 +51,19 @@ use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
 use crate::search::SearchState;
 use crate::syntax::Language;
 use crate::theme::{default_theme, Theme};
-use crate::window::{Rect, WindowManager};
+use crate::window::{Rect, WindowId, WindowManager};
 use crate::Mode;
+
+/// Links the output `*AI*` buffer and input `*ai-input*` buffer in a
+/// split-view pair. The output pane is read-only (conversation history);
+/// the input pane is a normal Text buffer with full vi editing.
+#[derive(Debug, Clone)]
+pub struct ConversationPair {
+    pub output_buffer_idx: usize,
+    pub input_buffer_idx: usize,
+    pub output_window_id: WindowId,
+    pub input_window_id: WindowId,
+}
 
 /// LSP server connection status, tracked per language_id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +168,8 @@ pub struct Editor {
     /// keymap, and the resulting command's help page is opened instead
     /// of dispatched. Cleared on resolution or Escape.
     pub awaiting_key_description: bool,
+    /// Transient flag for double-Esc detection in the *AI* output buffer.
+    pub conv_esc_pending: bool,
     /// Active named register selected by `"x` prefix. Consumed by the
     /// next yank/delete/paste operation. Uppercase = append mode,
     /// `_` = black-hole (discard), `+`/`*` = system clipboard.
@@ -415,6 +428,9 @@ pub struct Editor {
     /// instead of the human-focused active buffer. This allows the AI to
     /// edit files while the human watches the *AI* conversation.
     pub ai_target_buffer_idx: Option<usize>,
+    /// Linked output+input buffer pair for the split-view conversation UI.
+    /// `None` until the user opens the conversation buffer.
+    pub conversation_pair: Option<ConversationPair>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -517,6 +533,7 @@ impl Editor {
             registers: HashMap::new(),
             pending_char_command: None,
             awaiting_key_description: false,
+            conv_esc_pending: false,
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
@@ -616,6 +633,7 @@ impl Editor {
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
+            conversation_pair: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
@@ -1321,7 +1339,19 @@ impl Editor {
 
     /// Returns true if the buffer at `idx` is a Conversation buffer.
     pub fn is_conversation_buffer(&self, idx: usize) -> bool {
-        idx < self.buffers.len() && self.buffers[idx].kind == crate::BufferKind::Conversation
+        if idx >= self.buffers.len() {
+            return false;
+        }
+        if self.buffers[idx].kind == crate::BufferKind::Conversation {
+            return true;
+        }
+        // The *ai-input* buffer is also part of the conversation pair.
+        if let Some(ref pair) = self.conversation_pair {
+            if idx == pair.input_buffer_idx {
+                return true;
+            }
+        }
+        false
     }
 
     /// Switch to buffer `idx` but avoid stealing focus from a conversation window.
@@ -1371,8 +1401,23 @@ impl Editor {
             return true;
         }
 
-        // 3. Fallback: split the focused window if it's conversation,
-        // or just some window if we can't find a better spot.
+        // 3. Fallback: split a window. Prefer a non-conversation window to avoid
+        // splitting the tiny *ai-input* pane or the *AI* output pane.
+        let focused_is_conv = self.is_conversation_buffer(self.active_buffer_idx());
+        if focused_is_conv {
+            // Find any non-conversation window to focus before splitting.
+            let non_conv_win = self
+                .window_mgr
+                .iter_windows()
+                .find(|w| !self.is_conversation_buffer(w.buffer_idx))
+                .map(|w| w.id);
+            if let Some(id) = non_conv_win {
+                self.window_mgr.set_focused(id);
+            } else if let Some(ref pair) = self.conversation_pair {
+                // All windows are conversation — split from the output window (larger pane).
+                self.window_mgr.set_focused(pair.output_window_id);
+            }
+        }
         let area = self.default_area();
         match self
             .window_mgr

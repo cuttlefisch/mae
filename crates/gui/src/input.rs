@@ -25,6 +25,7 @@ pub fn winit_key_to_keypress(event: &KeyEvent) -> Option<KeyPress> {
         key: mae_key,
         ctrl: false,
         alt: false,
+        shift: false,
     })
 }
 
@@ -39,6 +40,15 @@ pub fn winit_event_to_input(
     let mut kp = winit_key_to_keypress(event)?;
     kp.ctrl = ctrl;
     kp.alt = alt;
+
+    // For character keys, the shift is already encoded in the character
+    // itself (e.g. 'Q' vs 'q', '!' vs '1'). Only set shift=true for
+    // non-character keys (Enter, Tab, arrows, etc.) so that keymap
+    // lookups work correctly — the keymap stores 'Q' with shift=false.
+    kp.shift = match kp.key {
+        Key::Char(_) => false,
+        _ => shift,
+    };
 
     // Shift+Tab → BackTab (winit sends Tab with shift modifier)
     if shift && kp.key == Key::Tab {

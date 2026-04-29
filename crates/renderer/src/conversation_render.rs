@@ -54,26 +54,6 @@ pub(crate) fn render_conversation_window(
 
         let mut lines: Vec<Line> = Vec::new();
         for rl in rendered.iter().skip(start).take(viewport_height) {
-            // Handle InputPrompt specially for visible cursor rendering.
-            if rl.style == mae_core::conversation::LineStyle::InputPrompt {
-                let input_style = ts(editor, "conversation.input");
-                if editor.mode == mae_core::Mode::ConversationInput && focused {
-                    if let Some(ref conv) = buf.conversation {
-                        let (prefix, before, cursor_ch, after) = conv.input_cursor_spans();
-                        let cursor_style = ts(editor, "ui.cursor");
-                        lines.push(Line::from(vec![
-                            Span::styled(prefix.to_string(), input_style),
-                            Span::styled(before.to_string(), input_style),
-                            Span::styled(cursor_ch, cursor_style),
-                            Span::styled(after.to_string(), input_style),
-                        ]));
-                        continue;
-                    }
-                }
-                lines.push(Line::from(Span::styled(rl.text.clone(), input_style)));
-                continue;
-            }
-
             let style = match rl.style {
                 mae_core::conversation::LineStyle::RoleMarker => {
                     if rl.text.contains("[You]") {
@@ -103,7 +83,7 @@ pub(crate) fn render_conversation_window(
                 mae_core::conversation::LineStyle::SystemText => ts(editor, "conversation.system"),
                 mae_core::conversation::LineStyle::Separator => Style::default(),
                 mae_core::conversation::LineStyle::InputPrompt => {
-                    // Handled above — this branch is unreachable in practice.
+                    // Legacy — InputPrompt no longer produced; input is in *ai-input*.
                     ts(editor, "conversation.input")
                 }
             };

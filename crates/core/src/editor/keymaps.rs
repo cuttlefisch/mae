@@ -508,6 +508,7 @@ impl Editor {
                 key: Key::Left,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "org-promote",
         );
@@ -516,6 +517,7 @@ impl Editor {
                 key: Key::Right,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "org-demote",
         );
@@ -530,6 +532,7 @@ impl Editor {
                 key: Key::Enter,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "org-insert-heading",
         );
@@ -544,6 +547,7 @@ impl Editor {
                 key: Key::Up,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "org-move-subtree-up",
         );
@@ -552,6 +556,7 @@ impl Editor {
                 key: Key::Down,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "org-move-subtree-down",
         );
@@ -574,6 +579,7 @@ impl Editor {
                 key: Key::Left,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "md-promote",
         );
@@ -582,6 +588,7 @@ impl Editor {
                 key: Key::Right,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "md-demote",
         );
@@ -595,6 +602,7 @@ impl Editor {
                 key: Key::Up,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "md-move-subtree-up",
         );
@@ -603,6 +611,7 @@ impl Editor {
                 key: Key::Down,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "md-move-subtree-down",
         );
@@ -613,6 +622,7 @@ impl Editor {
                 key: Key::Enter,
                 ctrl: false,
                 alt: true,
+                shift: false,
             }],
             "md-insert-heading",
         );

@@ -1,6 +1,7 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
+    cursor::SetCursorStyle,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -85,6 +86,12 @@ impl Renderer for TerminalRenderer {
         shells: &HashMap<usize, ShellTerminal>,
     ) -> io::Result<()> {
         let _span = tracing::trace_span!("tui_render").entered();
+        // Set terminal cursor style based on mode (bar for insert-like, block otherwise).
+        let cursor_style = match editor.mode {
+            mae_core::Mode::Insert | mae_core::Mode::ConversationInput => SetCursorStyle::SteadyBar,
+            _ => SetCursorStyle::SteadyBlock,
+        };
+        execute!(self.terminal.backend_mut(), cursor_style)?;
         self.terminal.draw(|frame| {
             render_frame(frame, editor, shells);
         })?;
@@ -104,7 +111,11 @@ impl Renderer for TerminalRenderer {
 
     fn cleanup(&mut self) -> io::Result<()> {
         disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            self.terminal.backend_mut(),
+            SetCursorStyle::DefaultUserShape,
+            LeaveAlternateScreen
+        )?;
         Ok(())
     }
 }

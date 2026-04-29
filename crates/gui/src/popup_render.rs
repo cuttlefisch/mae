@@ -618,6 +618,7 @@ mod tests {
             key: mae_core::Key::Char(' '),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         assert_eq!(format_keypress(&kp), "SPC");
     }
@@ -628,6 +629,7 @@ mod tests {
             key: mae_core::Key::Char('c'),
             ctrl: true,
             alt: false,
+            shift: false,
         };
         assert_eq!(format_keypress(&kp), "C-c");
     }

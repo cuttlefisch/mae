@@ -15,8 +15,12 @@
 "ui.statusline.mode.insert" = { fg = "white", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "white", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "white", bg = "magenta", bold = true }
+"ui.statusline.mode.visual" = { fg = "white", bg = "magenta", bold = true }
 "ui.statusline.mode.locked" = { fg = "white", bg = "red", bold = true }
 "ui.statusline.mode.mcp" = { fg = "white", bg = "yellow", bold = true }
+"ui.statusline.ai.standard" = { fg = "white", bg = "green", bold = true }
+"ui.statusline.ai.auto" = { fg = "white", bg = "yellow", bold = true }
+"ui.statusline.ai.plan" = { fg = "white", bg = "blue", bold = true }
 "ui.gutter" = { fg = "gray" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "black" }

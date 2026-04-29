@@ -196,11 +196,83 @@ impl Editor {
         Ok(path)
     }
 
-    /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.
+    /// Open (or focus) the *AI* conversation split view and enter ConversationInput mode.
+    ///
+    /// Creates a horizontal split: output `*AI*` buffer (top, ~85%) +
+    /// input `*ai-input*` buffer (bottom, ~15%). If the pair already exists
+    /// and both windows are valid, just focuses the input window.
     pub fn open_conversation_buffer(&mut self) {
-        let idx = self.ensure_conversation_buffer_idx();
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
+        // If pair exists and both windows/buffers are still valid, just focus input.
+        if let Some(ref pair) = self.conversation_pair {
+            let out_ok = pair.output_buffer_idx < self.buffers.len()
+                && self.window_mgr.window(pair.output_window_id).is_some();
+            let in_ok = pair.input_buffer_idx < self.buffers.len()
+                && self.window_mgr.window(pair.input_window_id).is_some();
+            if out_ok && in_ok {
+                // Restore buffer assignments in case they were changed.
+                if let Some(win) = self.window_mgr.window_mut(pair.input_window_id) {
+                    win.buffer_idx = pair.input_buffer_idx;
+                }
+                if let Some(win) = self.window_mgr.window_mut(pair.output_window_id) {
+                    win.buffer_idx = pair.output_buffer_idx;
+                }
+                self.window_mgr.set_focused(pair.input_window_id);
+                self.set_mode(crate::Mode::ConversationInput);
+                return;
+            }
+            // Stale pair — will recreate below.
+        }
+
+        // 1. Find or create the output conversation buffer.
+        let output_idx = self.ensure_conversation_buffer_idx();
+
+        // 2. Create the input buffer (normal Text, not file-backed).
+        let input_buf = {
+            let mut b = Buffer::new();
+            b.name = "*ai-input*".to_string();
+            b.read_only = false;
+            b
+        };
+        self.buffers.push(input_buf);
+        let input_idx = self.buffers.len() - 1;
+
+        // 3. Set focused window to the output buffer.
+        self.window_mgr.focused_window_mut().buffer_idx = output_idx;
+        let output_window_id = self.window_mgr.focused_id();
+
+        // 4. Horizontal split: output (top, 85%) + input (bottom, 15%).
+        let area = self.default_area();
+        let input_window_id = match self.window_mgr.split_with_ratio(
+            crate::window::SplitDirection::Horizontal,
+            input_idx,
+            area,
+            0.85,
+        ) {
+            Ok(id) => id,
+            Err(_) => {
+                // Fallback: if split fails (tiny terminal), just use the output window.
+                self.window_mgr.focused_window_mut().buffer_idx = output_idx;
+                self.set_mode(crate::Mode::ConversationInput);
+                return;
+            }
+        };
+
+        // 5. Focus the input (bottom) window.
+        self.window_mgr.set_focused(input_window_id);
+
+        // 6. Enter ConversationInput mode.
         self.set_mode(crate::Mode::ConversationInput);
+
+        // 7. Sync the output buffer's rope from conversation entries.
+        self.sync_conversation_buffer_rope();
+
+        // 8. Record the pair.
+        self.conversation_pair = Some(super::ConversationPair {
+            output_buffer_idx: output_idx,
+            input_buffer_idx: input_idx,
+            output_window_id,
+            input_window_id,
+        });
     }
 
     /// Persist the AI conversation to a JSON file (`:ai-save <path>`).

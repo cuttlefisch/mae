@@ -239,6 +239,77 @@ fn conversation_input_mode_excluded_from_gui_cursor() {
 }
 
 // -----------------------------------------------------------------------
+// E2E: ConversationInput multiline submit
+// -----------------------------------------------------------------------
+
+#[test]
+fn conversation_multiline_submit_reads_all_lines() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+
+    // Open conversation (creates pair: *AI* output + *ai-input* input).
+    editor.dispatch_builtin("ai-prompt");
+    assert_eq!(editor.mode, Mode::ConversationInput);
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+
+    // Type "hello" into the input buffer.
+    for ch in "hello".chars() {
+        dispatch(
+            &mut editor,
+            &mut scheme,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        );
+    }
+
+    // Insert a newline via Shift+Enter.
+    dispatch(
+        &mut editor,
+        &mut scheme,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+    );
+
+    // Type "world" on the second line.
+    for ch in "world".chars() {
+        dispatch(
+            &mut editor,
+            &mut scheme,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        );
+    }
+
+    // The input buffer should now have "hello\nworld\n" (ropey trailing newline).
+    let rope = editor.buffers[pair.input_buffer_idx].rope().clone();
+    let text: String = rope.chars().collect();
+    assert_eq!(text.trim_end_matches('\n'), "hello\nworld");
+
+    // Now submit with Enter — should clear input and push to conversation.
+    dispatch(
+        &mut editor,
+        &mut scheme,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+
+    // Input buffer should be cleared.
+    let rope_after = editor.buffers[pair.input_buffer_idx].rope().clone();
+    let text_after: String = rope_after.chars().collect();
+    assert_eq!(
+        text_after.trim_end_matches('\n'),
+        "",
+        "input buffer should be empty after submit"
+    );
+
+    // Conversation should have the user message.
+    let conv = editor.buffers[pair.output_buffer_idx]
+        .conversation
+        .as_ref()
+        .unwrap();
+    assert!(
+        conv.entries.iter().any(|e| e.content == "hello\nworld"),
+        "conversation should contain the multiline prompt"
+    );
+}
+
+// -----------------------------------------------------------------------
 // E2E: ignorecase/smartcase through :set
 // -----------------------------------------------------------------------
 

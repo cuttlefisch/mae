@@ -72,23 +72,6 @@ pub fn compute_cursor_position(
                 scale: 1.0,
             })
         }
-        Mode::ConversationInput => {
-            if let Some(ref conv) = buf.conversation {
-                if conv.scroll == 0 {
-                    let cursor_byte = conv.input_cursor.min(conv.input_line.len());
-                    let cursor_col = conv.input_line[..cursor_byte].chars().count();
-                    let input_y = win_inner.height.saturating_sub(1);
-                    return Some(CursorPos {
-                        row: input_y,
-                        col: 2 + cursor_col,
-                        pixel_y: None,
-                        pixel_x: None,
-                        scale: 1.0,
-                    });
-                }
-            }
-            None
-        }
         _ => {
             // Normal/Insert/Visual — cursor in buffer content.
             let line_text = if win.cursor_row < buf.line_count() {
@@ -415,6 +398,46 @@ mod tests {
     #[test]
     fn scaled_col_at_zero_is_zero() {
         assert_eq!(FrameLayout::scaled_col("* Heading", 0, 1.5), 0);
+    }
+
+    #[test]
+    fn cursor_conversation_input_follows_text() {
+        // Simulate opening conversation buffer and typing.
+        let mut editor = Editor::new();
+        editor.dispatch_builtin("ai-prompt");
+        assert_eq!(editor.mode, Mode::ConversationInput);
+
+        let pair = editor.conversation_pair.as_ref().unwrap().clone();
+
+        // Type "hi" into the input buffer.
+        {
+            let buf = &mut editor.buffers[pair.input_buffer_idx];
+            let win = editor.window_mgr.focused_window_mut();
+            buf.insert_char(win, 'h');
+            buf.insert_char(win, 'i');
+        }
+
+        // Verify cursor advanced.
+        let win = editor.window_mgr.focused_window();
+        assert_eq!(win.cursor_col, 2);
+        assert_eq!(win.buffer_idx, pair.input_buffer_idx);
+
+        // Compute layout for the input window.
+        let buf = &editor.buffers[pair.input_buffer_idx];
+        let fl = layout::compute_layout(&editor, buf, win, 0, 0, 80, 6, 16.0, 8.0, None, None);
+
+        let gutter_w = fl.gutter_width;
+        let inner = CellRect::new(0, 0, 80, 6);
+        let pos = compute_cursor_position(&editor, Some(&fl), inner, gutter_w, None);
+        assert!(
+            pos.is_some(),
+            "cursor position should be Some for input buffer"
+        );
+        let p = pos.unwrap();
+        assert_eq!(p.row, 0);
+        // Cursor col should be gutter + 2 chars of "hi".
+        assert_eq!(p.col, gutter_w + 2);
+        assert_eq!(p.scale, 1.0);
     }
 
     /// Regression: cursor pixel_x must use the same formula as text rendering

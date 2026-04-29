@@ -377,9 +377,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
 
             // Cursor (not for shell buffers — they render their own).
-            if editor.mode != mae_core::Mode::ShellInsert
-                && editor.mode != mae_core::Mode::ConversationInput
-            {
+            if editor.mode != mae_core::Mode::ShellInsert {
                 render_gui_cursor(
                     canvas,
                     editor,
@@ -858,9 +856,7 @@ fn render_gui_cursor(
                 .get(&focused_win.buffer_idx)
                 .map(|v| v.as_slice()),
         ) {
-            // Use FrameLayout for exact pixel-Y positioning (fold-aware, scale-aware).
             let cursor_pixel_y = pos.pixel_y.unwrap_or((inner_row + pos.row) as f32 * ch);
-            // Use exact pixel X from font metrics for scaled lines.
             let cursor_pixel_x = if let Some(px) = pos.pixel_x {
                 px
             } else {

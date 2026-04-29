@@ -66,7 +66,40 @@ pub fn render_status_bar(
 
     let right_w = UnicodeWidthStr::width(layout.right_text.as_str());
     let right_col = (mode_len + avail).saturating_sub(right_w);
-    canvas.draw_text_at(row, right_col, &layout.right_text, sl_fg);
+
+    if layout.right_styled_spans.is_empty() {
+        canvas.draw_text_at(row, right_col, &layout.right_text, sl_fg);
+    } else {
+        // Draw right text in segments, applying style_hint colors where specified.
+        let mut byte_pos = 0;
+        let mut col = right_col;
+        for span in &layout.right_styled_spans {
+            // Draw unstyled text before this span.
+            if span.byte_offset > byte_pos {
+                let plain = &layout.right_text[byte_pos..span.byte_offset];
+                canvas.draw_text_at(row, col, plain, sl_fg);
+                col += UnicodeWidthStr::width(plain);
+            }
+            // Draw the styled span with its own fg/bg.
+            let styled_text =
+                &layout.right_text[span.byte_offset..span.byte_offset + span.byte_len];
+            let span_style = editor.theme.style(span.style_key);
+            let span_fg = theme::color_or(span_style.fg, sl_fg);
+            let span_bg_opt = span_style.bg.map(|c| theme::color_or(Some(c), sl_bg));
+            let w = UnicodeWidthStr::width(styled_text);
+            if let Some(span_bg) = span_bg_opt {
+                canvas.draw_rect_fill(row, col, w, 1, span_bg);
+            }
+            canvas.draw_text_at(row, col, styled_text, span_fg);
+            col += w;
+            byte_pos = span.byte_offset + span.byte_len;
+        }
+        // Draw remaining unstyled text.
+        if byte_pos < layout.right_text.len() {
+            let rest = &layout.right_text[byte_pos..];
+            canvas.draw_text_at(row, col, rest, sl_fg);
+        }
+    }
 }
 
 /// Render the command/message line at the given screen row.

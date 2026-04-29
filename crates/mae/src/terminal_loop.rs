@@ -395,6 +395,7 @@ pub(crate) async fn run_terminal_loop(
                     dap_command_tx,
                     ai_event_tx,
                     ai_command_tx,
+                    scheme,
                 };
                 ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }

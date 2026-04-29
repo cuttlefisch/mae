@@ -831,6 +831,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     dap_command_tx: &self.dap_command_tx,
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
+                    scheme: &mut self.scheme,
                 };
                 ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
@@ -940,9 +941,30 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.alt_held = state.alt_key();
                 self.shift_held = state.shift_key();
             }
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state == winit::event::ElementState::Pressed =>
-            {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Track modifier keys directly from KeyboardInput events.
+                // On some Wayland compositors (GNOME), ModifiersChanged may
+                // arrive AFTER KeyboardInput, causing shift_held to be stale.
+                // Tracking from physical key press/release fixes this.
+                use winit::keyboard::{Key as WinitKey, NamedKey};
+                match &event.logical_key {
+                    WinitKey::Named(NamedKey::Shift) => {
+                        self.shift_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    WinitKey::Named(NamedKey::Control) => {
+                        self.ctrl_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    WinitKey::Named(NamedKey::Alt) => {
+                        self.alt_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    _ => {}
+                }
+
+                // Only process non-release events for actual key dispatch.
+                if event.state != winit::event::ElementState::Pressed {
+                    return;
+                }
+
                 self.dirty = true;
                 self.input_dirty = true;
                 self.editor.last_edit_time = std::time::Instant::now();

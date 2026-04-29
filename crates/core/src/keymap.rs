@@ -7,6 +7,7 @@ pub struct KeyPress {
     pub key: Key,
     pub ctrl: bool,
     pub alt: bool,
+    pub shift: bool,
 }
 
 /// Abstract key code — no dependency on crossterm.
@@ -36,6 +37,7 @@ impl KeyPress {
             key: Key::Char(ch),
             ctrl: false,
             alt: false,
+            shift: false,
         }
     }
 
@@ -44,6 +46,7 @@ impl KeyPress {
             key: Key::Char(ch),
             ctrl: true,
             alt: false,
+            shift: false,
         }
     }
 
@@ -52,6 +55,7 @@ impl KeyPress {
             key,
             ctrl: false,
             alt: false,
+            shift: false,
         }
     }
 }
@@ -267,6 +271,7 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
                     key: Key::Char(ch),
                     ctrl: false,
                     alt: true,
+                    shift: false,
                 });
             }
             continue;
@@ -379,6 +384,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
             key: Key::Char(ch),
             ctrl: true,
             alt: true,
+            shift: false,
         });
     }
     if let Some(rest) = lower.strip_prefix("c-") {
@@ -387,6 +393,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
             key: Key::Char(ch),
             ctrl: true,
             alt: false,
+            shift: false,
         });
     }
     if let Some(rest) = lower.strip_prefix("m-") {
@@ -396,6 +403,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
                 key,
                 ctrl: false,
                 alt: true,
+                shift: false,
             });
         }
         let ch = rest.chars().next()?;
@@ -403,6 +411,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
             key: Key::Char(ch),
             ctrl: false,
             alt: true,
+            shift: false,
         });
     }
 
@@ -788,6 +797,7 @@ mod tests {
             key: Key::Char('x'),
             ctrl: false,
             alt: true,
+            shift: false,
         };
         assert_eq!(serialize_keypress(&kp), "<M-x>");
     }
@@ -954,6 +964,7 @@ mod tests {
             key: Key::Left,
             ctrl: false,
             alt: true,
+            shift: false,
         };
         assert_eq!(serialize_keypress(&kp), "<M-Left>");
         let back = deserialize_macro("<M-Left>");

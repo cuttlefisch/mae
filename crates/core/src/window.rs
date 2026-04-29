@@ -216,7 +216,7 @@ impl Window {
     /// Ensure cursor is within valid bounds after any structural change.
     /// Respects narrowed range if set.
     pub fn clamp_cursor(&mut self, buf: &crate::buffer::Buffer) {
-        let line_count = buf.display_line_count();
+        let line_count = buf.line_count();
         if line_count == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;
@@ -562,6 +562,13 @@ impl WindowManager {
         self.focused
     }
 
+    /// Set the focused window by ID. No-op if the window doesn't exist.
+    pub fn set_focused(&mut self, id: WindowId) {
+        if self.windows.contains_key(&id) {
+            self.focused = id;
+        }
+    }
+
     /// Get a window by ID.
     pub fn window(&self, id: WindowId) -> Option<&Window> {
         self.windows.get(&id)
@@ -638,6 +645,63 @@ impl WindowManager {
             LayoutNode::Split {
                 direction,
                 ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(old_focused)),
+                second: Box::new(LayoutNode::Leaf(new_id)),
+            },
+        );
+
+        Ok(new_id)
+    }
+
+    /// Split the focused window with a custom ratio (0.0..1.0).
+    /// `ratio` is the proportion allocated to the first (original) child.
+    pub fn split_with_ratio(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        ratio: f32,
+    ) -> Result<WindowId, String> {
+        let rects = self.layout_rects(available);
+        let focused_rect = rects
+            .iter()
+            .find(|(id, _)| *id == self.focused)
+            .map(|(_, r)| *r)
+            .unwrap_or(available);
+
+        match direction {
+            SplitDirection::Vertical => {
+                let smaller = (focused_rect.width as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_WIDTH {
+                    return Err(format!(
+                        "Cannot split: pane width {} < minimum {}",
+                        smaller, MIN_WINDOW_WIDTH
+                    ));
+                }
+            }
+            SplitDirection::Horizontal => {
+                let smaller = (focused_rect.height as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_HEIGHT {
+                    return Err(format!(
+                        "Cannot split: pane height {} < minimum {}",
+                        smaller, MIN_WINDOW_HEIGHT
+                    ));
+                }
+            }
+        }
+
+        let new_id = self.next_id;
+        self.next_id += 1;
+
+        let new_window = Window::new(new_id, buffer_idx);
+        self.windows.insert(new_id, new_window);
+
+        let old_focused = self.focused;
+        self.replace_leaf(
+            old_focused,
+            LayoutNode::Split {
+                direction,
+                ratio: ratio.clamp(0.1, 0.9),
                 first: Box::new(LayoutNode::Leaf(old_focused)),
                 second: Box::new(LayoutNode::Leaf(new_id)),
             },

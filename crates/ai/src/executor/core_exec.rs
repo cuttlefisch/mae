@@ -10,6 +10,20 @@ use crate::tool_impls::{
 };
 use crate::types::ToolCall;
 
+/// Queue a Scheme expression for evaluation. The actual eval happens in the
+/// AI event handler where the SchemeRuntime is available. The result replaces
+/// the "queued" placeholder before being sent back to the AI.
+fn execute_eval_scheme(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let code = args
+        .get("code")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'code' argument")?;
+
+    editor.pending_scheme_eval.push(code.to_string());
+    // Placeholder — replaced by drain_pending_scheme_evals in ai_event_handler.
+    Ok("eval_scheme: queued".into())
+}
+
 /// Dispatch core editor tools: buffer, cursor, file, project, editor state, options.
 /// Returns `Some(result)` if the tool was handled, `None` otherwise.
 pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<String, String>> {
@@ -38,6 +52,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "rename_file" => execute_rename_file(editor, &call.arguments),
         "editor_save_state" => execute_editor_save_state(editor),
         "editor_restore_state" => execute_editor_restore_state(editor),
+        "eval_scheme" => execute_eval_scheme(editor, &call.arguments),
         _ => return None,
     };
     Some(result)

@@ -42,12 +42,41 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         .saturating_sub(UnicodeWidthStr::width(layout.left_text.as_str()))
         .saturating_sub(right_w);
 
-    let status_line = Line::from(vec![
+    // Build right-side spans, applying styled spans for colored badges.
+    let right_spans = if layout.right_styled_spans.is_empty() {
+        vec![Span::styled(layout.right_text, sl_style)]
+    } else {
+        let mut spans = Vec::new();
+        let mut byte_pos = 0;
+        for styled in &layout.right_styled_spans {
+            if styled.byte_offset > byte_pos {
+                spans.push(Span::styled(
+                    layout.right_text[byte_pos..styled.byte_offset].to_string(),
+                    sl_style,
+                ));
+            }
+            let span_text = layout.right_text
+                [styled.byte_offset..styled.byte_offset + styled.byte_len]
+                .to_string();
+            spans.push(Span::styled(span_text, ts(editor, styled.style_key)));
+            byte_pos = styled.byte_offset + styled.byte_len;
+        }
+        if byte_pos < layout.right_text.len() {
+            spans.push(Span::styled(
+                layout.right_text[byte_pos..].to_string(),
+                sl_style,
+            ));
+        }
+        spans
+    };
+
+    let mut line_spans = vec![
         Span::styled(&mode_str, mode_style),
         Span::styled(layout.left_text, sl_style),
         Span::styled(" ".repeat(remaining), sl_style),
-        Span::styled(layout.right_text, sl_style),
-    ]);
+    ];
+    line_spans.extend(right_spans);
+    let status_line = Line::from(line_spans);
 
     let paragraph = Paragraph::new(status_line);
     frame.render_widget(paragraph, area);

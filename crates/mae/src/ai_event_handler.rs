@@ -90,6 +90,7 @@ pub struct AiEventContext<'a> {
     pub ai_event_tx: &'a tokio::sync::mpsc::Sender<AiEvent>,
     #[allow(dead_code)]
     pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pub scheme: &'a mut mae_scheme::SchemeRuntime,
 }
 
 /// Handle a single AI event. Shared between terminal and GUI loops.
@@ -108,8 +109,15 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             }
             let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
+            // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
+            let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
             match exec_result {
-                ExecuteResult::Immediate(result) => {
+                ExecuteResult::Immediate(mut result) => {
+                    // If the tool queued a Scheme eval, replace the output with the result.
+                    if let Some(output) = scheme_output {
+                        result.output = output;
+                        result.success = true;
+                    }
                     let elapsed = tool_start.elapsed().as_millis() as u64;
                     info!(
                         tool = %call.name,
@@ -509,6 +517,11 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.set_status(format!("AI Error: {}", msg));
         }
     }
+
+    // After every AI event that may have mutated conversation state,
+    // sync the output rope and auto-scroll the output window to bottom.
+    editor.sync_conversation_buffer_rope();
+    crate::key_handling::conversation::scroll_output_to_bottom(editor);
 }
 
 fn render_changes_to_diff(changes: &serde_json::Value) -> String {
@@ -1027,4 +1040,23 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
             resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
         }
     }
+}
+
+/// Drain any pending Scheme evaluations queued by AI tools (e.g. `eval_scheme`).
+/// Returns `Some(output)` if any expressions were evaluated, `None` otherwise.
+fn drain_pending_scheme_evals(
+    editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
+) -> Option<String> {
+    if editor.pending_scheme_eval.is_empty() {
+        return None;
+    }
+    let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
+    let mut results = Vec::new();
+    for code in &exprs {
+        let output = scheme.eval_for_repl(code, editor);
+        editor.append_to_scheme_repl(&output);
+        results.push(output);
+    }
+    Some(results.join("\n"))
 }

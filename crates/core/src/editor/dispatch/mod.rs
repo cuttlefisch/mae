@@ -68,6 +68,36 @@ impl Editor {
 
     /// Kill buffer at `idx`, handling LSP notification, window fixup, and fallback.
     fn kill_buffer_at(&mut self, idx: usize) {
+        // If this buffer is part of a conversation pair, close both halves.
+        if let Some(ref pair) = self.conversation_pair {
+            let sibling_idx = if idx == pair.output_buffer_idx {
+                Some(pair.input_buffer_idx)
+            } else if idx == pair.input_buffer_idx {
+                Some(pair.output_buffer_idx)
+            } else {
+                None
+            };
+            if let Some(sib) = sibling_idx {
+                let pair = self.conversation_pair.take().unwrap();
+                // Close the sibling's window.
+                let sib_win = if sib == pair.input_buffer_idx {
+                    pair.input_window_id
+                } else {
+                    pair.output_window_id
+                };
+                self.window_mgr.close(sib_win);
+                // Remove both buffers (higher index first to avoid shifting).
+                let (first, second) = if idx > sib { (idx, sib) } else { (sib, idx) };
+                self.remove_buffer_raw(first);
+                self.remove_buffer_raw(second);
+                self.set_mode(crate::Mode::Normal);
+                let new_idx = self.active_buffer_idx();
+                let name = self.buffers[new_idx].name.clone();
+                self.set_status(format!("Conversation closed — now: {}", name));
+                return;
+            }
+        }
+
         self.fire_hook("buffer-close");
         if self.buffers.len() <= 1 {
             self.lsp_notify_did_close_for_buffer(0);
@@ -94,6 +124,29 @@ impl Editor {
             let new_idx = self.active_buffer_idx();
             let name = self.buffers[new_idx].name.clone();
             self.set_status(format!("Buffer killed — now: {}", name));
+        }
+    }
+
+    /// Remove a buffer at index and adjust all window references. Shared by
+    /// conversation pair teardown so we don't duplicate the index-shifting logic.
+    fn remove_buffer_raw(&mut self, idx: usize) {
+        if idx >= self.buffers.len() {
+            return;
+        }
+        self.lsp_notify_did_close_for_buffer(idx);
+        self.buffers.remove(idx);
+        self.syntax.shift_after_remove(idx);
+        self.adjust_ai_target_after_remove(idx);
+        for win in self.window_mgr.iter_windows_mut() {
+            if win.buffer_idx == idx {
+                win.buffer_idx = idx
+                    .saturating_sub(1)
+                    .min(self.buffers.len().saturating_sub(1));
+                win.cursor_row = 0;
+                win.cursor_col = 0;
+            } else if win.buffer_idx > idx {
+                win.buffer_idx -= 1;
+            }
         }
     }
 

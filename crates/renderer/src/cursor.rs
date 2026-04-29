@@ -42,15 +42,12 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 cmd_area.y,
             ));
         } else if editor.mode == Mode::ConversationInput {
-            if let Some(ref conv) = focused_buf.conversation {
-                if conv.scroll == 0 {
-                    let cursor_byte = conv.input_cursor.min(conv.input_line.len());
-                    let cursor_col = conv.input_line[..cursor_byte].chars().count() as u16;
-                    let input_x = inner.x + 2 + cursor_col;
-                    let input_y = inner.y + inner.height.saturating_sub(1);
-                    frame.set_cursor_position(Position::new(input_x, input_y));
-                }
-            }
+            // ConversationInput: cursor is in the *ai-input* Text buffer,
+            // positioned normally via the standard cursor logic below.
+            let display_col = grapheme::display_width_up_to_grapheme("", focused_win.cursor_col);
+            let cursor_x = inner.x + gutter_w as u16 + display_col as u16;
+            let cursor_y = inner.y + (focused_win.cursor_row - focused_win.scroll_offset) as u16;
+            frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         } else {
             let line_text = if focused_win.cursor_row < focused_buf.line_count() {
                 let line = focused_buf.rope().line(focused_win.cursor_row);

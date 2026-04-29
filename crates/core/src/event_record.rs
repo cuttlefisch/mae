@@ -190,6 +190,7 @@ mod tests {
             key: Key::Char('a'),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         rec.record(InputEvent::Key(kp));
         assert_eq!(rec.event_count(), 1);
@@ -202,6 +203,7 @@ mod tests {
             key: Key::Char('b'),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         rec.record(InputEvent::Key(kp2));
         assert_eq!(rec.event_count(), 1);
@@ -216,6 +218,7 @@ mod tests {
                 key: Key::Char(char::from(b'a' + i)),
                 ctrl: false,
                 alt: false,
+                shift: false,
             };
             rec.record(InputEvent::Key(kp));
         }
@@ -232,6 +235,7 @@ mod tests {
                 key: Key::Char('x'),
                 ctrl: false,
                 alt: false,
+                shift: false,
             };
             rec.record(InputEvent::Key(kp));
         }
@@ -246,6 +250,7 @@ mod tests {
             key: Key::Char('a'),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         rec.record(InputEvent::Key(kp));
         let json = rec.dump_json(10);
@@ -261,6 +266,7 @@ mod tests {
             key: Key::Char('z'),
             ctrl: true,
             alt: false,
+            shift: false,
         };
         rec.record(InputEvent::Key(kp));
         rec.stop_recording();
@@ -285,6 +291,7 @@ mod tests {
             key: Key::Char('a'),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         rec.record(InputEvent::Key(kp));
         assert_eq!(rec.event_count(), 1);
@@ -300,6 +307,7 @@ mod tests {
             key: Key::Char('x'),
             ctrl: true,
             alt: true,
+            shift: false,
         };
         let val = format_event(&InputEvent::Key(kp));
         assert_eq!(val["type"], "key");

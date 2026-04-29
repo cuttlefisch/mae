@@ -44,6 +44,7 @@ mod tests {
             key: Key::Char('x'),
             ctrl: true,
             alt: false,
+            shift: false,
         };
         let event = InputEvent::Key(kp.clone());
         if let InputEvent::Key(got) = event {
