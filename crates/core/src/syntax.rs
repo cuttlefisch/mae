@@ -633,6 +633,20 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
         editor.buffers[idx].recompute_display_regions(link_descriptive);
     }
 
+    // Set display_reveal_cursor per-frame for the focused window's buffer.
+    // This implements org-appear: when cursor is inside a display region,
+    // that region is suppressed so raw text is visible for editing.
+    let focused_idx = editor.window_mgr.focused_window().buffer_idx;
+    if !editor.buffers[focused_idx].display_regions.is_empty() {
+        let win = editor.window_mgr.focused_window();
+        let buf = &editor.buffers[focused_idx];
+        let char_offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+        let byte_offset = buf.rope().char_to_byte(char_offset);
+        editor.buffers[focused_idx].display_reveal_cursor = Some(byte_offset);
+    } else {
+        editor.buffers[focused_idx].display_reveal_cursor = None;
+    }
+
     out
 }
 

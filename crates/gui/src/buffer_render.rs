@@ -252,7 +252,11 @@ pub fn render_buffer_content(
                 if let Some(ref dm) = ll.display_map {
                     let link_style = editor.theme.style("markup.link");
                     let link_fg = theme::color_or(link_style.fg, base_fg);
-                    for region in &buf.display_regions {
+                    let eff_regions = mae_core::display_region::regions_with_cursor_reveal(
+                        &buf.display_regions,
+                        buf.display_reveal_cursor,
+                    );
+                    for region in &eff_regions {
                         if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start
                         {
                             continue;

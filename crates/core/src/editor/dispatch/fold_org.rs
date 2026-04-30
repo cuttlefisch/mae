@@ -73,6 +73,13 @@ impl Editor {
             "md-global-cycle" => {
                 self.heading_global_cycle(crate::syntax::Language::Markdown);
             }
+            // Display region link navigation
+            "text-next-link" => {
+                self.text_next_link();
+            }
+            "text-prev-link" => {
+                self.text_prev_link();
+            }
             _ => return None,
         }
         Some(true)

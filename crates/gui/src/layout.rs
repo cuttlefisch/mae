@@ -273,6 +273,12 @@ pub fn compute_layout(
     let mut pixel_y = area_row as f32 * cell_height;
     let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
 
+    // Pre-compute effective display regions (org-appear: cursor reveals its region).
+    let effective_regions = mae_core::display_region::regions_with_cursor_reveal(
+        &buf.display_regions,
+        buf.display_reveal_cursor,
+    );
+
     let mut lines: Vec<LineLayout> = Vec::with_capacity(area_height + 1);
     let mut line_idx = win.scroll_offset;
 
@@ -331,9 +337,8 @@ pub fn compute_layout(
         let line_char_start = buf.rope().line_to_char(line_idx);
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
         let line_byte_end = buf.rope().char_to_byte(line_char_start + rope_chars.len());
-        let has_display_regions = !buf.display_regions.is_empty()
-            && buf
-                .display_regions
+        let has_display_regions = !effective_regions.is_empty()
+            && effective_regions
                 .iter()
                 .any(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start);
 
@@ -342,7 +347,7 @@ pub fn compute_layout(
                 &rope_chars,
                 line_byte_start,
                 line_byte_end,
-                &buf.display_regions,
+                &effective_regions,
             )
         } else {
             (Vec::new(), Vec::new())

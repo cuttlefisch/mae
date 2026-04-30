@@ -557,26 +557,27 @@ fn display_regions_recomputed_on_edit() {
 }
 
 #[test]
-fn cursor_skips_hidden_link_syntax() {
+fn cursor_moves_through_revealed_link_region() {
+    // With org-appear, cursor moves through raw chars in a revealed region
+    // (no snapping). The display_reveal_cursor suppresses concealment.
     let mut ed = Editor::new();
     let idx = ed.active_buffer_idx();
     ed.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
     ed.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
     ed.buffers[idx].recompute_display_regions(true);
+    assert!(!ed.buffers[idx].display_regions.is_empty());
 
-    // Place cursor at col 5 (inside the hidden region [docs](url))
+    // Place cursor at col 5 (inside the link region [docs](url))
     let win = ed.window_mgr.focused_window_mut();
     win.cursor_row = 0;
     win.cursor_col = 5;
 
-    // Move right should snap past the hidden region
+    // Move right should advance by 1 char (no snapping with org-appear)
     ed.dispatch_builtin("move-right");
     let col = ed.window_mgr.focused_window().cursor_col;
-    // Should have snapped to the end of the region (byte_end = 27, char 27)
-    assert!(
-        col >= 27,
-        "cursor should skip past hidden region, got col={}",
-        col
+    assert_eq!(
+        col, 6,
+        "cursor should move normally through revealed region"
     );
 }
 

@@ -48,61 +48,12 @@ impl Editor {
                 for _ in 0..n {
                     self.window_mgr.focused_window_mut().move_left();
                 }
-                // Snap cursor past hidden display regions.
-                let idx = self.active_buffer_idx();
-                if !self.buffers[idx].display_regions.is_empty() {
-                    let win = self.window_mgr.focused_window();
-                    let row = win.cursor_row;
-                    let col = win.cursor_col;
-                    let buf = &self.buffers[idx];
-                    let line_chars: Vec<char> = buf
-                        .rope()
-                        .line(row)
-                        .chars()
-                        .filter(|c| *c != '\n' && *c != '\r')
-                        .collect();
-                    let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(row));
-                    let snapped = crate::display_region::snap_past_regions(
-                        col,
-                        line_byte_start,
-                        &line_chars,
-                        &buf.display_regions,
-                        false,
-                    );
-                    if snapped != col {
-                        self.window_mgr.focused_window_mut().cursor_col = snapped;
-                    }
-                }
+                // With org-appear, cursor moves through revealed text — no snapping.
             }
             "move-right" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
                     self.window_mgr.focused_window_mut().move_right(buf);
-                }
-                // Snap cursor past hidden display regions.
-                let idx = self.active_buffer_idx();
-                if !self.buffers[idx].display_regions.is_empty() {
-                    let win = self.window_mgr.focused_window();
-                    let row = win.cursor_row;
-                    let col = win.cursor_col;
-                    let buf = &self.buffers[idx];
-                    let line_chars: Vec<char> = buf
-                        .rope()
-                        .line(row)
-                        .chars()
-                        .filter(|c| *c != '\n' && *c != '\r')
-                        .collect();
-                    let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(row));
-                    let snapped = crate::display_region::snap_past_regions(
-                        col,
-                        line_byte_start,
-                        &line_chars,
-                        &buf.display_regions,
-                        true,
-                    );
-                    if snapped != col {
-                        self.window_mgr.focused_window_mut().cursor_col = snapped;
-                    }
                 }
             }
             "move-to-line-start" => {

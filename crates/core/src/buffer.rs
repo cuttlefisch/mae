@@ -161,6 +161,10 @@ pub struct Buffer {
     pub display_regions: Vec<crate::display_region::DisplayRegion>,
     /// Generation at which `display_regions` were last computed.
     pub display_regions_gen: u64,
+    /// Cursor byte offset for org-appear reveal. When the cursor is inside a
+    /// display region, that region is suppressed so raw text is visible.
+    /// Set per-frame from the focused window's cursor position. `None` = no reveal.
+    pub display_reveal_cursor: Option<usize>,
 }
 
 impl Default for Buffer {
@@ -201,6 +205,7 @@ impl Buffer {
             local_options: BufferLocalOptions::default(),
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
+            display_reveal_cursor: None,
         }
     }
 

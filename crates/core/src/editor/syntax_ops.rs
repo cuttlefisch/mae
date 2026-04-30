@@ -269,6 +269,8 @@ impl Editor {
         let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
         let level = Self::heading_level(&line, lang);
         if level == 0 {
+            // Not on a heading — jump to next link (Doom-style Tab behavior).
+            self.text_next_link();
             return;
         }
 
@@ -935,6 +937,50 @@ impl Editor {
                 self.set_status("CONTENTS");
             }
             _ => unreachable!(),
+        }
+    }
+
+    /// Jump cursor to the next display-region link. Wraps around buffer end.
+    pub fn text_next_link(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let regions = &self.buffers[buf_idx].display_regions;
+        if regions.is_empty() {
+            return;
+        }
+        let win = self.window_mgr.focused_window();
+        let char_offset = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(char_offset);
+        if let Some((byte_start, _)) = crate::display_region::next_link_region(regions, cursor_byte)
+        {
+            let char_pos = self.buffers[buf_idx].rope().byte_to_char(byte_start);
+            let row = self.buffers[buf_idx].rope().char_to_line(char_pos);
+            let line_start = self.buffers[buf_idx].rope().line_to_char(row);
+            let col = char_pos - line_start;
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = row;
+            win.cursor_col = col;
+        }
+    }
+
+    /// Jump cursor to the previous display-region link. Wraps around buffer start.
+    pub fn text_prev_link(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let regions = &self.buffers[buf_idx].display_regions;
+        if regions.is_empty() {
+            return;
+        }
+        let win = self.window_mgr.focused_window();
+        let char_offset = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(char_offset);
+        if let Some((byte_start, _)) = crate::display_region::prev_link_region(regions, cursor_byte)
+        {
+            let char_pos = self.buffers[buf_idx].rope().byte_to_char(byte_start);
+            let row = self.buffers[buf_idx].rope().char_to_line(char_pos);
+            let line_start = self.buffers[buf_idx].rope().line_to_char(row);
+            let col = char_pos - line_start;
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = row;
+            win.cursor_col = col;
         }
     }
 }

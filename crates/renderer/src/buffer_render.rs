@@ -105,6 +105,12 @@ pub(crate) fn render_buffer(
         0
     };
 
+    // Pre-compute effective display regions (org-appear: cursor reveals its region).
+    let effective_regions = mae_core::display_region::regions_with_cursor_reveal(
+        &buf.display_regions,
+        buf.display_reveal_cursor,
+    );
+
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
 
@@ -148,9 +154,8 @@ pub(crate) fn render_buffer(
         let line_byte_end_dr = buf
             .rope()
             .char_to_byte(line_char_start_dr + rope_chars.len());
-        let has_display_regions = !buf.display_regions.is_empty()
-            && buf
-                .display_regions
+        let has_display_regions = !effective_regions.is_empty()
+            && effective_regions
                 .iter()
                 .any(|r| r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr);
         let (display_chars_vec, display_map_vec) = if has_display_regions {
@@ -158,7 +163,7 @@ pub(crate) fn render_buffer(
                 &rope_chars,
                 line_byte_start_dr,
                 line_byte_end_dr,
-                &buf.display_regions,
+                &effective_regions,
             )
         } else {
             (Vec::new(), Vec::new())
@@ -260,7 +265,7 @@ pub(crate) fn render_buffer(
                 let link_style = ts(editor, "markup.link");
                 let line_byte_start = buf.rope().char_to_byte(line_char_start);
                 let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                for region in &buf.display_regions {
+                for region in &effective_regions {
                     if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start {
                         continue;
                     }

@@ -192,6 +192,63 @@ pub fn display_col_to_rope_col(display_col: usize, rope_col_map: &[usize]) -> us
         .unwrap_or_else(|| rope_col_map.last().map(|&c| c + 1).unwrap_or(0))
 }
 
+/// Find the display region containing `cursor_byte`, if any.
+/// Returns the index into the regions vec.
+pub fn region_at_byte(regions: &[DisplayRegion], cursor_byte: usize) -> Option<usize> {
+    regions
+        .iter()
+        .position(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+}
+
+/// Return effective display regions with the revealed region removed.
+/// `reveal_cursor_byte`: cursor byte offset for org-appear reveal.
+/// If the cursor is inside a region, that region is suppressed (raw text visible).
+pub fn regions_with_cursor_reveal(
+    regions: &[DisplayRegion],
+    reveal_cursor_byte: Option<usize>,
+) -> Vec<DisplayRegion> {
+    let Some(cursor_byte) = reveal_cursor_byte else {
+        return regions.to_vec();
+    };
+    match region_at_byte(regions, cursor_byte) {
+        Some(idx) => {
+            let mut out = Vec::with_capacity(regions.len() - 1);
+            out.extend_from_slice(&regions[..idx]);
+            out.extend_from_slice(&regions[idx + 1..]);
+            out
+        }
+        None => regions.to_vec(),
+    }
+}
+
+/// Find the next display region with a `link_target` at or after `cursor_byte`.
+/// Wraps to the first link if none found after cursor.
+/// Returns `(byte_start, byte_end)` of the link region.
+pub fn next_link_region(regions: &[DisplayRegion], cursor_byte: usize) -> Option<(usize, usize)> {
+    let links: Vec<&DisplayRegion> = regions.iter().filter(|r| r.link_target.is_some()).collect();
+    if links.is_empty() {
+        return None;
+    }
+    // Find first link whose byte_start > cursor_byte (strictly after).
+    let next = links.iter().find(|r| r.byte_start > cursor_byte);
+    let r = next.unwrap_or(&links[0]);
+    Some((r.byte_start, r.byte_end))
+}
+
+/// Find the previous display region with a `link_target` before `cursor_byte`.
+/// Wraps to the last link if none found before cursor.
+/// Returns `(byte_start, byte_end)` of the link region.
+pub fn prev_link_region(regions: &[DisplayRegion], cursor_byte: usize) -> Option<(usize, usize)> {
+    let links: Vec<&DisplayRegion> = regions.iter().filter(|r| r.link_target.is_some()).collect();
+    if links.is_empty() {
+        return None;
+    }
+    // Find last link whose byte_start < cursor_byte.
+    let prev = links.iter().rposition(|r| r.byte_start < cursor_byte);
+    let r = prev.map(|i| links[i]).unwrap_or(links[links.len() - 1]);
+    Some((r.byte_start, r.byte_end))
+}
+
 /// Snap cursor past display regions when moving.
 ///
 /// If `rope_col` is inside a hidden region, snaps to the appropriate edge:
@@ -450,5 +507,112 @@ mod tests {
         // Display col 0 is "S" — not in a region
         let r = region_at_display_col(0, 0, text.len(), &chars, &regions);
         assert!(r.is_none());
+    }
+
+    // --- region_at_byte ---
+
+    #[test]
+    fn region_at_byte_inside() {
+        let text = "See [docs](https://docs.rs) here";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // byte 5 is inside the region (byte_start=4, byte_end=27)
+        assert_eq!(region_at_byte(&regions, 5), Some(0));
+    }
+
+    #[test]
+    fn region_at_byte_outside() {
+        let text = "See [docs](https://docs.rs) here";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // byte 0 is before the region
+        assert_eq!(region_at_byte(&regions, 0), None);
+        // byte 28 is after the region
+        assert_eq!(region_at_byte(&regions, 28), None);
+    }
+
+    // --- regions_with_cursor_reveal ---
+
+    #[test]
+    fn regions_with_cursor_reveal_inside() {
+        let text = "[a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        assert_eq!(regions.len(), 2);
+        // Cursor inside first region → only first removed
+        let cursor_byte = 2; // inside [a](...)
+        let revealed = regions_with_cursor_reveal(&regions, Some(cursor_byte));
+        assert_eq!(revealed.len(), 1);
+        assert_eq!(revealed[0].replacement.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn regions_with_cursor_reveal_outside() {
+        let text = "[a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // Cursor outside all regions → all kept
+        let revealed = regions_with_cursor_reveal(&regions, Some(20));
+        assert_eq!(revealed.len(), 2);
+    }
+
+    #[test]
+    fn regions_with_cursor_reveal_none() {
+        let text = "[a](https://a.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // No reveal cursor → all kept
+        let revealed = regions_with_cursor_reveal(&regions, None);
+        assert_eq!(revealed.len(), 1);
+    }
+
+    // --- next_link_region / prev_link_region ---
+
+    #[test]
+    fn next_link_region_basic() {
+        let text = "text [a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        assert_eq!(regions.len(), 2);
+        // Cursor before first link → next is first link
+        let (start, _) = next_link_region(&regions, 0).unwrap();
+        assert_eq!(start, regions[0].byte_start);
+    }
+
+    #[test]
+    fn next_link_region_skips_current() {
+        let text = "text [a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // Cursor at region[0].byte_start → should find region[1] (strictly after)
+        let (start, _) = next_link_region(&regions, regions[0].byte_start).unwrap();
+        assert_eq!(start, regions[1].byte_start);
+    }
+
+    #[test]
+    fn next_link_region_wraps() {
+        let text = "text [a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // Cursor past last link → wraps to first
+        let (start, _) = next_link_region(&regions, 100).unwrap();
+        assert_eq!(start, regions[0].byte_start);
+    }
+
+    #[test]
+    fn prev_link_region_basic() {
+        let text = "text [a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // Cursor at end → prev is second link
+        let (start, _) = prev_link_region(&regions, 100).unwrap();
+        assert_eq!(start, regions[1].byte_start);
+    }
+
+    #[test]
+    fn prev_link_region_wraps() {
+        let text = "text [a](https://a.com) and [b](https://b.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        // Cursor before first link → wraps to last
+        let (start, _) = prev_link_region(&regions, 0).unwrap();
+        assert_eq!(start, regions[1].byte_start);
+    }
+
+    #[test]
+    fn link_region_empty() {
+        let regions: Vec<DisplayRegion> = vec![];
+        assert!(next_link_region(&regions, 0).is_none());
+        assert!(prev_link_region(&regions, 0).is_none());
     }
 }
