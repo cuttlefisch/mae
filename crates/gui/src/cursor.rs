@@ -85,6 +85,21 @@ pub fn compute_cursor_position(
                 String::new()
             };
 
+            // When display regions are active, map cursor_col to display coordinates.
+            let cursor_layout = frame_layout.and_then(|fl| fl.layout_for_row(win.cursor_row));
+            let display_cursor_col =
+                if let Some(dm) = cursor_layout.and_then(|ll| ll.display_map.as_ref()) {
+                    mae_core::display_region::rope_col_to_display_col(win.cursor_col, dm)
+                } else {
+                    win.cursor_col
+                };
+            let display_line_text =
+                if let Some(dc) = cursor_layout.and_then(|ll| ll.display_chars.as_ref()) {
+                    dc.iter().collect::<String>()
+                } else {
+                    line_text.clone()
+                };
+
             // Use FrameLayout for fold-aware positioning when available.
             if let Some(layout) = frame_layout {
                 let text_width = if let Some(fl) = frame_layout {
@@ -104,8 +119,8 @@ pub fn compute_cursor_position(
                     // For wrapped lines, find the wrap segment offset.
                     let show_break_w = editor.show_break.chars().count();
                     let (row_off, col) = wrap_cursor_position(
-                        &line_text,
-                        win.cursor_col,
+                        &display_line_text,
+                        display_cursor_col,
                         text_width,
                         editor.break_indent,
                         show_break_w,
@@ -115,7 +130,7 @@ pub fn compute_cursor_position(
                     let screen_row = base_display_row + row_off;
 
                     let indent_len = if editor.break_indent && row_off > 0 {
-                        let chars: Vec<char> = line_text.chars().collect();
+                        let chars: Vec<char> = display_line_text.chars().collect();
                         mae_core::wrap::leading_indent_len(&chars)
                     } else {
                         0
@@ -127,13 +142,17 @@ pub fn compute_cursor_position(
                     };
                     let target = prefix_w + col;
                     let glyph_advance = layout.glyph_advance_for_row(win.cursor_row);
-                    let scaled_col = FrameLayout::scaled_col(&line_text, target, scale);
+                    let scaled_col = FrameLayout::scaled_col(&display_line_text, target, scale);
                     // Compute pixel X using the font's actual glyph advance.
                     let pixel_x_abs = if scale != 1.0 {
                         let text_start_px = layout.text_col as f32 * layout.cell_width;
                         Some(
                             text_start_px
-                                + FrameLayout::pixel_x_for_col(&line_text, target, glyph_advance),
+                                + FrameLayout::pixel_x_for_col(
+                                    &display_line_text,
+                                    target,
+                                    glyph_advance,
+                                ),
                         )
                     } else {
                         None
@@ -157,8 +176,8 @@ pub fn compute_cursor_position(
                     let screen_row = display_row?;
                     // Compute column offset using FrameLayout::scaled_col.
                     let visible_start = win.col_offset;
-                    let cursor_char_in_visible = win.cursor_col.saturating_sub(visible_start);
-                    let visible_text: String = line_text
+                    let cursor_char_in_visible = display_cursor_col.saturating_sub(visible_start);
+                    let visible_text: String = display_line_text
                         .chars()
                         .skip(visible_start)
                         .take(cursor_char_in_visible)

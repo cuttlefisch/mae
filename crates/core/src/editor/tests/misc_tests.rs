@@ -486,5 +486,99 @@ fn gx_keybinding_exists() {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// link_descriptive / render_markup options
+// ---------------------------------------------------------------------------
+
+#[test]
+fn link_descriptive_default_true() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("link_descriptive").unwrap();
+    assert_eq!(val, "true");
+    assert_eq!(def.name, "link_descriptive");
+}
+
+#[test]
+fn render_markup_default_true() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("render_markup").unwrap();
+    assert_eq!(val, "true");
+    assert_eq!(def.name, "render_markup");
+}
+
+#[test]
+fn setlocal_link_descriptive() {
+    let mut ed = Editor::new();
+    assert!(ed.link_descriptive); // global default
+    let result = ed.set_local_option("link_descriptive", "false");
+    assert!(result.is_ok());
+    assert!(!ed.link_descriptive_for(0));
+    assert!(ed.link_descriptive); // global unchanged
+}
+
+#[test]
+fn setlocal_render_markup() {
+    let mut ed = Editor::new();
+    assert!(ed.render_markup);
+    let result = ed.set_local_option("render_markup", "false");
+    assert!(result.is_ok());
+    assert!(!ed.render_markup_for(0));
+    assert!(ed.render_markup); // global unchanged
+}
+
+// ---------------------------------------------------------------------------
+// Display regions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn display_regions_recomputed_on_edit() {
+    let mut ed = Editor::new();
+    let idx = ed.active_buffer_idx();
+    // Set a file path so it picks an extension
+    ed.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
+    ed.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
+    ed.buffers[idx].recompute_display_regions(true);
+    assert_eq!(ed.buffers[idx].display_regions.len(), 1);
+    assert_eq!(
+        ed.buffers[idx].display_regions[0].replacement.as_deref(),
+        Some("docs")
+    );
+
+    // Edit the buffer — regions should be stale
+    let gen_before = ed.buffers[idx].display_regions_gen;
+    ed.buffers[idx].insert_text_at(0, "x");
+    assert_ne!(ed.buffers[idx].generation, gen_before);
+
+    // Recompute
+    ed.buffers[idx].recompute_display_regions(true);
+    assert_eq!(ed.buffers[idx].display_regions.len(), 1);
+    // The region byte offsets should have shifted by 1
+    assert_eq!(ed.buffers[idx].display_regions[0].byte_start, 5);
+}
+
+#[test]
+fn cursor_skips_hidden_link_syntax() {
+    let mut ed = Editor::new();
+    let idx = ed.active_buffer_idx();
+    ed.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
+    ed.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
+    ed.buffers[idx].recompute_display_regions(true);
+
+    // Place cursor at col 5 (inside the hidden region [docs](url))
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 5;
+
+    // Move right should snap past the hidden region
+    ed.dispatch_builtin("move-right");
+    let col = ed.window_mgr.focused_window().cursor_col;
+    // Should have snapped to the end of the region (byte_end = 27, char 27)
+    assert!(
+        col >= 27,
+        "cursor should skip past hidden region, got col={}",
+        col
+    );
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

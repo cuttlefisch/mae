@@ -490,6 +490,10 @@ pub struct Editor {
     pub smartcase: bool,
     pub scrollbar: bool,
     pub nyan_mode: bool,
+    /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
+    pub link_descriptive: bool,
+    /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
+    pub render_markup: bool,
     /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
     /// is pressed in block visual mode. On insert-mode exit, the typed text is
     /// replicated to all rows in the range.
@@ -670,6 +674,8 @@ impl Editor {
             smartcase: false,
             scrollbar: true,
             nyan_mode: false,
+            link_descriptive: true,
+            render_markup: true,
             pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -812,6 +818,22 @@ impl Editor {
             .unwrap_or(self.heading_scale)
     }
 
+    /// Effective link_descriptive for a specific buffer index.
+    pub fn link_descriptive_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .link_descriptive
+            .unwrap_or(self.link_descriptive)
+    }
+
+    /// Effective render_markup for a specific buffer index.
+    pub fn render_markup_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .render_markup
+            .unwrap_or(self.render_markup)
+    }
+
     /// Set a buffer-local option on the active buffer (:setlocal).
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -839,6 +861,12 @@ impl Editor {
             }
             "heading_scale" => {
                 opts.heading_scale = Some(crate::options::parse_option_bool(value)?);
+            }
+            "link_descriptive" => {
+                opts.link_descriptive = Some(crate::options::parse_option_bool(value)?);
+            }
+            "render_markup" => {
+                opts.render_markup = Some(crate::options::parse_option_bool(value)?);
             }
             _ => {
                 return Err(format!(
@@ -884,6 +912,8 @@ impl Editor {
             "autosave_interval" => self.autosave_interval.to_string(),
             "scrollbar" => self.scrollbar.to_string(),
             "nyan_mode" => self.nyan_mode.to_string(),
+            "link_descriptive" => self.link_descriptive.to_string(),
+            "render_markup" => self.render_markup.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1028,6 +1058,12 @@ impl Editor {
             }
             "nyan_mode" => {
                 self.nyan_mode = parse_option_bool(value)?;
+            }
+            "link_descriptive" => {
+                self.link_descriptive = parse_option_bool(value)?;
+            }
+            "render_markup" => {
+                self.render_markup = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

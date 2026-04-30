@@ -7,6 +7,7 @@ pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
 pub mod diff;
+pub mod display_region;
 pub mod editor;
 pub mod event_record;
 pub mod file_browser;
@@ -64,8 +65,8 @@ pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub use syntax::{
-    compute_markdown_style_spans, language_for_path, HighlightSpan, Language, SyntaxMap,
-    SyntaxSpanMap,
+    compute_markdown_style_spans, compute_org_style_spans, language_for_path, HighlightSpan,
+    Language, SyntaxMap, SyntaxSpanMap,
 };
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,

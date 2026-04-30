@@ -142,18 +142,31 @@ pub fn render_buffer_content(
 
         // Only re-collect chars/styles when we move to a new buffer line.
         if prev_buf_row != Some(line_idx) {
-            let line_text = buf.rope().line(line_idx);
             full_chars.clear();
-            full_chars.extend(line_text.chars().filter(|c| *c != '\n' && *c != '\r'));
+            if let Some(ref dc) = ll.display_chars {
+                // Display regions active: use pre-computed display chars.
+                full_chars.extend_from_slice(dc);
+            } else {
+                let line_text = buf.rope().line(line_idx);
+                full_chars.extend(line_text.chars().filter(|c| *c != '\n' && *c != '\r'));
+            }
             prev_buf_row = Some(line_idx);
         }
 
         let is_cursor_line = focused && line_idx == win.cursor_row;
         let is_stopped_line = stopped_line == Some(line_idx as u32);
 
+        // For span mapping we always need the rope-level positions.
+        let rope_line_char_start = buf.rope().line_to_char(line_idx);
+        let rope_line_text = buf.rope().line(line_idx);
+        let rope_char_count = rope_line_text
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .count();
+
         let full_count = full_chars.len();
-        let line_char_start = buf.rope().line_to_char(line_idx);
-        let line_char_end = line_char_start + full_count;
+        let line_char_start = rope_line_char_start;
+        let line_char_end = line_char_start + rope_char_count;
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
         let line_byte_end = buf.rope().char_to_byte(line_char_end);
         let base_fg = if is_stopped_line {
@@ -191,12 +204,22 @@ pub fn render_buffer_content(
                         }
                         let sb = span.byte_start.max(line_byte_start);
                         let eb = span.byte_end.min(line_byte_end);
-                        let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
-                        let ec = buf
+                        let rope_sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                        let rope_ec = buf
                             .rope()
                             .byte_to_char(eb)
                             .saturating_sub(line_char_start)
-                            .min(full_count);
+                            .min(rope_char_count);
+                        // Map rope char offsets to display char offsets when display regions are active.
+                        let (sc, ec) = if let Some(ref dm) = ll.display_map {
+                            let dsc =
+                                mae_core::display_region::rope_col_to_display_col(rope_sc, dm);
+                            let dec =
+                                mae_core::display_region::rope_col_to_display_col(rope_ec, dm);
+                            (dsc.min(full_count), dec.min(full_count))
+                        } else {
+                            (rope_sc.min(full_count), rope_ec.min(full_count))
+                        };
 
                         if editor.org_hide_emphasis_markers
                             && (span.theme_key == "markup.bold.marker"
@@ -221,6 +244,36 @@ pub fn render_buffer_content(
                             if let Some(bg) = ts.bg {
                                 cs.bg = Some(theme::theme_color_to_skia(&bg));
                             }
+                        }
+                    }
+                }
+
+                // Layer 1b: Display region link styling (underline + markup.link color).
+                if let Some(ref dm) = ll.display_map {
+                    let link_style = editor.theme.style("markup.link");
+                    let link_fg = theme::color_or(link_style.fg, base_fg);
+                    for region in &buf.display_regions {
+                        if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start
+                        {
+                            continue;
+                        }
+                        if region.link_target.is_none() {
+                            continue;
+                        }
+                        let rope_start = buf
+                            .rope()
+                            .byte_to_char(region.byte_start.max(line_byte_start))
+                            .saturating_sub(line_char_start);
+                        let dsc = mae_core::display_region::rope_col_to_display_col(rope_start, dm);
+                        let replacement_len = region
+                            .replacement
+                            .as_ref()
+                            .map(|r| r.chars().count())
+                            .unwrap_or(0);
+                        let dec = (dsc + replacement_len).min(full_count);
+                        for cs in char_styles[dsc..dec].iter_mut() {
+                            cs.fg = link_fg;
+                            cs.underline = true;
                         }
                     }
                 }

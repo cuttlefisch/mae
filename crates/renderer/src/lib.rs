@@ -310,9 +310,10 @@ fn render_window_area(
                         }
                     }
 
-                    // Inline markdown style spans.
+                    // Inline style spans (both markdown and org syntax).
                     let source_text: String = rope.chars().collect();
                     help_spans.extend(mae_core::compute_markdown_style_spans(&source_text));
+                    help_spans.extend(mae_core::compute_org_style_spans(&source_text));
 
                     // Link spans from help view.
                     if let Some(view) = buf.help_view.as_ref() {

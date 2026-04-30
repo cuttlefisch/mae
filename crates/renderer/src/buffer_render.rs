@@ -137,10 +137,37 @@ pub(crate) fn render_buffer(
         }
 
         let line_text = buf.rope().line(line_idx);
-        let full_display: String = line_text
+        let rope_chars: Vec<char> = line_text
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
+
+        // Apply display regions (link concealment).
+        let line_char_start_dr = buf.rope().line_to_char(line_idx);
+        let line_byte_start_dr = buf.rope().char_to_byte(line_char_start_dr);
+        let line_byte_end_dr = buf
+            .rope()
+            .char_to_byte(line_char_start_dr + rope_chars.len());
+        let has_display_regions = !buf.display_regions.is_empty()
+            && buf
+                .display_regions
+                .iter()
+                .any(|r| r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr);
+        let (display_chars_vec, display_map_vec) = if has_display_regions {
+            mae_core::display_region::apply_display_regions_to_line(
+                &rope_chars,
+                line_byte_start_dr,
+                line_byte_end_dr,
+                &buf.display_regions,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let full_display: String = if has_display_regions {
+            display_chars_vec.iter().collect()
+        } else {
+            rope_chars.iter().collect()
+        };
 
         let line_num = gutter_common::format_line_number(
             line_idx,
@@ -176,7 +203,8 @@ pub(crate) fn render_buffer(
             let line_char_start = buf.rope().line_to_char(line_idx);
             let full_chars: Vec<char> = full_display.chars().collect();
             let full_count = full_chars.len();
-            let line_char_end = line_char_start + full_count;
+            let rope_char_count = rope_chars.len();
+            let line_char_end = line_char_start + rope_char_count;
 
             let mut styles: Vec<Style> = vec![line_text_style; full_count];
 
@@ -190,12 +218,26 @@ pub(crate) fn render_buffer(
                     }
                     let sb = span.byte_start.max(line_byte_start);
                     let eb = span.byte_end.min(line_byte_end);
-                    let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
-                    let ec = buf
+                    let rope_sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                    let rope_ec = buf
                         .rope()
                         .byte_to_char(eb)
                         .saturating_sub(line_char_start)
-                        .min(full_count);
+                        .min(rope_char_count);
+                    // Map rope char offsets to display char offsets when display regions are active.
+                    let (sc, ec) = if has_display_regions {
+                        let dsc = mae_core::display_region::rope_col_to_display_col(
+                            rope_sc,
+                            &display_map_vec,
+                        );
+                        let dec = mae_core::display_region::rope_col_to_display_col(
+                            rope_ec,
+                            &display_map_vec,
+                        );
+                        (dsc.min(full_count), dec.min(full_count))
+                    } else {
+                        (rope_sc.min(full_count), rope_ec.min(full_count))
+                    };
 
                     if editor.org_hide_emphasis_markers
                         && (span.theme_key == "markup.bold.marker"
@@ -209,6 +251,39 @@ pub(crate) fn render_buffer(
                     let style = ts(editor, span.theme_key);
                     for s in styles[sc..ec].iter_mut() {
                         *s = s.patch(style);
+                    }
+                }
+            }
+
+            // Display region link styling (underline + markup.link color).
+            if has_display_regions {
+                let link_style = ts(editor, "markup.link");
+                let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                let line_byte_end = buf.rope().char_to_byte(line_char_end);
+                for region in &buf.display_regions {
+                    if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start {
+                        continue;
+                    }
+                    if region.link_target.is_none() {
+                        continue;
+                    }
+                    let rope_start = buf
+                        .rope()
+                        .byte_to_char(region.byte_start.max(line_byte_start))
+                        .saturating_sub(line_char_start);
+                    let dsc = mae_core::display_region::rope_col_to_display_col(
+                        rope_start,
+                        &display_map_vec,
+                    );
+                    let replacement_len = region
+                        .replacement
+                        .as_ref()
+                        .map(|r| r.chars().count())
+                        .unwrap_or(0);
+                    let dec = (dsc + replacement_len).min(full_count);
+                    let ul_style = link_style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+                    for s in styles[dsc..dec].iter_mut() {
+                        *s = s.patch(ul_style);
                     }
                 }
             }

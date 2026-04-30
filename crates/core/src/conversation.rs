@@ -200,6 +200,12 @@ pub struct Conversation {
     /// Maps entry index → first cached_line index, enabling incremental
     /// re-render of only the last entry during streaming.
     entry_start_indices: Vec<usize>,
+    /// Rendered links from markdown stripping — populated during render cache rebuild.
+    rendered_links: Vec<crate::link_detect::RenderedLink>,
+    /// Whether to strip markdown link markup (show labels only).
+    pub link_descriptive: bool,
+    /// Whether to render inline bold/italic/code spans.
+    pub render_markup: bool,
 }
 
 impl Default for Conversation {
@@ -227,6 +233,9 @@ impl Conversation {
             cached_screen_width: 0,
             screen_counts_dirty: true,
             entry_start_indices: Vec::new(),
+            rendered_links: Vec::new(),
+            link_descriptive: true,
+            render_markup: true,
         };
         conv.rebuild_render_cache();
         conv
@@ -453,6 +462,7 @@ impl Conversation {
 
     /// Rebuild the cached rendered lines. Called after every content mutation.
     pub fn rebuild_render_cache(&mut self) {
+        self.rendered_links.clear();
         self.cached_lines = self.compute_rendered_lines();
         self.cached_screen_counts.clear();
         self.screen_counts_dirty = true;
@@ -597,7 +607,7 @@ impl Conversation {
 
     /// Render a single entry into the provided line buffer.
     fn render_entry_into(
-        &self,
+        &mut self,
         lines: &mut Vec<RenderedLine>,
         i: usize,
         entry: &ConversationEntry,
@@ -636,8 +646,25 @@ impl Conversation {
                     entry_index: Some(i),
                 });
                 for line in entry.content.lines() {
+                    let text = if self.link_descriptive {
+                        let (clean, link_positions) =
+                            crate::link_detect::strip_markdown_links(line);
+                        let line_idx = lines.len();
+                        for (start, end, target) in link_positions {
+                            self.rendered_links.push(crate::link_detect::RenderedLink {
+                                line_idx,
+                                byte_start: start,
+                                byte_end: end,
+                                target,
+                                kind: crate::link_detect::LinkKind::Markdown,
+                            });
+                        }
+                        clean
+                    } else {
+                        line.to_string()
+                    };
                     lines.push(RenderedLine {
-                        text: line.to_string(),
+                        text,
                         style: LineStyle::AssistantText,
                         entry_index: Some(i),
                     });
@@ -729,13 +756,14 @@ impl Conversation {
     }
 
     /// Render all entries + input line into display lines.
-    fn compute_rendered_lines(&self) -> Vec<RenderedLine> {
+    fn compute_rendered_lines(&mut self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
+        let entry_count = self.entries.len();
 
-        for (i, entry) in self.entries.iter().enumerate() {
+        for i in 0..entry_count {
             // Skip ToolResult if the previous entry is a ToolCall that already
             // has the result merged (Completed/Error state with content).
-            if matches!(entry.role, ConversationRole::ToolResult { .. }) && i > 0 {
+            if matches!(self.entries[i].role, ConversationRole::ToolResult { .. }) && i > 0 {
                 if let ConversationRole::ToolCall { state, .. } = &self.entries[i - 1].role {
                     if matches!(state, ToolCallState::Completed | ToolCallState::Error) {
                         continue;
@@ -743,7 +771,8 @@ impl Conversation {
                 }
             }
 
-            self.render_entry_into(&mut lines, i, entry);
+            let entry = self.entries[i].clone();
+            self.render_entry_into(&mut lines, i, &entry);
 
             // Skip separator between consecutive tool entries for compact display
             let next_is_tool = self
@@ -757,7 +786,7 @@ impl Conversation {
                 })
                 .unwrap_or(false);
             let this_is_tool = matches!(
-                entry.role,
+                self.entries[i].role,
                 ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
             );
             if this_is_tool && next_is_tool {
@@ -879,6 +908,22 @@ impl Conversation {
         spans
     }
 
+    /// Find a rendered link at a given cursor position (line_idx, byte_col).
+    pub fn link_at_position(
+        &self,
+        line_idx: usize,
+        byte_col: usize,
+    ) -> Option<&crate::link_detect::RenderedLink> {
+        self.rendered_links
+            .iter()
+            .find(|l| l.line_idx == line_idx && byte_col >= l.byte_start && byte_col < l.byte_end)
+    }
+
+    /// Access the rendered links list.
+    pub fn rendered_links(&self) -> &[crate::link_detect::RenderedLink] {
+        &self.rendered_links
+    }
+
     /// Generate highlight spans with inline markdown styling for assistant text.
     ///
     /// Extends the base `highlight_spans()` with `markup.bold`, `markup.literal`,
@@ -900,10 +945,31 @@ impl Conversation {
             }
             let line_start_byte = rope.char_to_byte(rope.line_to_char(line_idx));
             let line_text: String = rope.line(line_idx).chars().collect();
-            for mut span in crate::syntax::compute_markdown_style_spans(&line_text) {
-                span.byte_start += line_start_byte;
-                span.byte_end += line_start_byte;
-                spans.push(span);
+
+            if self.render_markup {
+                // Markdown inline spans: **bold**, `code`, *italic*
+                for mut span in crate::syntax::compute_markdown_style_spans(&line_text) {
+                    span.byte_start += line_start_byte;
+                    span.byte_end += line_start_byte;
+                    spans.push(span);
+                }
+                // Org inline spans: *bold*, /italic/, =code=, ~verbatim~
+                for mut span in crate::syntax::compute_org_style_spans(&line_text) {
+                    span.byte_start += line_start_byte;
+                    span.byte_end += line_start_byte;
+                    spans.push(span);
+                }
+            }
+
+            // Link spans for concealed markdown links
+            for link in &self.rendered_links {
+                if link.line_idx == line_idx {
+                    spans.push(crate::syntax::HighlightSpan {
+                        byte_start: line_start_byte + link.byte_start,
+                        byte_end: line_start_byte + link.byte_end,
+                        theme_key: "markup.link",
+                    });
+                }
             }
         }
         spans.sort_by_key(|s| s.byte_start);
@@ -1504,6 +1570,80 @@ mod tests {
         assert!(
             !spans.iter().any(|s| s.theme_key == "markup.heading"),
             "highlight_spans_with_markup must not produce heading spans"
+        );
+    }
+
+    // --- Rendered link tests ---
+
+    #[test]
+    fn rendered_lines_strip_markdown_links() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        let lines = conv.rendered_lines();
+        let text_line = lines.iter().find(|l| l.style == LineStyle::AssistantText);
+        assert!(text_line.is_some());
+        assert_eq!(text_line.unwrap().text, "See docs for info");
+    }
+
+    #[test]
+    fn link_at_position_finds_link() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        // The rendered text is "See docs for info"
+        // "docs" starts at byte 4, ends at byte 8
+        // Line index: 0=[AI], 1="See docs for info"
+        let link = conv.link_at_position(1, 4);
+        assert!(link.is_some(), "expected link at position (1, 4)");
+        assert_eq!(link.unwrap().target, "https://docs.rs");
+        // No link at position 0 (before the label)
+        assert!(conv.link_at_position(1, 0).is_none());
+    }
+
+    #[test]
+    fn highlight_spans_include_link_style() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) here");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.link"),
+            "expected markup.link span for concealed link"
+        );
+    }
+
+    #[test]
+    fn link_descriptive_disabled_shows_raw() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = false;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        let lines = conv.rendered_lines();
+        let text_line = lines.iter().find(|l| l.style == LineStyle::AssistantText);
+        assert!(text_line.is_some());
+        assert_eq!(
+            text_line.unwrap().text,
+            "See [docs](https://docs.rs) for info"
+        );
+        assert!(conv.rendered_links().is_empty());
+    }
+
+    #[test]
+    fn render_markup_disabled_no_markup_spans() {
+        let mut conv = Conversation::new();
+        conv.render_markup = false;
+        conv.push_assistant("This is **bold** and `code`");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+        // Should NOT have markup.bold or markup.literal since render_markup is off
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected no markup.bold when render_markup=false"
+        );
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected no markup.literal when render_markup=false"
         );
     }
 }

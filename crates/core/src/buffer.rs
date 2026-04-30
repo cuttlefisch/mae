@@ -82,6 +82,8 @@ pub struct BufferLocalOptions {
     pub break_indent: Option<bool>,
     pub show_break: Option<String>,
     pub heading_scale: Option<bool>,
+    pub link_descriptive: Option<bool>,
+    pub render_markup: Option<bool>,
 }
 
 /// Rope-backed text buffer with undo history.
@@ -154,6 +156,11 @@ pub struct Buffer {
     pub global_fold_state: u8,
     /// Per-buffer option overrides (Emacs buffer-local / Vim setlocal).
     pub local_options: BufferLocalOptions,
+    /// Display regions: byte ranges with display overrides (link concealment, etc.).
+    /// Rebuilt lazily when `display_regions_gen != generation`.
+    pub display_regions: Vec<crate::display_region::DisplayRegion>,
+    /// Generation at which `display_regions` were last computed.
+    pub display_regions_gen: u64,
 }
 
 impl Default for Buffer {
@@ -192,7 +199,34 @@ impl Buffer {
             link_spans: Vec::new(),
             global_fold_state: 0,
             local_options: BufferLocalOptions::default(),
+            display_regions: Vec::new(),
+            display_regions_gen: u64::MAX, // force initial compute
         }
+    }
+
+    /// Recompute display regions for link concealment.
+    /// Called when buffer generation changes or `link_descriptive` toggles.
+    pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
+        self.display_regions.clear();
+        self.display_regions_gen = self.generation;
+
+        if !link_descriptive {
+            return;
+        }
+
+        // Only text buffers have link concealment.
+        if self.kind != BufferKind::Text {
+            return;
+        }
+
+        let ext = self
+            .file_path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str());
+
+        let source: String = self.rope.chars().collect();
+        self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
     }
 
     /// Create a dashboard buffer (startup splash screen).

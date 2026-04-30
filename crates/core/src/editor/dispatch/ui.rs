@@ -85,7 +85,47 @@ impl Editor {
                 let col = win.cursor_col;
                 let buf = &self.buffers[idx];
 
-                // First check buffer link_spans (populated by renderer for conversation/shell)
+                // Check display regions first (link concealment in text buffers).
+                if !buf.display_regions.is_empty() {
+                    let line_chars: Vec<char> = buf
+                        .rope()
+                        .line(row)
+                        .chars()
+                        .filter(|c| *c != '\n' && *c != '\r')
+                        .collect();
+                    let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(row));
+                    // The cursor col is a rope col — find the matching display region.
+                    let cursor_byte = line_byte_start + {
+                        let line_str: String = line_chars.iter().collect();
+                        line_str
+                            .char_indices()
+                            .nth(col)
+                            .map(|(b, _)| b)
+                            .unwrap_or(line_str.len())
+                    };
+                    if let Some(region) = buf
+                        .display_regions
+                        .iter()
+                        .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+                    {
+                        if let Some(ref target) = region.link_target {
+                            let target = target.clone();
+                            self.handle_link_click(&target);
+                            return Some(true);
+                        }
+                    }
+                }
+
+                // Check conversation rendered links first (from markdown stripping)
+                if let Some(conv) = buf.conversation.as_ref() {
+                    if let Some(link) = conv.link_at_position(row, col) {
+                        let target = link.target.clone();
+                        self.handle_link_click(&target);
+                        return Some(true);
+                    }
+                }
+
+                // Then check buffer link_spans (populated by renderer for conversation/shell)
                 if !buf.link_spans.is_empty() {
                     let line_start_byte = buf.rope().char_to_byte(buf.rope().line_to_char(row));
                     let click_byte = line_start_byte + col;

@@ -52,7 +52,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Editing UX
 - [x] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. LCS-based unified diff with `diff.*` theme keys in all 8 themes, syntax-highlighted (v0.6.0).
-- [ ] **Clickable Links in Output**: File paths in AI/shell output open in editor on click/Enter. User-configurable: open in current window or new split.
+- [x] **Clickable Links in Output**: `gx` opens URL/file path under cursor in any buffer. Mouse clicks detect links on-the-fly. File paths with `:line:col` navigate to position. (v0.6.0)
 - [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
 - [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
 
@@ -112,10 +112,11 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Editor Modes & Buffer-Local Options
 - [x] **Per-Buffer Word Wrap (`BufferLocalOptions`)**: `BufferLocalOptions` struct on `Buffer` with `Option<T>` overrides. `:setlocal word_wrap true` for per-buffer override. Conversation, Help, Messages buffers default to `word_wrap=true`. `toggle-word-wrap` flips buffer-local value. Infrastructure supports `line_numbers`, `relative_line_numbers` too (v0.6.0).
 - [ ] **Mode Refactoring & Initialization**: Restructure `Mode` enum and mode transitions. Per-mode configuration in user config (e.g. mode-specific keybindings, default options per mode). Emacs `define-derived-mode` equivalent for Scheme layer. Mode-line indicators for active minor modes.
-- [ ] **Buffer-Local Options Expansion**: Extend `BufferLocalOptions` to include `break_indent`, `show_break`, `heading_scale`, `org_hide_emphasis_markers`. Add mode hooks that auto-set buffer-local options based on file type (e.g. org files get heading_scale=true, code gets word_wrap=false).
+- [x] **Buffer-Local Options Expansion**: Extended `BufferLocalOptions` with `break_indent`, `show_break`, `heading_scale`. Accessors + `:setlocal` support for all 6 options (v0.6.0).
+- [ ] **File-Type Mode Hooks**: Auto-set buffer-local options based on file type (e.g. org files get heading_scale=true, code gets word_wrap=false). `org_hide_emphasis_markers` as buffer-local.
 
 ### Self-Test Infrastructure
-- [ ] **Atomic Self-Test Categories**: Restructure `build_self_test_plan()` to call `editor_save_state`/`editor_restore_state` per category instead of once for the entire suite. Each section is treated as an atomic unit — buffers created during a category are cleaned up before the next one. Prevents buffer/window accumulation across categories.
+- [x] **Atomic Self-Test Categories**: Each category wrapped with `editor_save_state`/`editor_restore_state` — buffers cleaned up per-category (v0.6.0).
 
 ### Project Intelligence
 - [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.

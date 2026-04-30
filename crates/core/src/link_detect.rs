@@ -1,5 +1,33 @@
 //! Link detection for clickable URLs and file paths in buffer text.
 
+/// The kind of link — drives navigation behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkKind {
+    /// External URL (http/https) — opened in browser via xdg-open.
+    Url,
+    /// Local file path (absolute, relative, or ~/...) — opened in editor.
+    FilePath,
+    /// Markdown `[label](url)` — stripped to show just label.
+    Markdown,
+    /// Org `[[target][label]]` — stripped to show just label.
+    OrgLink,
+}
+
+/// A link embedded in rendered output (after markup stripping).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedLink {
+    /// Rendered line index in the containing buffer.
+    pub line_idx: usize,
+    /// Byte offset of the label start in the rendered (stripped) text.
+    pub byte_start: usize,
+    /// Byte offset of the label end in the rendered text.
+    pub byte_end: usize,
+    /// The resolved target (URL, file path, or internal reference).
+    pub target: String,
+    /// The kind of link — drives navigation behavior.
+    pub kind: LinkKind,
+}
+
 /// A detected link span in buffer text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkSpan {
@@ -248,6 +276,31 @@ pub fn render_segments(text: &str) -> Vec<TextSegment> {
     segments
 }
 
+/// Strip markdown `[label](url)` from text, returning the cleaned text
+/// and a list of (byte_start, byte_end, target) tuples relative to the cleaned text.
+pub fn strip_markdown_links(text: &str) -> (String, Vec<(usize, usize, String)>) {
+    let links = detect_markdown_links(text);
+    if links.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+    let mut result = String::with_capacity(text.len());
+    let mut link_positions = Vec::new();
+    let mut pos = 0;
+    for link in &links {
+        // Copy text before this link
+        result.push_str(&text[pos..link.byte_start]);
+        let label = link.label.as_deref().unwrap_or(&link.target);
+        let label_start = result.len();
+        result.push_str(label);
+        let label_end = result.len();
+        link_positions.push((label_start, label_end, link.target.clone()));
+        pos = link.byte_end;
+    }
+    // Copy remaining text
+    result.push_str(&text[pos..]);
+    (result, link_positions)
+}
+
 fn dedup_overlapping(spans: &mut Vec<LinkSpan>) {
     let mut i = 0;
     while i + 1 < spans.len() {
@@ -404,5 +457,41 @@ mod tests {
         assert_eq!(segs[1].text, "https://example.com");
         assert!(segs[1].link_target.is_some());
         assert_eq!(segs[2].text, " for info");
+    }
+
+    // --- strip_markdown_links tests ---
+
+    #[test]
+    fn strip_markdown_links_basic() {
+        let (clean, links) = strip_markdown_links("[docs](https://docs.rs)");
+        assert_eq!(clean, "docs");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0], (0, 4, "https://docs.rs".to_string()));
+    }
+
+    #[test]
+    fn strip_markdown_links_multiple() {
+        let (clean, links) = strip_markdown_links("[a](https://a.com) and [b](https://b.com)");
+        assert_eq!(clean, "a and b");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].2, "https://a.com");
+        assert_eq!(links[1].2, "https://b.com");
+    }
+
+    #[test]
+    fn strip_markdown_links_no_links() {
+        let (clean, links) = strip_markdown_links("plain text here");
+        assert_eq!(clean, "plain text here");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn strip_markdown_links_mixed() {
+        let (clean, links) = strip_markdown_links("See [docs](https://docs.rs) for more info");
+        assert_eq!(clean, "See docs for more info");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, 4); // "See " = 4 bytes, then "docs" starts
+        assert_eq!(links[0].1, 8); // "docs" = 4 bytes
+        assert_eq!(links[0].2, "https://docs.rs");
     }
 }

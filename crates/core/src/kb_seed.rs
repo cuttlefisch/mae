@@ -891,6 +891,31 @@ All 8 bundled themes include `diff.added`, `diff.removed`, `diff.hunk`, \
 and `diff.header` style definitions.\n\n\
 See also: [[concept:ai-as-peer]], [[concept:options]]\n";
 
+const CONCEPT_CONCEAL: &str = "\
+**Link & Markup Rendering** controls how inline markup is displayed — \
+showing styled labels instead of raw syntax.\n\n\
+## Options\n\
+| Option | Default | Description |\n\
+|--------|---------|-------------|\n\
+| `link_descriptive` | `true` | Strip `[label](url)` markup, show styled label only |\n\
+| `render_markup` | `true` | Render `**bold**`, `` `code` ``, `*bold*`, `/italic/`, `=code=`, `~verbatim~` with styling |\n\n\
+## Configuration\n\
+- `:set link_descriptive false` — show raw `[label](url)` text\n\
+- `:set render_markup false` — disable inline styling in conversation buffers\n\
+- `:setlocal nolink_descriptive` — per-buffer override\n\
+- `config.toml`: `link_descriptive = true` under `[editor]`\n\
+- Scheme: `(set-option! \"link-descriptive\" \"true\")`\n\n\
+## Scope\n\
+- **Conversation buffers:** markdown links are stripped to labels; org and markdown \
+inline markup (bold, italic, code) get styling spans\n\
+- **Help buffers:** both markdown and org inline markup are styled\n\
+- Links are clickable via `gx` (`open-link-at-cursor`)\n\n\
+## Safety\n\
+Inline markup spans intentionally exclude `markup.heading` — heading spans \
+would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform \
+line heights in conversation buffers.\n\n\
+See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]\n";
+
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
@@ -1232,6 +1257,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_DIFF_DISPLAY,
         )
         .with_tags(["ai", "diff", "rendering"]),
+        Node::new(
+            "concept:conceal",
+            "Concept: Conceal (Link & Markup Rendering)",
+            NodeKind::Concept,
+            CONCEPT_CONCEAL,
+        )
+        .with_tags(["rendering", "configuration", "conversation"]),
     ]
 }
 
@@ -1264,7 +1296,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:autosave|Autosave]] — interval-based background save with idle debounce\n\
 - [[concept:file-tree|File Tree]] — project sidebar with icons and directory expansion\n\
 - [[concept:diff-display|Diff Display]] — syntax-highlighted unified diffs for AI changes\n\
-- [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode
+- [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode\n\
+- [[concept:conceal|Link & Markup Rendering]] — Descriptive links and inline styling
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]

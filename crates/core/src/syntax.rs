@@ -618,6 +618,21 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
             out.insert(idx, arc);
         }
     }
+
+    // Recompute display regions for visible text buffers whose generation changed.
+    for win in editor.window_mgr.iter_windows() {
+        let idx = win.buffer_idx;
+        let buf = &editor.buffers[idx];
+        if buf.kind != crate::buffer::BufferKind::Text {
+            continue;
+        }
+        if buf.display_regions_gen == buf.generation {
+            continue;
+        }
+        let link_descriptive = editor.link_descriptive_for(idx);
+        editor.buffers[idx].recompute_display_regions(link_descriptive);
+    }
+
     out
 }
 
@@ -891,6 +906,71 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
     }
 
     // Renderer expects spans sorted by start offset.
+    spans.sort_by_key(|s| s.byte_start);
+    spans
+}
+
+/// Compute inline org-style spans for non-tree-sitter contexts (help buffers,
+/// conversation buffers). Detects *bold*, /italic/, =code=, ~verbatim~ —
+/// intentionally excludes headings to avoid triggering `line_heading_scale()`.
+pub fn compute_org_style_spans(source: &str) -> Vec<HighlightSpan> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static BOLD: OnceLock<Regex> = OnceLock::new();
+    static ITALIC: OnceLock<Regex> = OnceLock::new();
+    static CODE: OnceLock<Regex> = OnceLock::new();
+    static VERBATIM: OnceLock<Regex> = OnceLock::new();
+
+    let bold = BOLD.get_or_init(|| {
+        Regex::new(r"(?:^|[\s(>])\*([^\s*][^*\n]*)\*(?:\s|[.,;:!?)>\]]|$)").unwrap()
+    });
+    let italic = ITALIC
+        .get_or_init(|| Regex::new(r"(?:^|[\s(>])/([^\s/][^/\n]*)/(?:\s|[.,;:!?)>\]]|$)").unwrap());
+    let code = CODE
+        .get_or_init(|| Regex::new(r"(?:^|[\s(>])=([^\s=][^=\n]*)=(?:\s|[.,;:!?)>\]]|$)").unwrap());
+    let verbatim = VERBATIM
+        .get_or_init(|| Regex::new(r"(?:^|[\s(>])~([^\s~][^~\n]*)~(?:\s|[.,;:!?)>\]]|$)").unwrap());
+
+    let mut spans: Vec<HighlightSpan> = Vec::new();
+
+    for cap in bold.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start().saturating_sub(1),
+                byte_end: m.end() + 1,
+                theme_key: "markup.bold",
+            });
+        }
+    }
+    for cap in italic.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start().saturating_sub(1),
+                byte_end: m.end() + 1,
+                theme_key: "markup.italic",
+            });
+        }
+    }
+    for cap in code.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start().saturating_sub(1),
+                byte_end: m.end() + 1,
+                theme_key: "markup.literal",
+            });
+        }
+    }
+    for cap in verbatim.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start().saturating_sub(1),
+                byte_end: m.end() + 1,
+                theme_key: "markup.literal",
+            });
+        }
+    }
+
     spans.sort_by_key(|s| s.byte_start);
     spans
 }
@@ -1339,5 +1419,68 @@ mod tests {
     fn markdown_style_spans_empty() {
         let spans = compute_markdown_style_spans("");
         assert!(spans.is_empty());
+    }
+
+    // --- compute_org_style_spans tests ---
+
+    #[test]
+    fn org_style_spans_bold() {
+        let spans = compute_org_style_spans("This is *bold* text");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold from *bold*, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_style_spans_italic() {
+        let spans = compute_org_style_spans("This is /italic/ text");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.italic"),
+            "expected markup.italic from /italic/, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_style_spans_code() {
+        let spans = compute_org_style_spans("This is =code= text");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected markup.literal from =code=, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_style_spans_verbatim() {
+        let spans = compute_org_style_spans("This is ~verbatim~ text");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected markup.literal from ~verbatim~, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_style_spans_no_headings() {
+        // Critical safety: compute_org_style_spans must NEVER produce heading spans.
+        let spans = compute_org_style_spans("* heading\n** sub\n*bold*");
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "compute_org_style_spans must not produce markup.heading spans"
+        );
+    }
+
+    #[test]
+    fn org_style_spans_mixed() {
+        let spans = compute_org_style_spans("*bold* and /italic/ and =code=");
+        assert!(spans.iter().any(|s| s.theme_key == "markup.bold"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.italic"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
+        for w in spans.windows(2) {
+            assert!(w[0].byte_start <= w[1].byte_start);
+        }
     }
 }

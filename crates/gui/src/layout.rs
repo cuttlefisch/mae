@@ -46,6 +46,12 @@ pub struct LineLayout {
     pub char_start: usize,
     /// Character count in this segment.
     pub char_count: usize,
+    /// Maps display char index -> rope char index when display regions are active.
+    /// `None` if no display regions affect this line.
+    pub display_map: Option<Vec<usize>>,
+    /// Display chars when display regions are active.
+    /// `None` if no display regions affect this line.
+    pub display_chars: Option<Vec<char>>,
 }
 
 /// Complete layout for one window's visible content area.
@@ -316,16 +322,41 @@ pub fn compute_layout(
         let is_fold_start = fold_info > 0;
 
         let line_text = buf.rope().line(line_idx);
-        let full_count = line_text
+        let rope_chars: Vec<char> = line_text
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
-            .count();
+            .collect();
+
+        // Apply display regions (link concealment) if any overlap this line.
+        let line_char_start = buf.rope().line_to_char(line_idx);
+        let line_byte_start = buf.rope().char_to_byte(line_char_start);
+        let line_byte_end = buf.rope().char_to_byte(line_char_start + rope_chars.len());
+        let has_display_regions = !buf.display_regions.is_empty()
+            && buf
+                .display_regions
+                .iter()
+                .any(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start);
+
+        let (display_chars_vec, display_map_vec) = if has_display_regions {
+            mae_core::display_region::apply_display_regions_to_line(
+                &rope_chars,
+                line_byte_start,
+                line_byte_end,
+                &buf.display_regions,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let full_chars = if has_display_regions {
+            &display_chars_vec
+        } else {
+            &rope_chars
+        };
+        let full_count = full_chars.len();
 
         if wrap {
-            let full_chars: Vec<char> = line_text
-                .chars()
-                .filter(|c| *c != '\n' && *c != '\r')
-                .collect();
+            let full_chars = full_chars.to_vec();
             let indent_len = if editor.break_indent {
                 leading_indent_len(&full_chars)
             } else {
@@ -378,6 +409,16 @@ pub fn compute_layout(
                     folded_line_count: if is_first { fold_info } else { 0 },
                     char_start: pos,
                     char_count: end - pos,
+                    display_map: if has_display_regions {
+                        Some(display_map_vec.clone())
+                    } else {
+                        None
+                    },
+                    display_chars: if has_display_regions {
+                        Some(display_chars_vec.clone())
+                    } else {
+                        None
+                    },
                 });
 
                 pixel_y += seg_height;
@@ -405,10 +446,6 @@ pub fn compute_layout(
             } else {
                 text_width
             };
-            let full_chars: Vec<char> = line_text
-                .chars()
-                .filter(|c| *c != '\n' && *c != '\r')
-                .collect();
             let mut vis_width = 0;
             let mut visible_end = visible_start;
             for &ch in &full_chars[visible_start..] {
@@ -438,6 +475,16 @@ pub fn compute_layout(
                 folded_line_count: fold_info,
                 char_start: visible_start,
                 char_count: visible_end - visible_start,
+                display_map: if has_display_regions {
+                    Some(display_map_vec.clone())
+                } else {
+                    None
+                },
+                display_chars: if has_display_regions {
+                    Some(display_chars_vec.clone())
+                } else {
+                    None
+                },
             });
 
             pixel_y += line_height;

@@ -584,10 +584,10 @@ fn render_window_area(
                         }
                     }
 
-                    // Inline markdown style spans (bold, code, italic).
+                    // Inline style spans (bold, code, italic) — both markdown and org syntax.
                     let source_text: String = rope.chars().collect();
-                    let inline_spans = mae_core::compute_markdown_style_spans(&source_text);
-                    help_spans.extend(inline_spans);
+                    help_spans.extend(mae_core::compute_markdown_style_spans(&source_text));
+                    help_spans.extend(mae_core::compute_org_style_spans(&source_text));
 
                     // Link spans from help view.
                     if let Some(view) = buf.help_view.as_ref() {

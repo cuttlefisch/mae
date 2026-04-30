@@ -335,6 +335,24 @@ impl OptionRegistry {
                     config_key: Some("editor.nyan_mode"),
                     valid_values: &[],
                 },
+                OptionDef {
+                    name: "link_descriptive",
+                    aliases: &["link-descriptive"],
+                    doc: "Show link labels instead of raw markup (Emacs org-link-descriptive). When true, [label](url) and [[target][label]] display as styled labels.",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.link_descriptive"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "render_markup",
+                    aliases: &["render-markup"],
+                    doc: "Apply inline styling (bold/italic/code) in conversation and help buffers (both markdown and org syntax)",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.render_markup"),
+                    valid_values: &[],
+                },
             ],
         }
     }
