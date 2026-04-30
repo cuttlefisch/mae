@@ -36,6 +36,12 @@ pub trait BufferMode {
     fn status_hint(&self) -> Option<&'static str> {
         None
     }
+
+    /// Override the status-bar mode theme key for this buffer kind.
+    /// Returns `None` to fall through to the standard mode-based theme key.
+    fn mode_theme_key(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 impl BufferMode for BufferKind {
@@ -77,6 +83,13 @@ impl BufferMode for BufferKind {
             Self::GitStatus => Some("Press ? for key help, SPC m for mode menu"),
             Self::Debug => Some("Press ? for key help"),
             Self::FileTree => Some("Press ? for key help"),
+            _ => None,
+        }
+    }
+
+    fn mode_theme_key(&self) -> Option<&'static str> {
+        match self {
+            Self::GitStatus | Self::Debug => Some("ui.statusline.mode.command"),
             _ => None,
         }
     }
@@ -164,6 +177,21 @@ mod tests {
         );
         assert_eq!(BufferKind::Text.status_hint(), None);
         assert_eq!(BufferKind::Conversation.status_hint(), None);
+    }
+
+    #[test]
+    fn buffer_mode_theme_key() {
+        assert_eq!(
+            BufferKind::GitStatus.mode_theme_key(),
+            Some("ui.statusline.mode.command")
+        );
+        assert_eq!(
+            BufferKind::Debug.mode_theme_key(),
+            Some("ui.statusline.mode.command")
+        );
+        assert_eq!(BufferKind::Text.mode_theme_key(), None);
+        assert_eq!(BufferKind::Conversation.mode_theme_key(), None);
+        assert_eq!(BufferKind::FileTree.mode_theme_key(), None);
     }
 
     #[test]

@@ -147,7 +147,6 @@ impl Editor {
         fn push_line(view: &mut GitStatusView, text: &mut String, line: GitStatusLine) {
             text.push_str(&line.text);
             text.push('\n');
-            view.line_kinds.push(line.kind.clone());
             view.lines.push(line);
         }
 
@@ -159,31 +158,14 @@ impl Editor {
                 text: format!("Head:     {}", branch),
                 section: None,
                 file_path: None,
-                hunk: None,
                 hunk_index: None,
                 hunk_header: None,
-                is_header: true,
-                is_collapsed: false,
                 kind: GitLineKind::Header,
             },
         );
 
         // Blank separator
-        push_line(
-            &mut view,
-            &mut text,
-            GitStatusLine {
-                text: String::new(),
-                section: None,
-                file_path: None,
-                hunk: None,
-                hunk_index: None,
-                hunk_header: None,
-                is_header: false,
-                is_collapsed: false,
-                kind: GitLineKind::Blank,
-            },
-        );
+        push_line(&mut view, &mut text, GitStatusLine::blank());
 
         // Helper closure to push a section with multi-level collapse
         let push_section = |view: &mut GitStatusView,
@@ -207,32 +189,14 @@ impl Editor {
                     text: header_text,
                     section: Some(section),
                     file_path: None,
-                    hunk: None,
                     hunk_index: None,
                     hunk_header: None,
-                    is_header: true,
-                    is_collapsed: section_collapsed,
                     kind: GitLineKind::SectionHeader(section),
                 },
             );
 
             if section_collapsed {
-                // Blank separator even when collapsed
-                push_line(
-                    view,
-                    text,
-                    GitStatusLine {
-                        text: String::new(),
-                        section: None,
-                        file_path: None,
-                        hunk: None,
-                        hunk_index: None,
-                        hunk_header: None,
-                        is_header: false,
-                        is_collapsed: false,
-                        kind: GitLineKind::Blank,
-                    },
-                );
+                push_line(view, text, GitStatusLine::blank());
                 return;
             }
 
@@ -248,11 +212,8 @@ impl Editor {
                         text: file_text,
                         section: Some(section),
                         file_path: Some(p.clone()),
-                        hunk: None,
                         hunk_index: None,
                         hunk_header: None,
-                        is_header: false,
-                        is_collapsed: !file_expanded,
                         kind: GitLineKind::File {
                             section,
                             status_char: *status_char,
@@ -303,7 +264,8 @@ impl Editor {
                             format!("hunk:{}:{}:{}", p, section_name(&section), hunk_idx);
                         let hunk_collapsed = view.is_collapsed(&hunk_key);
 
-                        if is_hunk_header {
+                        // Hunk headers always visible; diff lines only when not collapsed
+                        if is_hunk_header || !hunk_collapsed {
                             let display_line = format!("    {}", diff_line);
                             push_line(
                                 view,
@@ -312,68 +274,21 @@ impl Editor {
                                     text: display_line,
                                     section: Some(section),
                                     file_path: Some(p.clone()),
-                                    hunk: None,
                                     hunk_index: Some(hunk_idx),
                                     hunk_header: current_hunk_header.clone(),
-                                    is_header: false,
-                                    is_collapsed: hunk_collapsed,
-                                    kind: diff_kind,
-                                },
-                            );
-                            // Increment hunk index AFTER emitting the header
-                            if hunk_idx > 0 || !is_hunk_header {
-                                // already incremented below
-                            }
-                        } else if !hunk_collapsed {
-                            let display_line = format!("    {}", diff_line);
-                            push_line(
-                                view,
-                                text,
-                                GitStatusLine {
-                                    text: display_line,
-                                    section: Some(section),
-                                    file_path: Some(p.clone()),
-                                    hunk: None,
-                                    hunk_index: Some(hunk_idx),
-                                    hunk_header: current_hunk_header.clone(),
-                                    is_header: false,
-                                    is_collapsed: false,
                                     kind: diff_kind,
                                 },
                             );
                         }
 
-                        // Advance hunk counter on next @@ line
-                        if is_hunk_header && diff_line.starts_with("@@") {
-                            // hunk_idx is already set for this hunk's lines;
-                            // we'll increment when we see the NEXT hunk header
-                        }
-                        // Actually: increment after processing a complete hunk header
                         if is_hunk_header {
                             hunk_idx += 1;
-                            // Correct: hunk N's header was emitted with hunk_index=N,
-                            // now hunk_idx=N+1 for the next hunk
                         }
                     }
                 }
             }
 
-            // Blank separator
-            push_line(
-                view,
-                text,
-                GitStatusLine {
-                    text: String::new(),
-                    section: None,
-                    file_path: None,
-                    hunk: None,
-                    hunk_index: None,
-                    hunk_header: None,
-                    is_header: false,
-                    is_collapsed: false,
-                    kind: GitLineKind::Blank,
-                },
-            );
+            push_line(view, text, GitStatusLine::blank());
         };
 
         // Untracked files (use '?' as status char)
@@ -418,11 +333,8 @@ impl Editor {
                     text: format!("{} Stashes:", indicator),
                     section: Some(GitSection::Stashes),
                     file_path: None,
-                    hunk: None,
                     hunk_index: None,
                     hunk_header: None,
-                    is_header: true,
-                    is_collapsed: stash_collapsed,
                     kind: GitLineKind::SectionHeader(GitSection::Stashes),
                 },
             );
@@ -437,11 +349,8 @@ impl Editor {
                             text: display_line,
                             section: Some(GitSection::Stashes),
                             file_path: None,
-                            hunk: None,
                             hunk_index: None,
                             hunk_header: None,
-                            is_header: false,
-                            is_collapsed: false,
                             kind: GitLineKind::File {
                                 section: GitSection::Stashes,
                                 status_char: 'S',
@@ -552,8 +461,8 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let cursor_row = self.window_mgr.focused_window().cursor_row;
         if let Some(view) = self.buffers[idx].git_status_view() {
-            for i in (cursor_row + 1)..view.line_kinds.len() {
-                if matches!(view.line_kinds[i], crate::git_status::GitLineKind::DiffHunk) {
+            for i in (cursor_row + 1)..view.lines.len() {
+                if matches!(view.lines[i].kind, crate::git_status::GitLineKind::DiffHunk) {
                     self.window_mgr.focused_window_mut().cursor_row = i;
                     self.window_mgr.focused_window_mut().cursor_col = 0;
                     return;
@@ -569,7 +478,7 @@ impl Editor {
         let cursor_row = self.window_mgr.focused_window().cursor_row;
         if let Some(view) = self.buffers[idx].git_status_view() {
             for i in (0..cursor_row).rev() {
-                if matches!(view.line_kinds[i], crate::git_status::GitLineKind::DiffHunk) {
+                if matches!(view.lines[i].kind, crate::git_status::GitLineKind::DiffHunk) {
                     self.window_mgr.focused_window_mut().cursor_row = i;
                     self.window_mgr.focused_window_mut().cursor_col = 0;
                     return;
@@ -620,13 +529,7 @@ impl Editor {
     }
 
     /// Build a minimal patch for `git apply` from a single hunk.
-    fn build_hunk_patch(
-        file_path: &str,
-        hunk_header: &str,
-        hunk_lines: &[String],
-        staged: bool,
-    ) -> String {
-        // For staged hunks, the a/ and b/ are both the file path.
+    fn build_hunk_patch(file_path: &str, hunk_header: &str, hunk_lines: &[String]) -> String {
         let mut patch = String::new();
         patch.push_str(&format!("diff --git a/{} b/{}\n", file_path, file_path));
         patch.push_str(&format!("--- a/{}\n", file_path));
@@ -637,113 +540,66 @@ impl Editor {
             patch.push_str(line);
             patch.push('\n');
         }
-        let _ = staged; // both paths use same patch format
         patch
     }
 
-    /// Stage the hunk at cursor.
+    /// Apply the hunk patch at cursor with the given git-apply args.
+    fn apply_hunk_patch(&mut self, args: &[&str], success_msg: &str, fail_prefix: &str) {
+        if let Some((file_path, _section, hunk_header, hunk_lines)) = self.find_cursor_hunk() {
+            let patch = Self::build_hunk_patch(&file_path, &hunk_header, &hunk_lines);
+            let root = self.git_root();
+            let result = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    use std::io::Write;
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        stdin.write_all(patch.as_bytes())?;
+                    }
+                    child.wait_with_output()
+                });
+            match result {
+                Ok(output) if output.status.success() => {
+                    self.set_status(success_msg.to_string());
+                    self.git_status();
+                }
+                Ok(output) => {
+                    let err = String::from_utf8_lossy(&output.stderr);
+                    self.set_status(format!("{}: {}", fail_prefix, err));
+                }
+                Err(e) => self.set_status(format!("{}: {}", fail_prefix, e)),
+            }
+        } else {
+            self.set_status("No hunk at cursor");
+        }
+    }
+
     pub fn git_stage_hunk(&mut self) {
-        if let Some((file_path, _section, hunk_header, hunk_lines)) = self.find_cursor_hunk() {
-            let patch = Self::build_hunk_patch(&file_path, &hunk_header, &hunk_lines, false);
-            let root = self.git_root();
-            let result = std::process::Command::new("git")
-                .args(["apply", "--cached", "--recount"])
-                .current_dir(&root)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        stdin.write_all(patch.as_bytes())?;
-                    }
-                    child.wait_with_output()
-                });
-            match result {
-                Ok(output) if output.status.success() => {
-                    self.set_status("Hunk staged");
-                    self.git_status();
-                }
-                Ok(output) => {
-                    let err = String::from_utf8_lossy(&output.stderr);
-                    self.set_status(format!("Stage hunk failed: {}", err));
-                }
-                Err(e) => self.set_status(format!("Stage hunk failed: {}", e)),
-            }
-        } else {
-            self.set_status("No hunk at cursor");
-        }
+        self.apply_hunk_patch(
+            &["apply", "--cached", "--recount"],
+            "Hunk staged",
+            "Stage hunk failed",
+        );
     }
 
-    /// Unstage the hunk at cursor.
     pub fn git_unstage_hunk(&mut self) {
-        if let Some((file_path, _section, hunk_header, hunk_lines)) = self.find_cursor_hunk() {
-            let patch = Self::build_hunk_patch(&file_path, &hunk_header, &hunk_lines, true);
-            let root = self.git_root();
-            let result = std::process::Command::new("git")
-                .args(["apply", "--cached", "--recount", "-R"])
-                .current_dir(&root)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        stdin.write_all(patch.as_bytes())?;
-                    }
-                    child.wait_with_output()
-                });
-            match result {
-                Ok(output) if output.status.success() => {
-                    self.set_status("Hunk unstaged");
-                    self.git_status();
-                }
-                Ok(output) => {
-                    let err = String::from_utf8_lossy(&output.stderr);
-                    self.set_status(format!("Unstage hunk failed: {}", err));
-                }
-                Err(e) => self.set_status(format!("Unstage hunk failed: {}", e)),
-            }
-        } else {
-            self.set_status("No hunk at cursor");
-        }
+        self.apply_hunk_patch(
+            &["apply", "--cached", "--recount", "-R"],
+            "Hunk unstaged",
+            "Unstage hunk failed",
+        );
     }
 
-    /// Discard the hunk at cursor (apply reverse patch to working tree).
     pub fn git_discard_hunk(&mut self) {
-        if let Some((file_path, _section, hunk_header, hunk_lines)) = self.find_cursor_hunk() {
-            let patch = Self::build_hunk_patch(&file_path, &hunk_header, &hunk_lines, false);
-            let root = self.git_root();
-            let result = std::process::Command::new("git")
-                .args(["apply", "--recount", "-R"])
-                .current_dir(&root)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    use std::io::Write;
-                    if let Some(stdin) = child.stdin.as_mut() {
-                        stdin.write_all(patch.as_bytes())?;
-                    }
-                    child.wait_with_output()
-                });
-            match result {
-                Ok(output) if output.status.success() => {
-                    self.set_status("Hunk discarded");
-                    self.git_status();
-                }
-                Ok(output) => {
-                    let err = String::from_utf8_lossy(&output.stderr);
-                    self.set_status(format!("Discard hunk failed: {}", err));
-                }
-                Err(e) => self.set_status(format!("Discard hunk failed: {}", e)),
-            }
-        } else {
-            self.set_status("No hunk at cursor");
-        }
+        self.apply_hunk_patch(
+            &["apply", "--recount", "-R"],
+            "Hunk discarded",
+            "Discard hunk failed",
+        );
     }
 
     /// Discard unstaged changes for the file at cursor.
@@ -893,46 +749,35 @@ impl Editor {
         rest[..end].parse().ok()
     }
 
-    pub fn git_stash_pop(&mut self) {
-        let idx_str = self
-            .stash_index_at_cursor()
+    /// Resolve stash ref at cursor, defaulting to stash@{0}.
+    fn stash_ref_at_cursor(&self) -> String {
+        self.stash_index_at_cursor()
             .map(|n| format!("stash@{{{}}}", n))
-            .unwrap_or_else(|| "stash@{0}".to_string());
-        let (ok, _, stderr) = self.run_git_porcelain(&["stash", "pop", &idx_str]);
+            .unwrap_or_else(|| "stash@{0}".to_string())
+    }
+
+    /// Run a stash subcommand with the ref at cursor.
+    fn stash_op(&mut self, verb: &str, past_tense: &str) {
+        let idx_str = self.stash_ref_at_cursor();
+        let (ok, _, stderr) = self.run_git_porcelain(&["stash", verb, &idx_str]);
         if ok {
-            self.set_status(format!("Popped {}", idx_str));
+            self.set_status(format!("{} {}", past_tense, idx_str));
             self.git_status();
         } else {
-            self.set_status(format!("Stash pop failed: {}", stderr));
+            self.set_status(format!("Stash {} failed: {}", verb, stderr));
         }
+    }
+
+    pub fn git_stash_pop(&mut self) {
+        self.stash_op("pop", "Popped");
     }
 
     pub fn git_stash_apply(&mut self) {
-        let idx_str = self
-            .stash_index_at_cursor()
-            .map(|n| format!("stash@{{{}}}", n))
-            .unwrap_or_else(|| "stash@{0}".to_string());
-        let (ok, _, stderr) = self.run_git_porcelain(&["stash", "apply", &idx_str]);
-        if ok {
-            self.set_status(format!("Applied {}", idx_str));
-            self.git_status();
-        } else {
-            self.set_status(format!("Stash apply failed: {}", stderr));
-        }
+        self.stash_op("apply", "Applied");
     }
 
     pub fn git_stash_drop(&mut self) {
-        let idx_str = self
-            .stash_index_at_cursor()
-            .map(|n| format!("stash@{{{}}}", n))
-            .unwrap_or_else(|| "stash@{0}".to_string());
-        let (ok, _, stderr) = self.run_git_porcelain(&["stash", "drop", &idx_str]);
-        if ok {
-            self.set_status(format!("Dropped {}", idx_str));
-            self.git_status();
-        } else {
-            self.set_status(format!("Stash drop failed: {}", stderr));
-        }
+        self.stash_op("drop", "Dropped");
     }
 
     // ── Discard (context-aware) ─────────────────────────────────────
@@ -943,7 +788,7 @@ impl Editor {
         let cursor_row = self.window_mgr.focused_window().cursor_row;
         let kind = self.buffers[idx]
             .git_status_view()
-            .and_then(|v| v.line_kinds.get(cursor_row).cloned());
+            .and_then(|v| v.kind_at(cursor_row).cloned());
 
         match kind {
             Some(crate::git_status::GitLineKind::DiffHunk)
@@ -958,13 +803,28 @@ impl Editor {
 
     // ── Context-Aware Stage/Unstage ─────────────────────────────────
 
-    /// Context-aware stage: hunk if on diff line, file if on file line.
-    pub fn git_stage_at_cursor(&mut self) {
+    /// Collect file paths belonging to a section in the git status view.
+    fn section_file_paths(&self, section: crate::git_status::GitSection) -> Vec<String> {
         let idx = self.active_buffer_idx();
-        let cursor_row = self.window_mgr.focused_window().cursor_row;
-        let kind = self.buffers[idx]
+        self.buffers[idx]
             .git_status_view()
-            .and_then(|v| v.line_kinds.get(cursor_row).cloned());
+            .map(|v| {
+                v.lines
+                    .iter()
+                    .filter(|l| l.section == Some(section))
+                    .filter_map(|l| l.file_path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Context-aware stage: hunk if on diff line, file if on file line,
+    /// all files if on section header. Batch: only refresh once at the end.
+    pub fn git_stage_at_cursor(&mut self) {
+        let cursor_row = self.window_mgr.focused_window().cursor_row;
+        let kind = self.buffers[self.active_buffer_idx()]
+            .git_status_view()
+            .and_then(|v| v.kind_at(cursor_row).cloned());
 
         match kind {
             Some(crate::git_status::GitLineKind::DiffHunk)
@@ -972,20 +832,11 @@ impl Editor {
                 self.git_stage_hunk();
             }
             Some(crate::git_status::GitLineKind::SectionHeader(section)) => {
-                // Stage all files in section
-                let paths: Vec<String> = self.buffers[idx]
-                    .git_status_view()
-                    .map(|v| {
-                        v.lines
-                            .iter()
-                            .filter(|l| l.section == Some(section))
-                            .filter_map(|l| l.file_path.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for p in paths {
-                    self.git_stage_file(&p);
+                let paths = self.section_file_paths(section);
+                for p in &paths {
+                    let _ = self.run_git_porcelain(&["add", "--", p]);
                 }
+                self.git_status();
             }
             _ => {
                 if let Some(p) = self.current_git_file_path() {
@@ -995,13 +846,13 @@ impl Editor {
         }
     }
 
-    /// Context-aware unstage: hunk if on diff line, file if on file line.
+    /// Context-aware unstage: hunk if on diff line, file if on file line,
+    /// all files if on section header. Batch: only refresh once at the end.
     pub fn git_unstage_at_cursor(&mut self) {
-        let idx = self.active_buffer_idx();
         let cursor_row = self.window_mgr.focused_window().cursor_row;
-        let kind = self.buffers[idx]
+        let kind = self.buffers[self.active_buffer_idx()]
             .git_status_view()
-            .and_then(|v| v.line_kinds.get(cursor_row).cloned());
+            .and_then(|v| v.kind_at(cursor_row).cloned());
 
         match kind {
             Some(crate::git_status::GitLineKind::DiffHunk)
@@ -1009,19 +860,11 @@ impl Editor {
                 self.git_unstage_hunk();
             }
             Some(crate::git_status::GitLineKind::SectionHeader(section)) => {
-                let paths: Vec<String> = self.buffers[idx]
-                    .git_status_view()
-                    .map(|v| {
-                        v.lines
-                            .iter()
-                            .filter(|l| l.section == Some(section))
-                            .filter_map(|l| l.file_path.clone())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for p in paths {
-                    self.git_unstage_file(&p);
+                let paths = self.section_file_paths(section);
+                for p in &paths {
+                    let _ = self.run_git_porcelain(&["reset", "HEAD", "--", p]);
                 }
+                self.git_status();
             }
             _ => {
                 if let Some(p) = self.current_git_file_path() {

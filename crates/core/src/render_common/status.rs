@@ -130,19 +130,19 @@ pub fn mode_theme_key(editor: &Editor) -> &'static str {
     } else {
         // Buffer-kind-aware theme keys for special buffers.
         let buf_kind = editor.active_buffer().kind;
-        match buf_kind {
-            BufferKind::GitStatus | BufferKind::Debug => "ui.statusline.mode.command",
-            _ => match editor.mode {
-                Mode::Normal => "ui.statusline.mode.normal",
-                Mode::Insert => "ui.statusline.mode.insert",
-                Mode::Visual(_) => "ui.statusline.mode.visual",
-                Mode::Command => "ui.statusline.mode.command",
-                Mode::ConversationInput => "ui.statusline.mode.conversation",
-                Mode::ShellInsert => "ui.statusline.mode.insert",
-                Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
-                    "ui.statusline.mode.command"
-                }
-            },
+        if let Some(key) = buf_kind.mode_theme_key() {
+            return key;
+        }
+        match editor.mode {
+            Mode::Normal => "ui.statusline.mode.normal",
+            Mode::Insert => "ui.statusline.mode.insert",
+            Mode::Visual(_) => "ui.statusline.mode.visual",
+            Mode::Command => "ui.statusline.mode.command",
+            Mode::ConversationInput => "ui.statusline.mode.conversation",
+            Mode::ShellInsert => "ui.statusline.mode.insert",
+            Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
+                "ui.statusline.mode.command"
+            }
         }
     }
 }

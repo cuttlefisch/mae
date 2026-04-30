@@ -36,7 +36,7 @@ pub fn git_line_theme_key(kind: &GitLineKind) -> &'static str {
     }
 }
 
-/// Compute highlight spans for a GitStatus buffer by iterating `line_kinds`.
+/// Compute highlight spans for a GitStatus buffer by iterating `lines`.
 /// Each non-blank line gets a full-line span with the theme key from
 /// `git_line_theme_key()`. This is the git-status equivalent of
 /// `compute_help_spans()`.
@@ -49,11 +49,11 @@ pub fn compute_git_status_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let rope = buf.rope();
     let mut spans = Vec::new();
 
-    for (line_idx, kind) in view.line_kinds.iter().enumerate() {
-        if matches!(kind, GitLineKind::Blank) {
+    for (line_idx, line) in view.lines.iter().enumerate() {
+        if matches!(line.kind, GitLineKind::Blank) {
             continue;
         }
-        let theme_key = git_line_theme_key(kind);
+        let theme_key = git_line_theme_key(&line.kind);
         if theme_key == "ui.text" {
             continue; // default color, no span needed
         }
@@ -160,28 +160,19 @@ mod tests {
             text: "Head:     main".to_string(),
             section: None,
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::Header,
         });
-        view.line_kinds.push(GitLineKind::Header);
 
         view.lines.push(GitStatusLine {
             text: "Unstaged changes:".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Unstaged),
         });
-        view.line_kinds
-            .push(GitLineKind::SectionHeader(GitSection::Unstaged));
 
         buf.view = BufferView::GitStatus(Box::new(view));
         buf.insert_text_at(0, "Head:     main\nUnstaged changes:\n");

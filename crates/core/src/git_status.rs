@@ -45,16 +45,26 @@ pub struct GitStatusLine {
     pub text: String,
     pub section: Option<GitSection>,
     pub file_path: Option<String>,
-    /// If Some, this line represents a specific hunk (start, count)
-    pub hunk: Option<(usize, usize)>,
     /// Which hunk within the file (0-based). Set on DiffHunk and DiffLine rows.
     pub hunk_index: Option<usize>,
     /// Raw `@@ ... @@` header for this hunk. Set on DiffHunk rows.
     pub hunk_header: Option<String>,
-    pub is_header: bool,
-    pub is_collapsed: bool,
     /// Semantic kind for rendering.
     pub kind: GitLineKind,
+}
+
+impl GitStatusLine {
+    /// A blank separator line.
+    pub fn blank() -> Self {
+        GitStatusLine {
+            text: String::new(),
+            section: None,
+            file_path: None,
+            hunk_index: None,
+            hunk_header: None,
+            kind: GitLineKind::Blank,
+        }
+    }
 }
 
 /// Structured state for the `*Git Status*` buffer.
@@ -66,8 +76,6 @@ pub struct GitStatusLine {
 #[derive(Debug, Clone)]
 pub struct GitStatusView {
     pub lines: Vec<GitStatusLine>,
-    /// Parallel to `lines` — maps each buffer line to its semantic kind.
-    pub line_kinds: Vec<GitLineKind>,
     /// Multi-level collapse state. Keys use structured prefixes (see above).
     pub collapsed: HashMap<String, bool>,
     /// Root directory of the repository.
@@ -78,10 +86,14 @@ impl GitStatusView {
     pub fn new(repo_root: PathBuf) -> Self {
         GitStatusView {
             lines: Vec::new(),
-            line_kinds: Vec::new(),
             collapsed: HashMap::new(),
             repo_root,
         }
+    }
+
+    /// Get the line kind at a given row index.
+    pub fn kind_at(&self, row: usize) -> Option<&GitLineKind> {
+        self.lines.get(row).map(|l| &l.kind)
     }
 
     /// Toggle collapse state for a key. Default state is "not collapsed" (expanded).
@@ -188,11 +200,8 @@ mod tests {
             text: "Unstaged changes:".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Unstaged),
         };
         assert_eq!(
@@ -204,11 +213,8 @@ mod tests {
             text: "  M src/main.rs".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: Some("src/main.rs".to_string()),
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: false,
-            is_collapsed: false,
             kind: GitLineKind::File {
                 section: GitSection::Unstaged,
                 status_char: 'M',
@@ -223,11 +229,8 @@ mod tests {
             text: "    @@ -1,3 +1,4 @@".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: Some("src/main.rs".to_string()),
-            hunk: None,
             hunk_index: Some(0),
             hunk_header: Some("@@ -1,3 +1,4 @@".to_string()),
-            is_header: false,
-            is_collapsed: false,
             kind: GitLineKind::DiffHunk,
         };
         assert_eq!(
@@ -244,51 +247,34 @@ mod tests {
             text: "Head:     main".to_string(),
             section: None,
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::Header,
         });
-        view.line_kinds.push(GitLineKind::Header);
 
         view.lines.push(GitStatusLine {
             text: "Unstaged changes:".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Unstaged),
         });
-        view.line_kinds
-            .push(GitLineKind::SectionHeader(GitSection::Unstaged));
 
         view.lines.push(GitStatusLine {
             text: "  M src/main.rs".to_string(),
             section: Some(GitSection::Unstaged),
             file_path: Some("src/main.rs".to_string()),
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: false,
-            is_collapsed: true,
             kind: GitLineKind::File {
                 section: GitSection::Unstaged,
                 status_char: 'M',
             },
         });
-        view.line_kinds.push(GitLineKind::File {
-            section: GitSection::Unstaged,
-            status_char: 'M',
-        });
 
         assert_eq!(view.lines.len(), 3);
-        assert_eq!(view.line_kinds.len(), 3);
-        assert!(view.lines[0].is_header);
+        assert!(matches!(view.lines[0].kind, GitLineKind::Header));
         assert_eq!(view.lines[2].file_path.as_deref(), Some("src/main.rs"));
     }
 
@@ -300,11 +286,8 @@ mod tests {
             text: "Head:     main".to_string(),
             section: None,
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::Header,
         });
         // Section
@@ -312,11 +295,8 @@ mod tests {
             text: "Staged changes:".to_string(),
             section: Some(GitSection::Staged),
             file_path: None,
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: true,
-            is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Staged),
         });
         // File
@@ -324,11 +304,8 @@ mod tests {
             text: "  A new_file.rs".to_string(),
             section: Some(GitSection::Staged),
             file_path: Some("new_file.rs".to_string()),
-            hunk: None,
             hunk_index: None,
             hunk_header: None,
-            is_header: false,
-            is_collapsed: true,
             kind: GitLineKind::File {
                 section: GitSection::Staged,
                 status_char: 'A',

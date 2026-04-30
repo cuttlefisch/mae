@@ -762,19 +762,19 @@ impl Editor {
         self.keymaps.get(name)
     }
 
-    /// Get which-key entries for the current keymap, merging overlay + parent.
-    pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
+    /// Merge which-key entries from the overlay keymap and its parent.
+    fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
         let Some((primary, fallback)) = self.current_keymap_names() else {
             return vec![];
         };
         let mut entries = self
             .keymaps
             .get(primary)
-            .map(|km| km.which_key_entries(&self.which_key_prefix, &self.commands))
+            .map(|km| km.which_key_entries(prefix, &self.commands))
             .unwrap_or_default();
         if let Some(fb_name) = fallback {
             if let Some(fb_km) = self.keymaps.get(fb_name) {
-                let fb_entries = fb_km.which_key_entries(&self.which_key_prefix, &self.commands);
+                let fb_entries = fb_km.which_key_entries(prefix, &self.commands);
                 let existing: std::collections::HashSet<String> =
                     entries.iter().map(|e| format!("{:?}", e.key)).collect();
                 for entry in fb_entries {
@@ -787,31 +787,15 @@ impl Editor {
         entries
     }
 
+    /// Get which-key entries for the current keymap, merging overlay + parent.
+    pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
+        self.merged_which_key_entries(&self.which_key_prefix)
+    }
+
     /// Get all top-level bindings for the current buffer's keymap + parent.
     /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
     pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
-        let Some((primary, fallback)) = self.current_keymap_names() else {
-            return vec![];
-        };
-        let empty_prefix: &[KeyPress] = &[];
-        let mut entries = self
-            .keymaps
-            .get(primary)
-            .map(|km| km.which_key_entries(empty_prefix, &self.commands))
-            .unwrap_or_default();
-        if let Some(fb_name) = fallback {
-            if let Some(fb_km) = self.keymaps.get(fb_name) {
-                let fb_entries = fb_km.which_key_entries(empty_prefix, &self.commands);
-                let existing: std::collections::HashSet<String> =
-                    entries.iter().map(|e| format!("{:?}", e.key)).collect();
-                for entry in fb_entries {
-                    if !existing.contains(&format!("{:?}", entry.key)) {
-                        entries.push(entry);
-                    }
-                }
-            }
-        }
-        entries
+        self.merged_which_key_entries(&[])
     }
 
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
