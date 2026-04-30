@@ -18,6 +18,8 @@ use mae_core::{parse_key_seq_spaced, Editor};
 struct SharedState {
     /// (keymap_name, key_string, command_name)
     keymap_bindings: Vec<(String, String, String)>,
+    /// (keymap_name, parent_name) — new keymaps to create
+    keymap_defs: Vec<(String, String)>,
     /// (command_name, doc_string, scheme_function_name)
     command_defs: Vec<(String, String, String)>,
     /// Status messages set by Scheme code
@@ -148,6 +150,13 @@ impl SchemeRuntime {
                 SteelVal::Void
             },
         );
+
+        // Register define-keymap: (define-keymap NAME PARENT)
+        let s = shared.clone();
+        engine.register_fn("define-keymap", move |name: String, parent: String| {
+            s.lock().unwrap().keymap_defs.push((name, parent));
+            SteelVal::Void
+        });
 
         // Register define-command: (define-command NAME DOC SCHEME-FN-NAME)
         let s = shared.clone();
@@ -442,7 +451,6 @@ impl SchemeRuntime {
             mae_core::Mode::FileBrowser => "file-browser",
             mae_core::Mode::CommandPalette => "command-palette",
             mae_core::Mode::ShellInsert => "shell-insert",
-            mae_core::Mode::GitStatus => "git-status",
         };
         self.engine
             .register_value("*mode*", SteelVal::StringV(mode_str.into()));
@@ -498,6 +506,16 @@ impl SchemeRuntime {
     /// Call this after loading init.scm or after REPL eval.
     pub fn apply_to_editor(&mut self, editor: &mut Editor) {
         let mut state = self.shared.lock().unwrap();
+
+        // Create new keymaps (must come before bindings so define-key can target them)
+        for (name, parent) in state.keymap_defs.drain(..) {
+            if !editor.keymaps.contains_key(&name) {
+                debug!(keymap = %name, parent = %parent, "creating scheme keymap");
+                editor
+                    .keymaps
+                    .insert(name.clone(), mae_core::Keymap::with_parent(&name, &parent));
+            }
+        }
 
         // Apply keymap bindings
         let binding_count = state.keymap_bindings.len();
@@ -959,6 +977,25 @@ mod tests {
         let bindings = rt.list_keybindings();
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0], ("normal".into(), "Q".into(), "quit".into()));
+    }
+
+    #[test]
+    fn define_keymap_creates_with_parent() {
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(define-keymap "python" "normal")"#).unwrap();
+        rt.eval(r#"(define-key "python" "C-c" "run-python-buffer")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+
+        let km = editor.keymaps.get("python").unwrap();
+        assert_eq!(km.parent.as_deref(), Some("normal"));
+        let seq = parse_key_seq("C-c");
+        assert_eq!(
+            km.lookup(&seq),
+            mae_core::LookupResult::Exact("run-python-buffer")
+        );
     }
 
     #[test]

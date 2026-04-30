@@ -242,7 +242,23 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.sync_conversation_buffer_rope();
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
-            editor.set_status("[AI] Done");
+
+            // Auto-restore editor state after self-test session.
+            if editor.self_test_active {
+                editor.self_test_active = false;
+                match editor.restore_state() {
+                    Ok(summary) => {
+                        info!(summary = %summary, "auto-restored editor state after self-test");
+                        editor.set_status(format!("[AI] Done — {}", summary));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to auto-restore state after self-test");
+                        editor.set_status("[AI] Done (state restore failed)");
+                    }
+                }
+            } else {
+                editor.set_status("[AI] Done");
+            }
         }
         AiEvent::CostUpdate {
             session_usd,

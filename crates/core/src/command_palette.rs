@@ -35,6 +35,7 @@ pub enum PalettePurpose {
     SwitchProject,
     AiMode,
     AiProfile,
+    GitBranch,
 }
 
 /// State for the command palette overlay.
@@ -115,6 +116,11 @@ impl CommandPalette {
     /// AI profile picker palette. Used by `:ai-set-profile`.
     pub fn for_ai_profile(profiles: &[&str]) -> Self {
         Self::with_name_list(profiles, PalettePurpose::AiProfile)
+    }
+
+    /// Git branch picker palette. Used by `b b` in git-status.
+    pub fn for_git_branch(branches: &[&str]) -> Self {
+        Self::with_name_list(branches, PalettePurpose::GitBranch)
     }
 
     /// Splash art picker palette. More art variants will be added in a

@@ -244,7 +244,7 @@ pub fn compute_layout(
     glyph_advance_fn: Option<&dyn Fn(f32) -> f32>,
 ) -> FrameLayout {
     let total_lines = buf.display_line_count();
-    let gutter_w = if buf.kind == mae_core::BufferKind::Conversation {
+    let gutter_w = if !mae_core::BufferMode::has_gutter(&buf.kind) {
         0
     } else if editor.show_line_numbers {
         gutter::gutter_width(buf.display_line_count())

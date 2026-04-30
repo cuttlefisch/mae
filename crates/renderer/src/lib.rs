@@ -171,11 +171,14 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_command_palette(frame, area, editor);
-    } else if !editor.which_key_prefix.is_empty() {
-        let entries = if let Some(km) = editor.keymaps.get("normal") {
-            km.which_key_entries(&editor.which_key_prefix, &editor.commands)
+    } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
+        let (entries, title_override) = if editor.buffer_keys_popup {
+            let kind = editor.active_buffer().kind;
+            use mae_core::buffer_mode::BufferMode;
+            let title = kind.mode_name().to_string();
+            (editor.buffer_keys_entries(), Some(title))
         } else {
-            vec![]
+            (editor.which_key_entries_for_current_keymap(), None)
         };
 
         let cols = (area.width as usize / 25).max(1);
@@ -186,7 +189,13 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);
 
         render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
-        which_key_render::render_which_key_popup(frame, chunks[1], editor, &entries);
+        which_key_render::render_which_key_popup(
+            frame,
+            chunks[1],
+            editor,
+            &entries,
+            title_override.as_deref(),
+        );
     } else if mae_core::render_common::splash::should_show_splash(editor) {
         let chunks = Layout::vertical([
             Constraint::Min(1),
@@ -285,6 +294,19 @@ fn render_window_area(
                         is_focused,
                         editor,
                         Some(&help_spans),
+                    );
+                }
+                mae_core::BufferKind::GitStatus => {
+                    let git_spans =
+                        mae_core::render_common::git_status::compute_git_status_spans(buf);
+                    buffer_render::render_window(
+                        frame,
+                        ratatui_rect,
+                        buf,
+                        win,
+                        is_focused,
+                        editor,
+                        Some(&git_spans),
                     );
                 }
                 mae_core::BufferKind::Debug => {

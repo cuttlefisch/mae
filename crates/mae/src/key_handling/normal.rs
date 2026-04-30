@@ -10,6 +10,15 @@ pub(super) fn handle_keymap_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // Dismiss buffer-keys popup on any keypress.
+    // Esc/q dismiss only; other keys dismiss AND fall through to normal processing.
+    if editor.buffer_keys_popup {
+        editor.buffer_keys_popup = false;
+        if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
+            return;
+        }
+    }
+
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         editor.running = false;
         return;
@@ -361,120 +370,8 @@ pub(super) fn handle_normal_mode(
         }
     }
 
-    // Help buffer: intercept only link-navigation and help-specific keys.
-    // All normal vim navigation (j/k/G/gg/C-d/C-u/etc.) falls through to
-    // the standard keymap — the help buffer is a read-only rope buffer.
-    let is_help = {
-        let idx = editor.active_buffer_idx();
-        editor.buffers[idx].kind == BufferKind::Help
-    };
-    if is_help && pending_keys.is_empty() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Enter => {
-                editor.help_follow_link();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Tab => {
-                editor.help_next_link();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::BackTab => {
-                editor.help_prev_link();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('q') if !ctrl => {
-                editor.help_close();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('o') if ctrl => {
-                editor.help_back();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('i') if ctrl => {
-                editor.help_forward();
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {} // Fall through to normal keymap
-        }
-    }
-
-    // Debug panel: intercept navigation and action keys.
-    // j/k move between interactive items, Enter selects/expands,
-    // c/n/s/S drive execution, o toggles output, r refreshes, q closes.
-    let is_debug = {
-        let idx = editor.active_buffer_idx();
-        editor.buffers[idx].kind == BufferKind::Debug
-    };
-    if is_debug && pending_keys.is_empty() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('j') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view_mut() {
-                    view.move_down();
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view_mut() {
-                    view.move_up();
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Enter => {
-                editor.debug_panel_select();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('q') if !ctrl => {
-                editor.close_debug_panel();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('o') if !ctrl => {
-                editor.debug_toggle_output();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('r') if !ctrl => {
-                editor.dap_refresh();
-                editor.debug_panel_refresh_if_open();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('c') if !ctrl => {
-                editor.dap_continue();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('n') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::Over);
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('s') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::In);
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('S') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::Out);
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {} // Fall through to normal keymap
-        }
-    }
+    // Help buffer and Debug panel keys are now handled via their respective
+    // overlay keymaps ("help" and "debug"), so no inline interception needed.
 
     // Pending file delete confirmation (y/n). Shared by file-tree-delete and delete-this-file.
     if editor.pending_file_delete.is_some() && pending_keys.is_empty() {
@@ -523,113 +420,7 @@ pub(super) fn handle_normal_mode(
         return;
     }
 
-    // File tree sidebar: intercept navigation and action keys.
-    // j/k navigate, Enter opens file or toggles dir, o expands, R refreshes, q closes.
-    let is_file_tree = {
-        let idx = editor.active_buffer_idx();
-        editor.buffers[idx].kind == BufferKind::FileTree
-    };
-    if is_file_tree && pending_keys.is_empty() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('j') if !ctrl => {
-                editor.dispatch_builtin("file-tree-down");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                editor.dispatch_builtin("file-tree-up");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Enter => {
-                editor.dispatch_builtin("file-tree-open");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('o') if !ctrl => {
-                editor.dispatch_builtin("file-tree-expand");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Tab => {
-                editor.dispatch_builtin("file-tree-expand");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('R') if !ctrl => {
-                editor.dispatch_builtin("file-tree-refresh");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('q') if !ctrl => {
-                editor.dispatch_builtin("file-tree-toggle");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('G') if !ctrl => {
-                editor.dispatch_builtin("file-tree-last");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('g') if !ctrl => {
-                editor.dispatch_builtin("file-tree-first");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('>') if !ctrl => {
-                editor.dispatch_builtin("window-grow");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('<') if !ctrl => {
-                editor.dispatch_builtin("window-shrink");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('x') if !ctrl => {
-                editor.dispatch_builtin("file-tree-close-parent");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('C') if !ctrl => {
-                editor.dispatch_builtin("file-tree-cd");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('u') if !ctrl => {
-                editor.dispatch_builtin("file-tree-parent");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('d') if !ctrl => {
-                editor.dispatch_builtin("file-tree-delete");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('r') if !ctrl => {
-                editor.dispatch_builtin("file-tree-rename");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('a') if !ctrl => {
-                editor.dispatch_builtin("file-tree-create");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('s') if !ctrl => {
-                editor.dispatch_builtin("file-tree-open-vsplit");
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('i') if !ctrl => {
-                editor.dispatch_builtin("file-tree-open-hsplit");
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {} // Fall through to normal keymap
-        }
-    }
+    // File tree keys are now handled via the "file-tree" overlay keymap.
 
     // In the *AI* output buffer, `i`/`a` redirect focus to the input window
     // --- Conversation pair intercepts ---

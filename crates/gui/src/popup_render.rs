@@ -350,6 +350,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
         PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
         PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
+        PalettePurpose::GitBranch => format!(" Git Branch ({}/{}) ", match_count, total),
     };
     draw_border_titled(
         canvas,
@@ -441,6 +442,7 @@ pub fn render_which_key_popup(
     height: usize,
     cols: usize,
     entries: &[mae_core::WhichKeyEntry],
+    title_override: Option<&str>,
 ) {
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let group_fg = theme::ts_fg(editor, "ui.popup.group");
@@ -449,28 +451,25 @@ pub fn render_which_key_popup(
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
-    let breadcrumb: String = editor
-        .which_key_prefix
-        .iter()
-        .map(format_keypress)
-        .collect::<Vec<_>>()
-        .join(" > ");
-    draw_border_titled(
-        canvas,
-        row_start,
-        0,
-        cols,
-        height,
-        border_fg,
-        &format!(" {} ", breadcrumb),
-    );
+    let title = if let Some(t) = title_override {
+        format!(" {} keys ", t)
+    } else {
+        let breadcrumb: String = editor
+            .which_key_prefix
+            .iter()
+            .map(format_keypress)
+            .collect::<Vec<_>>()
+            .join(" > ");
+        format!(" {} ", breadcrumb)
+    };
+    draw_border_titled(canvas, row_start, 0, cols, height, border_fg, &title);
 
     let inner_row = row_start + 1;
     let inner_col = 1_usize;
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    let col_width = 25_usize;
+    let col_width = 30_usize;
     let num_cols = (inner_width / col_width).max(1);
 
     let mut row = 0;

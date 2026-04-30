@@ -60,6 +60,10 @@ impl Editor {
                 }
             }
 
+            "show-buffer-keys" => {
+                self.buffer_keys_popup = true;
+            }
+
             "file-info" => {
                 let idx = self.active_buffer_idx();
                 let buf = &self.buffers[idx];

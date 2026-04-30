@@ -342,6 +342,51 @@ fn save_and_restore_preserves_original_buffers() {
     assert_eq!(editor.buffers[1].name, "existing.rs");
 }
 
+#[test]
+fn save_and_restore_preserves_conversation_pair() {
+    use crate::editor::ConversationPair;
+
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI*".into();
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".into();
+    editor.buffers.push(input_buf);
+
+    // Simulate a conversation pair
+    editor.conversation_pair = Some(ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: 100,
+        input_window_id: 101,
+    });
+
+    editor.save_state();
+
+    // Mutate: clear the pair and add a test buffer
+    editor.conversation_pair = None;
+    let mut test_buf = Buffer::new();
+    test_buf.name = "test.txt".into();
+    editor.buffers.push(test_buf);
+
+    editor.restore_state().unwrap();
+
+    // Conversation pair should be restored with correct (possibly remapped) indices
+    let pair = editor
+        .conversation_pair
+        .as_ref()
+        .expect("pair should be restored");
+    assert_eq!(editor.buffers[pair.output_buffer_idx].name, "*AI*");
+    assert_eq!(editor.buffers[pair.input_buffer_idx].name, "*ai-input*");
+    assert_eq!(pair.output_window_id, 100);
+    assert_eq!(pair.input_window_id, 101);
+}
+
+#[test]
+fn self_test_active_flag_defaults_false() {
+    let editor = Editor::new();
+    assert!(!editor.self_test_active);
+}
+
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Buffer-local options (per-buffer word_wrap, line_numbers, etc.)

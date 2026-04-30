@@ -11,7 +11,7 @@ pub trait BufferMode {
 
     /// Name of the keymap to use when this buffer is focused in Normal mode.
     /// Returns None to use the default "normal" keymap.
-    fn keymap_name(&self) -> Option<&str> {
+    fn keymap_name(&self) -> Option<&'static str> {
         None
     }
 
@@ -23,6 +23,18 @@ pub trait BufferMode {
     /// Whether word-wrap should default to on (prose buffers).
     fn default_word_wrap(&self) -> bool {
         false
+    }
+
+    /// Whether this buffer kind should show a line-number gutter.
+    fn has_gutter(&self) -> bool {
+        true
+    }
+
+    /// Optional hint text for the command area when this buffer is first entered.
+    /// Returns None for buffers that don't need discoverability hints.
+    /// Emacs equivalent: mode-specific `message` on mode entry.
+    fn status_hint(&self) -> Option<&'static str> {
+        None
     }
 }
 
@@ -43,10 +55,28 @@ impl BufferMode for BufferKind {
         }
     }
 
-    fn keymap_name(&self) -> Option<&str> {
+    fn keymap_name(&self) -> Option<&'static str> {
         match self {
             Self::GitStatus => Some("git-status"),
             Self::FileTree => Some("file-tree"),
+            Self::Help => Some("help"),
+            Self::Debug => Some("debug"),
+            _ => None,
+        }
+    }
+
+    fn has_gutter(&self) -> bool {
+        !matches!(
+            self,
+            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard
+        )
+    }
+
+    fn status_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::GitStatus => Some("Press ? for key help, SPC m for mode menu"),
+            Self::Debug => Some("Press ? for key help"),
+            Self::FileTree => Some("Press ? for key help"),
             _ => None,
         }
     }
@@ -92,8 +122,9 @@ mod tests {
     fn buffer_mode_keymap() {
         assert_eq!(BufferKind::GitStatus.keymap_name(), Some("git-status"));
         assert_eq!(BufferKind::FileTree.keymap_name(), Some("file-tree"));
+        assert_eq!(BufferKind::Help.keymap_name(), Some("help"));
+        assert_eq!(BufferKind::Debug.keymap_name(), Some("debug"));
         assert_eq!(BufferKind::Text.keymap_name(), None);
-        assert_eq!(BufferKind::Help.keymap_name(), None);
         assert_eq!(BufferKind::Conversation.keymap_name(), None);
     }
 
@@ -104,6 +135,35 @@ mod tests {
         assert!(BufferKind::Messages.default_word_wrap());
         assert!(!BufferKind::Text.default_word_wrap());
         assert!(!BufferKind::Shell.default_word_wrap());
+    }
+
+    #[test]
+    fn buffer_mode_has_gutter() {
+        assert!(BufferKind::Text.has_gutter());
+        assert!(BufferKind::Help.has_gutter());
+        assert!(BufferKind::GitStatus.has_gutter());
+        assert!(!BufferKind::Conversation.has_gutter());
+        assert!(!BufferKind::Messages.has_gutter());
+        assert!(!BufferKind::Dashboard.has_gutter());
+        assert!(!BufferKind::Visual.has_gutter());
+    }
+
+    #[test]
+    fn buffer_mode_status_hint() {
+        assert_eq!(
+            BufferKind::GitStatus.status_hint(),
+            Some("Press ? for key help, SPC m for mode menu")
+        );
+        assert_eq!(
+            BufferKind::Debug.status_hint(),
+            Some("Press ? for key help")
+        );
+        assert_eq!(
+            BufferKind::FileTree.status_hint(),
+            Some("Press ? for key help")
+        );
+        assert_eq!(BufferKind::Text.status_hint(), None);
+        assert_eq!(BufferKind::Conversation.status_hint(), None);
     }
 
     #[test]

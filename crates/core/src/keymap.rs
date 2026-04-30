@@ -86,6 +86,8 @@ pub struct WhichKeyEntry {
 /// efficient multi-key sequence handling (dd, gg, C-c C-v, etc.)
 pub struct Keymap {
     pub name: String,
+    /// If set, keys not found in this keymap fall back to the parent.
+    pub parent: Option<String>,
     bindings: HashMap<Vec<KeyPress>, String>,
     /// All proper prefixes of bound key sequences, for multi-key detection.
     prefixes: HashSet<Vec<KeyPress>>,
@@ -97,6 +99,18 @@ impl Keymap {
     pub fn new(name: impl Into<String>) -> Self {
         Keymap {
             name: name.into(),
+            parent: None,
+            bindings: HashMap::new(),
+            prefixes: HashSet::new(),
+            group_names: HashMap::new(),
+        }
+    }
+
+    /// Create a keymap with a named parent for fallback lookup.
+    pub fn with_parent(name: impl Into<String>, parent: impl Into<String>) -> Self {
+        Keymap {
+            name: name.into(),
+            parent: Some(parent.into()),
             bindings: HashMap::new(),
             prefixes: HashSet::new(),
             group_names: HashMap::new(),
@@ -184,7 +198,7 @@ impl Keymap {
             if is_leaf {
                 let label = commands
                     .get(cmd_name)
-                    .map(|c| c.doc.clone())
+                    .map(|c| c.which_key_label().to_string())
                     .unwrap_or_else(|| cmd_name.clone());
                 seen.insert(
                     sort_key,

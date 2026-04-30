@@ -4,6 +4,7 @@
 //! prioritized segments, then [`layout_status_segments`] to split them into
 //! left/right text.  The backend only needs to draw the resulting strings.
 
+use crate::buffer_mode::BufferMode;
 use crate::{Buffer, BufferKind, Editor, InputLock, LspServerStatus, Mode, VisualType, Window};
 use unicode_width::UnicodeWidthStr;
 
@@ -89,22 +90,32 @@ pub fn mode_label(editor: &Editor) -> String {
     } else if editor.macro_recording {
         format!(" REC @{} ", editor.macro_register.unwrap_or('?'))
     } else {
-        match editor.mode {
-            Mode::Normal => " NORMAL ",
-            Mode::Insert => " INSERT ",
-            Mode::Visual(VisualType::Char) => " VISUAL ",
-            Mode::Visual(VisualType::Line) => " V-LINE ",
-            Mode::Visual(VisualType::Block) => " V-BLOCK ",
-            Mode::Command => " COMMAND ",
-            Mode::ConversationInput => " AI INPUT ",
-            Mode::Search => " SEARCH ",
-            Mode::FilePicker => " FIND FILE ",
-            Mode::FileBrowser => " BROWSE ",
-            Mode::CommandPalette => " COMMAND PALETTE ",
-            Mode::ShellInsert => " TERMINAL ",
-            Mode::GitStatus => " GIT STATUS ",
+        // Buffer-kind-aware labels: derive from BufferMode trait.
+        let buf_kind = editor.active_buffer().kind;
+        let kind_label = if buf_kind.keymap_name().is_some() {
+            Some(format!(" {} ", buf_kind.mode_name().to_uppercase()))
+        } else {
+            None
+        };
+        if let Some(label) = kind_label {
+            label
+        } else {
+            match editor.mode {
+                Mode::Normal => " NORMAL ",
+                Mode::Insert => " INSERT ",
+                Mode::Visual(VisualType::Char) => " VISUAL ",
+                Mode::Visual(VisualType::Line) => " V-LINE ",
+                Mode::Visual(VisualType::Block) => " V-BLOCK ",
+                Mode::Command => " COMMAND ",
+                Mode::ConversationInput => " AI INPUT ",
+                Mode::Search => " SEARCH ",
+                Mode::FilePicker => " FIND FILE ",
+                Mode::FileBrowser => " BROWSE ",
+                Mode::CommandPalette => " COMMAND PALETTE ",
+                Mode::ShellInsert => " TERMINAL ",
+            }
+            .to_string()
         }
-        .to_string()
     }
 }
 
@@ -117,17 +128,21 @@ pub fn mode_theme_key(editor: &Editor) -> &'static str {
             InputLock::None => "ui.statusline.mode.normal",
         }
     } else {
-        match editor.mode {
-            Mode::Normal => "ui.statusline.mode.normal",
-            Mode::Insert => "ui.statusline.mode.insert",
-            Mode::Visual(_) => "ui.statusline.mode.visual",
-            Mode::Command => "ui.statusline.mode.command",
-            Mode::ConversationInput => "ui.statusline.mode.conversation",
-            Mode::ShellInsert => "ui.statusline.mode.insert",
-            Mode::GitStatus => "ui.statusline.mode.command",
-            Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
-                "ui.statusline.mode.command"
-            }
+        // Buffer-kind-aware theme keys for special buffers.
+        let buf_kind = editor.active_buffer().kind;
+        match buf_kind {
+            BufferKind::GitStatus | BufferKind::Debug => "ui.statusline.mode.command",
+            _ => match editor.mode {
+                Mode::Normal => "ui.statusline.mode.normal",
+                Mode::Insert => "ui.statusline.mode.insert",
+                Mode::Visual(_) => "ui.statusline.mode.visual",
+                Mode::Command => "ui.statusline.mode.command",
+                Mode::ConversationInput => "ui.statusline.mode.conversation",
+                Mode::ShellInsert => "ui.statusline.mode.insert",
+                Mode::Search | Mode::FilePicker | Mode::FileBrowser | Mode::CommandPalette => {
+                    "ui.statusline.mode.command"
+                }
+            },
         }
     }
 }

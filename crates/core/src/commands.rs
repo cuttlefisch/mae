@@ -15,6 +15,20 @@ pub struct Command {
     pub source: CommandSource,
 }
 
+impl Command {
+    /// Compact label for which-key popups. Strips the trailing `(...)`
+    /// key hint since the key is already displayed in the popup entry itself.
+    /// Full `doc` is preserved for help buffers and `describe-command`.
+    pub fn which_key_label(&self) -> &str {
+        if self.doc.ends_with(')') {
+            if let Some(i) = self.doc.rfind(" (") {
+                return &self.doc[..i];
+            }
+        }
+        &self.doc
+    }
+}
+
 /// Where a command's implementation lives.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandSource {
@@ -571,6 +585,12 @@ impl CommandRegistry {
             "debug-panel",
             "Toggle debug panel showing threads, stack, and variables (SPC d p)",
         );
+        reg.register_builtin("debug-panel-select", "Select/expand item in debug panel");
+        reg.register_builtin("close-debug-panel", "Close the debug panel");
+        reg.register_builtin("debug-toggle-output", "Toggle debug output pane");
+        reg.register_builtin("debug-move-down", "Move cursor down in debug panel");
+        reg.register_builtin("debug-move-up", "Move cursor up in debug panel");
+        reg.register_builtin("dap-refresh", "Refresh DAP state and debug panel");
         reg.register_builtin(
             "debug-attach",
             "Attach debugger to a running process (:debug-attach <adapter> <pid>)",
@@ -760,11 +780,42 @@ impl CommandRegistry {
             "Toggle inline diff for file at cursor (Tab in git status)",
         );
         reg.register_builtin(
+            "git-toggle-fold",
+            "Multi-level fold/unfold: section, file diff, or hunk (Tab in git status)",
+        );
+        reg.register_builtin(
             "git-discard",
-            "Discard unstaged changes for file at cursor (x in git status)",
+            "Discard changes at cursor — hunk-aware (x in git status)",
         );
         reg.register_builtin("git-status-toggle", "Toggle git status detail for file");
         reg.register_builtin("git-status-open", "Open file from git status buffer");
+        reg.register_builtin("git-next-hunk", "Jump to next diff hunk (n in git status)");
+        reg.register_builtin(
+            "git-prev-hunk",
+            "Jump to previous diff hunk (p in git status)",
+        );
+        reg.register_builtin("git-push", "Push to remote (P p in git status)");
+        reg.register_builtin("git-pull", "Pull from remote (F p in git status)");
+        reg.register_builtin("git-fetch", "Fetch from all remotes (f f in git status)");
+        reg.register_builtin(
+            "git-branch-switch",
+            "Switch branch via palette (b b in git status)",
+        );
+        reg.register_builtin("git-branch-create", "Create new branch (b n in git status)");
+        reg.register_builtin("git-branch-delete", "Delete a branch (b d in git status)");
+        reg.register_builtin("git-stash-push", "Stash working tree (z z in git status)");
+        reg.register_builtin("git-stash-pop", "Pop stash at cursor (z p in git status)");
+        reg.register_builtin(
+            "git-stash-apply",
+            "Apply stash at cursor (z a in git status)",
+        );
+        reg.register_builtin("git-stash-drop", "Drop stash at cursor (z d in git status)");
+
+        // Buffer-local key discoverability
+        reg.register_builtin(
+            "show-buffer-keys",
+            "Show all keybindings for the current buffer (?)",
+        );
 
         // Notes/KB commands
         reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
@@ -1059,5 +1110,42 @@ mod tests {
         assert!(reg.contains("kb-ingest"));
         assert!(reg.contains("ai-save"));
         assert!(reg.contains("ai-load"));
+    }
+
+    #[test]
+    fn which_key_label_strips_trailing_parens() {
+        let cmd = Command {
+            name: "git-discard".into(),
+            doc: "Discard changes at cursor (x in git status)".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Discard changes at cursor");
+
+        let cmd2 = Command {
+            name: "git-status".into(),
+            doc: "Open git status (SPC g s)".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd2.which_key_label(), "Open git status");
+    }
+
+    #[test]
+    fn which_key_label_preserves_without_trailing_parens() {
+        let cmd = Command {
+            name: "save".into(),
+            doc: "Save current buffer".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Save current buffer");
+    }
+
+    #[test]
+    fn which_key_label_no_false_positive_mid_parens() {
+        let cmd = Command {
+            name: "test".into(),
+            doc: "Run tests (unit) and report".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Run tests (unit) and report");
     }
 }

@@ -497,25 +497,75 @@ impl Editor {
         let mut shell_insert = Keymap::new("shell-insert");
         shell_insert.bind(parse_key_seq_spaced("C-\\ C-n"), "shell-normal-mode");
 
-        // Git status keymap (Magit-lite)
-        let mut git_status = Keymap::new("git-status");
+        // Git status keymap (Magit-parity)
+        let mut git_status = Keymap::with_parent("git-status", "normal");
+        // Navigation
         git_status.bind(parse_key_seq("j"), "move-down");
         git_status.bind(parse_key_seq("k"), "move-up");
+        git_status.bind(parse_key_seq("n"), "git-next-hunk");
+        git_status.bind(parse_key_seq("p"), "git-prev-hunk");
+        git_status.bind(parse_key_seq("G"), "move-to-last-line");
+        git_status.bind(parse_key_seq("gg"), "move-to-first-line");
+        // Stage/Unstage (context-aware: hunk on diff lines, file on file lines)
         git_status.bind(parse_key_seq("s"), "git-stage");
         git_status.bind(parse_key_seq("u"), "git-unstage");
         git_status.bind(parse_key_seq("S"), "git-stage-all");
         git_status.bind(parse_key_seq("U"), "git-unstage-all");
+        // Commit
         git_status.bind(parse_key_seq("c c"), "git-commit");
         git_status.bind(parse_key_seq("c a"), "git-amend");
+        // Log
         git_status.bind(parse_key_seq("l l"), "git-log");
+        // Discard (context-aware)
         git_status.bind(parse_key_seq("x"), "git-discard");
-        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-toggle-section");
+        // Fold/unfold (multi-level: section → file → hunk)
+        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-toggle-fold");
+        // Open file
         git_status.bind(vec![KeyPress::special(Key::Enter)], "git-status-open");
-        git_status.bind(parse_key_seq("q"), "enter-normal-mode");
+        // Push/Pull/Fetch
+        git_status.bind(parse_key_seq("P p"), "git-push");
+        git_status.bind(parse_key_seq("P u"), "git-push");
+        git_status.bind(parse_key_seq("f f"), "git-fetch");
+        git_status.bind(parse_key_seq("F p"), "git-pull");
+        git_status.bind(parse_key_seq("F u"), "git-pull");
+        // Branch
+        git_status.bind(parse_key_seq("b b"), "git-branch-switch");
+        git_status.bind(parse_key_seq("b n"), "git-branch-create");
+        git_status.bind(parse_key_seq("b d"), "git-branch-delete");
+        // Stash
+        git_status.bind(parse_key_seq("z z"), "git-stash-push");
+        git_status.bind(parse_key_seq("z p"), "git-stash-pop");
+        git_status.bind(parse_key_seq("z a"), "git-stash-apply");
+        git_status.bind(parse_key_seq("z d"), "git-stash-drop");
+        // Misc
+        git_status.bind(parse_key_seq("q"), "kill-buffer");
+        git_status.bind(vec![KeyPress::special(Key::Escape)], "kill-buffer");
+        git_status.bind(parse_key_seq("?"), "show-buffer-keys");
         git_status.bind(parse_key_seq("g r"), "git-status"); // Refresh
+                                                             // Local leader (SPC m) — Doom-style mode menu
+        git_status.bind(parse_key_seq_spaced("SPC m s"), "git-stage");
+        git_status.bind(parse_key_seq_spaced("SPC m u"), "git-unstage");
+        git_status.bind(parse_key_seq_spaced("SPC m S"), "git-stage-all");
+        git_status.bind(parse_key_seq_spaced("SPC m U"), "git-unstage-all");
+        git_status.bind(parse_key_seq_spaced("SPC m x"), "git-discard");
+        git_status.bind(parse_key_seq_spaced("SPC m c"), "git-commit");
+        git_status.bind(parse_key_seq_spaced("SPC m a"), "git-amend");
+        git_status.bind(parse_key_seq_spaced("SPC m p"), "git-push");
+        git_status.bind(parse_key_seq_spaced("SPC m f"), "git-fetch");
+        git_status.bind(parse_key_seq_spaced("SPC m F"), "git-pull");
+        git_status.bind(parse_key_seq_spaced("SPC m r"), "git-status");
+        git_status.set_group_name(parse_key_seq_spaced("SPC m"), "+git");
+        // Group labels for which-key
+        git_status.set_group_name(parse_key_seq("c"), "+commit");
+        git_status.set_group_name(parse_key_seq("l"), "+log");
+        git_status.set_group_name(parse_key_seq("P"), "+push");
+        git_status.set_group_name(parse_key_seq("f"), "+fetch");
+        git_status.set_group_name(parse_key_seq("F"), "+pull");
+        git_status.set_group_name(parse_key_seq("b"), "+branch");
+        git_status.set_group_name(parse_key_seq("z"), "+stash");
 
         // Org-mode keymap
-        let mut org = Keymap::new("org");
+        let mut org = Keymap::with_parent("org", "normal");
         org.bind(vec![KeyPress::special(Key::Tab)], "org-cycle");
         org.bind(vec![KeyPress::special(Key::BackTab)], "org-global-cycle");
         org.bind(parse_key_seq_spaced("S-Left"), "org-todo-prev");
@@ -591,7 +641,7 @@ impl Editor {
         maps.insert("org".to_string(), org);
 
         // Markdown keymap (mirrors org keybindings with md-* commands)
-        let mut markdown = Keymap::new("markdown");
+        let mut markdown = Keymap::with_parent("markdown", "normal");
         markdown.bind(vec![KeyPress::special(Key::Tab)], "md-cycle");
         markdown.bind(vec![KeyPress::special(Key::BackTab)], "md-global-cycle");
         // Promote/demote headings
@@ -657,7 +707,7 @@ impl Editor {
         maps.insert("markdown".to_string(), markdown);
 
         // File tree keymap (NERDTree-style)
-        let mut file_tree = Keymap::new("file-tree");
+        let mut file_tree = Keymap::with_parent("file-tree", "normal");
         // Navigation
         file_tree.bind(parse_key_seq("j"), "file-tree-down");
         file_tree.bind(parse_key_seq("k"), "file-tree-up");
@@ -686,7 +736,34 @@ impl Editor {
         file_tree.bind(parse_key_seq("d"), "file-tree-delete");
         file_tree.bind(parse_key_seq("r"), "file-tree-rename");
         file_tree.bind(parse_key_seq("q"), "file-tree-toggle");
+        file_tree.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("file-tree".to_string(), file_tree);
+
+        // Help buffer keymap
+        let mut help = Keymap::with_parent("help", "normal");
+        help.bind(vec![KeyPress::special(Key::Enter)], "help-follow-link");
+        help.bind(vec![KeyPress::special(Key::Tab)], "help-next-link");
+        help.bind(vec![KeyPress::special(Key::BackTab)], "help-prev-link");
+        help.bind(parse_key_seq("q"), "help-close");
+        help.bind(parse_key_seq("C-o"), "help-back");
+        help.bind(parse_key_seq("C-i"), "help-forward");
+        help.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("help".to_string(), help);
+
+        // Debug panel keymap
+        let mut debug = Keymap::with_parent("debug", "normal");
+        debug.bind(parse_key_seq("j"), "debug-move-down");
+        debug.bind(parse_key_seq("k"), "debug-move-up");
+        debug.bind(vec![KeyPress::special(Key::Enter)], "debug-panel-select");
+        debug.bind(parse_key_seq("q"), "close-debug-panel");
+        debug.bind(parse_key_seq("o"), "debug-toggle-output");
+        debug.bind(parse_key_seq("r"), "dap-refresh");
+        debug.bind(parse_key_seq("c"), "debug-continue");
+        debug.bind(parse_key_seq("n"), "debug-step-over");
+        debug.bind(parse_key_seq("s"), "debug-step-into");
+        debug.bind(parse_key_seq("S"), "debug-step-out");
+        debug.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("debug".to_string(), debug);
 
         maps
     }
@@ -835,5 +912,142 @@ mod tests {
         ed.window_mgr.focused_window_mut().buffer_idx = tree_idx;
         let names = ed.current_keymap_names();
         assert_eq!(names, Some(("file-tree", Some("normal"))));
+    }
+
+    #[test]
+    fn help_keymap_exists_with_bindings() {
+        let ed = Editor::new();
+        let help_map = ed.keymaps.get("help").unwrap();
+        assert_eq!(help_map.parent.as_deref(), Some("normal"));
+        let q_key = parse_key_seq("q");
+        assert_eq!(
+            help_map.lookup(&q_key),
+            crate::keymap::LookupResult::Exact("help-close")
+        );
+        let enter_key = vec![KeyPress::special(Key::Enter)];
+        assert_eq!(
+            help_map.lookup(&enter_key),
+            crate::keymap::LookupResult::Exact("help-follow-link")
+        );
+    }
+
+    #[test]
+    fn debug_keymap_exists_with_bindings() {
+        let ed = Editor::new();
+        let debug_map = ed.keymaps.get("debug").unwrap();
+        assert_eq!(debug_map.parent.as_deref(), Some("normal"));
+        let j_key = parse_key_seq("j");
+        assert_eq!(
+            debug_map.lookup(&j_key),
+            crate::keymap::LookupResult::Exact("debug-move-down")
+        );
+        let c_key = parse_key_seq("c");
+        assert_eq!(
+            debug_map.lookup(&c_key),
+            crate::keymap::LookupResult::Exact("debug-continue")
+        );
+    }
+
+    #[test]
+    fn help_buffer_uses_help_keymap() {
+        let mut ed = Editor::new();
+        // Create a help buffer and focus it
+        let mut buf = crate::buffer::Buffer::new();
+        buf.kind = crate::buffer::BufferKind::Help;
+        buf.name = "*Help*".to_string();
+        ed.buffers.push(buf);
+        let help_idx = ed.buffers.len() - 1;
+        ed.window_mgr.focused_window_mut().buffer_idx = help_idx;
+        let names = ed.current_keymap_names();
+        assert_eq!(names, Some(("help", Some("normal"))));
+    }
+
+    #[test]
+    fn overlay_keymaps_have_parent_field() {
+        let ed = Editor::new();
+        assert_eq!(
+            ed.keymaps.get("git-status").unwrap().parent.as_deref(),
+            Some("normal")
+        );
+        assert_eq!(
+            ed.keymaps.get("org").unwrap().parent.as_deref(),
+            Some("normal")
+        );
+        assert_eq!(
+            ed.keymaps.get("markdown").unwrap().parent.as_deref(),
+            Some("normal")
+        );
+        assert_eq!(
+            ed.keymaps.get("file-tree").unwrap().parent.as_deref(),
+            Some("normal")
+        );
+        assert!(ed.keymaps.get("normal").unwrap().parent.is_none());
+    }
+
+    #[test]
+    fn git_status_q_binds_to_kill_buffer() {
+        let ed = Editor::new();
+        let gs = ed.keymaps.get("git-status").unwrap();
+        let q_key = parse_key_seq("q");
+        assert_eq!(
+            gs.lookup(&q_key),
+            crate::keymap::LookupResult::Exact("kill-buffer")
+        );
+    }
+
+    #[test]
+    fn overlay_keymaps_have_show_buffer_keys() {
+        let ed = Editor::new();
+        let q_key = parse_key_seq("?");
+        for name in &["git-status", "help", "debug", "file-tree"] {
+            let km = ed.keymaps.get(*name).unwrap();
+            assert_eq!(
+                km.lookup(&q_key),
+                crate::keymap::LookupResult::Exact("show-buffer-keys"),
+                "{} keymap should bind ? to show-buffer-keys",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn git_status_spc_m_local_leader() {
+        let ed = Editor::new();
+        let gs = ed.keymaps.get("git-status").unwrap();
+        let cases = vec![
+            ("SPC m s", "git-stage"),
+            ("SPC m u", "git-unstage"),
+            ("SPC m c", "git-commit"),
+            ("SPC m p", "git-push"),
+            ("SPC m f", "git-fetch"),
+            ("SPC m r", "git-status"),
+        ];
+        for (seq, expected) in cases {
+            let keys = parse_key_seq_spaced(seq);
+            assert_eq!(
+                gs.lookup(&keys),
+                crate::keymap::LookupResult::Exact(expected),
+                "git-status {} should resolve to {}",
+                seq,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn buffer_keys_entries_returns_entries() {
+        let mut ed = Editor::new();
+        // Create a git-status buffer and focus it
+        let mut buf = crate::buffer::Buffer::new();
+        buf.kind = crate::buffer::BufferKind::GitStatus;
+        ed.buffers.push(buf);
+        let idx = ed.buffers.len() - 1;
+        ed.window_mgr.focused_window_mut().buffer_idx = idx;
+        let entries = ed.buffer_keys_entries();
+        // Should have entries from git-status + normal keymaps
+        assert!(!entries.is_empty());
+        // Check that a git-status-specific binding is present
+        let has_stage = entries.iter().any(|e| e.label.contains("stage"));
+        assert!(has_stage, "buffer_keys_entries should include git-stage");
     }
 }

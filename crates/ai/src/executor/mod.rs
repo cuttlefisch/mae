@@ -169,7 +169,12 @@ pub fn execute_tool(
     }
 
     // 4b. Handle self_test_suite (returns structured test plan).
+    // Auto-save editor state so it can be restored when the session completes.
     if call.name == "self_test_suite" {
+        if !editor.self_test_active {
+            editor.save_state();
+            editor.self_test_active = true;
+        }
         let filter = call
             .arguments
             .get("categories")
@@ -764,13 +769,11 @@ fn build_self_test_plan(filter: &str) -> String {
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
         "instructions": [
             "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
-            "Each category is ATOMIC: call editor_save_state BEFORE and editor_restore_state AFTER each category. This prevents buffer/window accumulation across categories.",
+            "State is automatically saved before tests and restored after the session completes. Do NOT call editor_save_state or editor_restore_state.",
             "Step 1: For each category in order:",
-            "  1a. Call editor_save_state to snapshot buffers, windows, and focus.",
-            "  1b. Execute the category's 'setup' array (if any). Ignore errors — they clean up stale state.",
-            "  1c. Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
-            "  1d. Execute the category's 'cleanup' array (if any).",
-            "  1e. Call editor_restore_state to close test buffers and restore layout.",
+            "  1a. Execute the category's 'setup' array (if any). Ignore errors — they clean up stale state.",
+            "  1b. Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
+            "  1c. Execute the category's 'cleanup' array (if any).",
             "Step 2: Final cleanup — delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
             "Step 3: Output the report. Do NOT quit the editor."
         ],
@@ -1837,6 +1840,54 @@ mod tests {
         assert!(
             tools.iter().any(|t| t.name == "self_test_suite"),
             "self_test_suite should be in ai_specific_tools(&mae_core::OptionRegistry::new())"
+        );
+    }
+
+    #[test]
+    fn self_test_suite_auto_saves_state() {
+        let mut editor = Editor::new();
+        assert!(!editor.self_test_active);
+        assert!(editor.state_stack.is_empty());
+
+        let call = make_call("self_test_suite", serde_json::json!({}));
+        let result = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert!(result.success);
+        assert!(editor.self_test_active, "self_test_active should be set");
+        assert_eq!(editor.state_stack.len(), 1, "state should be saved");
+
+        // Calling again should NOT double-save
+        let call2 = make_call("self_test_suite", serde_json::json!({}));
+        let _ = unwrap_immediate(execute_tool(
+            &mut editor,
+            &call2,
+            &all_tools(),
+            &PermissionPolicy::default(),
+        ));
+        assert_eq!(editor.state_stack.len(), 1, "should not double-save");
+    }
+
+    #[test]
+    fn self_test_plan_instructions_no_manual_save_restore() {
+        let plan_json = build_self_test_plan("");
+        let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
+        let instructions = plan["instructions"].as_array().unwrap();
+        let all_text: String = instructions
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !all_text.contains("Call editor_save_state"),
+            "instructions should not tell agent to manually save state"
+        );
+        assert!(
+            all_text.contains("Do NOT call editor_save_state"),
+            "instructions should tell agent NOT to call save/restore"
         );
     }
 

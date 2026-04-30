@@ -81,6 +81,31 @@ impl Editor {
             "debug-panel" => {
                 self.toggle_debug_panel();
             }
+            "debug-panel-select" => {
+                self.debug_panel_select();
+            }
+            "close-debug-panel" => {
+                self.close_debug_panel();
+            }
+            "debug-toggle-output" => {
+                self.debug_toggle_output();
+            }
+            "debug-move-down" => {
+                let idx = self.active_buffer_idx();
+                if let Some(view) = self.buffers[idx].debug_view_mut() {
+                    view.move_down();
+                }
+            }
+            "debug-move-up" => {
+                let idx = self.active_buffer_idx();
+                if let Some(view) = self.buffers[idx].debug_view_mut() {
+                    view.move_up();
+                }
+            }
+            "dap-refresh" => {
+                self.dap_refresh();
+                self.debug_panel_refresh_if_open();
+            }
             _ => return None,
         }
         Some(true)

@@ -98,8 +98,6 @@ pub enum Mode {
     FilePicker,
     FileBrowser,
     CommandPalette,
-    /// Git status "porcelain" UI (Phase 6 M5).
-    GitStatus,
     /// Terminal emulator — keys go directly to PTY. Exit with Ctrl-\ Ctrl-n.
     ShellInsert,
 }

@@ -120,7 +120,6 @@ mod command;
 mod command_palette;
 pub(crate) mod conversation;
 mod file_picker;
-mod git_status;
 mod insert;
 mod normal;
 mod search;
@@ -280,7 +279,7 @@ pub fn handle_key(
         Mode::FilePicker => file_picker::handle_file_picker_mode(editor, key),
         Mode::FileBrowser => file_picker::handle_file_browser_mode(editor, key),
         Mode::CommandPalette => command_palette::handle_command_palette_mode(editor, scheme, key),
-        Mode::GitStatus => git_status::handle_git_status_mode(editor, key),
+        // GitStatus buffers use Mode::Normal + buffer-kind overlay keymap
         Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
     }
 

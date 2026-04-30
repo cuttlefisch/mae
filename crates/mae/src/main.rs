@@ -1195,7 +1195,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
-                let gutter_w = if buf.kind == mae_core::BufferKind::Conversation {
+                let gutter_w = if !mae_core::BufferMode::has_gutter(&buf.kind) {
                     0
                 } else if self.editor.show_line_numbers {
                     mae_renderer::gutter_width(buf.display_line_count())

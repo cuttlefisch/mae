@@ -44,7 +44,7 @@ use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
 use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
-use crate::keymap::{KeyPress, Keymap};
+use crate::keymap::{KeyPress, Keymap, WhichKeyEntry};
 use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
 use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
@@ -127,6 +127,8 @@ pub struct EditorStateSnapshot {
     pub next_window_id: crate::window::WindowId,
     /// Editor mode at snapshot time.
     pub mode: Mode,
+    /// Conversation pair (AI split layout) at snapshot time.
+    pub conversation_pair: Option<ConversationPair>,
 }
 
 /// Top-level editor state.
@@ -512,10 +514,17 @@ pub struct Editor {
     /// State stack for save/restore (push/pop) during temporary operations
     /// like self-test. AI tools call `editor_save_state` / `editor_restore_state`.
     pub state_stack: Vec<EditorStateSnapshot>,
+    /// True while a self-test session is running. Set when `self_test_suite`
+    /// is called (auto `save_state`), cleared on `SessionComplete` (auto `restore_state`).
+    pub self_test_active: bool,
     /// Last time autosave fired. Compared against `autosave_interval` option.
     pub last_autosave: std::time::Instant,
     /// Autosave interval in seconds (0 = disabled). Parsed from option registry.
     pub autosave_interval: u64,
+    /// When `true`, the renderer shows a which-key popup with all bindings
+    /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
+    /// cleared on the next keypress.
+    pub buffer_keys_popup: bool,
 }
 
 impl Default for Editor {
@@ -682,8 +691,10 @@ impl Editor {
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
             state_stack: Vec::new(),
+            self_test_active: false,
             last_autosave: std::time::Instant::now(),
             autosave_interval: 0,
+            buffer_keys_popup: false,
         }
     }
 
@@ -710,7 +721,8 @@ impl Editor {
     }
 
     /// Returns the primary keymap name and optional fallback for the current mode.
-    /// Org/git-status modes overlay on top of "normal" — if the overlay has no
+    /// Buffer-kind overlays (git-status, file-tree, help, debug) and language
+    /// overlays (org, markdown) sit on top of "normal" — if the overlay has no
     /// match, the caller should retry with the fallback.
     pub fn current_keymap_names(&self) -> Option<(&'static str, Option<&'static str>)> {
         let idx = self.active_buffer_idx();
@@ -719,11 +731,12 @@ impl Editor {
 
         match self.mode {
             Mode::Normal => {
-                if kind == crate::buffer::BufferKind::FileTree {
-                    Some(("file-tree", Some("normal")))
-                } else if kind == crate::buffer::BufferKind::GitStatus {
-                    Some(("git-status", Some("normal")))
+                // Buffer-kind overlay via BufferMode trait
+                use crate::buffer_mode::BufferMode;
+                if let Some(km_name) = kind.keymap_name() {
+                    Some((km_name, Some("normal")))
                 } else if lang == Some(Language::Org) {
+                    // Language overlays stay hardcoded until Language::keymap_name() exists
                     Some(("org", Some("normal")))
                 } else if lang == Some(Language::Markdown) {
                     Some(("markdown", Some("normal")))
@@ -739,7 +752,6 @@ impl Editor {
             | Mode::FilePicker
             | Mode::FileBrowser
             | Mode::CommandPalette => Some(("command", None)),
-            Mode::GitStatus => Some(("git-status", Some("normal"))),
             Mode::ShellInsert => None,
         }
     }
@@ -748,6 +760,58 @@ impl Editor {
     pub fn current_keymap(&self) -> Option<&Keymap> {
         let (name, _) = self.current_keymap_names()?;
         self.keymaps.get(name)
+    }
+
+    /// Get which-key entries for the current keymap, merging overlay + parent.
+    pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
+        let Some((primary, fallback)) = self.current_keymap_names() else {
+            return vec![];
+        };
+        let mut entries = self
+            .keymaps
+            .get(primary)
+            .map(|km| km.which_key_entries(&self.which_key_prefix, &self.commands))
+            .unwrap_or_default();
+        if let Some(fb_name) = fallback {
+            if let Some(fb_km) = self.keymaps.get(fb_name) {
+                let fb_entries = fb_km.which_key_entries(&self.which_key_prefix, &self.commands);
+                let existing: std::collections::HashSet<String> =
+                    entries.iter().map(|e| format!("{:?}", e.key)).collect();
+                for entry in fb_entries {
+                    if !existing.contains(&format!("{:?}", entry.key)) {
+                        entries.push(entry);
+                    }
+                }
+            }
+        }
+        entries
+    }
+
+    /// Get all top-level bindings for the current buffer's keymap + parent.
+    /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
+    pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
+        let Some((primary, fallback)) = self.current_keymap_names() else {
+            return vec![];
+        };
+        let empty_prefix: &[KeyPress] = &[];
+        let mut entries = self
+            .keymaps
+            .get(primary)
+            .map(|km| km.which_key_entries(empty_prefix, &self.commands))
+            .unwrap_or_default();
+        if let Some(fb_name) = fallback {
+            if let Some(fb_km) = self.keymaps.get(fb_name) {
+                let fb_entries = fb_km.which_key_entries(empty_prefix, &self.commands);
+                let existing: std::collections::HashSet<String> =
+                    entries.iter().map(|e| format!("{:?}", e.key)).collect();
+                for entry in fb_entries {
+                    if !existing.contains(&format!("{:?}", entry.key)) {
+                        entries.push(entry);
+                    }
+                }
+            }
+        }
+        entries
     }
 
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
@@ -1303,6 +1367,7 @@ impl Editor {
             focused_id,
             next_window_id: next_id,
             mode: self.mode,
+            conversation_pair: self.conversation_pair.clone(),
         });
         self.state_stack.len()
     }
@@ -1357,7 +1422,32 @@ impl Editor {
         // 4. Restore mode
         self.mode = snapshot.mode;
 
-        // 5. Focus the originally focused buffer
+        // 5. Restore conversation pair with remapped buffer indices.
+        if let Some(mut pair) = snapshot.conversation_pair {
+            let out_name = snapshot
+                .buffer_names
+                .get(pair.output_buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            let in_name = snapshot
+                .buffer_names
+                .get(pair.input_buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            let out_ok = self.buffers.iter().position(|b| b.name == out_name);
+            let in_ok = self.buffers.iter().position(|b| b.name == in_name);
+            if let (Some(out_idx), Some(in_idx)) = (out_ok, in_ok) {
+                pair.output_buffer_idx = out_idx;
+                pair.input_buffer_idx = in_idx;
+                self.conversation_pair = Some(pair);
+            } else {
+                self.conversation_pair = None;
+            }
+        } else {
+            self.conversation_pair = None;
+        }
+
+        // 6. Focus the originally focused buffer
         if let Some(idx) = self
             .buffers
             .iter()
@@ -1631,14 +1721,8 @@ impl Editor {
             crate::BufferKind::Shell => {
                 self.set_mode(Mode::ShellInsert);
             }
-            crate::BufferKind::GitStatus => {
-                self.set_mode(Mode::GitStatus);
-            }
             _ => {
-                if matches!(
-                    self.mode,
-                    Mode::ShellInsert | Mode::ConversationInput | Mode::GitStatus
-                ) {
+                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
                     self.set_mode(Mode::Normal);
                 }
             }

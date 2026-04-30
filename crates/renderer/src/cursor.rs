@@ -24,7 +24,7 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
     if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
         let rr = Rect::new(win_rect.x, win_rect.y, win_rect.width, win_rect.height);
         let inner = inner_rect(rr);
-        let gutter_w = if focused_buf.kind == mae_core::BufferKind::Conversation {
+        let gutter_w = if !mae_core::BufferMode::has_gutter(&focused_buf.kind) {
             0
         } else if editor.show_line_numbers {
             gutter_width(focused_buf.display_line_count())

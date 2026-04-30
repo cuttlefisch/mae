@@ -47,6 +47,10 @@ pub struct GitStatusLine {
     pub file_path: Option<String>,
     /// If Some, this line represents a specific hunk (start, count)
     pub hunk: Option<(usize, usize)>,
+    /// Which hunk within the file (0-based). Set on DiffHunk and DiffLine rows.
+    pub hunk_index: Option<usize>,
+    /// Raw `@@ ... @@` header for this hunk. Set on DiffHunk rows.
+    pub hunk_header: Option<String>,
     pub is_header: bool,
     pub is_collapsed: bool,
     /// Semantic kind for rendering.
@@ -54,13 +58,18 @@ pub struct GitStatusLine {
 }
 
 /// Structured state for the `*Git Status*` buffer.
+///
+/// Collapse keys use structured prefixes:
+/// - `"section:Unstaged"` — section-level
+/// - `"file:src/main.rs:Unstaged"` — file-level
+/// - `"hunk:src/main.rs:Unstaged:0"` — hunk-level
 #[derive(Debug, Clone)]
 pub struct GitStatusView {
     pub lines: Vec<GitStatusLine>,
     /// Parallel to `lines` — maps each buffer line to its semantic kind.
     pub line_kinds: Vec<GitLineKind>,
-    /// Which sections/files are currently collapsed.
-    pub collapsed_paths: HashMap<String, bool>,
+    /// Multi-level collapse state. Keys use structured prefixes (see above).
+    pub collapsed: HashMap<String, bool>,
     /// Root directory of the repository.
     pub repo_root: PathBuf,
 }
@@ -70,20 +79,68 @@ impl GitStatusView {
         GitStatusView {
             lines: Vec::new(),
             line_kinds: Vec::new(),
-            collapsed_paths: HashMap::new(),
+            collapsed: HashMap::new(),
             repo_root,
         }
     }
 
-    /// Toggle expansion/collapse of a file's inline diff.
-    pub fn toggle_file_expansion(&mut self, path: &str) {
-        let collapsed = self.collapsed_paths.entry(path.to_string()).or_insert(true);
+    /// Toggle collapse state for a key. Default state is "not collapsed" (expanded).
+    pub fn toggle(&mut self, key: &str) {
+        let collapsed = self.collapsed.entry(key.to_string()).or_insert(false);
         *collapsed = !*collapsed;
     }
 
-    /// Check if a file's diff is expanded (not collapsed).
-    pub fn is_expanded(&self, path: &str) -> bool {
-        self.collapsed_paths.get(path).copied() == Some(false)
+    /// Check if a key is collapsed.
+    pub fn is_collapsed(&self, key: &str) -> bool {
+        self.collapsed.get(key).copied().unwrap_or(false)
+    }
+
+    /// Build the collapse key for a given line.
+    pub fn collapse_key_for_line(line: &GitStatusLine) -> Option<String> {
+        match &line.kind {
+            GitLineKind::SectionHeader(section) => {
+                Some(format!("section:{}", section_name(section)))
+            }
+            GitLineKind::File { section, .. } => line
+                .file_path
+                .as_ref()
+                .map(|p| format!("file:{}:{}", p, section_name(section))),
+            GitLineKind::DiffHunk => {
+                if let (Some(path), Some(section), Some(idx)) =
+                    (&line.file_path, &line.section, line.hunk_index)
+                {
+                    Some(format!("hunk:{}:{}:{}", path, section_name(section), idx))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // Legacy compatibility: check if a file's diff is expanded.
+    // Files default to collapsed (diffs hidden). Expanded = collapsed entry is `false`.
+    pub fn is_file_expanded(&self, path: &str, section: &GitSection) -> bool {
+        let key = format!("file:{}:{}", path, section_name(section));
+        self.collapsed.get(&key).copied() == Some(false)
+    }
+
+    /// Toggle expansion/collapse of a file's inline diff (legacy helper).
+    /// Default is `true` (collapsed); first toggle flips to `false` (expanded).
+    pub fn toggle_file_expansion(&mut self, path: &str, section: &GitSection) {
+        let key = format!("file:{}:{}", path, section_name(section));
+        let collapsed = self.collapsed.entry(key).or_insert(true);
+        *collapsed = !*collapsed;
+    }
+}
+
+/// Convert a `GitSection` to a stable string for collapse keys.
+pub fn section_name(section: &GitSection) -> &'static str {
+    match section {
+        GitSection::Untracked => "Untracked",
+        GitSection::Unstaged => "Unstaged",
+        GitSection::Staged => "Staged",
+        GitSection::Stashes => "Stashes",
     }
 }
 
@@ -95,14 +152,88 @@ mod tests {
     #[test]
     fn git_status_expand_collapse() {
         let mut view = GitStatusView::new(PathBuf::from("/tmp"));
-        // Initially not expanded
-        assert!(!view.is_expanded("src/main.rs"));
+        let section = GitSection::Unstaged;
+        // Initially not expanded (file diffs default to collapsed)
+        assert!(!view.is_file_expanded("src/main.rs", &section));
         // Toggle to expand
-        view.toggle_file_expansion("src/main.rs");
-        assert!(view.is_expanded("src/main.rs"));
+        view.toggle_file_expansion("src/main.rs", &section);
+        assert!(view.is_file_expanded("src/main.rs", &section));
         // Toggle to collapse
-        view.toggle_file_expansion("src/main.rs");
-        assert!(!view.is_expanded("src/main.rs"));
+        view.toggle_file_expansion("src/main.rs", &section);
+        assert!(!view.is_file_expanded("src/main.rs", &section));
+    }
+
+    #[test]
+    fn multi_level_collapse_keys() {
+        let mut view = GitStatusView::new(PathBuf::from("/tmp"));
+        // Section collapse
+        assert!(!view.is_collapsed("section:Unstaged"));
+        view.toggle("section:Unstaged");
+        assert!(view.is_collapsed("section:Unstaged"));
+
+        // File collapse
+        assert!(!view.is_collapsed("file:src/main.rs:Unstaged"));
+        view.toggle("file:src/main.rs:Unstaged");
+        assert!(view.is_collapsed("file:src/main.rs:Unstaged"));
+
+        // Hunk collapse
+        assert!(!view.is_collapsed("hunk:src/main.rs:Unstaged:0"));
+        view.toggle("hunk:src/main.rs:Unstaged:0");
+        assert!(view.is_collapsed("hunk:src/main.rs:Unstaged:0"));
+    }
+
+    #[test]
+    fn collapse_key_for_line_variants() {
+        let section_line = GitStatusLine {
+            text: "Unstaged changes:".to_string(),
+            section: Some(GitSection::Unstaged),
+            file_path: None,
+            hunk: None,
+            hunk_index: None,
+            hunk_header: None,
+            is_header: true,
+            is_collapsed: false,
+            kind: GitLineKind::SectionHeader(GitSection::Unstaged),
+        };
+        assert_eq!(
+            GitStatusView::collapse_key_for_line(&section_line),
+            Some("section:Unstaged".to_string())
+        );
+
+        let file_line = GitStatusLine {
+            text: "  M src/main.rs".to_string(),
+            section: Some(GitSection::Unstaged),
+            file_path: Some("src/main.rs".to_string()),
+            hunk: None,
+            hunk_index: None,
+            hunk_header: None,
+            is_header: false,
+            is_collapsed: false,
+            kind: GitLineKind::File {
+                section: GitSection::Unstaged,
+                status_char: 'M',
+            },
+        };
+        assert_eq!(
+            GitStatusView::collapse_key_for_line(&file_line),
+            Some("file:src/main.rs:Unstaged".to_string())
+        );
+
+        let hunk_line = GitStatusLine {
+            text: "    @@ -1,3 +1,4 @@".to_string(),
+            section: Some(GitSection::Unstaged),
+            file_path: Some("src/main.rs".to_string()),
+            hunk: None,
+            hunk_index: Some(0),
+            hunk_header: Some("@@ -1,3 +1,4 @@".to_string()),
+            is_header: false,
+            is_collapsed: false,
+            kind: GitLineKind::DiffHunk,
+        };
+        assert_eq!(
+            GitStatusView::collapse_key_for_line(&hunk_line),
+            Some("hunk:src/main.rs:Unstaged:0".to_string())
+        );
     }
 
     #[test]
@@ -114,6 +245,8 @@ mod tests {
             section: None,
             file_path: None,
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: true,
             is_collapsed: false,
             kind: GitLineKind::Header,
@@ -125,6 +258,8 @@ mod tests {
             section: Some(GitSection::Unstaged),
             file_path: None,
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: true,
             is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Unstaged),
@@ -137,6 +272,8 @@ mod tests {
             section: Some(GitSection::Unstaged),
             file_path: Some("src/main.rs".to_string()),
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: false,
             is_collapsed: true,
             kind: GitLineKind::File {
@@ -164,6 +301,8 @@ mod tests {
             section: None,
             file_path: None,
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: true,
             is_collapsed: false,
             kind: GitLineKind::Header,
@@ -174,6 +313,8 @@ mod tests {
             section: Some(GitSection::Staged),
             file_path: None,
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: true,
             is_collapsed: false,
             kind: GitLineKind::SectionHeader(GitSection::Staged),
@@ -184,6 +325,8 @@ mod tests {
             section: Some(GitSection::Staged),
             file_path: Some("new_file.rs".to_string()),
             hunk: None,
+            hunk_index: None,
+            hunk_header: None,
             is_header: false,
             is_collapsed: true,
             kind: GitLineKind::File {

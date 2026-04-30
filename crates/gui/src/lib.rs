@@ -314,12 +314,15 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_command_palette(canvas, editor, cols, rows);
-        } else if !editor.which_key_prefix.is_empty() {
+        } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
             debug!("render: which_key popup");
-            let entries = if let Some(km) = editor.keymaps.get("normal") {
-                km.which_key_entries(&editor.which_key_prefix, &editor.commands)
+            let (entries, title_override) = if editor.buffer_keys_popup {
+                let kind = editor.active_buffer().kind;
+                use mae_core::buffer_mode::BufferMode;
+                let title = kind.mode_name().to_string();
+                (editor.buffer_keys_entries(), Some(title))
             } else {
-                vec![]
+                (editor.which_key_entries_for_current_keymap(), None)
             };
 
             let entry_cols = (cols / 25).max(1);
@@ -344,6 +347,7 @@ impl Renderer for GuiRenderer {
                 popup_height,
                 cols,
                 &entries,
+                title_override.as_deref(),
             );
         } else if splash_render::should_show_splash(editor) {
             debug!("render: splash screen");
@@ -594,6 +598,50 @@ fn render_window_area(
                         focused_layout = Some(fl);
                     }
                 }
+                BufferKind::GitStatus => {
+                    let git_spans =
+                        mae_core::render_common::git_status::compute_git_status_spans(buf);
+
+                    let border_fg = if is_focused {
+                        theme::ts_fg(editor, "ui.window.border.active")
+                    } else {
+                        theme::ts_fg(editor, "ui.window.border")
+                    };
+                    let title = format!(" {} ", buf.name);
+                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
+
+                    let inner_row = r_row + 1;
+                    let inner_col = r_col + 1;
+                    let inner_width = r_width.saturating_sub(2);
+                    let inner_height = r_height.saturating_sub(2);
+                    let (_, cell_height) = canvas.cell_size();
+                    let fl = layout::compute_layout(
+                        editor,
+                        buf,
+                        win,
+                        inner_row,
+                        inner_col,
+                        inner_width,
+                        inner_height,
+                        cell_height,
+                        cw,
+                        Some(&git_spans),
+                        Some(&glyph_advance_fn),
+                    );
+                    buffer_render::render_buffer_content(
+                        canvas,
+                        editor,
+                        buf,
+                        win,
+                        is_focused,
+                        &fl,
+                        Some(&git_spans),
+                    );
+                    scrollbar::render_scrollbar(canvas, editor, &fl);
+                    if is_focused {
+                        focused_layout = Some(fl);
+                    }
+                }
                 BufferKind::Debug => {
                     debug_render::render_debug_window(
                         canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
@@ -837,8 +885,8 @@ fn render_gui_cursor(
         let inner_width = (win_rect.width as usize).saturating_sub(2);
         let inner_height = (win_rect.height as usize).saturating_sub(2);
 
-        // Conversation buffers render without a gutter — cursor gutter offset must be 0.
-        let gutter_w = if focused_buf.kind == mae_core::BufferKind::Conversation {
+        // Some buffer kinds render without a gutter — cursor gutter offset must be 0.
+        let gutter_w = if !mae_core::BufferMode::has_gutter(&focused_buf.kind) {
             0
         } else if editor.show_line_numbers {
             gutter::gutter_width(focused_buf.display_line_count())

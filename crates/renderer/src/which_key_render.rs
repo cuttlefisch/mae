@@ -38,19 +38,25 @@ pub(crate) fn render_which_key_popup(
     area: Rect,
     editor: &Editor,
     entries: &[mae_core::WhichKeyEntry],
+    title_override: Option<&str>,
 ) {
-    let breadcrumb: String = editor
-        .which_key_prefix
-        .iter()
-        .map(format_keypress)
-        .collect::<Vec<_>>()
-        .join(" > ");
+    let title = if let Some(t) = title_override {
+        format!(" {} keys ", t)
+    } else {
+        let breadcrumb: String = editor
+            .which_key_prefix
+            .iter()
+            .map(format_keypress)
+            .collect::<Vec<_>>()
+            .join(" > ");
+        format!(" {} ", breadcrumb)
+    };
 
     let popup_border = ts(editor, "ui.window.border");
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(popup_border)
-        .title(format!(" {} ", breadcrumb));
+        .title(title);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -59,7 +65,7 @@ pub(crate) fn render_which_key_popup(
     let key_style = ts(editor, "ui.popup.key");
     let text_style = ts(editor, "ui.popup.text");
 
-    let col_width = 25_u16;
+    let col_width = 30_u16;
     let num_cols = (inner.width / col_width).max(1) as usize;
 
     let mut lines: Vec<Line> = Vec::new();
