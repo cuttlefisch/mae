@@ -77,6 +77,44 @@ impl Editor {
                 ));
             }
 
+            // Link following (gx / Enter on links in any buffer)
+            "open-link-at-cursor" => {
+                let idx = self.active_buffer_idx();
+                let win = self.window_mgr.focused_window();
+                let row = win.cursor_row;
+                let col = win.cursor_col;
+                let buf = &self.buffers[idx];
+
+                // First check buffer link_spans (populated by renderer for conversation/shell)
+                if !buf.link_spans.is_empty() {
+                    let line_start_byte = buf.rope().char_to_byte(buf.rope().line_to_char(row));
+                    let click_byte = line_start_byte + col;
+                    if let Some(link) = buf
+                        .link_spans
+                        .iter()
+                        .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+                    {
+                        let target = link.target.clone();
+                        self.handle_link_click(&target);
+                        return Some(true);
+                    }
+                }
+
+                // Fall back: detect links in current line, find one containing cursor col
+                let line_text: String = buf.rope().line(row).chars().collect();
+                let links = crate::link_detect::detect_links(&line_text);
+                for link in &links {
+                    let link_char_start = line_text[..link.byte_start].chars().count();
+                    let link_char_end = line_text[..link.byte_end].chars().count();
+                    if col >= link_char_start && col < link_char_end {
+                        let target = link.target.clone();
+                        self.handle_link_click(&target);
+                        return Some(true);
+                    }
+                }
+                self.set_status("No link under cursor");
+            }
+
             // Help / KB
             "help" => self.open_help_at("index"),
             "help-follow-link" => self.help_follow_link(),

@@ -399,5 +399,92 @@ fn word_wrap_for_specific_buffer() {
     assert!(ed.word_wrap_for(conv_idx));
 }
 
+// ---------------------------------------------------------------------------
+// Buffer-local options: break_indent, show_break, heading_scale
+// ---------------------------------------------------------------------------
+
+#[test]
+fn setlocal_break_indent() {
+    let mut ed = Editor::new();
+    assert!(ed.break_indent); // global default true
+    let result = ed.set_local_option("break_indent", "false");
+    assert!(result.is_ok());
+    assert!(!ed.break_indent_for(0));
+    assert!(ed.break_indent); // global unchanged
+}
+
+#[test]
+fn setlocal_heading_scale() {
+    let mut ed = Editor::new();
+    assert!(ed.heading_scale); // global default true
+    let result = ed.set_local_option("heading_scale", "false");
+    assert!(result.is_ok());
+    assert!(!ed.heading_scale_for(0));
+}
+
+#[test]
+fn setlocal_show_break() {
+    let mut ed = Editor::new();
+    let result = ed.set_local_option("show_break", ">>> ");
+    assert!(result.is_ok());
+    assert_eq!(ed.show_break_for(0), ">>> ");
+    assert_eq!(ed.show_break, "↪ "); // global unchanged
+}
+
+// ---------------------------------------------------------------------------
+// open-link-at-cursor: URL and file path detection under cursor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn open_link_at_cursor_no_link() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "just plain text here");
+    ed.dispatch_builtin("open-link-at-cursor");
+    assert!(ed.status_msg.contains("No link"));
+}
+
+#[test]
+fn open_link_at_cursor_detects_url() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "visit https://example.com for info");
+    // Move cursor to the URL
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_col = 10; // within "https://example.com"
+    ed.dispatch_builtin("open-link-at-cursor");
+    // URL opens externally, status shows "Opening ..."
+    assert!(ed.status_msg.contains("Opening"));
+}
+
+#[test]
+fn handle_link_click_navigates_to_line() {
+    let mut ed = Editor::new();
+    // Create a temp file
+    let dir = std::env::temp_dir().join("mae_test_link_click");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("test.txt");
+    std::fs::write(&file, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+    // Simulate clicking a file:line link
+    let target = format!("{}:3:1", file.display());
+    ed.handle_link_click(&target);
+
+    // Should have opened the file and navigated to line 3 (row 2, 0-indexed)
+    let win = ed.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gx_keybinding_exists() {
+    let ed = Editor::new();
+    let keymap = ed.keymaps.get("normal").unwrap();
+    let result = keymap.lookup(&crate::keymap::parse_key_seq("gx"));
+    assert!(matches!(
+        result,
+        crate::LookupResult::Exact("open-link-at-cursor")
+    ));
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

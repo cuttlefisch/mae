@@ -787,6 +787,31 @@ impl Editor {
             .unwrap_or(self.relative_line_numbers)
     }
 
+    /// Effective break_indent for a specific buffer index.
+    pub fn break_indent_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .break_indent
+            .unwrap_or(self.break_indent)
+    }
+
+    /// Effective show_break for a specific buffer index.
+    pub fn show_break_for(&self, buf_idx: usize) -> &str {
+        self.buffers[buf_idx]
+            .local_options
+            .show_break
+            .as_deref()
+            .unwrap_or(&self.show_break)
+    }
+
+    /// Effective heading_scale for a specific buffer index.
+    pub fn heading_scale_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .heading_scale
+            .unwrap_or(self.heading_scale)
+    }
+
     /// Set a buffer-local option on the active buffer (:setlocal).
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -805,6 +830,15 @@ impl Editor {
             }
             "relative_line_numbers" => {
                 opts.relative_line_numbers = Some(crate::options::parse_option_bool(value)?);
+            }
+            "break_indent" => {
+                opts.break_indent = Some(crate::options::parse_option_bool(value)?);
+            }
+            "show_break" => {
+                opts.show_break = Some(value.to_string());
+            }
+            "heading_scale" => {
+                opts.heading_scale = Some(crate::options::parse_option_bool(value)?);
             }
             _ => {
                 return Err(format!(
@@ -1760,7 +1794,8 @@ impl Editor {
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
 
-                // Check for link click: convert row+col to byte offset, search link_spans
+                // Check for link click: first try pre-populated link_spans,
+                // then fall back to on-the-fly detection on the clicked line.
                 if !buf.link_spans.is_empty() {
                     let line_start_byte =
                         buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
@@ -1773,6 +1808,21 @@ impl Editor {
                         let target = link.target.clone();
                         self.handle_link_click(&target);
                         return;
+                    }
+                }
+                // On-the-fly link detection for buffers without pre-populated spans
+                // (conversation, shell, text).
+                if target_row < buf.rope().len_lines() {
+                    let line_text: String = buf.rope().line(target_row).chars().collect();
+                    let links = crate::link_detect::detect_links(&line_text);
+                    for link in &links {
+                        let link_char_start = line_text[..link.byte_start].chars().count();
+                        let link_char_end = line_text[..link.byte_end].chars().count();
+                        if text_col >= link_char_start && text_col < link_char_end {
+                            let target = link.target.clone();
+                            self.handle_link_click(&target);
+                            return;
+                        }
                     }
                 }
 
@@ -1799,9 +1849,18 @@ impl Editor {
             let _ = std::process::Command::new("xdg-open").arg(target).spawn();
             self.set_status(format!("Opening {}", target));
         } else {
-            // Strip :line:col suffix for file paths
-            let (path, _line, _col) = file_ops::parse_file_link(target);
+            // Parse :line:col suffix from file paths
+            let (path, line, col) = file_ops::parse_file_link(target);
             self.open_file(path);
+            // Navigate to line:col if specified
+            if let Some(ln) = line {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let target_row = ln.saturating_sub(1).min(buf.line_count().saturating_sub(1));
+                let target_col = col.unwrap_or(1).saturating_sub(1);
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = target_row;
+                win.cursor_col = target_col;
+            }
         }
     }
 

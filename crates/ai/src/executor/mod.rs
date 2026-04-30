@@ -764,17 +764,18 @@ fn build_self_test_plan(filter: &str) -> String {
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <tool> -- <what was verified>\n  [FAIL] <tool> -- expected <X>, got <Y>\n  [SKIP] <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
         "instructions": [
             "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
-            "Step 1: Call editor_save_state to snapshot the current buffer list, window layout, and focus.",
-            "Step 2: Execute each category's setup (if any), tests, and cleanup in order.",
-            "Step 3: If a category has a 'setup' array, execute those steps FIRST (ignore errors — they clean up stale state from previous runs).",
-            "Step 4: Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
-            "Step 5: After each category, execute its 'cleanup' array (if any).",
-            "Step 6: Final cleanup — call editor_restore_state to automatically close test buffers and restore window layout.",
-            "Step 7: Output the report. Do NOT quit the editor."
+            "Each category is ATOMIC: call editor_save_state BEFORE and editor_restore_state AFTER each category. This prevents buffer/window accumulation across categories.",
+            "Step 1: For each category in order:",
+            "  1a. Call editor_save_state to snapshot buffers, windows, and focus.",
+            "  1b. Execute the category's 'setup' array (if any). Ignore errors — they clean up stale state.",
+            "  1c. Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
+            "  1d. Execute the category's 'cleanup' array (if any).",
+            "  1e. Call editor_restore_state to close test buffers and restore layout.",
+            "Step 2: Final cleanup — delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
+            "Step 3: Output the report. Do NOT quit the editor."
         ],
         "cleanup": [
             "Delete test files via shell_exec: rm -f /tmp/mae-self-test-editing.txt",
-            "Call editor_restore_state to restore the editor to its pre-test state (closes test buffers, restores window layout and focus).",
             "Do NOT quit the editor"
         ],
         "categories": categories

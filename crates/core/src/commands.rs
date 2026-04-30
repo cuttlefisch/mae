@@ -636,6 +636,10 @@ impl CommandRegistry {
         reg.register_builtin("org-todo-next", "Cycle org TODO state forward");
         reg.register_builtin("org-todo-prev", "Cycle org TODO state backward");
         reg.register_builtin("org-open-link", "Open org link under cursor");
+        reg.register_builtin(
+            "open-link-at-cursor",
+            "Open URL or file path under cursor (gx)",
+        );
         reg.register_builtin("org-promote", "Promote org heading (M-Left)");
         reg.register_builtin("org-demote", "Demote org heading (M-Right)");
         reg.register_builtin("org-move-subtree-up", "Move org subtree up (M-Up)");

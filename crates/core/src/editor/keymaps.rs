@@ -131,6 +131,8 @@ impl Editor {
         // gf — open file under cursor. Resolves absolute paths, relative
         // paths (cwd first, then buffer's dir), and ~-expanded home paths.
         normal.bind(parse_key_seq("gf"), "goto-file-under-cursor");
+        // gx — open link under cursor (URL or file path with :line:col).
+        normal.bind(parse_key_seq("gx"), "open-link-at-cursor");
         // Marks (m<letter> sets, '<letter> jumps)
         normal.bind(parse_key_seq("m"), "set-mark-await");
         normal.bind(parse_key_seq("'"), "jump-mark-await");

@@ -405,6 +405,12 @@ impl Editor {
                                     "relative_line_numbers" => {
                                         self.relative_line_numbers_for(self.active_buffer_idx())
                                     }
+                                    "break_indent" => {
+                                        self.break_indent_for(self.active_buffer_idx())
+                                    }
+                                    "heading_scale" => {
+                                        self.heading_scale_for(self.active_buffer_idx())
+                                    }
                                     _ => {
                                         self.set_status(format!(
                                             "Option '{}' does not support buffer-local toggle",
@@ -446,6 +452,17 @@ impl Editor {
                                     "relative_line_numbers" => self.buffers[idx]
                                         .local_options
                                         .relative_line_numbers
+                                        .map(|v| v.to_string()),
+                                    "break_indent" => self.buffers[idx]
+                                        .local_options
+                                        .break_indent
+                                        .map(|v| v.to_string()),
+                                    "show_break" => {
+                                        self.buffers[idx].local_options.show_break.clone()
+                                    }
+                                    "heading_scale" => self.buffers[idx]
+                                        .local_options
+                                        .heading_scale
                                         .map(|v| v.to_string()),
                                     _ => None,
                                 };

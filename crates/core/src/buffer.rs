@@ -79,6 +79,9 @@ pub struct BufferLocalOptions {
     pub word_wrap: Option<bool>,
     pub line_numbers: Option<bool>,
     pub relative_line_numbers: Option<bool>,
+    pub break_indent: Option<bool>,
+    pub show_break: Option<String>,
+    pub heading_scale: Option<bool>,
 }
 
 /// Rope-backed text buffer with undo history.
