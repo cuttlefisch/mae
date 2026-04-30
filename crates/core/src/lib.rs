@@ -1,4 +1,6 @@
 pub mod buffer;
+pub mod buffer_mode;
+pub mod buffer_view;
 pub mod clipboard;
 pub mod command_palette;
 pub mod commands;
@@ -38,6 +40,8 @@ pub mod word;
 pub mod wrap;
 
 pub use buffer::{Buffer, BufferKind, BufferLocalOptions};
+pub use buffer_mode::BufferMode;
+pub use buffer_view::BufferView;
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;

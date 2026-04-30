@@ -250,7 +250,7 @@ pub fn execute_dap_list_variables(editor: &Editor) -> Result<String, String> {
         .buffers
         .iter()
         .find(|b| b.kind == mae_core::buffer::BufferKind::Debug)
-        .and_then(|b| b.debug_view.as_ref())
+        .and_then(|b| b.debug_view())
         .map(|v| &v.child_variables);
 
     let mut scopes_out = serde_json::Map::new();
@@ -353,7 +353,7 @@ pub fn execute_dap_select_frame(editor: &mut Editor, args: &Value) -> Result<Str
         .iter_mut()
         .find(|b| b.kind == mae_core::buffer::BufferKind::Debug)
     {
-        if let Some(view) = buf.debug_view.as_mut() {
+        if let Some(view) = buf.debug_view_mut() {
             view.selected_frame_id = Some(frame_id);
         }
     }

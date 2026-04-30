@@ -22,7 +22,7 @@ fn find_buffer_by_name_or_default_mut<'a>(
 ) -> Option<&'a mut mae_core::conversation::Conversation> {
     if let Some(n) = name {
         if let Some(idx) = editor.find_buffer_by_name(n) {
-            return editor.buffers[idx].conversation.as_mut();
+            return editor.buffers[idx].conversation_mut();
         }
     }
     find_conversation_buffer_mut(editor)
@@ -390,9 +390,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
 
             // Create a dedicated conversation buffer for the sub-agent.
             // Users can switch to this buffer to monitor progress in real-time.
-            let mut sub_buf = mae_core::Buffer::new();
-            sub_buf.name = target_buf_name.clone();
-            sub_buf.conversation = Some(mae_core::conversation::Conversation::new());
+            let sub_buf = mae_core::Buffer::new_conversation(&target_buf_name);
             editor.buffers.push(sub_buf);
             if let Some(conv) = find_buffer_by_name_or_default_mut(editor, Some(&target_buf_name)) {
                 conv.push_system(format!("Objective: {}", objective));

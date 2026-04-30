@@ -157,12 +157,12 @@ pub fn handle_key(
     // Toggle collapse in conversation buffers (Normal mode)
     if editor.mode == Mode::Normal {
         let idx = editor.active_buffer_idx();
-        if editor.buffers[idx].conversation.is_some()
+        if editor.buffers[idx].conversation().is_some()
             && (key.code == KeyCode::Enter || key.code == KeyCode::Tab)
         {
             let win = editor.window_mgr.focused_window();
             let row = win.cursor_row;
-            if let Some(ref mut conv) = editor.buffers[idx].conversation {
+            if let Some(conv) = editor.buffers[idx].conversation_mut() {
                 let lines = conv.rendered_lines();
                 if let Some(line) = lines.get(row) {
                     if let Some(entry_idx) = line.entry_index {

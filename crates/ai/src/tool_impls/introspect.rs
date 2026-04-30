@@ -110,11 +110,11 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
             "modified": b.modified,
             "line_count": b.line_count(),
             "folded_ranges_count": b.folded_ranges.len(),
-            "has_git_status": b.git_status.is_some(),
+            "has_git_status": b.git_status_view().is_some(),
         });
 
         if b.kind == BufferKind::GitStatus {
-            if let Some(ref gs) = b.git_status {
+            if let Some(gs) = b.git_status_view() {
                 b_info["git_repo_root"] = json!(gs.repo_root);
             }
         }

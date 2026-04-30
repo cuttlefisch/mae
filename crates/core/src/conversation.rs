@@ -177,6 +177,7 @@ pub struct RenderedLine {
 }
 
 /// Conversation state for an AI interaction pane.
+#[derive(Debug)]
 pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
     /// Conversation-specific scroll state: 0 = bottom (auto-follow),

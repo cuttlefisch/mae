@@ -506,8 +506,10 @@ impl Editor {
         git_status.bind(parse_key_seq("S"), "git-stage-all");
         git_status.bind(parse_key_seq("U"), "git-unstage-all");
         git_status.bind(parse_key_seq("c c"), "git-commit");
+        git_status.bind(parse_key_seq("c a"), "git-amend");
         git_status.bind(parse_key_seq("l l"), "git-log");
-        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-status-toggle");
+        git_status.bind(parse_key_seq("x"), "git-discard");
+        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-toggle-section");
         git_status.bind(vec![KeyPress::special(Key::Enter)], "git-status-open");
         git_status.bind(parse_key_seq("q"), "enter-normal-mode");
         git_status.bind(parse_key_seq("g r"), "git-status"); // Refresh

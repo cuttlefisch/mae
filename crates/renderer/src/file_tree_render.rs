@@ -26,7 +26,7 @@ pub(crate) fn render_file_tree_window(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if let Some(ref ft) = buf.file_tree {
+    if let Some(ft) = buf.file_tree() {
         let sel_style = ts(editor, "ui.selection");
         let dir_style = ts(editor, "keyword").add_modifier(Modifier::BOLD);
         let file_style = ts(editor, "ui.text");

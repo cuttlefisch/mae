@@ -1385,14 +1385,12 @@ impl Editor {
 
     /// First conversation attached to any buffer, if any.
     pub fn conversation(&self) -> Option<&crate::conversation::Conversation> {
-        self.buffers.iter().find_map(|b| b.conversation.as_ref())
+        self.buffers.iter().find_map(|b| b.conversation())
     }
 
     /// Mutable view of the first conversation attached to any buffer.
     pub fn conversation_mut(&mut self) -> Option<&mut crate::conversation::Conversation> {
-        self.buffers
-            .iter_mut()
-            .find_map(|b| b.conversation.as_mut())
+        self.buffers.iter_mut().find_map(|b| b.conversation_mut())
     }
 
     /// Set the editor mode and fire the `mode-change` hook.
@@ -1437,7 +1435,7 @@ impl Editor {
             .iter()
             .position(|b| b.kind == crate::buffer::BufferKind::Help)
         {
-            if let Some(view) = self.buffers[idx].help_view.as_mut() {
+            if let Some(view) = self.buffers[idx].help_view_mut() {
                 let v: &mut crate::help_view::HelpView = view;
                 v.navigate_to(node_id.to_string());
             }
@@ -1452,7 +1450,7 @@ impl Editor {
         self.buffers
             .iter_mut()
             .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view.as_mut())
+            .and_then(|b| b.help_view_mut())
     }
 
     /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
@@ -1460,7 +1458,7 @@ impl Editor {
         self.buffers
             .iter()
             .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view.as_ref())
+            .and_then(|b| b.help_view())
     }
 
     /// Switch the focused window to the buffer at the given index.

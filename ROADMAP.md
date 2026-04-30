@@ -53,7 +53,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Editing UX
 - [x] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. LCS-based unified diff with `diff.*` theme keys in all 8 themes, syntax-highlighted (v0.6.0).
 - [x] **Clickable Links in Output**: `gx` opens URL/file path under cursor in any buffer. Mouse clicks detect links on-the-fly. File paths with `:line:col` navigate to position. (v0.6.0)
-- [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
+- [x] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers. (v0.6.0: display regions with link concealment, cursor reveal, `gx` link following)
 - [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
 
 ### Agent Quality
@@ -941,10 +941,14 @@ agent can observe, suggest, and execute commands alongside the user.
 Full git porcelain in a dedicated buffer — the magit experience. Builds on
 M1 PTY shell and the existing `SPC g` stubs.
 
-- [ ] `SPC g s` — git status buffer with staged/unstaged/untracked sections
-- [ ] Stage/unstage: `s` to stage file or hunk, `u` to unstage, `S`/`U` for all
-- [ ] `c c` — commit (inline message editing), `c a` — amend
-- [ ] Diff view: per-file and per-hunk diffs with syntax-highlighted context
+- [x] `SPC g s` — git status buffer with staged/unstaged/untracked/stash sections
+- [x] Stage/unstage: `s` to stage file or hunk, `u` to unstage, `S`/`U` for all
+- [x] `c c` — commit, `c a` — amend
+- [x] Diff view: Tab on file toggles inline diff with added/removed/context coloring
+- [x] Discard: `x` — discard unstaged changes for file at cursor
+- [x] `BufferView` enum replaces 6 `Option<T>` fields; `BufferMode` trait encodes mode contract
+- [x] Shared `render_common::help` deduplicates ~65 LOC between TUI/GUI help renderers
+- [x] `GitLineKind` + `DiffLineType` semantic types for rendering and dispatch
 - [ ] Log view: `l l` — commit history with graph, `l b` — branch log
 - [ ] Blame: `SPC g b` — line-by-line blame in gutter or dedicated buffer
 - [ ] Stash: `z z` — stash, `z p` — pop, `z l` — list stashes

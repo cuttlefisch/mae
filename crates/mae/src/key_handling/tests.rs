@@ -300,8 +300,7 @@ fn conversation_multiline_submit_reads_all_lines() {
 
     // Conversation should have the user message.
     let conv = editor.buffers[pair.output_buffer_idx]
-        .conversation
-        .as_ref()
+        .conversation()
         .unwrap();
     assert!(
         conv.entries.iter().any(|e| e.content == "hello\nworld"),

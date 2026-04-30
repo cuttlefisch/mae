@@ -84,6 +84,8 @@ impl Editor {
     }
 
     pub fn git_status(&mut self) {
+        use crate::git_status::*;
+
         let root = self
             .project
             .as_ref()
@@ -100,84 +102,248 @@ impl Editor {
             return;
         }
 
-        let mut view = crate::git_status::GitStatusView::new(root.clone());
+        // Preserve collapsed state from previous view
+        let prev_collapsed = self
+            .find_buffer_by_name("*git-status*")
+            .and_then(|i| {
+                self.buffers[i]
+                    .git_status_view()
+                    .map(|v| v.collapsed_paths.clone())
+            })
+            .unwrap_or_default();
+
+        let mut view = GitStatusView::new(root.clone());
+        view.collapsed_paths = prev_collapsed;
         let mut text = String::new();
 
         let mut branch = "unknown".to_string();
-        let mut staged = Vec::new();
-        let mut unstaged = Vec::new();
+        let mut staged: Vec<(String, char)> = Vec::new();
+        let mut unstaged: Vec<(String, char)> = Vec::new();
         let mut untracked = Vec::new();
 
         for line in stdout.lines() {
             if let Some(stripped) = line.strip_prefix("# branch.head ") {
                 branch = stripped.to_string();
             } else if line.starts_with("1 ") || line.starts_with("2 ") {
-                // Changed tracked files
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 9 {
                     let staging = parts[1];
                     let path = parts[parts.len() - 1].to_string();
                     let s_char = staging.chars().next().unwrap_or('.');
                     let u_char = staging.chars().nth(1).unwrap_or('.');
-
                     if s_char != '.' {
-                        staged.push(path.clone());
+                        staged.push((path.clone(), s_char));
                     }
                     if u_char != '.' {
-                        unstaged.push(path);
+                        unstaged.push((path, u_char));
                     }
                 }
             } else if let Some(stripped) = line.strip_prefix("? ") {
-                // Untracked
                 untracked.push(stripped.to_string());
             }
         }
 
-        text.push_str(&format!("Head:     {}\n\n", branch));
+        // Header
+        let header_line = format!("Head:     {}", branch);
+        text.push_str(&header_line);
+        text.push('\n');
+        view.lines.push(GitStatusLine {
+            text: header_line,
+            section: None,
+            file_path: None,
+            hunk: None,
+            is_header: true,
+            is_collapsed: false,
+            kind: GitLineKind::Header,
+        });
+        view.line_kinds.push(GitLineKind::Header);
 
-        if !untracked.is_empty() {
-            text.push_str("Untracked files:\n");
-            for p in &untracked {
-                text.push_str(&format!("  ? {}\n", p));
-                view.lines.push(crate::git_status::GitStatusLine {
-                    text: format!("  ? {}", p),
-                    section: Some(crate::git_status::GitSection::Untracked),
-                    file_path: Some(p.clone()),
-                    hunk: None,
-                    is_header: false,
-                    is_collapsed: false,
-                });
+        // Blank separator
+        text.push('\n');
+        view.lines.push(GitStatusLine {
+            text: String::new(),
+            section: None,
+            file_path: None,
+            hunk: None,
+            is_header: false,
+            is_collapsed: false,
+            kind: GitLineKind::Blank,
+        });
+        view.line_kinds.push(GitLineKind::Blank);
+
+        // Helper closure to push a section
+        let push_section = |view: &mut GitStatusView,
+                            text: &mut String,
+                            section: GitSection,
+                            heading: &str,
+                            files: &[(String, char)]| {
+            if files.is_empty() {
+                return;
             }
+            // Section header
+            text.push_str(heading);
             text.push('\n');
-        }
+            let kind = GitLineKind::SectionHeader(section);
+            view.lines.push(GitStatusLine {
+                text: heading.to_string(),
+                section: Some(section),
+                file_path: None,
+                hunk: None,
+                is_header: true,
+                is_collapsed: false,
+                kind: kind.clone(),
+            });
+            view.line_kinds.push(kind);
 
-        if !unstaged.is_empty() {
-            text.push_str("Unstaged changes:\n");
-            for p in &unstaged {
-                text.push_str(&format!("  M {}\n", p));
-                view.lines.push(crate::git_status::GitStatusLine {
-                    text: format!("  M {}", p),
-                    section: Some(crate::git_status::GitSection::Unstaged),
+            // File entries
+            for (p, status_char) in files {
+                let file_text = format!("  {} {}", status_char, p);
+                text.push_str(&file_text);
+                text.push('\n');
+                let file_kind = GitLineKind::File {
+                    section,
+                    status_char: *status_char,
+                };
+                view.lines.push(GitStatusLine {
+                    text: file_text,
+                    section: Some(section),
                     file_path: Some(p.clone()),
                     hunk: None,
                     is_header: false,
-                    is_collapsed: false,
+                    is_collapsed: !view.is_expanded(p),
+                    kind: file_kind.clone(),
                 });
-            }
-            text.push('\n');
-        }
+                view.line_kinds.push(file_kind);
 
-        if !staged.is_empty() {
-            text.push_str("Staged changes:\n");
-            for p in &staged {
-                text.push_str(&format!("  S {}\n", p));
-                view.lines.push(crate::git_status::GitStatusLine {
-                    text: format!("  S {}", p),
-                    section: Some(crate::git_status::GitSection::Staged),
-                    file_path: Some(p.clone()),
+                // Inline diff for expanded files
+                if view.is_expanded(p) {
+                    let diff_args = if section == GitSection::Staged {
+                        vec!["diff", "--cached", "--", p.as_str()]
+                    } else {
+                        vec!["diff", "--", p.as_str()]
+                    };
+                    let diff_output = match std::process::Command::new("git")
+                        .args(&diff_args)
+                        .current_dir(&view.repo_root)
+                        .output()
+                    {
+                        Ok(o) if o.status.success() => {
+                            String::from_utf8_lossy(&o.stdout).to_string()
+                        }
+                        _ => String::new(),
+                    };
+                    for diff_line in diff_output.lines() {
+                        if diff_line.starts_with("diff ")
+                            || diff_line.starts_with("index ")
+                            || diff_line.starts_with("--- ")
+                            || diff_line.starts_with("+++ ")
+                        {
+                            continue; // Skip diff metadata
+                        }
+                        let diff_kind = if diff_line.starts_with("@@") {
+                            GitLineKind::DiffHunk
+                        } else if diff_line.starts_with('+') {
+                            GitLineKind::DiffLine(DiffLineType::Added)
+                        } else if diff_line.starts_with('-') {
+                            GitLineKind::DiffLine(DiffLineType::Removed)
+                        } else {
+                            GitLineKind::DiffLine(DiffLineType::Context)
+                        };
+                        let display_line = format!("    {}", diff_line);
+                        text.push_str(&display_line);
+                        text.push('\n');
+                        view.lines.push(GitStatusLine {
+                            text: display_line,
+                            section: Some(section),
+                            file_path: Some(p.clone()),
+                            hunk: None,
+                            is_header: false,
+                            is_collapsed: false,
+                            kind: diff_kind.clone(),
+                        });
+                        view.line_kinds.push(diff_kind);
+                    }
+                }
+            }
+
+            // Blank separator
+            text.push('\n');
+            view.lines.push(GitStatusLine {
+                text: String::new(),
+                section: None,
+                file_path: None,
+                hunk: None,
+                is_header: false,
+                is_collapsed: false,
+                kind: GitLineKind::Blank,
+            });
+            view.line_kinds.push(GitLineKind::Blank);
+        };
+
+        // Untracked files (use '?' as status char)
+        let untracked_files: Vec<(String, char)> =
+            untracked.iter().map(|p| (p.clone(), '?')).collect();
+        push_section(
+            &mut view,
+            &mut text,
+            GitSection::Untracked,
+            "Untracked files:",
+            &untracked_files,
+        );
+
+        // Unstaged changes
+        push_section(
+            &mut view,
+            &mut text,
+            GitSection::Unstaged,
+            "Unstaged changes:",
+            &unstaged,
+        );
+
+        // Staged changes
+        push_section(
+            &mut view,
+            &mut text,
+            GitSection::Staged,
+            "Staged changes:",
+            &staged,
+        );
+
+        // Stash list
+        let (stash_ok, stash_stdout, _) = self.run_git_porcelain(&["stash", "list"]);
+        if stash_ok && !stash_stdout.trim().is_empty() {
+            text.push_str("Stashes:\n");
+            let kind = GitLineKind::SectionHeader(GitSection::Stashes);
+            view.lines.push(GitStatusLine {
+                text: "Stashes:".to_string(),
+                section: Some(GitSection::Stashes),
+                file_path: None,
+                hunk: None,
+                is_header: true,
+                is_collapsed: false,
+                kind: kind.clone(),
+            });
+            view.line_kinds.push(kind);
+
+            for stash_line in stash_stdout.lines() {
+                let display_line = format!("  {}", stash_line);
+                text.push_str(&display_line);
+                text.push('\n');
+                view.lines.push(GitStatusLine {
+                    text: display_line,
+                    section: Some(GitSection::Stashes),
+                    file_path: None,
                     hunk: None,
                     is_header: false,
                     is_collapsed: false,
+                    kind: GitLineKind::File {
+                        section: GitSection::Stashes,
+                        status_char: 'S',
+                    },
+                });
+                view.line_kinds.push(GitLineKind::File {
+                    section: GitSection::Stashes,
+                    status_char: 'S',
                 });
             }
         }
@@ -197,11 +363,11 @@ impl Editor {
             self.buffers.len() - 1
         };
 
-        self.buffers[idx].git_status = Some(view);
-        self.buffers[idx].read_only = true;
+        self.buffers[idx].view = crate::buffer_view::BufferView::GitStatus(Box::new(view));
 
-        // Populate rope
+        // Populate rope BEFORE setting read_only (insert_text_at is a no-op on read-only buffers)
         self.buffers[idx].insert_text_at(0, &text);
+        self.buffers[idx].read_only = true;
         self.buffers[idx].modified = false;
 
         // Switch to it
@@ -211,6 +377,80 @@ impl Editor {
         self.window_mgr.focused_window_mut().cursor_row = 0;
         self.window_mgr.focused_window_mut().cursor_col = 0;
         self.set_mode(crate::Mode::GitStatus);
+    }
+
+    /// Toggle inline diff expansion for the file at cursor.
+    pub fn git_toggle_section(&mut self) {
+        let win = self.window_mgr.focused_window();
+        let cursor_row = win.cursor_row;
+        let idx = self.active_buffer_idx();
+
+        let path = self.buffers[idx]
+            .git_status_view()
+            .and_then(|v| v.lines.get(cursor_row))
+            .and_then(|line| line.file_path.clone());
+
+        if let Some(p) = path {
+            if let Some(view) = self.buffers[idx].git_status_view_mut() {
+                view.toggle_file_expansion(&p);
+            }
+            // Refresh to rebuild with diff lines
+            self.git_status();
+        }
+    }
+
+    /// Discard unstaged changes for the file at cursor.
+    pub fn git_discard_file(&mut self) {
+        let win = self.window_mgr.focused_window();
+        let cursor_row = win.cursor_row;
+        let idx = self.active_buffer_idx();
+
+        let (path, section) = self.buffers[idx]
+            .git_status_view()
+            .and_then(|v| {
+                v.lines
+                    .get(cursor_row)
+                    .and_then(|line| line.file_path.as_ref().map(|p| (p.clone(), line.section)))
+            })
+            .unwrap_or_default();
+
+        if path.is_empty() {
+            return;
+        }
+
+        // Only discard unstaged changes
+        if section != Some(crate::git_status::GitSection::Unstaged) {
+            self.set_status("Can only discard unstaged changes");
+            return;
+        }
+
+        let (ok, _, stderr) = self.run_git_porcelain(&["checkout", "--", &path]);
+        if ok {
+            self.set_status(format!("Discarded changes to {}", path));
+            self.git_status();
+        } else {
+            self.set_status(format!("git checkout failed: {}", stderr));
+        }
+    }
+
+    /// Amend the previous commit.
+    pub fn git_amend(&mut self) {
+        let root = self
+            .project
+            .as_ref()
+            .map(|p| p.root.clone())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+
+        info!("opening amend commit message buffer");
+        let commit_file = root.join(".git/COMMIT_EDITMSG");
+        // Pre-populate with previous commit message
+        let (ok, msg, _) = self.run_git_porcelain(&["log", "-1", "--format=%B"]);
+        if ok {
+            let _ = std::fs::write(&commit_file, msg.trim());
+        }
+        self.open_file(&commit_file);
+        self.set_status("Edit commit message and save to amend (use :!git commit --amend)");
     }
 
     fn run_git_porcelain(&self, args: &[&str]) -> (bool, String, String) {

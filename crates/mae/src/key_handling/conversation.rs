@@ -45,7 +45,7 @@ pub fn scroll_output_to_bottom(editor: &mut Editor) {
             }
         }
         // Also reset conversation scroll to bottom.
-        if let Some(ref mut conv) = editor.buffers[pair.output_buffer_idx].conversation {
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
             conv.scroll_to_bottom();
         }
     }
@@ -71,8 +71,7 @@ pub(crate) fn submit_conversation_prompt(
 
     // Reject submissions while the previous turn is still streaming.
     let already_streaming = editor.buffers[output_idx]
-        .conversation
-        .as_ref()
+        .conversation()
         .map(|conv| conv.streaming)
         .unwrap_or(false);
 
@@ -82,7 +81,7 @@ pub(crate) fn submit_conversation_prompt(
     }
 
     // Push user message to conversation + clear input buffer.
-    if let Some(ref mut conv) = editor.buffers[output_idx].conversation {
+    if let Some(conv) = editor.buffers[output_idx].conversation_mut() {
         conv.push_user(&input);
         conv.scroll_to_bottom();
 
@@ -119,7 +118,7 @@ pub(crate) fn submit_conversation_prompt(
     } else {
         warn!("AI prompt submitted but no AI provider configured");
         editor.set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
-        if let Some(ref mut conv) = editor.buffers[output_idx].conversation {
+        if let Some(conv) = editor.buffers[output_idx].conversation_mut() {
             conv.end_streaming();
         }
     }
@@ -159,13 +158,13 @@ pub(super) fn handle_conversation_input(
                 .map(|p| p.output_buffer_idx);
             let is_streaming = output_idx
                 .and_then(|idx| editor.buffers.get(idx))
-                .and_then(|b| b.conversation.as_ref())
+                .and_then(|b| b.conversation())
                 .map(|conv| conv.streaming)
                 .unwrap_or(false);
 
             if is_streaming {
                 if let Some(idx) = output_idx {
-                    if let Some(ref mut conv) = editor.buffers[idx].conversation {
+                    if let Some(conv) = editor.buffers[idx].conversation_mut() {
                         info!("user cancelled AI streaming");
                         conv.streaming = false;
                         conv.streaming_start = None;

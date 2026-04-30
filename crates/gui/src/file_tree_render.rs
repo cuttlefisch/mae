@@ -37,7 +37,7 @@ pub fn render_file_tree_window(
     let inner_width = area_width.saturating_sub(2);
     let inner_height = area_height.saturating_sub(2);
 
-    if let Some(ref ft) = buf.file_tree {
+    if let Some(ft) = buf.file_tree() {
         let sel_bg = theme::ts_bg(editor, "ui.selection").unwrap_or(theme::DEFAULT_BG);
         let dir_fg = theme::ts_fg(editor, "keyword");
         let file_fg = theme::ts_fg(editor, "ui.text");

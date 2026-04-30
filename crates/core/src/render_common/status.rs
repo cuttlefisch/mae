@@ -394,7 +394,7 @@ fn build_nyan_segment(buf: &Buffer, win: &Window) -> String {
 
 fn compute_scroll_pct(buf: &Buffer, win: &Window) -> String {
     if buf.kind == BufferKind::Conversation {
-        if let Some(ref conv) = buf.conversation {
+        if let Some(conv) = buf.conversation() {
             let total = conv.line_count();
             if total <= 1 {
                 "All".to_string()

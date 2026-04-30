@@ -199,7 +199,7 @@ impl Editor {
     /// Render the current KB node into the help buffer's rope and store
     /// link spans. Called on every navigation (open, follow link, back/forward).
     pub fn help_populate_buffer(&mut self, buf_idx: usize) {
-        let node_id = match self.buffers[buf_idx].help_view.as_ref() {
+        let node_id = match self.buffers[buf_idx].help_view() {
             Some(v) => v.current.clone(),
             None => return,
         };
@@ -286,7 +286,7 @@ impl Editor {
         self.buffers[buf_idx].read_only = false;
         self.buffers[buf_idx].replace_contents(&text);
         self.buffers[buf_idx].read_only = true;
-        if let Some(view) = self.buffers[buf_idx].help_view.as_mut() {
+        if let Some(view) = self.buffers[buf_idx].help_view_mut() {
             view.rendered_links = link_spans;
         }
     }
@@ -454,7 +454,7 @@ impl Editor {
             return;
         };
         // Save state for reopen.
-        self.last_help_state = self.buffers[help_idx].help_view.clone();
+        self.last_help_state = self.buffers[help_idx].help_view().cloned();
         // Pick a sensible destination: alternate if set (and not the
         // help buffer itself), otherwise the first non-help buffer.
         let dest_idx = self
@@ -499,7 +499,7 @@ impl Editor {
         let prev_idx = self.active_buffer_idx();
         let idx = self.ensure_help_buffer_idx(&node_id);
         // Restore full navigation state (back/forward stacks, focused link).
-        self.buffers[idx].help_view = Some(saved);
+        self.buffers[idx].view = crate::buffer_view::BufferView::Help(Box::new(saved));
         self.help_populate_buffer(idx);
         if idx != prev_idx {
             self.alternate_buffer_idx = Some(prev_idx);

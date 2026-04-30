@@ -6,6 +6,8 @@
 
 pub mod color;
 pub mod debug;
+pub mod git_status;
 pub mod gutter;
+pub mod help;
 pub mod splash;
 pub mod status;

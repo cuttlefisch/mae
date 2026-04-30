@@ -10,7 +10,7 @@ impl Editor {
             "git-stage" => {
                 let win = self.window_mgr.focused_window();
                 let idx = self.active_buffer_idx();
-                let path = if let Some(ref view) = self.buffers[idx].git_status {
+                let path = if let Some(view) = self.buffers[idx].git_status_view() {
                     if let Some(line) = view.lines.get(win.cursor_row) {
                         line.file_path.clone()
                     } else {
@@ -26,7 +26,7 @@ impl Editor {
             "git-unstage" => {
                 let win = self.window_mgr.focused_window();
                 let idx = self.active_buffer_idx();
-                let path = if let Some(ref view) = self.buffers[idx].git_status {
+                let path = if let Some(view) = self.buffers[idx].git_status_view() {
                     if let Some(line) = view.lines.get(win.cursor_row) {
                         line.file_path.clone()
                     } else {
@@ -51,13 +51,22 @@ impl Editor {
             "git-log" => {
                 self.git_log();
             }
+            "git-toggle-section" => {
+                self.git_toggle_section();
+            }
+            "git-discard" => {
+                self.git_discard_file();
+            }
+            "git-amend" => {
+                self.git_amend();
+            }
             "git-status-toggle" => {
-                self.git_status();
+                self.git_toggle_section();
             }
             "git-status-open" => {
                 let win = self.window_mgr.focused_window();
                 let idx = self.active_buffer_idx();
-                let (path, repo_root) = if let Some(ref view) = self.buffers[idx].git_status {
+                let (path, repo_root) = if let Some(view) = self.buffers[idx].git_status_view() {
                     if let Some(line) = view.lines.get(win.cursor_row) {
                         (line.file_path.clone(), Some(view.repo_root.clone()))
                     } else {

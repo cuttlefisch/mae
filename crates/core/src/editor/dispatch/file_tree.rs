@@ -76,7 +76,7 @@ impl Editor {
                                 .get(original_buf_idx)
                                 .and_then(|b| b.file_path().map(|p| p.to_path_buf()))
                             {
-                                if let Some(ref mut ft) = self.buffers[tree_buf_idx].file_tree {
+                                if let Some(ft) = self.buffers[tree_buf_idx].file_tree_mut() {
                                     ft.reveal(&current_path);
                                 }
                             }
@@ -93,21 +93,21 @@ impl Editor {
             }
             "file-tree-up" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.move_up();
                 }
                 Some(true)
             }
             "file-tree-down" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.move_down();
                 }
                 Some(true)
             }
             "file-tree-expand" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.toggle_expand();
                 }
                 Some(true)
@@ -115,8 +115,7 @@ impl Editor {
             "file-tree-open" => {
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     if path.is_file() {
@@ -133,7 +132,7 @@ impl Editor {
                         self.open_file(&path);
                     } else if path.is_dir() {
                         // Toggle expand for directories.
-                        if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                        if let Some(ft) = self.buffers[idx].file_tree_mut() {
                             ft.toggle_expand();
                         }
                     }
@@ -142,21 +141,21 @@ impl Editor {
             }
             "file-tree-first" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.move_to_first();
                 }
                 Some(true)
             }
             "file-tree-last" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.move_to_last();
                 }
                 Some(true)
             }
             "file-tree-close-parent" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.close_parent();
                 }
                 Some(true)
@@ -164,13 +163,12 @@ impl Editor {
             "file-tree-cd" => {
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     if path.is_dir() {
                         let display = path.display().to_string();
-                        if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                        if let Some(ft) = self.buffers[idx].file_tree_mut() {
                             ft.change_root(&path);
                         }
                         self.buffers[idx].name = format!("[Tree] {}", display);
@@ -184,12 +182,11 @@ impl Editor {
             "file-tree-parent" => {
                 let idx = self.active_buffer_idx();
                 let new_root = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.root.parent().map(|p| p.to_path_buf()));
                 if let Some(new_root) = new_root {
                     let display = new_root.display().to_string();
-                    if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                    if let Some(ft) = self.buffers[idx].file_tree_mut() {
                         ft.go_parent_root();
                     }
                     self.buffers[idx].name = format!("[Tree] {}", display);
@@ -200,8 +197,7 @@ impl Editor {
             "file-tree-delete" => {
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -213,8 +209,7 @@ impl Editor {
             "file-tree-rename" => {
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     let name = path
@@ -233,7 +228,7 @@ impl Editor {
             "file-tree-create" => {
                 let idx = self.active_buffer_idx();
                 // Use selected dir, or parent of selected file
-                let parent = self.buffers[idx].file_tree.as_ref().and_then(|ft| {
+                let parent = self.buffers[idx].file_tree().and_then(|ft| {
                     ft.selected_path().map(|p| {
                         if p.is_dir() {
                             p.to_path_buf()
@@ -266,7 +261,7 @@ impl Editor {
             }
             "file-tree-refresh" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.refresh();
                     self.set_status("File tree refreshed");
                 }
@@ -275,8 +270,7 @@ impl Editor {
             "file-tree-open-vsplit" | "file-tree-open-hsplit" => {
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
-                    .file_tree
-                    .as_ref()
+                    .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     if path.is_file() {
@@ -298,7 +292,7 @@ impl Editor {
                         }
                         self.open_file(&path);
                     } else if path.is_dir() {
-                        if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                        if let Some(ft) = self.buffers[idx].file_tree_mut() {
                             ft.toggle_expand();
                         }
                     }
@@ -307,35 +301,35 @@ impl Editor {
             }
             "file-tree-scroll-down" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.scroll_down(1, 30); // approximate visible height
                 }
                 Some(true)
             }
             "file-tree-scroll-up" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.scroll_up(1);
                 }
                 Some(true)
             }
             "file-tree-half-page-down" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.half_page_down(30);
                 }
                 Some(true)
             }
             "file-tree-half-page-up" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.half_page_up(30);
                 }
                 Some(true)
             }
             "file-tree-global-cycle" => {
                 let idx = self.active_buffer_idx();
-                if let Some(ref mut ft) = self.buffers[idx].file_tree {
+                if let Some(ft) = self.buffers[idx].file_tree_mut() {
                     ft.global_cycle();
                 }
                 Some(true)

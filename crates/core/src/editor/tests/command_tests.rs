@@ -464,12 +464,12 @@ fn ai_cancel_when_streaming() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("ai-prompt");
     // Simulate streaming state
-    if let Some(conv) = editor.buffers[1].conversation.as_mut() {
+    if let Some(conv) = editor.buffers[1].conversation_mut() {
         conv.streaming = true;
         conv.streaming_start = Some(std::time::Instant::now());
     }
     editor.dispatch_builtin("ai-cancel");
-    let conv = editor.buffers[1].conversation.as_ref().unwrap();
+    let conv = editor.buffers[1].conversation().unwrap();
     assert!(!conv.streaming);
     assert!(conv.streaming_start.is_none());
     assert!(editor.status_msg.contains("Cancelled"));
@@ -1095,7 +1095,7 @@ fn file_tree_open_vsplit_opens_in_split() {
     let content_win_count = ed.window_mgr.window_count();
 
     // Select the test.rs file in the tree
-    let ft = ed.buffers[tree_buf_idx].file_tree.as_mut().unwrap();
+    let ft = ed.buffers[tree_buf_idx].file_tree_mut().unwrap();
     if let Some(idx) = ft.entries.iter().position(|e| e.name == "test.rs") {
         ft.selected = idx;
     }
@@ -1128,7 +1128,7 @@ fn file_tree_reveal_on_toggle() {
         .iter()
         .position(|b| b.kind == crate::BufferKind::FileTree);
     if let Some(ti) = tree_idx {
-        let ft = ed.buffers[ti].file_tree.as_ref().unwrap();
+        let ft = ed.buffers[ti].file_tree().unwrap();
         // Should have expanded src and src/util
         assert!(ft.expanded_dirs.contains(&dir.path().join("src")));
         assert!(ft.expanded_dirs.contains(&dir.path().join("src/util")));

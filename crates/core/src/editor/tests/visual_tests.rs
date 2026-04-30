@@ -524,7 +524,7 @@ fn visual_line_selection_range_conversation_buffer() {
     let idx = ed.ensure_conversation_buffer_idx();
     {
         let buf = &mut ed.buffers[idx];
-        let conv = buf.conversation.as_mut().unwrap();
+        let conv = buf.conversation_mut().unwrap();
         conv.push_user("hello");
         conv.push_assistant("world\nsecond line");
     }

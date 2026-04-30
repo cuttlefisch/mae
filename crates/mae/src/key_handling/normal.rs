@@ -417,7 +417,7 @@ pub(super) fn handle_normal_mode(
         match key.code {
             KeyCode::Char('j') if !ctrl => {
                 let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                if let Some(view) = editor.buffers[idx].debug_view_mut() {
                     view.move_down();
                 }
                 editor.count_prefix = None;
@@ -425,7 +425,7 @@ pub(super) fn handle_normal_mode(
             }
             KeyCode::Char('k') if !ctrl => {
                 let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
+                if let Some(view) = editor.buffers[idx].debug_view_mut() {
                     view.move_up();
                 }
                 editor.count_prefix = None;
@@ -504,7 +504,7 @@ pub(super) fn handle_normal_mode(
                             .iter()
                             .position(|b| b.kind == BufferKind::FileTree);
                         if let Some(ti) = tree_idx {
-                            if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                            if let Some(ft) = editor.buffers[ti].file_tree_mut() {
                                 ft.refresh();
                             }
                         }

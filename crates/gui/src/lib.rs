@@ -50,7 +50,7 @@ use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
-use mae_core::{BufferKind, Editor, HighlightSpan, SyntaxSpanMap};
+use mae_core::{BufferKind, Editor, SyntaxSpanMap};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
 use tracing::{debug, info, trace_span};
@@ -483,7 +483,7 @@ fn render_window_area(
             match buf.kind {
                 BufferKind::Conversation => {
                     // Generate highlight spans with inline markdown styling.
-                    let conv_spans = if let Some(ref conv) = buf.conversation {
+                    let conv_spans = if let Some(conv) = buf.conversation() {
                         conv.highlight_spans_with_markup(buf.rope())
                     } else {
                         Vec::new()
@@ -495,7 +495,7 @@ fn render_window_area(
                     } else {
                         theme::ts_fg(editor, "ui.window.border")
                     };
-                    let streaming_indicator = if let Some(ref conv) = buf.conversation {
+                    let streaming_indicator = if let Some(conv) = buf.conversation() {
                         if conv.streaming {
                             if let Some(start) = conv.streaming_start {
                                 format!(" [waiting... {}s] ", start.elapsed().as_secs())
@@ -549,62 +549,7 @@ fn render_window_area(
                     );
                 }
                 BufferKind::Help => {
-                    // Help buffers: generate heading + inline markup + link spans.
-                    let mut help_spans: Vec<HighlightSpan> = Vec::new();
-
-                    // Heading spans from leading `*` or `#` chars in rope lines.
-                    let rope = buf.rope();
-                    for line_idx in 0..buf.line_count() {
-                        let line = rope.line(line_idx);
-                        let first_char = line.chars().next().unwrap_or(' ');
-                        let (prefix_count, is_heading) = if first_char == '*' {
-                            let c = line.chars().take_while(|&ch| ch == '*').count();
-                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
-                        } else if first_char == '#' {
-                            let c = line.chars().take_while(|&ch| ch == '#').count();
-                            (c, c > 0 && line.len_chars() > c && line.char(c) == ' ')
-                        } else {
-                            (0, false)
-                        };
-                        if is_heading && prefix_count > 0 {
-                            let line_start = rope.line_to_char(line_idx);
-                            let line_len = line.len_chars();
-                            let text_len = if line_idx + 1 < buf.line_count() {
-                                line_len.saturating_sub(1)
-                            } else {
-                                line_len
-                            };
-                            let byte_start = rope.char_to_byte(line_start);
-                            let byte_end = rope.char_to_byte(line_start + text_len);
-                            help_spans.push(HighlightSpan {
-                                byte_start,
-                                byte_end,
-                                theme_key: "markup.heading",
-                            });
-                        }
-                    }
-
-                    // Inline style spans (bold, code, italic) — both markdown and org syntax.
-                    let source_text: String = rope.chars().collect();
-                    help_spans.extend(mae_core::compute_markdown_style_spans(&source_text));
-                    help_spans.extend(mae_core::compute_org_style_spans(&source_text));
-
-                    // Link spans from help view.
-                    if let Some(view) = buf.help_view.as_ref() {
-                        for (i, link) in view.rendered_links.iter().enumerate() {
-                            let is_focused_link = view.focused_link == Some(i);
-                            help_spans.push(HighlightSpan {
-                                byte_start: link.byte_start,
-                                byte_end: link.byte_end,
-                                theme_key: if is_focused_link {
-                                    "ui.selection"
-                                } else {
-                                    "markup.link"
-                                },
-                            });
-                        }
-                    }
-                    help_spans.sort_by_key(|s| s.byte_start);
+                    let help_spans = mae_core::render_common::help::compute_help_spans(buf);
 
                     // Render with border — CRITICAL: pass same help_spans to both
                     // compute_layout() and render_buffer_content() (span parity).
@@ -664,7 +609,7 @@ fn render_window_area(
                 }
                 BufferKind::Visual => {
                     // Phase 1 Visual Debugger rendering
-                    if let Some(ref vb) = buf.visual {
+                    if let Some(vb) = buf.visual() {
                         render_visual_buffer(canvas, vb, r_row, r_col, r_width, r_height);
                     }
                 }

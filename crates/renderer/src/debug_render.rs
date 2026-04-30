@@ -39,7 +39,7 @@ pub(crate) fn render_debug_window(
         return;
     }
 
-    let view = match buf.debug_view.as_ref() {
+    let view = match buf.debug_view() {
         Some(v) => v,
         None => return,
     };

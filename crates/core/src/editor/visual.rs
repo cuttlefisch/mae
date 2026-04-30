@@ -84,7 +84,7 @@ impl Editor {
         let idx = self.active_buffer_idx();
 
         // Conversation buffer: yank from flat_text instead of rope
-        if self.buffers[idx].conversation.is_some() {
+        if self.buffers[idx].conversation().is_some() {
             if let Some(text) = self.conversation_visual_yank_text() {
                 self.save_yank(text);
             }
@@ -112,7 +112,7 @@ impl Editor {
     /// Extract the selected text from a conversation buffer's flat_text.
     fn conversation_visual_yank_text(&self) -> Option<String> {
         let idx = self.active_buffer_idx();
-        let conv = self.buffers[idx].conversation.as_ref()?;
+        let conv = self.buffers[idx].conversation()?;
         let flat = conv.flat_text();
         let lines: Vec<&str> = flat.lines().collect();
         let win = self.window_mgr.focused_window();

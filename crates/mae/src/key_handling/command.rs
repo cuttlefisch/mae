@@ -63,7 +63,7 @@ pub fn handle_command_mode(
                                     .iter()
                                     .position(|b| b.kind == mae_core::BufferKind::FileTree);
                                 if let Some(ti) = tree_idx {
-                                    if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                                    if let Some(ft) = editor.buffers[ti].file_tree_mut() {
                                         ft.refresh();
                                     }
                                 }
@@ -95,7 +95,7 @@ pub fn handle_command_mode(
                                     .iter()
                                     .position(|b| b.kind == mae_core::BufferKind::FileTree);
                                 if let Some(ti) = tree_idx {
-                                    if let Some(ref mut ft) = editor.buffers[ti].file_tree {
+                                    if let Some(ft) = editor.buffers[ti].file_tree_mut() {
                                         ft.refresh();
                                     }
                                 }

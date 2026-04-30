@@ -621,7 +621,7 @@ impl SchemeRuntime {
         if !visual_ops.is_empty() {
             let buf_idx = editor.active_buffer_idx();
             if editor.buffers[buf_idx].kind == mae_core::BufferKind::Visual {
-                if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+                if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
                     for op in visual_ops {
                         match op {
                             VisualOp::AddRect {

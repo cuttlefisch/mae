@@ -305,8 +305,7 @@ impl Editor {
         // Conversation buffers always carry a Conversation (invariant of
         // `Buffer::new_conversation`), so unwrap here is sound.
         let conv = self.buffers[idx]
-            .conversation
-            .as_mut()
+            .conversation_mut()
             .expect("conversation buffer missing its Conversation");
         conv.load_json(&contents)?;
         Ok(conv.entries.len())

@@ -22,8 +22,7 @@ pub(super) fn handle_git_status_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Char('s') => {
             let win = editor.window_mgr.focused_window();
             let path = editor.buffers[buf_idx]
-                .git_status
-                .as_ref()
+                .git_status_view()
                 .and_then(|view| view.lines.get(win.cursor_row))
                 .and_then(|line| line.file_path.clone());
 
@@ -34,8 +33,7 @@ pub(super) fn handle_git_status_mode(editor: &mut Editor, key: KeyEvent) {
         KeyCode::Char('u') => {
             let win = editor.window_mgr.focused_window();
             let path = editor.buffers[buf_idx]
-                .git_status
-                .as_ref()
+                .git_status_view()
                 .and_then(|view| view.lines.get(win.cursor_row))
                 .and_then(|line| line.file_path.clone());
 
@@ -48,14 +46,11 @@ pub(super) fn handle_git_status_mode(editor: &mut Editor, key: KeyEvent) {
         }
         KeyCode::Enter => {
             let win = editor.window_mgr.focused_window();
-            let target = editor.buffers[buf_idx]
-                .git_status
-                .as_ref()
-                .and_then(|view| {
-                    view.lines
-                        .get(win.cursor_row)
-                        .and_then(|line| line.file_path.as_ref().map(|p| view.repo_root.join(p)))
-                });
+            let target = editor.buffers[buf_idx].git_status_view().and_then(|view| {
+                view.lines
+                    .get(win.cursor_row)
+                    .and_then(|line| line.file_path.as_ref().map(|p| view.repo_root.join(p)))
+            });
 
             if let Some(full_path) = target {
                 editor.open_file(full_path);

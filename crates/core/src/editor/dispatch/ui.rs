@@ -117,7 +117,7 @@ impl Editor {
                 }
 
                 // Check conversation rendered links first (from markdown stripping)
-                if let Some(conv) = buf.conversation.as_ref() {
+                if let Some(conv) = buf.conversation() {
                     if let Some(link) = conv.link_at_position(row, col) {
                         let target = link.target.clone();
                         self.handle_link_click(&target);

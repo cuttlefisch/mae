@@ -754,6 +754,15 @@ impl CommandRegistry {
         reg.register_builtin("git-stage-all", "Stage all changed files");
         reg.register_builtin("git-unstage-all", "Unstage all staged files");
         reg.register_builtin("git-commit", "Commit staged changes (SPC g c)");
+        reg.register_builtin("git-amend", "Amend previous commit (c a in git status)");
+        reg.register_builtin(
+            "git-toggle-section",
+            "Toggle inline diff for file at cursor (Tab in git status)",
+        );
+        reg.register_builtin(
+            "git-discard",
+            "Discard unstaged changes for file at cursor (x in git status)",
+        );
         reg.register_builtin("git-status-toggle", "Toggle git status detail for file");
         reg.register_builtin("git-status-open", "Open file from git status buffer");
 

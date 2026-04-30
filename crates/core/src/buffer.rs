@@ -4,8 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::buffer_view::BufferView;
 use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
+use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
 use crate::help_view::HelpView;
 use crate::visual_buffer::VisualBuffer;
@@ -101,17 +103,8 @@ pub struct Buffer {
     pub kind: BufferKind,
     /// Read-only buffers reject all edit operations. Set for Help, Messages.
     pub read_only: bool,
-    pub conversation: Option<Conversation>,
-    /// Help-buffer navigation state. Present iff `kind == BufferKind::Help`.
-    pub help_view: Option<HelpView>,
-    /// Debug panel view state. Present iff `kind == BufferKind::Debug`.
-    pub debug_view: Option<DebugView>,
-    /// Git status view state. Present iff `kind == BufferKind::GitStatus`.
-    pub git_status: Option<GitStatusView>,
-    /// Visual scene-graph state. Present iff `kind == BufferKind::Visual`.
-    pub visual: Option<VisualBuffer>,
-    /// File tree sidebar state. Present iff `kind == BufferKind::FileTree`.
-    pub file_tree: Option<crate::file_tree::FileTree>,
+    /// Mode-specific state. Replaces 6 scattered Option<T> fields.
+    pub view: BufferView,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// When non-None, edits accumulate here instead of the undo stack directly.
@@ -182,12 +175,7 @@ impl Buffer {
             name: String::from("[scratch]"),
             kind: BufferKind::Text,
             read_only: false,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            file_tree: None,
+            view: BufferView::None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_group_acc: None,
@@ -250,7 +238,7 @@ impl Buffer {
         Buffer {
             name: name.into(),
             kind: BufferKind::Conversation,
-            conversation: Some(Conversation::new()),
+            view: BufferView::Conversation(Box::default()),
             local_options: BufferLocalOptions {
                 word_wrap: Some(true),
                 ..Default::default()
@@ -281,7 +269,7 @@ impl Buffer {
             name: String::from("*Help*"),
             kind: BufferKind::Help,
             read_only: true,
-            help_view: Some(HelpView::new(start_node_id.into())),
+            view: BufferView::Help(Box::new(HelpView::new(start_node_id.into()))),
             local_options: BufferLocalOptions {
                 word_wrap: Some(true),
                 ..Default::default()
@@ -306,7 +294,7 @@ impl Buffer {
             name: String::from(" File Tree "),
             kind: BufferKind::FileTree,
             read_only: true,
-            file_tree: Some(crate::file_tree::FileTree::open(root)),
+            view: BufferView::FileTree(Box::new(FileTree::open(root))),
             ..Self::new()
         }
     }
@@ -317,7 +305,7 @@ impl Buffer {
             name: String::from("*Debug*"),
             kind: BufferKind::Debug,
             read_only: true,
-            debug_view: Some(DebugView::new()),
+            view: BufferView::Debug(Box::default()),
             ..Self::new()
         }
     }
@@ -1010,10 +998,60 @@ impl Buffer {
     /// Rebuild the buffer's rope from the flattened conversation text.
     /// This allows standard motions and visual mode to work on the AI history.
     pub fn sync_conversation_rope(&mut self) {
-        if let Some(ref conv) = self.conversation {
+        if let Some(conv) = self.view.conversation() {
             let flat = conv.flat_text();
             self.rope = Rope::from_str(&flat);
         }
+    }
+
+    // --- BufferView accessor convenience methods ---
+
+    pub fn conversation(&self) -> Option<&Conversation> {
+        self.view.conversation()
+    }
+
+    pub fn conversation_mut(&mut self) -> Option<&mut Conversation> {
+        self.view.conversation_mut()
+    }
+
+    pub fn help_view(&self) -> Option<&HelpView> {
+        self.view.help_view()
+    }
+
+    pub fn help_view_mut(&mut self) -> Option<&mut HelpView> {
+        self.view.help_view_mut()
+    }
+
+    pub fn debug_view(&self) -> Option<&DebugView> {
+        self.view.debug_view()
+    }
+
+    pub fn debug_view_mut(&mut self) -> Option<&mut DebugView> {
+        self.view.debug_view_mut()
+    }
+
+    pub fn git_status_view(&self) -> Option<&GitStatusView> {
+        self.view.git_status()
+    }
+
+    pub fn git_status_view_mut(&mut self) -> Option<&mut GitStatusView> {
+        self.view.git_status_mut()
+    }
+
+    pub fn visual(&self) -> Option<&VisualBuffer> {
+        self.view.visual()
+    }
+
+    pub fn visual_mut(&mut self) -> Option<&mut VisualBuffer> {
+        self.view.visual_mut()
+    }
+
+    pub fn file_tree(&self) -> Option<&FileTree> {
+        self.view.file_tree()
+    }
+
+    pub fn file_tree_mut(&mut self) -> Option<&mut FileTree> {
+        self.view.file_tree_mut()
     }
 }
 
@@ -1552,14 +1590,14 @@ mod tests {
     fn default_kind_is_text() {
         let buf = Buffer::new();
         assert_eq!(buf.kind, BufferKind::Text);
-        assert!(buf.conversation.is_none());
+        assert!(buf.conversation().is_none());
     }
 
     #[test]
     fn conversation_buffer_creation() {
         let buf = Buffer::new_conversation("[conversation]");
         assert_eq!(buf.kind, BufferKind::Conversation);
-        assert!(buf.conversation.is_some());
+        assert!(buf.conversation().is_some());
         assert_eq!(buf.name, "[conversation]");
     }
 
@@ -1782,7 +1820,7 @@ mod tests {
 
         let buf = Buffer::from_file(&path).unwrap();
         assert_eq!(buf.kind, BufferKind::Text);
-        assert!(buf.conversation.is_none());
+        assert!(buf.conversation().is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
