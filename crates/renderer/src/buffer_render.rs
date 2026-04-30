@@ -98,7 +98,7 @@ pub(crate) fn render_buffer(
 
     let col_offset = win.col_offset;
     let text_width = (area.width as usize).saturating_sub(gutter_w);
-    let wrap = editor.word_wrap && text_width > 0;
+    let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && text_width > 0;
     let show_break_width = if wrap {
         editor.show_break.chars().count()
     } else {

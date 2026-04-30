@@ -65,7 +65,8 @@ impl Editor {
             "move-display-down" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let tw = self.text_area_width;
-                if !self.word_wrap || tw == 0 {
+                let wrap = self.effective_word_wrap();
+                if !wrap || tw == 0 {
                     for _ in 0..n {
                         self.window_mgr.focused_window_mut().move_down(buf);
                     }
@@ -94,7 +95,8 @@ impl Editor {
             "move-display-up" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let tw = self.text_area_width;
-                if !self.word_wrap || tw == 0 {
+                let wrap = self.effective_word_wrap();
+                if !wrap || tw == 0 {
                     for _ in 0..n {
                         self.window_mgr.focused_window_mut().move_up(buf);
                     }
@@ -134,7 +136,7 @@ impl Editor {
             }
             "move-display-line-start" => {
                 let tw = self.text_area_width;
-                if !self.word_wrap || tw == 0 {
+                if !self.effective_word_wrap() || tw == 0 {
                     self.window_mgr.focused_window_mut().move_to_line_start();
                 } else {
                     let buf = &self.buffers[self.active_buffer_idx()];
@@ -152,7 +154,7 @@ impl Editor {
             "move-display-line-end" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
                 let tw = self.text_area_width;
-                if !self.word_wrap || tw == 0 {
+                if !self.effective_word_wrap() || tw == 0 {
                     self.window_mgr.focused_window_mut().move_to_line_end(buf);
                 } else {
                     let sb_w = self.show_break.chars().count();
@@ -439,7 +441,8 @@ impl Editor {
                     _ => {
                         let vh = self.viewport_height;
                         let has_folds = !self.buffers[idx].folded_ranges.is_empty();
-                        let needs_wrapped = (self.word_wrap && self.text_area_width > 0)
+                        let needs_wrapped = (self.effective_word_wrap()
+                            && self.text_area_width > 0)
                             || has_folds
                             || self.heading_scale;
                         for _ in 0..n {

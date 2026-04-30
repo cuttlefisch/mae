@@ -68,6 +68,19 @@ pub enum EditAction {
     Group(Vec<EditAction>),
 }
 
+/// Per-buffer option overrides (Emacs buffer-local variables / Vim setlocal).
+///
+/// Each field is `Option<T>`: `None` means "use the global Editor default",
+/// `Some(v)` means this buffer overrides the global value. Access via
+/// `Editor::effective_word_wrap()` and friends, never read `editor.word_wrap`
+/// directly when a per-buffer check is needed.
+#[derive(Debug, Clone, Default)]
+pub struct BufferLocalOptions {
+    pub word_wrap: Option<bool>,
+    pub line_numbers: Option<bool>,
+    pub relative_line_numbers: Option<bool>,
+}
+
 /// Rope-backed text buffer with undo history.
 ///
 /// Emacs lesson: point (cursor) is per-window, not per-buffer. Two windows can
@@ -136,6 +149,8 @@ pub struct Buffer {
     /// Global fold cycle state: 0 = SHOW ALL, 1 = OVERVIEW, 2 = CONTENTS.
     /// Cycled by Shift-TAB in org/markdown buffers (Doom Emacs pattern).
     pub global_fold_state: u8,
+    /// Per-buffer option overrides (Emacs buffer-local / Vim setlocal).
+    pub local_options: BufferLocalOptions,
 }
 
 impl Default for Buffer {
@@ -173,6 +188,7 @@ impl Buffer {
             git_diff_lines: HashMap::new(),
             link_spans: Vec::new(),
             global_fold_state: 0,
+            local_options: BufferLocalOptions::default(),
         }
     }
 
@@ -187,32 +203,47 @@ impl Buffer {
     }
 
     /// Create a conversation buffer (AI interaction pane).
+    /// Word-wrap is enabled by default — prose reads better wrapped.
     pub fn new_conversation(name: impl Into<String>) -> Self {
         Buffer {
             name: name.into(),
             kind: BufferKind::Conversation,
             conversation: Some(Conversation::new()),
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
             ..Self::new()
         }
     }
 
     /// Create a messages buffer (live view of the in-editor log).
+    /// Word-wrap is enabled by default — log messages are prose.
     pub fn new_messages() -> Self {
         Buffer {
             name: String::from("*Messages*"),
             kind: BufferKind::Messages,
             read_only: true,
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
             ..Self::new()
         }
     }
 
     /// Create a help buffer viewing a KB node.
+    /// Word-wrap is enabled by default — help text is prose.
     pub fn new_help(start_node_id: impl Into<String>) -> Self {
         Buffer {
             name: String::from("*Help*"),
             kind: BufferKind::Help,
             read_only: true,
             help_view: Some(HelpView::new(start_node_id.into())),
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
             ..Self::new()
         }
     }
@@ -1488,6 +1519,23 @@ mod tests {
         assert_eq!(buf.kind, BufferKind::Conversation);
         assert!(buf.conversation.is_some());
         assert_eq!(buf.name, "[conversation]");
+    }
+
+    #[test]
+    fn buffer_local_word_wrap_defaults() {
+        // Conversation, Help, Messages buffers default to word_wrap=true.
+        let conv = Buffer::new_conversation("conv");
+        assert_eq!(conv.local_options.word_wrap, Some(true));
+
+        let help = Buffer::new_help("test");
+        assert_eq!(help.local_options.word_wrap, Some(true));
+
+        let msgs = Buffer::new_messages();
+        assert_eq!(msgs.local_options.word_wrap, Some(true));
+
+        // Normal text buffers have no override (use global default).
+        let text = Buffer::new();
+        assert_eq!(text.local_options.word_wrap, None);
     }
 
     // --- delete_word_backward (C-w) ---

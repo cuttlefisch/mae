@@ -268,6 +268,7 @@ fn render_window_area(
                     messages_render::render_messages_window(
                         frame,
                         ratatui_rect,
+                        buf,
                         win,
                         is_focused,
                         editor,

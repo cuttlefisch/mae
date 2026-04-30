@@ -343,5 +343,61 @@ fn save_and_restore_preserves_original_buffers() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Buffer-local options (per-buffer word_wrap, line_numbers, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effective_word_wrap_uses_buffer_local() {
+    let mut ed = Editor::new();
+    // Global default: off
+    assert!(!ed.word_wrap);
+    assert!(!ed.effective_word_wrap());
+
+    // Create conversation buffer — has word_wrap=true locally
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+    assert!(ed.effective_word_wrap());
+
+    // Switch back to text buffer — no local override, uses global
+    ed.switch_to_buffer(0);
+    assert!(!ed.effective_word_wrap());
+
+    // Set global to true
+    ed.word_wrap = true;
+    assert!(ed.effective_word_wrap());
+}
+
+#[test]
+fn setlocal_word_wrap_command() {
+    let mut ed = Editor::new();
+    assert!(!ed.word_wrap);
+    assert!(!ed.effective_word_wrap());
+
+    // :setlocal word_wrap true
+    let result = ed.set_local_option("word_wrap", "true");
+    assert!(result.is_ok());
+    assert!(ed.effective_word_wrap());
+
+    // Global is still false
+    assert!(!ed.word_wrap);
+
+    // Buffer-local is set
+    assert_eq!(ed.buffers[0].local_options.word_wrap, Some(true));
+}
+
+#[test]
+fn word_wrap_for_specific_buffer() {
+    let mut ed = Editor::new();
+    ed.word_wrap = false;
+
+    // Buffer 0 (text) has no override
+    assert!(!ed.word_wrap_for(0));
+
+    // Create conversation buffer with local override
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    assert!(ed.word_wrap_for(conv_idx));
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

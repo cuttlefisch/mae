@@ -65,7 +65,7 @@ impl Editor {
                 let buf = &self.buffers[idx];
                 let total = buf.line_count();
                 let row = self.window_mgr.focused_window().cursor_row + 1;
-                let pct = if total > 0 { row * 100 / total } else { 0 };
+                let pct = (row * 100).checked_div(total).unwrap_or(0);
                 let name = buf
                     .file_path()
                     .map(|p| p.display().to_string())
@@ -330,10 +330,13 @@ impl Editor {
                 ));
             }
             "toggle-word-wrap" => {
-                self.word_wrap = !self.word_wrap;
+                // Toggle per-buffer (setlocal). Flips the effective value.
+                let new_val = !self.effective_word_wrap();
+                let idx = self.active_buffer_idx();
+                self.buffers[idx].local_options.word_wrap = Some(new_val);
                 self.set_status(format!(
-                    "Word wrap: {}",
-                    if self.word_wrap { "on" } else { "off" }
+                    "Word wrap: {} (buffer-local)",
+                    if new_val { "on" } else { "off" }
                 ));
             }
             "toggle-scrollbar" => {

@@ -1,6 +1,6 @@
 //! *Messages* buffer rendering for the GUI backend.
 
-use mae_core::{Editor, Window};
+use mae_core::{Buffer, Editor, Window};
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -9,6 +9,7 @@ use crate::theme;
 /// Render the *Messages* log buffer.
 pub fn render_messages_window(
     canvas: &mut SkiaCanvas,
+    buf: &Buffer,
     win: &Window,
     focused: bool,
     editor: &Editor,
@@ -47,7 +48,7 @@ pub fn render_messages_window(
     let target_fg = theme::ts_fg(editor, "diagnostic.target");
     let text_fg = theme::ts_fg(editor, "ui.text");
 
-    let wrap_enabled = editor.word_wrap && inner_width > 0;
+    let wrap_enabled = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && inner_width > 0;
     let mut visual_row = 0usize;
 
     for entry in entries.iter().skip(start) {

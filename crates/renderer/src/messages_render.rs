@@ -1,6 +1,6 @@
 //! *Messages* buffer rendering.
 
-use mae_core::{Editor, Window};
+use mae_core::{Buffer, Editor, Window};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -9,6 +9,7 @@ use crate::theme_convert::ts;
 pub(crate) fn render_messages_window(
     frame: &mut Frame,
     area: Rect,
+    buf: &Buffer,
     win: &Window,
     focused: bool,
     editor: &Editor,
@@ -43,7 +44,7 @@ pub(crate) fn render_messages_window(
     // Over-fetch entries and let ratatui's Paragraph + Wrap clip at the
     // widget boundary. We also accumulate visual rows so scrolling stays
     // correct — stop once we've filled the viewport.
-    let wrap_enabled = editor.word_wrap && inner_width > 0;
+    let wrap_enabled = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && inner_width > 0;
 
     let mut lines: Vec<Line> = Vec::new();
     let mut visual_rows = 0usize;

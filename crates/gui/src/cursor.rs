@@ -92,7 +92,8 @@ pub fn compute_cursor_position(
                 } else {
                     win_inner.width.saturating_sub(gutter_w)
                 };
-                let wrap = editor.word_wrap && text_width > 0;
+                let wrap =
+                    buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && text_width > 0;
 
                 // Look up the display row from the layout (fold-aware).
                 let display_row = layout.display_row_of(win.cursor_row);

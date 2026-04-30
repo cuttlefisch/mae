@@ -753,6 +753,69 @@ impl Editor {
         self.project.as_ref().map(|p| p.root.as_path())
     }
 
+    // -- Per-buffer option accessors (Emacs buffer-local / Vim setlocal) ------
+    // Check the active buffer's local override first, then fall back to the
+    // global Editor default.  Use these instead of reading `self.word_wrap`
+    // etc. directly when the result should be buffer-sensitive.
+
+    /// Effective word-wrap for a specific buffer index.
+    pub fn word_wrap_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .word_wrap
+            .unwrap_or(self.word_wrap)
+    }
+
+    /// Effective word-wrap for the currently focused buffer.
+    pub fn effective_word_wrap(&self) -> bool {
+        self.word_wrap_for(self.active_buffer_idx())
+    }
+
+    /// Effective show_line_numbers for a specific buffer index.
+    pub fn line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .line_numbers
+            .unwrap_or(self.show_line_numbers)
+    }
+
+    /// Effective relative_line_numbers for a specific buffer index.
+    pub fn relative_line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .relative_line_numbers
+            .unwrap_or(self.relative_line_numbers)
+    }
+
+    /// Set a buffer-local option on the active buffer (:setlocal).
+    pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let def_name = self
+            .option_registry
+            .find(name)
+            .map(|d| d.name)
+            .ok_or_else(|| format!("Unknown option: {}", name))?;
+        let idx = self.active_buffer_idx();
+        let opts = &mut self.buffers[idx].local_options;
+        match def_name {
+            "word_wrap" => {
+                opts.word_wrap = Some(crate::options::parse_option_bool(value)?);
+            }
+            "line_numbers" => {
+                opts.line_numbers = Some(crate::options::parse_option_bool(value)?);
+            }
+            "relative_line_numbers" => {
+                opts.relative_line_numbers = Some(crate::options::parse_option_bool(value)?);
+            }
+            _ => {
+                return Err(format!(
+                    "Option '{}' does not support buffer-local override",
+                    def_name
+                ))
+            }
+        }
+        Ok(format!("{} = {} (buffer-local)", def_name, value))
+    }
+
     /// Get the current value and definition of an option by name or alias.
     pub fn get_option(&self, name: &str) -> Option<(String, &crate::options::OptionDef)> {
         let def = self.option_registry.find(name)?;
@@ -1595,7 +1658,7 @@ impl Editor {
 
         let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
 
-        if self.word_wrap && self.text_area_width > 0 {
+        if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
             let text: String = chars.iter().collect();
             let sb_w = self.show_break.chars().count();
             crate::wrap::wrap_line_display_rows(

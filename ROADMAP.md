@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (1,885 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode, autosave config+idle debounce, diff syntax highlighting (8 themes), file tree sidebar with icons, V-line conversation bugfix.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (2,011 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode, autosave config+idle debounce, diff syntax highlighting (8 themes), file tree sidebar with icons and NERDTree-style keymap, V-line conversation bugfix, Doom which-key parity + file tree git markers + gutter diff indicators, inline markup rendering (bold/code/italic) in conversation+help, help buffer span parity fix, per-buffer word-wrap (`:setlocal`), `BufferLocalOptions` infrastructure.
 
 ---
 
@@ -51,7 +51,7 @@ Agent reliability improvements from crash log analysis and self-test failures.
 User-facing AI interaction quality — from org-roam exploration notes (2026-04-23).
 
 ### Editing UX
-- [ ] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. Must inherit from theme (no raw ANSI escape codes). Used for both "preview changes" and "changes made" display.
+- [x] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. LCS-based unified diff with `diff.*` theme keys in all 8 themes, syntax-highlighted (v0.6.0).
 - [ ] **Clickable Links in Output**: File paths in AI/shell output open in editor on click/Enter. User-configurable: open in current window or new split.
 - [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
 - [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
@@ -79,7 +79,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
 
 ### Project Navigation
-- [ ] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, follow-focus, git status markers, eye icon for files in AI context.
+- [x] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, NERDTree-style keymap (j/k/gg/G/C-e/C-y/C-d/C-u, S-Tab fold cycling), git status markers (v0.6.0).
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
@@ -108,6 +108,14 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Buffer Safety
 - [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
+
+### Editor Modes & Buffer-Local Options
+- [x] **Per-Buffer Word Wrap (`BufferLocalOptions`)**: `BufferLocalOptions` struct on `Buffer` with `Option<T>` overrides. `:setlocal word_wrap true` for per-buffer override. Conversation, Help, Messages buffers default to `word_wrap=true`. `toggle-word-wrap` flips buffer-local value. Infrastructure supports `line_numbers`, `relative_line_numbers` too (v0.6.0).
+- [ ] **Mode Refactoring & Initialization**: Restructure `Mode` enum and mode transitions. Per-mode configuration in user config (e.g. mode-specific keybindings, default options per mode). Emacs `define-derived-mode` equivalent for Scheme layer. Mode-line indicators for active minor modes.
+- [ ] **Buffer-Local Options Expansion**: Extend `BufferLocalOptions` to include `break_indent`, `show_break`, `heading_scale`, `org_hide_emphasis_markers`. Add mode hooks that auto-set buffer-local options based on file type (e.g. org files get heading_scale=true, code gets word_wrap=false).
+
+### Self-Test Infrastructure
+- [ ] **Atomic Self-Test Categories**: Restructure `build_self_test_plan()` to call `editor_save_state`/`editor_restore_state` per category instead of once for the entire suite. Each section is treated as an atomic unit — buffers created during a category are cleaned up before the next one. Prevents buffer/window accumulation across categories.
 
 ### Project Intelligence
 - [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.

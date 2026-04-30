@@ -545,7 +545,7 @@ fn render_window_area(
                 }
                 BufferKind::Messages => {
                     messages_render::render_messages_window(
-                        canvas, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
                 }
                 BufferKind::Help => {

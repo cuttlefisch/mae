@@ -72,7 +72,11 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
 
             let text_width = inner.width.saturating_sub(gutter_w as u16) as usize;
-            let wrap = editor.word_wrap && text_width > 0;
+            let wrap = focused_buf
+                .local_options
+                .word_wrap
+                .unwrap_or(editor.word_wrap)
+                && text_width > 0;
 
             let show_break_w = editor.show_break.chars().count();
 

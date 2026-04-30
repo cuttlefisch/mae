@@ -384,6 +384,89 @@ impl Editor {
                 }
                 true
             }
+            "setlocal" => {
+                if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    match ex_parse::parse_set_args(kv) {
+                        SetAction::Assign(name, value) => {
+                            match self.set_local_option(&name, &value) {
+                                Ok(msg) => self.set_status(msg),
+                                Err(e) => self.set_status(e),
+                            }
+                        }
+                        SetAction::Toggle(name) => {
+                            // Toggle: read effective, flip, set local
+                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            if let Some(dn) = def_name {
+                                let current = match dn {
+                                    "word_wrap" => self.effective_word_wrap(),
+                                    "line_numbers" => {
+                                        self.line_numbers_for(self.active_buffer_idx())
+                                    }
+                                    "relative_line_numbers" => {
+                                        self.relative_line_numbers_for(self.active_buffer_idx())
+                                    }
+                                    _ => {
+                                        self.set_status(format!(
+                                            "Option '{}' does not support buffer-local toggle",
+                                            dn
+                                        ));
+                                        return true;
+                                    }
+                                };
+                                let new_val = if current { "false" } else { "true" };
+                                match self.set_local_option(dn, new_val) {
+                                    Ok(msg) => self.set_status(msg),
+                                    Err(e) => self.set_status(e),
+                                }
+                            } else {
+                                self.set_status(format!("Unknown option: {}", name));
+                            }
+                        }
+                        SetAction::Enable(name) => match self.set_local_option(&name, "true") {
+                            Ok(msg) => self.set_status(msg),
+                            Err(e) => self.set_status(e),
+                        },
+                        SetAction::Disable(name) => match self.set_local_option(&name, "false") {
+                            Ok(msg) => self.set_status(msg),
+                            Err(e) => self.set_status(e),
+                        },
+                        SetAction::Query(name) => {
+                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            if let Some(dn) = def_name {
+                                let idx = self.active_buffer_idx();
+                                let local_val = match dn {
+                                    "word_wrap" => self.buffers[idx]
+                                        .local_options
+                                        .word_wrap
+                                        .map(|v| v.to_string()),
+                                    "line_numbers" => self.buffers[idx]
+                                        .local_options
+                                        .line_numbers
+                                        .map(|v| v.to_string()),
+                                    "relative_line_numbers" => self.buffers[idx]
+                                        .local_options
+                                        .relative_line_numbers
+                                        .map(|v| v.to_string()),
+                                    _ => None,
+                                };
+                                match local_val {
+                                    Some(v) => {
+                                        self.set_status(format!("{} = {} (buffer-local)", dn, v))
+                                    }
+                                    None => {
+                                        self.set_status(format!("{}: no buffer-local override", dn))
+                                    }
+                                }
+                            } else {
+                                self.set_status(format!("Unknown option: {}", name));
+                            }
+                        }
+                    }
+                } else {
+                    self.set_status("Usage: :setlocal <option> [value]");
+                }
+                true
+            }
             "set-save" => {
                 if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
                     let parts: Vec<&str> = kv.splitn(2, ' ').collect();

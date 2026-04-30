@@ -116,7 +116,7 @@ pub fn render_buffer_content(
 
     let col_offset = win.col_offset;
 
-    let wrap = editor.word_wrap;
+    let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap);
     let show_break_width = if wrap {
         unicode_width::UnicodeWidthStr::width(editor.show_break.as_str())
     } else {

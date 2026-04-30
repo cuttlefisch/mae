@@ -36,7 +36,7 @@ pub mod window;
 pub mod word;
 pub mod wrap;
 
-pub use buffer::{Buffer, BufferKind};
+pub use buffer::{Buffer, BufferKind, BufferLocalOptions};
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
