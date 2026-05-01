@@ -334,9 +334,22 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         0
     };
 
-    // Adaptive name column: fit visible entries, but cap at 40% of inner
-    // width so docs always get the majority of space.
-    let max_name_width = (inner.width as usize * 2 / 5).max(12);
+    // For path-heavy palettes (recent files, projects), use full width since
+    // there's no doc column. Otherwise cap name at 40% to leave room for docs.
+    let full_width_name = matches!(
+        palette.purpose,
+        mae_core::command_palette::PalettePurpose::RecentFile
+            | mae_core::command_palette::PalettePurpose::SwitchProject
+            | mae_core::command_palette::PalettePurpose::SwitchBuffer
+            | mae_core::command_palette::PalettePurpose::SetTheme
+            | mae_core::command_palette::PalettePurpose::SetSplashArt
+            | mae_core::command_palette::PalettePurpose::GitBranch
+    );
+    let max_name_width = if full_width_name {
+        (inner.width as usize).saturating_sub(2)
+    } else {
+        (inner.width as usize * 2 / 5).max(12)
+    };
     let name_col = palette
         .filtered
         .iter()
@@ -368,24 +381,37 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         };
 
         let name_display = if entry.name.len() > name_col {
-            format!("{:<w$}", &entry.name[..name_col], w = name_col)
+            if full_width_name {
+                // For paths, show the end (most distinctive part)
+                let skip = entry.name.len() - name_col + 1;
+                format!("…{}", &entry.name[skip..])
+            } else {
+                format!("{:<w$}", &entry.name[..name_col], w = name_col)
+            }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
         };
 
-        let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
-        let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
-            let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
-            s.push('…');
-            s
+        if full_width_name {
+            lines.push(Line::from(Span::styled(
+                format!(" {}", name_display),
+                row_style,
+            )));
         } else {
-            entry.doc.clone()
-        };
+            let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
+            let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
+                let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
+                s.push('…');
+                s
+            } else {
+                entry.doc.clone()
+            };
 
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {}  ", name_display), row_style),
-            Span::styled(doc_display, doc_row_style),
-        ]));
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {}  ", name_display), row_style),
+                Span::styled(doc_display, doc_row_style),
+            ]));
+        }
     }
 
     let paragraph = Paragraph::new(lines);

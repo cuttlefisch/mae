@@ -69,9 +69,12 @@ pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
+pub mod redraw;
 pub use syntax::{
-    compute_markdown_style_spans, compute_org_style_spans, language_for_path, HighlightSpan,
-    Language, SyntaxMap, SyntaxSpanMap,
+    compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
+    detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,
+    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupFlavor,
+    SyntaxMap, SyntaxSpanMap,
 };
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,

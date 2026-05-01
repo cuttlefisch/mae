@@ -255,8 +255,14 @@ impl Renderer for GuiRenderer {
         canvas.set_clip_height(clip_height);
 
         // Pre-compute syntax-highlight spans for every visible text buffer.
-        // Uses stale spans during typing; deferred reparse happens in the event loop.
-        let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
+        // CursorOnly fast path: reuse cached spans from the previous frame,
+        // skipping the most expensive per-frame operation (syntax span lookup
+        // + tree walk). This is the Emacs `try_cursor_movement` pattern.
+        let syntax_spans = if editor.redraw_level == mae_core::redraw::RedrawLevel::CursorOnly {
+            mae_core::syntax::cached_visible_syntax_spans(editor)
+        } else {
+            mae_core::syntax::compute_visible_syntax_spans(editor)
+        };
 
         let editor: &Editor = editor;
 
@@ -517,14 +523,32 @@ fn render_window_area(
                 _ => {
                     // Standard text pipeline: shared span selection for Conversation,
                     // Help, GitStatus, *AI-Diff*; syntax spans for Text/Preview/Dashboard.
-                    let shared_spans_storage;
+                    // Text buffers with a markup flavor get inline markup spans merged.
+                    let owned_spans: Option<Vec<mae_core::HighlightSpan>>;
                     let spans = if let Some(shared) =
                         mae_core::render_common::spans::highlight_spans_for_buffer(buf)
                     {
-                        shared_spans_storage = shared;
-                        Some(shared_spans_storage.as_slice())
+                        owned_spans = Some(shared);
+                        owned_spans.as_deref()
                     } else {
-                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                        let flavor = editor.effective_markup_flavor(win.buffer_idx);
+                        if flavor != mae_core::MarkupFlavor::None {
+                            let mut enriched = syntax_spans
+                                .get(&win.buffer_idx)
+                                .map(|v| v.as_ref().clone())
+                                .unwrap_or_default();
+                            mae_core::render_common::spans::enrich_spans_with_markup(
+                                &mut enriched,
+                                buf,
+                                flavor,
+                            );
+                            owned_spans = Some(enriched);
+                            owned_spans.as_deref()
+                        } else {
+                            owned_spans = None;
+                            let _ = &owned_spans;
+                            syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                        }
                     };
 
                     let border_fg = if is_focused {

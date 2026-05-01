@@ -96,6 +96,10 @@ bright_orange = "#fe8019"
 "namespace" = { fg = "bright_yellow" }
 "punctuation" = { fg = "fg3" }
 "markup.link" = { fg = "bright_aqua", underline = true }
+"markup.todo" = { fg = "bright_red", bold = true }
+"markup.done" = { fg = "bright_green" }
+"markup.checkbox" = { fg = "bright_yellow", bold = true }
+"markup.checkbox.checked" = { fg = "bright_green" }
 
 "diff.added" = { fg = "bright_green" }
 "diff.removed" = { fg = "bright_red" }

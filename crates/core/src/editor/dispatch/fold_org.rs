@@ -17,14 +17,11 @@ impl Editor {
             "org-cycle" => {
                 self.org_cycle();
             }
-            "org-todo-next" => {
-                self.org_todo_cycle(true);
+            "org-todo-next" | "org-todo-prev" => {
+                self.org_todo_cycle();
             }
-            "org-todo-prev" => {
-                self.org_todo_cycle(false);
-            }
-            "org-open-link" => {
-                self.org_open_link();
+            "org-open-link" | "smart-enter" => {
+                self.smart_enter();
             }
             "org-promote" => {
                 self.org_promote();

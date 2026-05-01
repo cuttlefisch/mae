@@ -434,13 +434,9 @@ pub fn execute_org_cycle(editor: &mut Editor) -> Result<String, String> {
 
 pub fn execute_org_todo_cycle(
     editor: &mut Editor,
-    args: &serde_json::Value,
+    _args: &serde_json::Value,
 ) -> Result<String, String> {
-    let forward = args
-        .get("forward")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    editor.org_todo_cycle(forward);
+    editor.org_todo_cycle();
     Ok(editor.status_msg.clone())
 }
 

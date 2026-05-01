@@ -3,6 +3,20 @@
 use crate::buffer::Buffer;
 use crate::syntax::HighlightSpan;
 
+/// Layer inline markup spans onto base spans for a buffer.
+pub fn enrich_spans_with_markup(
+    base: &mut Vec<HighlightSpan>,
+    buf: &Buffer,
+    flavor: crate::syntax::MarkupFlavor,
+) {
+    if flavor == crate::syntax::MarkupFlavor::None {
+        return;
+    }
+    let source: String = buf.rope().chars().collect();
+    base.extend(crate::syntax::compute_markup_spans(&source, flavor));
+    base.sort_by_key(|s| s.byte_start);
+}
+
 /// Compute highlight spans for buffer kinds that use the standard text pipeline.
 /// Returns `None` for kinds with specialized renderers (Shell, Debug, Messages, etc.)
 /// — the caller should delegate to their dedicated render function.
@@ -45,5 +59,46 @@ mod tests {
         let mut buf = Buffer::new();
         buf.kind = BufferKind::GitStatus;
         assert!(highlight_spans_for_buffer(&buf).is_some());
+    }
+
+    #[test]
+    fn enrich_spans_adds_markup() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "**bold** text");
+        let mut spans = Vec::new();
+        enrich_spans_with_markup(&mut spans, &buf, crate::syntax::MarkupFlavor::Markdown);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold span after enrichment"
+        );
+    }
+
+    #[test]
+    fn enrich_spans_preserves_existing() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "**bold** text");
+        let mut spans = vec![HighlightSpan {
+            byte_start: 9,
+            byte_end: 13,
+            theme_key: "keyword",
+        }];
+        enrich_spans_with_markup(&mut spans, &buf, crate::syntax::MarkupFlavor::Markdown);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "keyword"),
+            "existing spans must be preserved"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "markup spans must be added"
+        );
+    }
+
+    #[test]
+    fn enrich_spans_none_flavor_noop() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "**bold** text");
+        let mut spans = Vec::new();
+        enrich_spans_with_markup(&mut spans, &buf, crate::syntax::MarkupFlavor::None);
+        assert!(spans.is_empty(), "None flavor should not add spans");
     }
 }

@@ -37,6 +37,7 @@ pub struct ThemeStyle {
     pub italic: bool,
     pub dim: bool,
     pub underline: bool,
+    pub strikethrough: bool,
 }
 
 /// Internal unresolved style — stores color name strings, not resolved colors.
@@ -49,6 +50,7 @@ pub struct UnresolvedStyle {
     pub italic: bool,
     pub dim: bool,
     pub underline: bool,
+    pub strikethrough: bool,
 }
 
 /// A complete editor theme.
@@ -291,6 +293,7 @@ impl Theme {
                     italic: us.italic,
                     dim: us.dim,
                     underline: us.underline,
+                    strikethrough: us.strikethrough,
                 },
             );
         }
@@ -475,6 +478,10 @@ fn parse_unresolved_style(val: &toml::Value) -> Result<UnresolvedStyle, ThemeErr
                 .get("underline")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let strikethrough = tbl
+                .get("strikethrough")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             Ok(UnresolvedStyle {
                 fg,
                 bg,
@@ -482,6 +489,7 @@ fn parse_unresolved_style(val: &toml::Value) -> Result<UnresolvedStyle, ThemeErr
                 italic,
                 dim,
                 underline,
+                strikethrough,
             })
         }
         _ => Err(ThemeError::ParseError(
@@ -853,6 +861,29 @@ red = "#ff0000"
         // Should have basic styles defined
         let text = theme.style("ui.text");
         assert!(text.fg.is_some(), "default theme must define ui.text fg");
+    }
+
+    #[test]
+    fn strikethrough_theme_style() {
+        let toml = r#"
+[styles]
+"markup.strikethrough" = { fg = "gray", strikethrough = true }
+"#;
+        let theme = Theme::from_toml("test", toml).unwrap();
+        let style = theme.style("markup.strikethrough");
+        assert!(style.strikethrough);
+        assert!(!style.bold);
+    }
+
+    #[test]
+    fn strikethrough_in_bundled_default() {
+        let resolver = BundledResolver;
+        let theme = Theme::load("default", &resolver).unwrap();
+        let style = theme.style("markup.strikethrough");
+        assert!(
+            style.strikethrough,
+            "default theme must define markup.strikethrough with strikethrough=true"
+        );
     }
 
     #[test]

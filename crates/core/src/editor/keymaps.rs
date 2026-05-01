@@ -572,7 +572,7 @@ impl Editor {
         org.bind(parse_key_seq_spaced("S-Right"), "org-todo-next");
         org.bind(parse_key_seq_spaced("S-Up"), "org-priority-up");
         org.bind(parse_key_seq_spaced("S-Down"), "org-priority-down");
-        org.bind(vec![KeyPress::special(Key::Enter)], "org-open-link");
+        org.bind(vec![KeyPress::special(Key::Enter)], "smart-enter");
         // Promote/demote headings (M-Left/M-Right + M-h/M-l)
         org.bind(
             vec![KeyPress {
@@ -697,6 +697,8 @@ impl Editor {
             }],
             "md-insert-heading",
         );
+        // Smart enter (link follow, checkbox toggle, TODO cycle)
+        markdown.bind(vec![KeyPress::special(Key::Enter)], "smart-enter");
         // Narrow/widen
         markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
         markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");

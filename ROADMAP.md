@@ -107,13 +107,13 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 - [x] **Mouse Click FrameLayout**: `pixel_to_buffer_position()` in FrameLayout for pixel-precise mouse conversion. GUI caches `last_focused_layout`, falls back to grid math. Scrollbar click detection included (v0.6.0).
 
 ### Buffer Safety
-- [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
+- [x] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (5s after last edit), configurable interval via `:set autosave_interval`. Swap file crash recovery (`.swp`), session index, `:recover`/`:delete-swap`. Emacs `auto-save-mode` equivalent (v0.6.0: swap files + timer).
 
 ### Editor Modes & Buffer-Local Options
 - [x] **Per-Buffer Word Wrap (`BufferLocalOptions`)**: `BufferLocalOptions` struct on `Buffer` with `Option<T>` overrides. `:setlocal word_wrap true` for per-buffer override. Conversation, Help, Messages buffers default to `word_wrap=true`. `toggle-word-wrap` flips buffer-local value. Infrastructure supports `line_numbers`, `relative_line_numbers` too (v0.6.0).
 - [ ] **Mode Refactoring & Initialization**: Restructure `Mode` enum and mode transitions. Per-mode configuration in user config (e.g. mode-specific keybindings, default options per mode). Emacs `define-derived-mode` equivalent for Scheme layer. Mode-line indicators for active minor modes.
 - [x] **Buffer-Local Options Expansion**: Extended `BufferLocalOptions` with `break_indent`, `show_break`, `heading_scale`. Accessors + `:setlocal` support for all 6 options (v0.6.0).
-- [ ] **File-Type Mode Hooks**: Auto-set buffer-local options based on file type (e.g. org files get heading_scale=true, code gets word_wrap=false). `org_hide_emphasis_markers` as buffer-local.
+- [x] **File-Type Mode Hooks**: Shebang/modeline/extension priority chain, `language_for_buffer()`, parameterized hooks (`buffer-open:rust`), `set-local-option!` Scheme function, `*buffer-language*`/`*buffer-file-path*` injection, per-language default options (v0.6.0).
 
 ### Self-Test Infrastructure
 - [x] **Atomic Self-Test Categories**: Each category wrapped with `editor_save_state`/`editor_restore_state` — buffers cleaned up per-category (v0.6.0).
@@ -1121,19 +1121,25 @@ Emacs-inspired display patterns and CJK correctness.
 - [x] `draw_styled_at` display-width-aware column tracking for CJK text rendering
 - [x] Regression tests: row layout (7 heights x 5 cell sizes), CJK wrap/break/width (6 tests)
 
-### M5: Emacs Display Patterns (Future)
-Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
-- [ ] Glyph matrix hashing — hash visible lines, skip unchanged rows on redraw (`dispnew.c:1262`)
-- [ ] Line-level dirty tracking — per-line content hash, only re-render changed rows (`dispnew.c:4263`)
+### M5: Emacs Display Patterns
+Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.6.0: infrastructure)
+- [x] Glyph matrix hashing — `content_hash: u64` on `LineLayout`, hashed over chars + scale (v0.6.0)
+- [x] Line-level dirty tracking — `RedrawLevel` enum (None/CursorOnly/Scroll/PartialLines/Full), `dirty_line_range` on Editor (v0.6.0)
+- [x] CursorOnly fast path — skip `compute_visible_syntax_spans()`, reuse cached Arc spans (v0.6.0)
 - [ ] Scroll region blit — Skia surface copy for scroll optimization (`dispnew.c:5107`)
+- [ ] Partial render skip — use content_hash to skip unchanged line draws (infrastructure ready)
 - [ ] Idle deferred work — defer syntax highlighting and LSP requests to idle periods (`xdisp.c:4531`)
 
 ### M6: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
-- [ ] Headings rendered at larger font sizes
+- [x] Headings rendered at larger font sizes (v0.5.0: heading_scale)
 - [ ] Code blocks rendered in monospace, prose in proportional
-- [ ] Bold/italic/underline/strikethrough font decorations
-- [ ] Line-height varies per line type (heading, code, prose)
+- [x] Bold/italic/underline/strikethrough font decorations (v0.6.0: strikethrough + italic typeface)
+- [x] Line-height varies per line type (v0.5.0: heading scale affects line height)
+- [x] Heading top padding — h1: 4px, h2: 3px, h3: 2px (v0.6.0)
+- [x] Strikethrough rendering — `~~text~~` detection + draw at 60% ascent (v0.6.0)
+- [x] Code block tinted backgrounds — fenced/src block detection + full-width bg rect (v0.6.0)
+- [x] Proper italic typeface — system italic font loading with skew fallback (v0.6.0)
 
 ### M7: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines

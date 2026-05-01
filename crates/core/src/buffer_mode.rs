@@ -47,6 +47,12 @@ pub trait BufferMode {
     fn insert_mode(&self) -> crate::Mode {
         crate::Mode::Insert
     }
+
+    /// Override markup flavor for this buffer kind. Returns `None` to fall
+    /// through to the language-derived flavor.
+    fn markup_flavor(&self) -> Option<crate::syntax::MarkupFlavor> {
+        None
+    }
 }
 
 impl BufferMode for BufferKind {
@@ -103,6 +109,13 @@ impl BufferMode for BufferKind {
         match self {
             Self::Shell => crate::Mode::ShellInsert,
             _ => crate::Mode::Insert,
+        }
+    }
+
+    fn markup_flavor(&self) -> Option<crate::syntax::MarkupFlavor> {
+        match self {
+            Self::Help | Self::Conversation => Some(crate::syntax::MarkupFlavor::Markdown),
+            _ => None,
         }
     }
 
@@ -218,5 +231,21 @@ mod tests {
         assert_eq!(BufferKind::Text.mode_name(), "Text");
         assert_eq!(BufferKind::Conversation.mode_name(), "Conversation");
         assert_eq!(BufferKind::GitStatus.mode_name(), "Git Status");
+    }
+
+    #[test]
+    fn buffer_mode_markup_flavor() {
+        use crate::syntax::MarkupFlavor;
+        assert_eq!(
+            BufferKind::Help.markup_flavor(),
+            Some(MarkupFlavor::Markdown)
+        );
+        assert_eq!(
+            BufferKind::Conversation.markup_flavor(),
+            Some(MarkupFlavor::Markdown)
+        );
+        assert_eq!(BufferKind::Text.markup_flavor(), None);
+        assert_eq!(BufferKind::Shell.markup_flavor(), None);
+        assert_eq!(BufferKind::GitStatus.markup_flavor(), None);
     }
 }

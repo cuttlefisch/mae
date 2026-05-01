@@ -948,8 +948,11 @@ impl Conversation {
             let line_text: String = rope.line(line_idx).chars().collect();
 
             if self.render_markup {
-                // Markdown inline spans: **bold**, `code`, *italic*
-                for mut span in crate::syntax::compute_markdown_style_spans(&line_text) {
+                // Markdown inline spans: **bold**, `code`, *italic*, ~~strikethrough~~
+                for mut span in crate::syntax::compute_markup_spans(
+                    &line_text,
+                    crate::syntax::MarkupFlavor::Markdown,
+                ) {
                     span.byte_start += line_start_byte;
                     span.byte_end += line_start_byte;
                     spans.push(span);

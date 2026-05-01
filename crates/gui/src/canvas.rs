@@ -20,6 +20,11 @@ pub struct SkiaCanvas {
     surface: Surface,
     font: Font,
     bold_font: Font,
+    /// Italic typeface loaded from system (e.g. JetBrains Mono Italic).
+    /// Falls back to skew matrix when None.
+    italic_font: Option<Font>,
+    /// Bold-italic typeface loaded from system.
+    italic_bold_font: Option<Font>,
     icon_font: Option<Font>,
     cell_width: f32,
     cell_height: f32,
@@ -94,6 +99,28 @@ impl SkiaCanvas {
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
             .unwrap_or_else(|| typeface.clone());
 
+        let italic_style = FontStyle::italic();
+        let italic_typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", italic_style))
+            .or_else(|| font_mgr.match_family_style("Fira Code", italic_style))
+            .or_else(|| font_mgr.match_family_style("Cascadia Code", italic_style))
+            .or_else(|| font_mgr.match_family_style("monospace", italic_style));
+
+        let bold_italic_style = FontStyle::bold_italic();
+        let italic_bold_typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, bold_italic_style))
+            .or_else(|| {
+                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", bold_italic_style)
+            })
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("Fira Code", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("Cascadia Code", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("monospace", bold_italic_style));
+
         let icon_typeface = icon_font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
             .or_else(|| {
@@ -106,6 +133,8 @@ impl SkiaCanvas {
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
         let bold_font = Font::from_typeface(bold_typeface, font_size);
+        let italic_font = italic_typeface.map(|tf| Font::from_typeface(tf, font_size));
+        let italic_bold_font = italic_bold_typeface.map(|tf| Font::from_typeface(tf, font_size));
         let icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, font_size));
 
         // Measure a reference character for cell dimensions.
@@ -141,6 +170,8 @@ impl SkiaCanvas {
             surface,
             font,
             bold_font,
+            italic_font,
+            italic_bold_font,
             icon_font,
             cell_width,
             cell_height,
@@ -161,10 +192,14 @@ impl SkiaCanvas {
     pub fn update_font_size(&mut self, size: f32) {
         let typeface = self.font.typeface();
         let bold_typeface = self.bold_font.typeface();
+        let italic_typeface = self.italic_font.as_ref().map(|f| f.typeface());
+        let italic_bold_typeface = self.italic_bold_font.as_ref().map(|f| f.typeface());
         let icon_typeface = self.icon_font.as_ref().map(|f| f.typeface());
 
         self.font = Font::from_typeface(typeface, size);
         self.bold_font = Font::from_typeface(bold_typeface, size);
+        self.italic_font = italic_typeface.map(|tf| Font::from_typeface(tf, size));
+        self.italic_bold_font = italic_bold_typeface.map(|tf| Font::from_typeface(tf, size));
         self.icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, size));
 
         let (advance, bounds) = self.font.measure_str("M", None);
@@ -261,6 +296,16 @@ impl SkiaCanvas {
         let font = self.get_scaled_font(true, scale).clone();
         let (advance, _) = font.measure_str("M", None);
         advance
+    }
+
+    /// Return the italic font for the given bold state, if a proper italic typeface is loaded.
+    /// When `Some`, the caller should use this font directly instead of skewing.
+    fn italic_font_for(&self, bold: bool) -> Option<&Font> {
+        if bold {
+            self.italic_bold_font.as_ref()
+        } else {
+            self.italic_font.as_ref()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -448,13 +493,23 @@ impl SkiaCanvas {
         let baseline = pixel_y - metrics.ascent;
 
         if italic {
-            self.surface.canvas().save();
-            let mut skew_matrix = skia_safe::Matrix::new_identity();
-            skew_matrix.pre_skew((-0.2, 0.0), None);
-            self.surface.canvas().translate((x, baseline));
-            self.surface.canvas().concat(&skew_matrix);
-            self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
-            self.surface.canvas().restore();
+            if let Some(it_font) = self.italic_font_for(bold) {
+                let mut it = it_font.clone();
+                if scale != 1.0 {
+                    it.set_size(it_font.size() * scale);
+                }
+                let (_, im) = it.metrics();
+                let ib = pixel_y - im.ascent;
+                self.surface.canvas().draw_str(&text, (x, ib), &it, &paint);
+            } else {
+                self.surface.canvas().save();
+                let mut skew_matrix = skia_safe::Matrix::new_identity();
+                skew_matrix.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((x, baseline));
+                self.surface.canvas().concat(&skew_matrix);
+                self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+                self.surface.canvas().restore();
+            }
             return;
         }
 
@@ -525,11 +580,30 @@ impl SkiaCanvas {
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
+        // If italic and we have a proper italic typeface, use it directly.
+        if italic {
+            if let Some(it_base) = self.italic_font_for(bold).cloned() {
+                let it_font = if scale != 1.0 {
+                    let mut f = it_base.clone();
+                    f.set_size(it_base.size() * scale);
+                    f
+                } else {
+                    it_base
+                };
+                let (_, m) = it_font.metrics();
+                let baseline = pixel_y - m.ascent;
+                self.surface
+                    .canvas()
+                    .draw_str(text, (x, baseline), &it_font, &paint);
+                return;
+            }
+            // Fall through to skew path below.
+        }
+
         if scale != 1.0 {
             let scaled = self.get_scaled_font(bold, scale);
             let (_, m) = scaled.metrics();
             let baseline = pixel_y - m.ascent;
-            // Clone ref out so we can borrow self.surface mutably.
             let scaled = scaled.clone();
             if italic {
                 self.surface.canvas().save();
@@ -550,7 +624,6 @@ impl SkiaCanvas {
         }
         let font = if bold { &self.bold_font } else { &self.font };
 
-        // Use font-specific ascent for baseline to avoid bold/regular misalignment.
         let baseline = if bold {
             let (_, m) = font.metrics();
             pixel_y - m.ascent
@@ -602,6 +675,25 @@ impl SkiaCanvas {
         }
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
+
+        // Use proper italic typeface when available.
+        if italic {
+            if let Some(it_base) = self.italic_font_for(bold).cloned() {
+                let it_font = if scale != 1.0 {
+                    let mut f = it_base.clone();
+                    f.set_size(it_base.size() * scale);
+                    f
+                } else {
+                    it_base
+                };
+                let (_, m) = it_font.metrics();
+                let baseline = pixel_y - m.ascent;
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &it_font, &paint);
+                return;
+            }
+        }
 
         if scale != 1.0 {
             let scaled = self.get_scaled_font(bold, scale).clone();
@@ -680,6 +772,43 @@ impl SkiaCanvas {
             (pixel_x + pixel_w, underline_y),
             &paint,
         );
+    }
+
+    /// Draw a strikethrough span at pixel Y. Column is cell-based.
+    /// Line is drawn at 60% of ascent (roughly vertical center of glyphs).
+    pub fn draw_strikethrough_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        count: usize,
+        color: Color4f,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let strike_y = pixel_y + self.ascent * 0.6;
+        let width = count as f32 * self.cell_width;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((x, strike_y), (x + width, strike_y), &paint);
+    }
+
+    /// Draw a strikethrough span at exact pixel coordinates.
+    pub fn draw_strikethrough_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let strike_y = pixel_y + self.ascent * 0.6;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((pixel_x, strike_y), (pixel_x + pixel_w, strike_y), &paint);
     }
 
     /// Draw text at pixel Y. ASCII uses a single run; mixed/CJK falls back per-char.

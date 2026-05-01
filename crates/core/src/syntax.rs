@@ -114,6 +114,95 @@ fn highlight_name_to_theme_key(name: &str) -> &'static str {
     }
 }
 
+/// Declarative type specifying which inline markup rules apply to a buffer.
+/// Follows Emacs's data-driven `font-lock-defaults` pattern: modes declare
+/// what to highlight, the engine handles how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkupFlavor {
+    /// **bold**, `code`, *italic*, ~~strikethrough~~, ``` fences
+    Markdown,
+    /// *bold*, /italic/, =code=, ~verbatim~, #+begin_src fences
+    Org,
+    #[default]
+    None,
+}
+
+/// Single enrichment point — all callers go through here.
+/// Filters out spans that fall inside code blocks (fenced ``` for markdown,
+/// #+begin_src/#+end_src for org) so regex-based inline markup doesn't
+/// override tree-sitter's injected language highlighting.
+pub fn compute_markup_spans(source: &str, flavor: MarkupFlavor) -> Vec<HighlightSpan> {
+    let spans = match flavor {
+        MarkupFlavor::Markdown => compute_markdown_style_spans(source),
+        MarkupFlavor::Org => compute_org_style_spans(source),
+        MarkupFlavor::None => return Vec::new(),
+    };
+    let code_ranges = code_block_byte_ranges(source, flavor);
+    filter_code_block_spans(spans, &code_ranges)
+}
+
+/// Detect byte ranges of code block content in markdown/org source.
+/// Returns `(content_start, content_end)` pairs — the content between fences,
+/// excluding the fence lines themselves.
+pub fn code_block_byte_ranges(source: &str, flavor: MarkupFlavor) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut in_block = false;
+    let mut block_start = 0;
+
+    let mut offset = 0;
+    for line in source.split_inclusive('\n') {
+        let line_start = offset;
+        let line_end = offset + line.len();
+        let trimmed = line.trim();
+
+        match flavor {
+            MarkupFlavor::Markdown => {
+                if trimmed.starts_with("```") {
+                    if in_block {
+                        ranges.push((block_start, line_start));
+                        in_block = false;
+                    } else {
+                        block_start = line_end;
+                        in_block = true;
+                    }
+                }
+            }
+            MarkupFlavor::Org => {
+                let lower = trimmed.to_ascii_lowercase();
+                if lower.starts_with("#+begin_src") {
+                    block_start = line_end;
+                    in_block = true;
+                } else if in_block && lower.starts_with("#+end_src") {
+                    ranges.push((block_start, line_start));
+                    in_block = false;
+                }
+            }
+            MarkupFlavor::None => {}
+        }
+
+        offset = line_end;
+    }
+    ranges
+}
+
+/// Filter out spans whose byte range falls inside any code block region.
+fn filter_code_block_spans(
+    spans: Vec<HighlightSpan>,
+    code_ranges: &[(usize, usize)],
+) -> Vec<HighlightSpan> {
+    if code_ranges.is_empty() {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .filter(|span| {
+            !code_ranges
+                .iter()
+                .any(|(start, end)| span.byte_start >= *start && span.byte_end <= *end)
+        })
+        .collect()
+}
+
 /// Identifies a language we can highlight.
 ///
 /// Most languages go through tree-sitter. `Org` is a special case: no
@@ -158,6 +247,15 @@ impl Language {
         }
     }
 
+    /// The markup flavor associated with this language, if any.
+    pub fn markup_flavor(self) -> MarkupFlavor {
+        match self {
+            Language::Markdown => MarkupFlavor::Markdown,
+            Language::Org => MarkupFlavor::Org,
+            _ => MarkupFlavor::None,
+        }
+    }
+
     /// Default buffer-local options for this language (e.g. heading_scale for markup).
     pub fn default_local_options(self) -> crate::buffer::BufferLocalOptions {
         match self {
@@ -165,6 +263,11 @@ impl Language {
                 heading_scale: Some(true),
                 render_markup: Some(true),
                 link_descriptive: Some(true),
+                word_wrap: Some(true),
+                ..Default::default()
+            },
+            Language::Json | Language::Yaml | Language::Toml => crate::buffer::BufferLocalOptions {
+                word_wrap: Some(false),
                 ..Default::default()
             },
             _ => crate::buffer::BufferLocalOptions::default(),
@@ -218,6 +321,99 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
         "org" => Language::Org,
         _ => return None,
     })
+}
+
+/// Parse a language ID string (e.g. "rust", "python") into a `Language`.
+pub fn language_from_id(id: &str) -> Option<Language> {
+    Some(match id.to_lowercase().as_str() {
+        "rust" => Language::Rust,
+        "toml" => Language::Toml,
+        "markdown" | "md" => Language::Markdown,
+        "python" | "py" => Language::Python,
+        "javascript" | "js" => Language::JavaScript,
+        "typescript" | "ts" => Language::TypeScript,
+        "tsx" => Language::Tsx,
+        "go" | "golang" => Language::Go,
+        "json" | "jsonc" => Language::Json,
+        "bash" | "sh" | "shell" | "zsh" => Language::Bash,
+        "scheme" | "scm" => Language::Scheme,
+        "yaml" | "yml" => Language::Yaml,
+        "org" => Language::Org,
+        _ => return None,
+    })
+}
+
+/// Detect language from a shebang line (e.g. `#!/usr/bin/env python3`).
+pub fn language_from_shebang(first_line: &str) -> Option<Language> {
+    let line = first_line.trim();
+    if !line.starts_with("#!") {
+        return None;
+    }
+    // Extract the binary name: last path component, with `env [-S]` handling.
+    let after_hash_bang = line[2..].trim();
+    let binary = if after_hash_bang.contains("/env") {
+        // `#!/usr/bin/env python3` or `#!/usr/bin/env -S node`
+        after_hash_bang
+            .split_whitespace()
+            .find(|s| !s.starts_with('/') && !s.starts_with('-'))?
+    } else {
+        // `#!/bin/bash` — take the last path component
+        after_hash_bang
+            .split('/')
+            .next_back()?
+            .split_whitespace()
+            .next()?
+    };
+    // Strip version suffix: python3.12 → python, node18 → node
+    let base = binary.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let base = if base.is_empty() { binary } else { base };
+    match base {
+        "python" | "pypy" => Some(Language::Python),
+        "bash" | "sh" | "zsh" | "ksh" => Some(Language::Bash),
+        "node" | "deno" | "bun" => Some(Language::JavaScript),
+        "ts-node" | "tsx" => Some(Language::TypeScript),
+        _ => None,
+    }
+}
+
+/// Detect language from a modeline comment in the first or last 5 lines.
+/// Pattern: `mae: language=<id>` (case-insensitive on the id).
+pub fn language_from_modeline(content: &str) -> Option<Language> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static MODELINE: OnceLock<Regex> = OnceLock::new();
+    let re = MODELINE.get_or_init(|| Regex::new(r"mae:\s*language=(\w+)").unwrap());
+
+    let lines: Vec<&str> = content.lines().collect();
+    let first5 = &lines[..lines.len().min(5)];
+    let last5_start = lines.len().saturating_sub(5);
+    let last5 = &lines[last5_start..];
+
+    for line in first5.iter().chain(last5.iter()) {
+        if let Some(cap) = re.captures(line) {
+            if let Some(m) = cap.get(1) {
+                return language_from_id(m.as_str());
+            }
+        }
+    }
+    None
+}
+
+/// Detect language for a buffer using priority: shebang > modeline > extension.
+/// This is the primary entry point for language detection on file open.
+pub fn language_for_buffer(path: &std::path::Path, content: &str) -> Option<Language> {
+    // 1. Shebang (first line)
+    if let Some(first_line) = content.lines().next() {
+        if let Some(lang) = language_from_shebang(first_line) {
+            return Some(lang);
+        }
+    }
+    // 2. Modeline
+    if let Some(lang) = language_from_modeline(content) {
+        return Some(lang);
+    }
+    // 3. File extension
+    language_for_path(path)
 }
 
 fn build_configuration(lang: Language) -> Option<HighlightConfiguration> {
@@ -352,6 +548,11 @@ impl SyntaxMap {
 
     pub fn language_of(&self, buf_idx: usize) -> Option<Language> {
         self.entries.get(&buf_idx).map(|s| s.language)
+    }
+
+    /// Alias for `language_of` — used by Scheme injection for `*buffer-language*`.
+    pub fn language_for(&self, buf_idx: usize) -> Option<Language> {
+        self.language_of(buf_idx)
     }
 
     /// Returns `true` if cached spans exist and are fresh for this buffer
@@ -663,6 +864,41 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
     out
 }
 
+/// Return cached syntax spans without triggering any reparses.
+/// Used by the CursorOnly fast path — reuses whatever was computed last frame.
+pub fn cached_visible_syntax_spans(editor: &mut crate::editor::Editor) -> SyntaxSpanMap {
+    let mut out: SyntaxSpanMap = HashMap::new();
+    for win in editor.window_mgr.iter_windows() {
+        let idx = win.buffer_idx;
+        if out.contains_key(&idx) {
+            continue;
+        }
+        let Some(buf) = editor.buffers.get(idx) else {
+            continue;
+        };
+        if !matches!(buf.kind, crate::buffer::BufferKind::Text) {
+            continue;
+        }
+        if let Some((arc, _)) = editor.syntax.cached_spans_arc(idx, buf.generation) {
+            out.insert(idx, arc);
+        }
+    }
+
+    // Still update display_reveal_cursor for org-appear.
+    let focused_idx = editor.window_mgr.focused_window().buffer_idx;
+    if !editor.buffers[focused_idx].display_regions.is_empty() {
+        let win = editor.window_mgr.focused_window();
+        let buf = &editor.buffers[focused_idx];
+        let char_offset = buf.char_offset_at(win.cursor_row, win.cursor_col);
+        let byte_offset = buf.rope().char_to_byte(char_offset);
+        editor.buffers[focused_idx].display_reveal_cursor = Some(byte_offset);
+    } else {
+        editor.buffers[focused_idx].display_reveal_cursor = None;
+    }
+
+    out
+}
+
 /// Perform deferred syntax reparses for buffers in `syntax_reparse_pending`.
 /// Called from event loops after a debounce period (~50ms after last edit).
 pub fn drain_pending_reparses(editor: &mut crate::editor::Editor) {
@@ -694,6 +930,29 @@ fn compute_spans_with_cache(
             return Vec::new();
         }
     }
+    if language == Language::Markdown {
+        // Same per-block standalone highlighting approach as org:
+        // 1. Highlight structural markdown (headings, emphasis, etc.)
+        // 2. Remove markup.literal from code block ranges
+        // 3. Add per-block tree-sitter highlighting for each fenced code block
+        let mut spans = highlight_with_config(configs.get(&language).unwrap(), source);
+
+        let code_ranges = code_block_byte_ranges(source, MarkupFlavor::Markdown);
+        if !code_ranges.is_empty() {
+            spans.retain(|s| {
+                if s.theme_key != "markup.literal" {
+                    return true;
+                }
+                !code_ranges
+                    .iter()
+                    .any(|(start, end)| s.byte_start < *end && s.byte_end > *start)
+            });
+        }
+
+        inject_fenced_code_blocks(source, &mut spans);
+        spans.sort_by_key(|s| s.byte_start);
+        return spans;
+    }
     highlight_with_config(configs.get(&language).unwrap(), source)
 }
 
@@ -701,6 +960,46 @@ fn compute_spans_with_cache(
 fn compute_spans(language: Language, source: &str) -> Vec<HighlightSpan> {
     // Org: regex-based fallback until a tree-sitter-org compatible with
     // tree-sitter 0.25 is available.
+    if language == Language::Org {
+        return compute_org_spans(source);
+    }
+    let Some(config) = build_configuration(language) else {
+        return Vec::new();
+    };
+    if language == Language::Markdown {
+        // Use the same per-block standalone highlighting approach as org:
+        // 1. Highlight structural markdown (headings, emphasis, etc.) without injection
+        // 2. Remove markup.literal from code block ranges
+        // 3. Add per-block tree-sitter highlighting for each fenced code block
+        let mut spans = highlight_with_config(&config, source);
+
+        let code_ranges = code_block_byte_ranges(source, MarkupFlavor::Markdown);
+        // Remove markup.literal from code block content (tree-sitter-md marks
+        // fenced_code_block content as @text.literal → markup.literal)
+        if !code_ranges.is_empty() {
+            spans.retain(|s| {
+                if s.theme_key != "markup.literal" {
+                    return true;
+                }
+                !code_ranges
+                    .iter()
+                    .any(|(start, end)| s.byte_start < *end && s.byte_end > *start)
+            });
+        }
+
+        // Per-block injection: same pattern as org's src block injection (line 1315)
+        inject_fenced_code_blocks(source, &mut spans);
+
+        spans.sort_by_key(|s| s.byte_start);
+        return spans;
+    }
+    highlight_with_config(&config, source)
+}
+
+/// Compute syntax spans for a single language + source without caching.
+/// Used by help buffers and other contexts needing one-shot highlighting
+/// of embedded code blocks.
+pub fn compute_spans_standalone(language: Language, source: &str) -> Vec<HighlightSpan> {
     if language == Language::Org {
         return compute_org_spans(source);
     }
@@ -742,6 +1041,34 @@ fn highlight_with_config(config: &HighlightConfiguration, source: &str) -> Vec<H
         }
     }
     spans
+}
+
+/// Inject per-block syntax highlighting for markdown fenced code blocks.
+/// Same approach as org's src block injection: regex-find ` ```lang ` / ` ``` `
+/// pairs, run `highlight_with_config()` on each block's content, and offset
+/// the resulting spans into the full source.
+fn inject_fenced_code_blocks(source: &str, spans: &mut Vec<HighlightSpan>) {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static FENCED_BLOCK: OnceLock<Regex> = OnceLock::new();
+    let fenced_block =
+        FENCED_BLOCK.get_or_init(|| Regex::new(r"(?m)^```(\w+)\s*\n([\s\S]*?)^```\s*$").unwrap());
+
+    for cap in fenced_block.captures_iter(source) {
+        if let (Some(lang_m), Some(content_m)) = (cap.get(1), cap.get(2)) {
+            if let Some(lang) = language_from_id(lang_m.as_str()) {
+                if let Some(config) = build_configuration(lang) {
+                    let offset = content_m.start();
+                    for mut span in highlight_with_config(&config, content_m.as_str()) {
+                        span.byte_start += offset;
+                        span.byte_end += offset;
+                        spans.push(span);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Build a one-shot syntax tree (used primarily in tests).
@@ -816,10 +1143,14 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
             });
             // TODO/DONE keyword at the start of the headline.
             if let Some(kw) = todo_kw.find(rest.as_str()) {
+                let theme_key = match kw.as_str() {
+                    "DONE" | "CANCELLED" | "DEFERRED" => "markup.done",
+                    _ => "markup.todo", // TODO, NEXT, WAIT
+                };
                 spans.push(HighlightSpan {
                     byte_start: rest.start() + kw.start(),
                     byte_end: rest.start() + kw.end(),
-                    theme_key: "keyword",
+                    theme_key,
                 });
             }
             // Tags at end of headline.
@@ -932,6 +1263,50 @@ fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         }
     }
 
+    // Checkbox highlighting: - [ ] or - [x] or - [-]
+    {
+        static CHECKBOX: OnceLock<Regex> = OnceLock::new();
+        let checkbox =
+            CHECKBOX.get_or_init(|| Regex::new(r"(?m)(?:[-+*]|\d+[.)]) (\[[ xX\-]\])").unwrap());
+        for cap in checkbox.captures_iter(source) {
+            if let Some(m) = cap.get(1) {
+                let checked = m.as_str().contains('x') || m.as_str().contains('X');
+                spans.push(HighlightSpan {
+                    byte_start: m.start(),
+                    byte_end: m.end(),
+                    theme_key: if checked {
+                        "markup.checkbox.checked"
+                    } else {
+                        "markup.checkbox"
+                    },
+                });
+            }
+        }
+    }
+
+    // Org src block injection: highlight code inside #+begin_src <lang> ... #+end_src
+    {
+        static SRC_BLOCK: OnceLock<Regex> = OnceLock::new();
+        let src_block = SRC_BLOCK.get_or_init(|| {
+            Regex::new(r"(?mi)^[ \t]*#\+begin_src[ \t]+(\w+)[^\n]*\n([\s\S]*?)^[ \t]*#\+end_src")
+                .unwrap()
+        });
+        for cap in src_block.captures_iter(source) {
+            if let (Some(lang_m), Some(content_m)) = (cap.get(1), cap.get(2)) {
+                if let Some(lang) = language_from_id(lang_m.as_str()) {
+                    if let Some(config) = build_configuration(lang) {
+                        let offset = content_m.start();
+                        for mut span in highlight_with_config(&config, content_m.as_str()) {
+                            span.byte_start += offset;
+                            span.byte_end += offset;
+                            spans.push(span);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Renderer expects spans sorted by start offset.
     spans.sort_by_key(|s| s.byte_start);
     spans
@@ -1012,6 +1387,7 @@ pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {
     static BOLD: OnceLock<Regex> = OnceLock::new();
     static CODE: OnceLock<Regex> = OnceLock::new();
     static ITALIC: OnceLock<Regex> = OnceLock::new();
+    static STRIKETHROUGH: OnceLock<Regex> = OnceLock::new();
 
     let bold = BOLD.get_or_init(|| Regex::new(r"\*\*([^*\n]+)\*\*").unwrap());
     let code = CODE.get_or_init(|| Regex::new(r"`([^`\n]+)`").unwrap());
@@ -1020,6 +1396,7 @@ pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {
     let italic = ITALIC.get_or_init(|| {
         Regex::new(r"(?:^|[\s(>])\*([^\s*][^*\n]*)\*(?:\s|[.,;:!?)>\]]|$)").unwrap()
     });
+    let strikethrough = STRIKETHROUGH.get_or_init(|| Regex::new(r"~~([^~\n]+)~~").unwrap());
 
     let mut spans: Vec<HighlightSpan> = Vec::new();
 
@@ -1051,8 +1428,80 @@ pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {
         }
     }
 
+    for cap in strikethrough.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        spans.push(HighlightSpan {
+            byte_start: full.start(),
+            byte_end: full.end(),
+            theme_key: "markup.strikethrough",
+        });
+    }
+
+    // Checkbox highlighting: - [ ] or - [x]
+    {
+        static CHECKBOX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let checkbox =
+            CHECKBOX.get_or_init(|| Regex::new(r"(?m)(?:[-+*]|\d+[.)]) (\[[ xX\-]\])").unwrap());
+        for cap in checkbox.captures_iter(source) {
+            if let Some(m) = cap.get(1) {
+                let checked = m.as_str().contains('x') || m.as_str().contains('X');
+                spans.push(HighlightSpan {
+                    byte_start: m.start(),
+                    byte_end: m.end(),
+                    theme_key: if checked {
+                        "markup.checkbox.checked"
+                    } else {
+                        "markup.checkbox"
+                    },
+                });
+            }
+        }
+    }
+
     spans.sort_by_key(|s| s.byte_start);
     spans
+}
+
+/// Detect lines inside fenced code blocks in markdown (` ``` `) or org (`#+begin_src`/`#+end_src`).
+/// Returns a `Vec<bool>` indexed by line number — `true` if the line is inside a code block
+/// (including the fence lines themselves).
+pub fn detect_code_block_lines(buf: &crate::Buffer, flavor: MarkupFlavor) -> Vec<bool> {
+    let line_count = buf.line_count();
+    let mut result = vec![false; line_count];
+    if flavor == MarkupFlavor::None {
+        return result;
+    }
+
+    let mut inside = false;
+    for (i, flag) in result.iter_mut().enumerate() {
+        let line: String = buf.rope().line(i).chars().collect();
+        let trimmed = line.trim();
+        if flavor == MarkupFlavor::Org {
+            if trimmed.eq_ignore_ascii_case("#+begin_src")
+                || trimmed.to_ascii_lowercase().starts_with("#+begin_src ")
+            {
+                inside = true;
+                *flag = true;
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("#+end_src") {
+                *flag = true;
+                inside = false;
+                continue;
+            }
+        } else {
+            // Markdown fenced code blocks
+            if trimmed.starts_with("```") {
+                inside = !inside;
+                *flag = true;
+                continue;
+            }
+        }
+        if inside {
+            *flag = true;
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1234,8 +1683,8 @@ mod tests {
         let spans = compute_spans(Language::Org, src);
         assert!(spans.iter().any(|s| s.theme_key == "markup.heading"));
         assert!(
-            spans.iter().any(|s| s.theme_key == "keyword"),
-            "TODO should be keyword"
+            spans.iter().any(|s| s.theme_key == "markup.todo"),
+            "TODO should be markup.todo"
         );
         assert!(
             spans.iter().any(|s| s.theme_key == "attribute"),
@@ -1247,6 +1696,41 @@ mod tests {
         assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
         assert!(spans.iter().any(|s| s.theme_key == "markup.list"));
         assert!(spans.iter().any(|s| s.theme_key == "constant"), "timestamp");
+    }
+
+    #[test]
+    fn org_todo_uses_markup_todo_key() {
+        let spans = compute_org_spans("* TODO Write docs\n");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.todo"),
+            "expected markup.todo for TODO keyword, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_done_uses_markup_done_key() {
+        let spans = compute_org_spans("* DONE Finished task\n");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.done"),
+            "expected markup.done for DONE keyword, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn org_next_wait_use_markup_todo_key() {
+        let spans = compute_org_spans("* NEXT Pending\n* WAIT Blocked\n");
+        let todo_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.theme_key == "markup.todo")
+            .collect();
+        assert_eq!(
+            todo_spans.len(),
+            2,
+            "NEXT and WAIT should both be markup.todo, got: {:?}",
+            spans
+        );
     }
 
     #[test]
@@ -1517,14 +2001,477 @@ mod tests {
         assert_eq!(md.heading_scale, Some(true));
         assert_eq!(md.render_markup, Some(true));
         assert_eq!(md.link_descriptive, Some(true));
-        assert_eq!(md.word_wrap, None);
+        assert_eq!(md.word_wrap, Some(true));
 
         let org = Language::Org.default_local_options();
         assert_eq!(org.heading_scale, Some(true));
+        assert_eq!(org.word_wrap, Some(true));
+
+        // Structured data languages shouldn't word-wrap.
+        let json = Language::Json.default_local_options();
+        assert_eq!(json.word_wrap, Some(false));
+        let yaml = Language::Yaml.default_local_options();
+        assert_eq!(yaml.word_wrap, Some(false));
+        let toml = Language::Toml.default_local_options();
+        assert_eq!(toml.word_wrap, Some(false));
 
         let rs = Language::Rust.default_local_options();
         assert_eq!(rs.heading_scale, None);
         assert_eq!(rs.render_markup, None);
         assert_eq!(rs.link_descriptive, None);
+    }
+
+    // --- Shebang detection tests ---
+
+    #[test]
+    fn shebang_python3() {
+        assert_eq!(
+            language_from_shebang("#!/usr/bin/env python3"),
+            Some(Language::Python)
+        );
+    }
+
+    #[test]
+    fn shebang_bash() {
+        assert_eq!(language_from_shebang("#!/bin/bash"), Some(Language::Bash));
+    }
+
+    #[test]
+    fn shebang_node() {
+        assert_eq!(
+            language_from_shebang("#!/usr/bin/env node"),
+            Some(Language::JavaScript)
+        );
+    }
+
+    #[test]
+    fn shebang_no_shebang() {
+        assert_eq!(language_from_shebang("# just a comment"), None);
+        assert_eq!(language_from_shebang(""), None);
+    }
+
+    #[test]
+    fn shebang_env_with_flags() {
+        assert_eq!(
+            language_from_shebang("#!/usr/bin/env -S node"),
+            Some(Language::JavaScript)
+        );
+    }
+
+    // --- Modeline detection tests ---
+
+    #[test]
+    fn modeline_first_line() {
+        assert_eq!(
+            language_from_modeline("# mae: language=rust\nsome code"),
+            Some(Language::Rust)
+        );
+    }
+
+    #[test]
+    fn modeline_last_line() {
+        let content = "line1\nline2\nline3\nline4\nline5\nline6\n# mae: language=python\n";
+        assert_eq!(language_from_modeline(content), Some(Language::Python));
+    }
+
+    #[test]
+    fn modeline_no_match() {
+        assert_eq!(
+            language_from_modeline("just some text\nno modeline here\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn modeline_priority_over_ext() {
+        // language_for_buffer should prefer modeline over extension
+        let content = "# mae: language=python\nfn main() {}";
+        assert_eq!(
+            language_for_buffer(Path::new("foo.rs"), content),
+            Some(Language::Python)
+        );
+    }
+
+    // --- language_from_id tests ---
+
+    #[test]
+    fn language_from_id_valid() {
+        assert_eq!(language_from_id("rust"), Some(Language::Rust));
+        assert_eq!(language_from_id("Python"), Some(Language::Python));
+        assert_eq!(language_from_id("JS"), Some(Language::JavaScript));
+        assert_eq!(language_from_id("golang"), Some(Language::Go));
+    }
+
+    #[test]
+    fn language_from_id_invalid() {
+        assert_eq!(language_from_id("cobol"), None);
+    }
+
+    #[test]
+    fn shared_markup_spans_skip_code_blocks() {
+        // Markdown: bold outside code block is kept, bold inside is filtered
+        let md_src = "**bold**\n```\n**not bold**\n```\n";
+        let spans = compute_markup_spans(md_src, MarkupFlavor::Markdown);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold for text outside code block"
+        );
+        let code_start = md_src.find("**not bold**").unwrap();
+        assert!(
+            !spans
+                .iter()
+                .any(|s| s.theme_key == "markup.bold" && s.byte_start >= code_start),
+            "markup.bold should NOT appear inside fenced code block"
+        );
+
+        // Org: bold outside src block is kept, bold inside is filtered
+        let org_src = "*bold*\n#+begin_src python\n*not bold*\n#+end_src\n";
+        let spans = compute_markup_spans(org_src, MarkupFlavor::Org);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold for text outside org src block"
+        );
+        let code_start = org_src.find("*not bold*").unwrap();
+        assert!(
+            !spans
+                .iter()
+                .any(|s| s.theme_key == "markup.bold" && s.byte_start >= code_start),
+            "markup.bold should NOT appear inside org src block"
+        );
+    }
+
+    // --- language_for_buffer tests ---
+
+    #[test]
+    fn language_for_buffer_shebang_priority() {
+        let content = "#!/usr/bin/env python3\n";
+        // Even with .rs extension, shebang wins
+        assert_eq!(
+            language_for_buffer(Path::new("script.rs"), content),
+            Some(Language::Python)
+        );
+    }
+
+    #[test]
+    fn language_for_buffer_extension_fallback() {
+        let content = "fn main() {}";
+        assert_eq!(
+            language_for_buffer(Path::new("foo.rs"), content),
+            Some(Language::Rust)
+        );
+    }
+
+    // --- SyntaxMap::language_for tests ---
+
+    #[test]
+    fn syntax_map_language_for() {
+        let mut map = SyntaxMap::new();
+        map.set_language(0, Language::Rust);
+        assert_eq!(map.language_for(0), Some(Language::Rust));
+        assert_eq!(map.language_for(99), None);
+    }
+
+    // --- Strikethrough detection ---
+
+    #[test]
+    fn markdown_strikethrough_spans() {
+        let spans = compute_markdown_style_spans("This is ~~deleted~~ text");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.strikethrough"),
+            "expected markup.strikethrough span, got: {:?}",
+            spans
+        );
+    }
+
+    // --- Code block detection ---
+
+    fn buf_with_text_and_path(text: &str, path: &str) -> crate::Buffer {
+        let mut buf = crate::Buffer::new();
+        buf.insert_text_at(0, text);
+        buf.set_file_path(std::path::PathBuf::from(path));
+        buf
+    }
+
+    #[test]
+    fn detect_code_blocks_md() {
+        let buf = buf_with_text_and_path("line 0\n```rust\nfn main() {}\n```\nline 4", "test.md");
+        let lines = detect_code_block_lines(&buf, MarkupFlavor::Markdown);
+        assert_eq!(lines.len(), 5);
+        assert!(!lines[0], "line 0 is not in code block");
+        assert!(lines[1], "``` opening fence is in code block");
+        assert!(lines[2], "code content is in code block");
+        assert!(lines[3], "``` closing fence is in code block");
+        assert!(!lines[4], "line 4 is not in code block");
+    }
+
+    #[test]
+    fn detect_code_blocks_org() {
+        let buf = buf_with_text_and_path(
+            "text\n#+begin_src python\nprint(1)\n#+end_src\nmore",
+            "test.org",
+        );
+        let lines = detect_code_block_lines(&buf, MarkupFlavor::Org);
+        assert_eq!(lines.len(), 5);
+        assert!(!lines[0]);
+        assert!(lines[1]);
+        assert!(lines[2]);
+        assert!(lines[3]);
+        assert!(!lines[4]);
+    }
+
+    #[test]
+    fn detect_code_blocks_flavor_none() {
+        let buf = buf_with_text_and_path("```\ncode\n```", "test.rs");
+        let lines = detect_code_block_lines(&buf, MarkupFlavor::None);
+        assert!(
+            lines.iter().all(|&x| !x),
+            "MarkupFlavor::None produces no code blocks"
+        );
+    }
+
+    #[test]
+    fn markup_flavor_markdown_produces_spans() {
+        let spans = compute_markup_spans("**bold** and `code`", MarkupFlavor::Markdown);
+        assert!(spans.iter().any(|s| s.theme_key == "markup.bold"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
+    }
+
+    #[test]
+    fn markup_flavor_org_produces_spans() {
+        let spans = compute_markup_spans("*bold* and =code=", MarkupFlavor::Org);
+        assert!(spans.iter().any(|s| s.theme_key == "markup.bold"));
+        assert!(spans.iter().any(|s| s.theme_key == "markup.literal"));
+    }
+
+    #[test]
+    fn markup_flavor_none_empty() {
+        let spans = compute_markup_spans("**bold** and `code`", MarkupFlavor::None);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn language_markup_flavor() {
+        assert_eq!(Language::Markdown.markup_flavor(), MarkupFlavor::Markdown);
+        assert_eq!(Language::Org.markup_flavor(), MarkupFlavor::Org);
+        assert_eq!(Language::Rust.markup_flavor(), MarkupFlavor::None);
+        assert_eq!(Language::Python.markup_flavor(), MarkupFlavor::None);
+    }
+
+    // --- Code block injection tests ---
+
+    #[test]
+    fn markdown_code_block_has_injected_spans() {
+        let src = "# Heading\n\n```rust\nfn main() {}\n```\n";
+        let spans = compute_spans(Language::Markdown, src);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "keyword"),
+            "expected keyword span for `fn` in fenced code block, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn markdown_code_block_no_literal_on_injected_content() {
+        let src = "```rust\nfn main() {}\n```\n";
+        let spans = compute_spans(Language::Markdown, src);
+        // Content lines should NOT have markup.literal if injection resolved
+        let fn_byte = src.find("fn").unwrap();
+        let literal_on_fn = spans.iter().any(|s| {
+            s.theme_key == "markup.literal" && s.byte_start <= fn_byte && s.byte_end > fn_byte
+        });
+        assert!(
+            !literal_on_fn,
+            "markup.literal should be removed from injected code content"
+        );
+    }
+
+    #[test]
+    fn org_src_block_has_language_spans() {
+        let src = "#+begin_src rust\nfn main() {}\n#+end_src\n";
+        let spans = compute_org_spans(src);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "keyword"),
+            "expected keyword span for `fn` in org src block, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn injection_callback_resolves_rust() {
+        // Verify language_from_id works for injection resolution
+        assert_eq!(language_from_id("rust"), Some(Language::Rust));
+        assert!(build_configuration(Language::Rust).is_some());
+    }
+
+    #[test]
+    fn markdown_no_spurious_markup_in_code_block() {
+        // Bold/italic/code regex spans must NOT appear inside fenced code blocks
+        let src =
+            "**outside bold**\n```python\ndef **foo**():\n    \"\"\"*italic* `code`\"\"\"\n```\n";
+        let spans = compute_markup_spans(src, MarkupFlavor::Markdown);
+        let fence_end = src.find("```\n").unwrap(); // opening fence
+        let code_start = src[fence_end..].find('\n').unwrap() + fence_end + 1;
+        // Should have bold for "outside bold" but nothing inside the code block
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.bold" && s.byte_end <= fence_end),
+            "expected markup.bold outside code block"
+        );
+        let spurious = spans.iter().any(|s| s.byte_start >= code_start);
+        assert!(
+            !spurious,
+            "no markup spans should appear inside fenced code block, got: {:?}",
+            spans
+                .iter()
+                .filter(|s| s.byte_start >= code_start)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn code_block_byte_ranges_markdown() {
+        let src = "text\n```rust\ncode\n```\nmore text\n";
+        let ranges = code_block_byte_ranges(src, MarkupFlavor::Markdown);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        assert_eq!(&src[start..end], "code\n");
+    }
+
+    #[test]
+    fn code_block_byte_ranges_org() {
+        let src = "text\n#+begin_src python\ncode\n#+end_src\n";
+        let ranges = code_block_byte_ranges(src, MarkupFlavor::Org);
+        assert_eq!(ranges.len(), 1);
+        let (start, end) = ranges[0];
+        assert_eq!(&src[start..end], "code\n");
+    }
+
+    // --- Checkbox span tests ---
+
+    #[test]
+    fn checkbox_span_unchecked_theme_key() {
+        let spans = compute_org_spans("- [ ] unchecked item\n");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.checkbox"),
+            "expected markup.checkbox for unchecked, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn checkbox_span_checked_theme_key() {
+        let spans = compute_org_spans("- [x] checked item\n");
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.checkbox.checked"),
+            "expected markup.checkbox.checked for checked, got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn markdown_code_block_no_residual_markup_literal() {
+        let src = include_str!("../../../assets/markup-demo.md");
+        let spans = compute_spans(Language::Markdown, src);
+
+        // Find code block content ranges
+        let code_ranges = code_block_byte_ranges(src, MarkupFlavor::Markdown);
+
+        // NO markup.literal should survive inside ANY code block
+        let residual: Vec<_> = spans
+            .iter()
+            .filter(|s| s.theme_key == "markup.literal")
+            .filter(|s| {
+                code_ranges
+                    .iter()
+                    .any(|(start, end)| s.byte_start < *end && s.byte_end > *start)
+            })
+            .collect();
+        assert!(
+            residual.is_empty(),
+            "markup.literal must not survive in code blocks, found {} spans: {:?}",
+            residual.len(),
+            residual
+        );
+
+        // Verify specific tokens ARE highlighted correctly
+        let fn_byte = src.find("fn main()").unwrap();
+        assert!(
+            spans.iter().any(|s| s.theme_key == "keyword"
+                && s.byte_start <= fn_byte
+                && s.byte_end > fn_byte),
+            "expected keyword span for `fn`"
+        );
+
+        // Verify injected language spans exist in the Rust code block
+        // (the exact theme keys depend on the grammar's query file, so we
+        // just check that SOME non-markup spans appear in the block).
+        let rust_block = code_ranges[0]; // first code block is Rust
+        let injected_in_rust: Vec<_> = spans
+            .iter()
+            .filter(|s| {
+                s.byte_start >= rust_block.0
+                    && s.byte_end <= rust_block.1
+                    && !s.theme_key.starts_with("markup")
+            })
+            .collect();
+        assert!(
+            !injected_in_rust.is_empty(),
+            "expected injected language spans in Rust code block"
+        );
+
+        // Verify Python block also has injected spans
+        let python_block = code_ranges[1]; // second code block is Python
+        let injected_in_python: Vec<_> = spans
+            .iter()
+            .filter(|s| {
+                s.byte_start >= python_block.0
+                    && s.byte_end <= python_block.1
+                    && !s.theme_key.starts_with("markup")
+            })
+            .collect();
+        assert!(
+            !injected_in_python.is_empty(),
+            "expected injected language spans in Python code block"
+        );
+    }
+
+    #[test]
+    fn markdown_enrichment_no_spans_in_code_blocks() {
+        let src = include_str!("../../../assets/markup-demo.md");
+        let code_ranges = code_block_byte_ranges(src, MarkupFlavor::Markdown);
+        let markup_spans = compute_markup_spans(src, MarkupFlavor::Markdown);
+        let inside_code: Vec<_> = markup_spans
+            .iter()
+            .filter(|s| {
+                code_ranges
+                    .iter()
+                    .any(|(start, end)| s.byte_start >= *start && s.byte_end <= *end)
+            })
+            .collect();
+        assert!(
+            inside_code.is_empty(),
+            "regex markup spans must not exist inside code blocks: {:?}",
+            inside_code
+        );
+    }
+
+    #[test]
+    fn markdown_checkbox_spans() {
+        let spans = compute_markdown_style_spans("- [ ] todo\n- [x] done\n");
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.checkbox"),
+            "expected unchecked checkbox span in markdown, got: {:?}",
+            spans
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.theme_key == "markup.checkbox.checked"),
+            "expected checked checkbox span in markdown, got: {:?}",
+            spans
+        );
     }
 }

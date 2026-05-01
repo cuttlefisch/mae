@@ -82,6 +82,10 @@ yellow = "#f1fa8c"
 "namespace" = { fg = "cyan" }
 "punctuation" = { fg = "fg" }
 "markup.link" = { fg = "cyan", underline = true }
+"markup.todo" = { fg = "red", bold = true }
+"markup.done" = { fg = "green" }
+"markup.checkbox" = { fg = "yellow", bold = true }
+"markup.checkbox.checked" = { fg = "green" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

@@ -114,6 +114,14 @@ pub fn render_buffer_content(
     let (breakpoint_lines, stopped_line) = gutter::collect_breakpoints(buf, editor);
     let stopped_line_fg = theme::ts_fg(editor, "debug.current_line");
 
+    // Code block background detection (markdown/org fenced blocks).
+    let flavor = editor.effective_markup_flavor(win.buffer_idx);
+    let code_block_lines = mae_core::detect_code_block_lines(buf, flavor);
+    let code_block_bg = {
+        let cb_style = editor.theme.style("markup.code_block");
+        cb_style.bg.map(|c| theme::theme_color_to_skia(&c))
+    };
+
     let col_offset = win.col_offset;
 
     let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap);
@@ -191,6 +199,7 @@ pub fn render_buffer_content(
                     bold: false,
                     italic: false,
                     underline: false,
+                    strikethrough: false,
                 },
             );
 
@@ -240,6 +249,9 @@ pub fn render_buffer_content(
                             }
                             if ts.underline {
                                 cs.underline = true;
+                            }
+                            if ts.strikethrough {
+                                cs.strikethrough = true;
                             }
                             if let Some(bg) = ts.bg {
                                 cs.bg = Some(theme::theme_color_to_skia(&bg));
@@ -347,6 +359,15 @@ pub fn render_buffer_content(
         }
 
         // --- Drawing ---
+
+        // Code block tinted background (drawn before cursorline so cursorline overlays).
+        if let Some(cb_bg) = code_block_bg {
+            let is_code_block = code_block_lines.get(line_idx).copied().unwrap_or(false);
+            if is_code_block {
+                canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, cb_bg);
+            }
+        }
+
         if is_wrap_cont {
             // Wrap continuation segment: draw showbreak prefix + chunk.
             let indent_len = if editor.break_indent {
@@ -758,6 +779,45 @@ fn draw_styled_at(
             }
         }
     }
+
+    // Pass 4: Coalesce strikethrough spans (line at 60% of ascent).
+    {
+        let mut st_start: Option<(usize, usize, Color4f)> = None;
+        for (i, cs) in styles.iter().enumerate() {
+            if cs.strikethrough {
+                if st_start.is_none() {
+                    st_start = Some((i, col_offsets[i], cs.fg));
+                }
+            } else if let Some((start_idx, start_col, fg)) = st_start.take() {
+                if use_pixel {
+                    let pw = pixel_offsets[i] - pixel_offsets[start_idx];
+                    canvas.draw_strikethrough_at_pixel(
+                        base_x + pixel_offsets[start_idx],
+                        pixel_y,
+                        pw,
+                        fg,
+                    );
+                } else {
+                    let width = col_offsets[i] - start_col;
+                    canvas.draw_strikethrough_at_y(pixel_y, col + start_col, width, fg);
+                }
+            }
+        }
+        if let Some((start_idx, start_col, fg)) = st_start {
+            if use_pixel {
+                let pw = pixel_offsets[styles.len()] - pixel_offsets[start_idx];
+                canvas.draw_strikethrough_at_pixel(
+                    base_x + pixel_offsets[start_idx],
+                    pixel_y,
+                    pw,
+                    fg,
+                );
+            } else {
+                let width = col_offsets[styles.len()] - start_col;
+                canvas.draw_strikethrough_at_y(pixel_y, col + start_col, width, fg);
+            }
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -771,6 +831,7 @@ struct CharStyle {
     bold: bool,
     italic: bool,
     underline: bool,
+    strikethrough: bool,
 }
 
 // -----------------------------------------------------------------------
@@ -837,6 +898,7 @@ mod tests {
                 bold: false,
                 italic: false,
                 underline: false,
+                strikethrough: false,
             })
             .collect();
         apply_hex_color_preview(&chars, &mut styles);
@@ -858,6 +920,7 @@ mod tests {
                 bold: false,
                 italic: false,
                 underline: false,
+                strikethrough: false,
             })
             .collect();
         apply_hex_color_preview(&chars, &mut styles);
@@ -877,6 +940,7 @@ mod tests {
                 bold: false,
                 italic: false,
                 underline: false,
+                strikethrough: false,
             })
             .collect();
         apply_hex_color_preview(&chars, &mut styles);
@@ -891,6 +955,7 @@ mod tests {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
         };
         assert!(!cs.bold);
         assert!(cs.bg.is_none());

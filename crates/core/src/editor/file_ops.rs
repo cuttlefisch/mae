@@ -1056,7 +1056,9 @@ impl Editor {
         match Buffer::from_file(path) {
             Ok(buf) => {
                 let name = buf.name.clone();
-                let detected_lang = buf.file_path().and_then(crate::syntax::language_for_path);
+                let detected_lang = buf
+                    .file_path()
+                    .and_then(|p| crate::syntax::language_for_buffer(p, &buf.text()));
 
                 // Track recent files
                 if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
@@ -1132,6 +1134,9 @@ impl Editor {
                 self.lsp_notify_did_open();
                 self.refresh_git_diff(new_idx);
                 self.fire_hook("buffer-open");
+                if let Some(lang) = detected_lang {
+                    self.fire_hook(&format!("buffer-open:{}", lang.id()));
+                }
                 Some(new_idx)
             }
             Err(e) => {

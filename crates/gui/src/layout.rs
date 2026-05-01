@@ -11,6 +11,8 @@
 //! positioning. Layout computes heading scale from `markup.heading` spans —
 //! if the renderer sees different spans, line heights will not match.
 
+use std::hash::{Hash, Hasher};
+
 use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
 use mae_core::{Buffer, Editor, HighlightSpan, Window};
 
@@ -52,6 +54,9 @@ pub struct LineLayout {
     /// Display chars when display regions are active.
     /// `None` if no display regions affect this line.
     pub display_chars: Option<Vec<char>>,
+    /// Content hash for this line (chars + scale). Used to detect whether a
+    /// line changed between frames for the tiered redisplay optimization.
+    pub content_hash: u64,
 }
 
 /// Complete layout for one window's visible content area.
@@ -360,6 +365,28 @@ pub fn compute_layout(
         };
         let full_count = full_chars.len();
 
+        // Compute content hash (chars + scale) for tiered redisplay optimization.
+        let content_hash = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for &ch in full_chars.iter() {
+                ch.hash(&mut hasher);
+            }
+            org_heading_scale.to_bits().hash(&mut hasher);
+            hasher.finish()
+        };
+
+        // Heading spacing: add top padding before heading lines (Emacs display margin).
+        if org_heading_scale > 1.0 {
+            let padding = if org_heading_scale >= 1.5 {
+                4.0 // h1
+            } else if org_heading_scale >= 1.3 {
+                3.0 // h2
+            } else {
+                2.0 // h3
+            };
+            pixel_y += padding;
+        }
+
         if wrap {
             let full_chars = full_chars.to_vec();
             let indent_len = if editor.break_indent {
@@ -424,6 +451,7 @@ pub fn compute_layout(
                     } else {
                         None
                     },
+                    content_hash,
                 });
 
                 pixel_y += seg_height;
@@ -490,6 +518,7 @@ pub fn compute_layout(
                 } else {
                     None
                 },
+                content_hash,
             });
 
             pixel_y += line_height;

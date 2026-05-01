@@ -80,6 +80,12 @@
 "markup.italic" = { fg = "black", italic = true }
 "markup.list" = { fg = "magenta" }
 "markup.quote" = { fg = "dark_gray", italic = true }
+"markup.strikethrough" = { fg = "gray", strikethrough = true }
+"markup.todo" = { fg = "red", bold = true }
+"markup.done" = { fg = "green" }
+"markup.checkbox" = { fg = "yellow", bold = true }
+"markup.checkbox.checked" = { fg = "green" }
+"markup.code_block" = { bg = "#f0f0f0" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

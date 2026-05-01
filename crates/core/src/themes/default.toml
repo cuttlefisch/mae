@@ -92,6 +92,12 @@ gray = "#a89984"
 "markup.italic" = { fg = "white", italic = true }
 "markup.list" = { fg = "magenta" }
 "markup.quote" = { fg = "gray", italic = true }
+"markup.strikethrough" = { fg = "dark_gray", strikethrough = true }
+"markup.todo" = { fg = "red", bold = true }
+"markup.done" = { fg = "green" }
+"markup.checkbox" = { fg = "yellow", bold = true }
+"markup.checkbox.checked" = { fg = "green" }
+"markup.code_block" = { bg = "#32302f" }
 
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }

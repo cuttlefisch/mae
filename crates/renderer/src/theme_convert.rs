@@ -51,6 +51,9 @@ pub(crate) fn to_ratatui_style(ts: &ThemeStyle) -> Style {
     if ts.underline {
         style = style.add_modifier(Modifier::UNDERLINED);
     }
+    if ts.strikethrough {
+        style = style.add_modifier(Modifier::CROSSED_OUT);
+    }
     style
 }
 

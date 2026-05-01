@@ -52,6 +52,8 @@ struct SharedState {
     pending_recent_projects: Vec<String>,
     /// Visual buffer operations.
     pending_visual_ops: Vec<VisualOp>,
+    /// Buffer-local option changes: (key, value).
+    pending_local_options: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +243,13 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("set-option!", move |key: String, value: String| {
             s.lock().unwrap().pending_options.push((key, value));
+            SteelVal::Void
+        });
+
+        // (set-local-option! KEY VALUE) — set a buffer-local option on the active buffer.
+        let s = shared.clone();
+        engine.register_fn("set-local-option!", move |key: String, value: String| {
+            s.lock().unwrap().pending_local_options.push((key, value));
             SteelVal::Void
         });
 
@@ -454,6 +463,26 @@ impl SchemeRuntime {
         };
         self.engine
             .register_value("*mode*", SteelVal::StringV(mode_str.into()));
+
+        // *buffer-language* — current buffer's detected language (or "text")
+        let active_idx = editor.active_buffer_idx();
+        let lang_str = editor
+            .syntax
+            .language_for(active_idx)
+            .map(|l| l.id())
+            .unwrap_or("text");
+        self.engine
+            .register_value("*buffer-language*", SteelVal::StringV(lang_str.into()));
+
+        // *buffer-file-path* — current buffer's file path (empty if unsaved)
+        let file_path_str = buf
+            .file_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        self.engine.register_value(
+            "*buffer-file-path*",
+            SteelVal::StringV(file_path_str.into()),
+        );
 
         // (buffer-line N) — read a specific line (0-indexed). Capture
         // a snapshot of all lines so the closure is self-contained.
@@ -709,6 +738,17 @@ impl SchemeRuntime {
                             VisualOp::Clear => vb.clear(),
                         }
                     }
+                }
+            }
+        }
+
+        // Buffer-local options: (set-local-option! KEY VALUE)
+        for (key, value) in state.pending_local_options.drain(..) {
+            match editor.set_local_option(&key, &value) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(key = key.as_str(), "set-local-option! error: {}", e);
+                    editor.set_status(e);
                 }
             }
         }

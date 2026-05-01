@@ -657,6 +657,10 @@ impl CommandRegistry {
         reg.register_builtin("org-todo-prev", "Cycle org TODO state backward");
         reg.register_builtin("org-open-link", "Open org link under cursor");
         reg.register_builtin(
+            "smart-enter",
+            "Context-aware Enter: toggle checkbox, cycle TODO, or follow link",
+        );
+        reg.register_builtin(
             "open-link-at-cursor",
             "Open URL or file path under cursor (gx)",
         );

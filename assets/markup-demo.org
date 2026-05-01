@@ -1,0 +1,92 @@
+#+TITLE: Org Markup Demo
+#+AUTHOR: MAE
+
+* Heading 1 — Large Scale
+
+Regular paragraph text for comparison.
+
+** Heading 2 — Medium Scale
+
+*** Heading 3 — Small Scale
+
+** Inline Formatting
+
+This line has *bold text* and /italic text/ and =inline code= together.
+
+You can also combine *bold with =code= inside* or /italic with =code= inside/.
+
+Here is ~verbatim text~ in a sentence (org uses tilde for verbatim).
+
+** Links
+
+Org link with description: [[https://github.com/cuttlefisch/mae][MAE on GitHub]]
+
+Org link without description: [[https://git.savannah.gnu.org/cgit/emacs.git]]
+
+** Code Blocks
+
+Org source block:
+
+#+begin_src rust
+fn main() {
+    let greeting = "Hello, MAE!";
+    println!("{}", greeting);
+    for i in 0..10 {
+        eprintln!("iteration {}", i);
+    }
+}
+#+end_src
+
+Another source block:
+
+#+begin_src python
+def fibonacci(n):
+    """Generate fibonacci sequence."""
+    a, b = 0, 1
+    for _ in range(n):
+        yield a
+        a, b = b, a + b
+
+print(list(fibonacci(10)))
+#+end_src
+
+** TODO Lists and Keywords
+
+*** TODO Write documentation                                       :urgent:
+*** DONE Implement core features                                   :core:
+
+- Regular list item
+- *Bold list item* with =code=
+- Item with /italic/ emphasis
+- Item with a [[https://example.com][link]] inside
+  + Nested sub-item
+  + Another sub-item
+
+** Checkboxes
+
+- [ ] Unchecked item (press Enter to toggle)
+- [x] Already checked item
+- [ ] Another unchecked item
+
+*** Progress Cookies
+
+**** Tasks [1/3]
+- [x] First task
+- [ ] Second task
+- [ ] Third task
+
+**** Percentage [33%]
+- [x] Alpha
+- [ ] Beta
+- [ ] Gamma
+
+** Timestamps and Properties
+
+Meeting: <2026-05-01 Thu 10:00>
+Deadline: [2026-05-15 Thu]
+
+** Everything Together
+
+This paragraph has *bold*, /italic/, =code=, ~verbatim~, and a
+[[https://example.com][concealed link]] all in one place. The heading above
+should have extra top padding, and code blocks should have a tinted background.

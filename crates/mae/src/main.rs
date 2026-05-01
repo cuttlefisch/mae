@@ -971,6 +971,9 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
                 self.input_dirty = true;
                 self.editor.last_edit_time = std::time::Instant::now();
+                // Default to full redraw for keyboard input. Commands that only
+                // move the cursor can downgrade this via mark_cursor_moved().
+                self.editor.mark_full_redraw();
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1150,6 +1153,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.editor.perf_stats.sample_process_stats();
                 }
                 self.dirty = false;
+                self.editor.clear_redraw();
             }
             _ => {}
         }

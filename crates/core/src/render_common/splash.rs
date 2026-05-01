@@ -59,9 +59,13 @@ pub fn splash_action_count() -> usize {
     QUICK_ACTIONS.len()
 }
 
-/// Returns true if the splash should be displayed.
+/// Returns true if the fullscreen splash should be displayed.
+///
+/// Only shows fullscreen splash when the dashboard is active AND there's a
+/// single window. In a split layout, the dashboard renders within its pane
+/// via the normal window pipeline instead of obscuring other windows.
 pub fn should_show_splash(editor: &Editor) -> bool {
-    editor.active_buffer().kind == BufferKind::Dashboard
+    editor.active_buffer().kind == BufferKind::Dashboard && editor.window_mgr.window_count() == 1
 }
 
 /// A pre-laid-out splash line ready for rendering.
@@ -224,6 +228,26 @@ mod tests {
         editor.install_dashboard();
         editor.window_mgr.focused_window_mut().buffer_idx = 1;
         assert!(!should_show_splash(&editor));
+    }
+
+    #[test]
+    fn splash_hidden_in_split_layout() {
+        let mut editor = Editor::default();
+        editor.install_dashboard();
+        // Split the window — dashboard is still focused but shouldn't go fullscreen
+        let area = crate::window::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let _ = editor
+            .window_mgr
+            .split(crate::window::SplitDirection::Vertical, 1, area);
+        assert!(
+            !should_show_splash(&editor),
+            "fullscreen splash should NOT show in a split layout"
+        );
     }
 
     #[test]

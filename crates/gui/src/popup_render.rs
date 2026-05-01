@@ -365,7 +365,22 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         0
     };
 
-    let max_name_width = (inner.width * 2 / 5).max(12);
+    // For path-heavy palettes (recent files, projects), use full width since
+    // there's no doc column. Otherwise cap name at 40% to leave room for docs.
+    let full_width_name = matches!(
+        palette.purpose,
+        mae_core::command_palette::PalettePurpose::RecentFile
+            | mae_core::command_palette::PalettePurpose::SwitchProject
+            | mae_core::command_palette::PalettePurpose::SwitchBuffer
+            | mae_core::command_palette::PalettePurpose::SetTheme
+            | mae_core::command_palette::PalettePurpose::SetSplashArt
+            | mae_core::command_palette::PalettePurpose::GitBranch
+    );
+    let max_name_width = if full_width_name {
+        inner.width.saturating_sub(2)
+    } else {
+        (inner.width * 2 / 5).max(12)
+    };
     let name_col = palette
         .filtered
         .iter()
@@ -399,23 +414,30 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
         let name_display = if unicode_width::UnicodeWidthStr::width(entry.name.as_str()) > name_col
         {
-            truncate_end(&entry.name, name_col)
+            if full_width_name {
+                // For paths, show the end (most distinctive part)
+                truncate_start(&entry.name, name_col)
+            } else {
+                truncate_end(&entry.name, name_col)
+            }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
         };
 
-        let available_for_doc = inner.width.saturating_sub(name_col + 3);
-        let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
-            > available_for_doc
-            && available_for_doc > 1
-        {
-            truncate_end(&entry.doc, available_for_doc)
-        } else {
-            entry.doc.clone()
-        };
-
         canvas.draw_text_at(row, inner.col + 1, &name_display, fg);
-        canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
+
+        if !full_width_name {
+            let available_for_doc = inner.width.saturating_sub(name_col + 3);
+            let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
+                > available_for_doc
+                && available_for_doc > 1
+            {
+                truncate_end(&entry.doc, available_for_doc)
+            } else {
+                entry.doc.clone()
+            };
+            canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
+        }
     }
 }
 

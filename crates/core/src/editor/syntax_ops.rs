@@ -350,58 +350,38 @@ impl Editor {
         }
     }
 
-    /// Cycle TODO state for the Org heading at the cursor.
-    pub fn org_todo_cycle(&mut self, forward: bool) {
+    /// Cycle TODO state for org/markdown headings: none→TODO→DONE→TODO.
+    pub fn org_todo_cycle(&mut self) {
         let buf_idx = self.active_buffer_idx();
-        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
-            return;
-        }
 
-        info!(buf_idx, forward, "org todo cycle");
-        // Trivial string replacement logic for now
+        info!(buf_idx, "org todo cycle");
         let row = self.window_mgr.focused_window().cursor_row;
         let line = self.buffers[buf_idx].rope().line(row);
         let line_str: String = line.chars().collect();
 
         let (new_line, status) = if line_str.contains("TODO ") {
-            if forward {
-                (line_str.replace("TODO ", "DONE "), "DONE")
-            } else {
-                (line_str.replace("TODO ", ""), "None")
-            }
+            (line_str.replacen("TODO ", "DONE ", 1), "DONE")
         } else if line_str.contains("DONE ") {
-            if forward {
-                (line_str.replace("DONE ", ""), "None")
-            } else {
-                (line_str.replace("DONE ", "TODO "), "TODO")
-            }
+            (line_str.replacen("DONE ", "TODO ", 1), "TODO")
         } else {
-            // Find the start of the heading text (after stars)
-            let mut stars_found = false;
-            let mut stars_end = 0;
+            // Find the start of the heading text (after stars or hashes)
+            let mut prefix_end = 0;
+            let mut found = false;
             for (i, ch) in line_str.chars().enumerate() {
-                if ch == '*' {
-                    stars_found = true;
-                } else if stars_found && ch == ' ' {
-                    stars_end = i + 1;
-                    break;
-                } else if stars_found {
-                    // unexpected char after stars
+                if ch == '*' || ch == '#' {
+                    found = true;
+                } else if found && ch == ' ' {
+                    prefix_end = i + 1;
                     break;
                 } else {
                     break;
                 }
             }
 
-            if stars_found && stars_end > 0 {
+            if found && prefix_end > 0 {
                 let mut next = line_str.clone();
-                if forward {
-                    next.insert_str(stars_end, "TODO ");
-                    (next, "TODO")
-                } else {
-                    next.insert_str(stars_end, "DONE ");
-                    (next, "DONE")
-                }
+                next.insert_str(prefix_end, "TODO ");
+                (next, "TODO")
             } else {
                 (line_str.clone(), "Not a heading")
             }
@@ -410,8 +390,10 @@ impl Editor {
         if new_line != line_str {
             let start = self.buffers[buf_idx].rope().line_to_char(row);
             let end = start + line.len_chars();
+            self.buffers[buf_idx].begin_undo_group();
             self.buffers[buf_idx].delete_range(start, end);
             self.buffers[buf_idx].insert_text_at(start, &new_line);
+            self.buffers[buf_idx].end_undo_group();
             self.set_status(status);
         }
     }
@@ -873,6 +855,253 @@ impl Editor {
                 self.set_status(format!("Jumping to heading: {}", target));
                 // TODO: implement actual search/jump logic
             }
+        }
+    }
+
+    /// Smart enter: context-aware action in org/markdown buffers.
+    /// 1. Checkbox line → toggle checkbox
+    /// 2. TODO heading → cycle TODO state
+    /// 3. Link → follow link
+    /// 4. Otherwise → delegate to open-link-at-cursor (which handles display regions too)
+    pub fn smart_enter(&mut self) {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        let buf_idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let row = win.cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+
+        // 1. Checkbox toggle
+        static CHECKBOX_RE: OnceLock<Regex> = OnceLock::new();
+        let checkbox_re = CHECKBOX_RE
+            .get_or_init(|| Regex::new(r"^(\s*(?:[-+*]|\d+[.)]) )\[([ xX\-])\]").unwrap());
+        if checkbox_re.is_match(&line) {
+            self.toggle_checkbox_at_cursor();
+            return;
+        }
+
+        // 2. TODO heading cycle
+        static TODO_HEADING: OnceLock<Regex> = OnceLock::new();
+        let todo_heading = TODO_HEADING.get_or_init(|| {
+            Regex::new(r"^(?:\*+|#+) +(?:TODO|DONE|NEXT|WAIT|CANCELLED|DEFERRED)\b").unwrap()
+        });
+        if todo_heading.is_match(&line) {
+            self.org_todo_cycle();
+            return;
+        }
+
+        // 3. Fall through to open-link-at-cursor (handles display regions, link_spans, etc.)
+        self.dispatch_builtin("open-link-at-cursor");
+    }
+
+    /// Toggle checkbox at cursor: `[ ]` ↔ `[x]`, `[-]` → `[ ]`.
+    pub fn toggle_checkbox_at_cursor(&mut self) {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static CHECKBOX_RE: OnceLock<Regex> = OnceLock::new();
+        let checkbox_re = CHECKBOX_RE
+            .get_or_init(|| Regex::new(r"^(\s*(?:[-+*]|\d+[.)]) )\[([ xX\-])\](.*)$").unwrap());
+
+        let buf_idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let row = win.cursor_row;
+        let line: String = self.buffers[buf_idx]
+            .rope()
+            .line(row)
+            .chars()
+            .collect::<String>()
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+
+        let Some(caps) = checkbox_re.captures(&line) else {
+            return;
+        };
+        let prefix = caps.get(1).unwrap().as_str();
+        let state = caps.get(2).unwrap().as_str();
+        let rest = caps.get(3).unwrap().as_str();
+
+        let new_state = match state {
+            " " => "x",
+            _ => " ", // x, X, - all toggle to unchecked
+        };
+
+        let new_line = format!("{}[{}]{}\n", prefix, new_state, rest);
+
+        // Replace the line — all edits (checkbox + cookie updates) in one undo group
+        self.buffers[buf_idx].begin_undo_group();
+
+        let line_start = self.buffers[buf_idx].rope().line_to_char(row);
+        let line_end = if row + 1 < self.buffers[buf_idx].rope().len_lines() {
+            self.buffers[buf_idx].rope().line_to_char(row + 1)
+        } else {
+            self.buffers[buf_idx].rope().len_chars()
+        };
+        self.buffers[buf_idx].delete_range(line_start, line_end);
+        self.buffers[buf_idx].insert_text_at(line_start, &new_line);
+
+        self.set_status(format!(
+            "Checkbox {}",
+            if new_state == "x" {
+                "checked"
+            } else {
+                "unchecked"
+            }
+        ));
+
+        // Update parent statistics cookies (adds edits to the open undo group)
+        self.update_statistics_cookies(row);
+
+        self.buffers[buf_idx].end_undo_group();
+    }
+
+    /// Walk upward from `changed_row` to find parent headings/list items with
+    /// statistics cookies (`[n/m]` or `[n%]`) and update them.
+    pub fn update_statistics_cookies(&mut self, changed_row: usize) {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static CHECKBOX_RE: OnceLock<Regex> = OnceLock::new();
+        let checkbox_re =
+            CHECKBOX_RE.get_or_init(|| Regex::new(r"^\s*(?:[-+*]|\d+[.)]) \[([ xX\-])\]").unwrap());
+        static HEADING_RE: OnceLock<Regex> = OnceLock::new();
+        let heading_re = HEADING_RE.get_or_init(|| Regex::new(r"^(\*+|#+)\s").unwrap());
+        static COOKIE_FRAC: OnceLock<Regex> = OnceLock::new();
+        let cookie_frac = COOKIE_FRAC.get_or_init(|| Regex::new(r"\[\d+/\d+\]").unwrap());
+        static COOKIE_PCT: OnceLock<Regex> = OnceLock::new();
+        let cookie_pct = COOKIE_PCT.get_or_init(|| Regex::new(r"\[\d+%\]").unwrap());
+
+        let buf_idx = self.active_buffer_idx();
+
+        // Find parent: walk upward looking for a heading, a lower-indent list item,
+        // or any line with a statistics cookie (for plain-text cookie lines).
+        let changed_indent = {
+            let l: String = self.buffers[buf_idx]
+                .rope()
+                .line(changed_row)
+                .chars()
+                .collect();
+            l.len() - l.trim_start().len()
+        };
+
+        let mut parent_row = None;
+        for r in (0..changed_row).rev() {
+            let l: String = self.buffers[buf_idx].rope().line(r).chars().collect();
+            if heading_re.is_match(&l) {
+                parent_row = Some(r);
+                break;
+            }
+            let indent = l.len() - l.trim_start().len();
+            if indent < changed_indent
+                && l.trim()
+                    .starts_with(|c: char| c == '-' || c == '+' || c == '*' || c.is_ascii_digit())
+            {
+                parent_row = Some(r);
+                break;
+            }
+            // Plain-text line with a cookie (e.g. "Parent task [0/3]:")
+            if indent <= changed_indent && (cookie_frac.is_match(&l) || cookie_pct.is_match(&l)) {
+                parent_row = Some(r);
+                break;
+            }
+        }
+
+        let Some(parent) = parent_row else {
+            return;
+        };
+
+        let parent_line: String = self.buffers[buf_idx]
+            .rope()
+            .line(parent)
+            .chars()
+            .collect::<String>()
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string();
+
+        let has_frac = cookie_frac.is_match(&parent_line);
+        let has_pct = cookie_pct.is_match(&parent_line);
+
+        if !has_frac && !has_pct {
+            return;
+        }
+
+        // Count children checkboxes
+        let line_count = self.buffers[buf_idx].rope().len_lines();
+        let parent_indent = parent_line.len() - parent_line.trim_start().len();
+        let is_heading = heading_re.is_match(&parent_line);
+
+        let mut total = 0usize;
+        let mut checked = 0usize;
+
+        for r in (parent + 1)..line_count {
+            let l: String = self.buffers[buf_idx].rope().line(r).chars().collect();
+            let trimmed = l.trim_start();
+            let indent = l.len() - trimmed.len();
+
+            // Stop at same-level or higher heading
+            if is_heading && heading_re.is_match(&l) {
+                let parent_level = heading_re
+                    .captures(&parent_line)
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().len())
+                    .unwrap_or(0);
+                let this_level = heading_re
+                    .captures(&l)
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().len())
+                    .unwrap_or(0);
+                if this_level <= parent_level {
+                    break;
+                }
+            }
+            // Stop at same or lower indent for list items
+            if !is_heading && indent <= parent_indent && !l.trim().is_empty() {
+                break;
+            }
+
+            if let Some(caps) = checkbox_re.captures(&l) {
+                total += 1;
+                let state = caps.get(1).unwrap().as_str();
+                if state == "x" || state == "X" {
+                    checked += 1;
+                }
+            }
+        }
+
+        // Build new line with updated cookie
+        let mut new_line = parent_line.clone();
+        if has_frac {
+            new_line = cookie_frac
+                .replace(&new_line, format!("[{}/{}]", checked, total).as_str())
+                .to_string();
+        }
+        if has_pct {
+            let pct = if total > 0 {
+                (checked * 100) / total
+            } else {
+                0
+            };
+            new_line = cookie_pct
+                .replace(&new_line, format!("[{}%]", pct).as_str())
+                .to_string();
+        }
+
+        if new_line != parent_line {
+            let new_line = format!("{}\n", new_line);
+            let line_start = self.buffers[buf_idx].rope().line_to_char(parent);
+            let line_end = if parent + 1 < self.buffers[buf_idx].rope().len_lines() {
+                self.buffers[buf_idx].rope().line_to_char(parent + 1)
+            } else {
+                self.buffers[buf_idx].rope().len_chars()
+            };
+            self.buffers[buf_idx].delete_range(line_start, line_end);
+            self.buffers[buf_idx].insert_text_at(line_start, &new_line);
+
+            // Recurse upward (depth limited by call stack, max ~10 heading levels)
+            self.update_statistics_cookies(parent);
         }
     }
 

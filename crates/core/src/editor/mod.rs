@@ -529,6 +529,13 @@ pub struct Editor {
     /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
     /// cleared on the next keypress.
     pub buffer_keys_popup: bool,
+    /// Tiered redraw level — how much work the renderer needs to do this frame.
+    /// Set by event handlers, cleared after render.
+    pub redraw_level: crate::redraw::RedrawLevel,
+    /// Dirty line range (start_line, end_line inclusive) for PartialLines redraws.
+    pub dirty_line_range: Option<(usize, usize)>,
+    /// Double-click detection: (timestamp, row, col) of last left-click.
+    pub last_click: Option<(std::time::Instant, usize, usize)>,
 }
 
 impl Default for Editor {
@@ -701,6 +708,9 @@ impl Editor {
             swap_file: true,
             swap_directory: String::new(),
             buffer_keys_popup: false,
+            redraw_level: crate::redraw::RedrawLevel::Full,
+            dirty_line_range: None,
+            last_click: None,
         }
     }
 
@@ -804,6 +814,42 @@ impl Editor {
         self.merged_which_key_entries(&[])
     }
 
+    // -- Redraw level methods (Emacs tiered redisplay pattern) ----------------
+
+    /// Mark that only the cursor moved — reuse cached syntax spans.
+    pub fn mark_cursor_moved(&mut self) {
+        self.redraw_level = self
+            .redraw_level
+            .max(crate::redraw::RedrawLevel::CursorOnly);
+    }
+
+    /// Mark that the viewport scrolled.
+    pub fn mark_scrolled(&mut self) {
+        self.redraw_level = self.redraw_level.max(crate::redraw::RedrawLevel::Scroll);
+    }
+
+    /// Mark specific lines as dirty, merging with any existing dirty range.
+    pub fn mark_lines_dirty(&mut self, start: usize, end: usize) {
+        self.redraw_level = self
+            .redraw_level
+            .max(crate::redraw::RedrawLevel::PartialLines);
+        self.dirty_line_range = Some(match self.dirty_line_range {
+            Some((old_start, old_end)) => (old_start.min(start), old_end.max(end)),
+            None => (start, end),
+        });
+    }
+
+    /// Mark that a full redraw is needed (theme, resize, mode change, etc.).
+    pub fn mark_full_redraw(&mut self) {
+        self.redraw_level = crate::redraw::RedrawLevel::Full;
+    }
+
+    /// Reset redraw level after rendering. Called by the event loop after `render()`.
+    pub fn clear_redraw(&mut self) {
+        self.redraw_level = crate::redraw::RedrawLevel::None;
+        self.dirty_line_range = None;
+    }
+
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
     pub fn active_project_root(&self) -> Option<&std::path::Path> {
         let buf = self.active_buffer();
@@ -886,6 +932,23 @@ impl Editor {
             .local_options
             .render_markup
             .unwrap_or(self.render_markup)
+    }
+
+    /// Resolve the effective markup flavor for a buffer, respecting the
+    /// priority chain: BufferMode → Language → None, gated by render_markup.
+    pub fn effective_markup_flavor(&self, buf_idx: usize) -> crate::syntax::MarkupFlavor {
+        use crate::buffer_mode::BufferMode;
+        if !self.render_markup_for(buf_idx) {
+            return crate::syntax::MarkupFlavor::None;
+        }
+        let buf = &self.buffers[buf_idx];
+        if let Some(flavor) = buf.kind.markup_flavor() {
+            return flavor;
+        }
+        if let Some(lang) = self.syntax.language_of(buf_idx) {
+            return lang.markup_flavor();
+        }
+        crate::syntax::MarkupFlavor::None
     }
 
     /// Set a buffer-local option on the active buffer (:setlocal).
@@ -1910,38 +1973,90 @@ impl Editor {
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
 
-                // Check for link click: first try pre-populated link_spans,
-                // then fall back to on-the-fly detection on the clicked line.
-                if !buf.link_spans.is_empty() {
-                    let line_start_byte =
-                        buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
-                    let click_byte = line_start_byte + text_col;
-                    if let Some(link) = buf
-                        .link_spans
-                        .iter()
-                        .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
-                    {
-                        let target = link.target.clone();
-                        self.handle_link_click(&target);
-                        return;
+                // Double-click detection
+                let is_double_click = if let Some((prev_time, prev_row, prev_col)) = self.last_click
+                {
+                    prev_row == target_row
+                        && prev_col == text_col
+                        && prev_time.elapsed() < std::time::Duration::from_millis(400)
+                } else {
+                    false
+                };
+                self.last_click = Some((std::time::Instant::now(), target_row, text_col));
+
+                if is_double_click {
+                    // Double-click: attempt link following
+
+                    // Check display regions (concealed links in markup buffers).
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if !buf.display_regions.is_empty() {
+                        let line_byte_start =
+                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+                        let cursor_byte = line_byte_start + {
+                            let line_str: String = buf
+                                .rope()
+                                .line(target_row)
+                                .chars()
+                                .filter(|c| *c != '\n' && *c != '\r')
+                                .collect();
+                            line_str
+                                .char_indices()
+                                .nth(text_col)
+                                .map(|(b, _)| b)
+                                .unwrap_or(line_str.len())
+                        };
+                        if let Some(region) = buf
+                            .display_regions
+                            .iter()
+                            .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+                        {
+                            if let Some(ref target) = region.link_target {
+                                let target = target.clone();
+                                self.handle_link_click(&target);
+                                return;
+                            }
+                        }
                     }
-                }
-                // On-the-fly link detection for buffers without pre-populated spans
-                // (conversation, shell, text).
-                if target_row < buf.rope().len_lines() {
-                    let line_text: String = buf.rope().line(target_row).chars().collect();
-                    let links = crate::link_detect::detect_links(&line_text);
-                    for link in &links {
-                        let link_char_start = line_text[..link.byte_start].chars().count();
-                        let link_char_end = line_text[..link.byte_end].chars().count();
-                        if text_col >= link_char_start && text_col < link_char_end {
+
+                    // Check pre-populated link_spans
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if !buf.link_spans.is_empty() {
+                        let line_start_byte =
+                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+                        let click_byte = line_start_byte + text_col;
+                        if let Some(link) = buf
+                            .link_spans
+                            .iter()
+                            .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+                        {
                             let target = link.target.clone();
                             self.handle_link_click(&target);
                             return;
                         }
                     }
+
+                    // On-the-fly link detection
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if target_row < buf.rope().len_lines() {
+                        let line_text: String = buf.rope().line(target_row).chars().collect();
+                        let links = crate::link_detect::detect_links(&line_text);
+                        for link in &links {
+                            let link_char_start = line_text[..link.byte_start].chars().count();
+                            let link_char_end = line_text[..link.byte_end].chars().count();
+                            if text_col >= link_char_start && text_col < link_char_end {
+                                let target = link.target.clone();
+                                self.handle_link_click(&target);
+                                return;
+                            }
+                        }
+                    }
+
+                    // No link found — select word at cursor
+                    // (just position cursor for now, word selection is future work)
                 }
 
+                // Single-click: just position cursor
+                let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
                 let win = self.window_mgr.focused_window_mut();
