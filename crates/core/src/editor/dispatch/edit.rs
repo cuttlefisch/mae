@@ -251,36 +251,36 @@ impl Editor {
             // Mode changes
             "enter-insert-mode" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.set_mode(Mode::ShellInsert);
-                } else {
+                use crate::buffer_mode::BufferMode;
+                let mode = self.buffers[idx].kind.insert_mode();
+                if mode == Mode::Insert {
                     self.buffers[idx].begin_undo_group();
-                    self.set_mode(Mode::Insert);
                 }
+                self.set_mode(mode);
             }
             "enter-insert-mode-after" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.set_mode(Mode::ShellInsert);
-                } else {
+                use crate::buffer_mode::BufferMode;
+                let mode = self.buffers[idx].kind.insert_mode();
+                if mode == Mode::Insert {
                     self.window_mgr
                         .focused_window_mut()
                         .move_right(&self.buffers[idx]);
                     self.buffers[idx].begin_undo_group();
-                    self.set_mode(Mode::Insert);
                 }
+                self.set_mode(mode);
             }
             "enter-insert-mode-eol" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Shell {
-                    self.set_mode(Mode::ShellInsert);
-                } else {
+                use crate::buffer_mode::BufferMode;
+                let mode = self.buffers[idx].kind.insert_mode();
+                if mode == Mode::Insert {
                     self.window_mgr
                         .focused_window_mut()
                         .move_to_line_end(&self.buffers[idx]);
                     self.buffers[idx].begin_undo_group();
-                    self.set_mode(Mode::Insert);
                 }
+                self.set_mode(mode);
             }
             "enter-normal-mode" => {
                 self.insert_mode_oneshot_normal = false;

@@ -88,6 +88,36 @@ pub struct BufferLocalOptions {
     pub render_markup: Option<bool>,
 }
 
+impl BufferLocalOptions {
+    /// Merge defaults into this set, only filling in fields that are currently None.
+    pub fn apply_defaults(&mut self, defaults: &BufferLocalOptions) {
+        if self.word_wrap.is_none() {
+            self.word_wrap = defaults.word_wrap;
+        }
+        if self.line_numbers.is_none() {
+            self.line_numbers = defaults.line_numbers;
+        }
+        if self.relative_line_numbers.is_none() {
+            self.relative_line_numbers = defaults.relative_line_numbers;
+        }
+        if self.break_indent.is_none() {
+            self.break_indent = defaults.break_indent;
+        }
+        if self.show_break.is_none() {
+            self.show_break = defaults.show_break.clone();
+        }
+        if self.heading_scale.is_none() {
+            self.heading_scale = defaults.heading_scale;
+        }
+        if self.link_descriptive.is_none() {
+            self.link_descriptive = defaults.link_descriptive;
+        }
+        if self.render_markup.is_none() {
+            self.render_markup = defaults.render_markup;
+        }
+    }
+}
+
 /// Rope-backed text buffer with undo history.
 ///
 /// Emacs lesson: point (cursor) is per-window, not per-buffer. Two windows can
@@ -1953,5 +1983,27 @@ mod tests {
         buf.toggle_fold_at(2, &ranges);
         // Should fold innermost range (1, 3) since cursor line 2 is in both
         assert_eq!(buf.folded_ranges, vec![(1, 3)]);
+    }
+
+    #[test]
+    fn apply_defaults_fills_none_preserves_some() {
+        let mut opts = BufferLocalOptions {
+            heading_scale: Some(false),
+            ..Default::default()
+        };
+        let defaults = BufferLocalOptions {
+            heading_scale: Some(true),
+            render_markup: Some(true),
+            link_descriptive: Some(true),
+            ..Default::default()
+        };
+        opts.apply_defaults(&defaults);
+        // Existing Some(false) is preserved, not overwritten
+        assert_eq!(opts.heading_scale, Some(false));
+        // None fields filled from defaults
+        assert_eq!(opts.render_markup, Some(true));
+        assert_eq!(opts.link_descriptive, Some(true));
+        // Fields None in both stay None
+        assert_eq!(opts.word_wrap, None);
     }
 }

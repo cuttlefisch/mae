@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (2,011 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode, autosave config+idle debounce, diff syntax highlighting (8 themes), file tree sidebar with icons and NERDTree-style keymap, V-line conversation bugfix, Doom which-key parity + file tree git markers + gutter diff indicators, inline markup rendering (bold/code/italic) in conversation+help, help buffer span parity fix, per-buffer word-wrap (`:setlocal`), `BufferLocalOptions` infrastructure.
+Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (2,047 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding (za/zM/zR), incremental reparse, dispatch modularization, three-state org/md heading cycle, promote/demote/move subtree, narrow/widen, markdown structural editing parity, heading_scale option, FrameLayout unified text positioning (cursor/fold/scale-aware), S-TAB global fold cycle, canvas clip for descender overflow, unified diff display, AI guidance self-tests, ex-command tokenizer (w/q/x compounds), `:set` vim-style parsing (no-prefix/toggle/query/quoted), FrameLayout-based mouse clicks, insert heading (M-Enter), vertical scrollbar, nyan mode, autosave config+idle debounce, diff syntax highlighting (8 themes), file tree sidebar with icons and NERDTree-style keymap, V-line conversation bugfix, Doom which-key parity + file tree git markers + gutter diff indicators, inline markup rendering (bold/code/italic) in conversation+help, help buffer span parity fix, per-buffer word-wrap (`:setlocal`), `BufferLocalOptions` infrastructure, display overlays (link concealment), `BufferView` enum + `BufferMode` trait (7 methods), keymap overlay architecture (parent field, overlay keymaps, which-key merging), Magit parity (multi-level fold, hunk ops, push/pull/fetch, branch/stash), audit cleanup (dead fields, dedup git ops, `mode_theme_key()`), structural fixes (`PalettePurpose::label()`, file-type hooks, `insert_mode()` trait, `CollapseKey` enum, renderer span dedup).
 
 ---
 
@@ -384,8 +384,8 @@ Standard readline/Emacs editing bindings that users expect from any Unix program
 - [x] `C-r {register}` — paste from named register while in insert mode
        (from *Practical Vim* ch. 15 — "use registers in insert mode").
        Implemented in M5 via `pending_insert_register` + `insert_from_register`.
-- [ ] `C-o` — execute one normal-mode command then return to insert
-       (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode")
+- [x] `C-o` — execute one normal-mode command then return to insert
+       (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode") (v0.5.0)
 
 ### M2: Terminal Keybinds in Command Mode ✅
 Command line (`:` prompt) should behave like a readline/zsh command line.

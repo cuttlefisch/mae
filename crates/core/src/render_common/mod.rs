@@ -9,5 +9,6 @@ pub mod debug;
 pub mod git_status;
 pub mod gutter;
 pub mod help;
+pub mod spans;
 pub mod splash;
 pub mod status;

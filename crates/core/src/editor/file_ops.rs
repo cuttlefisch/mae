@@ -994,6 +994,9 @@ impl Editor {
 
                 if let Some(lang) = detected_lang {
                     self.syntax.set_language(new_idx, lang);
+                    self.buffers[new_idx]
+                        .local_options
+                        .apply_defaults(&lang.default_local_options());
                 }
                 self.set_status(format!("\"{}\" opened", name));
                 // Notify any running LSP server that this buffer is open.

@@ -42,6 +42,11 @@ pub trait BufferMode {
     fn mode_theme_key(&self) -> Option<&'static str> {
         None
     }
+
+    /// Which insert mode to enter for this buffer kind.
+    fn insert_mode(&self) -> crate::Mode {
+        crate::Mode::Insert
+    }
 }
 
 impl BufferMode for BufferKind {
@@ -91,6 +96,13 @@ impl BufferMode for BufferKind {
         match self {
             Self::GitStatus | Self::Debug => Some("ui.statusline.mode.command"),
             _ => None,
+        }
+    }
+
+    fn insert_mode(&self) -> crate::Mode {
+        match self {
+            Self::Shell => crate::Mode::ShellInsert,
+            _ => crate::Mode::Insert,
         }
     }
 
@@ -192,6 +204,13 @@ mod tests {
         assert_eq!(BufferKind::Text.mode_theme_key(), None);
         assert_eq!(BufferKind::Conversation.mode_theme_key(), None);
         assert_eq!(BufferKind::FileTree.mode_theme_key(), None);
+    }
+
+    #[test]
+    fn buffer_mode_insert_mode() {
+        assert_eq!(BufferKind::Shell.insert_mode(), crate::Mode::ShellInsert);
+        assert_eq!(BufferKind::Text.insert_mode(), crate::Mode::Insert);
+        assert_eq!(BufferKind::Conversation.insert_mode(), crate::Mode::Insert);
     }
 
     #[test]

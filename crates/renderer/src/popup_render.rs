@@ -1,6 +1,6 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
-use mae_core::{Editor, PalettePurpose};
+use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -301,19 +301,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
     let match_count = palette.filtered.len();
     let total = palette.entries.len();
 
-    let title = match palette.purpose {
-        PalettePurpose::Execute => format!(" Commands ({}/{}) ", match_count, total),
-        PalettePurpose::Describe => format!(" Describe Command ({}/{}) ", match_count, total),
-        PalettePurpose::SetTheme => format!(" Themes ({}/{}) ", match_count, total),
-        PalettePurpose::HelpSearch => format!(" Help Topics ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchBuffer => format!(" Buffers ({}/{}) ", match_count, total),
-        PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
-        PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
-        PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
-        PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
-        PalettePurpose::GitBranch => format!(" Git Branch ({}/{}) ", match_count, total),
-    };
+    let title = format!(" {} ({}/{}) ", palette.purpose.label(), match_count, total);
 
     let block = Block::default()
         .borders(Borders::ALL)

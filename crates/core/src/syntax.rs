@@ -158,6 +158,19 @@ impl Language {
         }
     }
 
+    /// Default buffer-local options for this language (e.g. heading_scale for markup).
+    pub fn default_local_options(self) -> crate::buffer::BufferLocalOptions {
+        match self {
+            Language::Markdown | Language::Org => crate::buffer::BufferLocalOptions {
+                heading_scale: Some(true),
+                render_markup: Some(true),
+                link_descriptive: Some(true),
+                ..Default::default()
+            },
+            _ => crate::buffer::BufferLocalOptions::default(),
+        }
+    }
+
     /// Get the tree-sitter `Language` for grammars we support via tree-sitter.
     /// Returns `None` for languages highlighted through a fallback path (org).
     fn ts_language(self) -> Option<tree_sitter::Language> {
@@ -1496,5 +1509,22 @@ mod tests {
         for w in spans.windows(2) {
             assert!(w[0].byte_start <= w[1].byte_start);
         }
+    }
+
+    #[test]
+    fn language_default_local_options() {
+        let md = Language::Markdown.default_local_options();
+        assert_eq!(md.heading_scale, Some(true));
+        assert_eq!(md.render_markup, Some(true));
+        assert_eq!(md.link_descriptive, Some(true));
+        assert_eq!(md.word_wrap, None);
+
+        let org = Language::Org.default_local_options();
+        assert_eq!(org.heading_scale, Some(true));
+
+        let rs = Language::Rust.default_local_options();
+        assert_eq!(rs.heading_scale, None);
+        assert_eq!(rs.render_markup, None);
+        assert_eq!(rs.link_descriptive, None);
     }
 }

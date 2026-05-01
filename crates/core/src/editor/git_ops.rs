@@ -176,7 +176,7 @@ impl Editor {
             if files.is_empty() {
                 return;
             }
-            let section_key = format!("section:{}", section_name(&section));
+            let section_key = CollapseKey::Section(section);
             let section_collapsed = view.is_collapsed(&section_key);
 
             // Section header (with collapse indicator)
@@ -260,8 +260,11 @@ impl Editor {
                         };
 
                         // Check hunk-level collapse
-                        let hunk_key =
-                            format!("hunk:{}:{}:{}", p, section_name(&section), hunk_idx);
+                        let hunk_key = CollapseKey::Hunk {
+                            path: p.clone(),
+                            section,
+                            index: hunk_idx,
+                        };
                         let hunk_collapsed = view.is_collapsed(&hunk_key);
 
                         // Hunk headers always visible; diff lines only when not collapsed
@@ -323,8 +326,8 @@ impl Editor {
         // Stash list
         let (stash_ok, stash_stdout, _) = self.run_git_porcelain(&["stash", "list"]);
         if stash_ok && !stash_stdout.trim().is_empty() {
-            let stash_section_key = "section:Stashes";
-            let stash_collapsed = view.is_collapsed(stash_section_key);
+            let stash_section_key = CollapseKey::Section(GitSection::Stashes);
+            let stash_collapsed = view.is_collapsed(&stash_section_key);
             let indicator = if stash_collapsed { "▸" } else { "▾" };
             push_line(
                 &mut view,
@@ -431,11 +434,11 @@ impl Editor {
         if let Some(k) = key {
             if let Some(view) = self.buffers[idx].git_status_view_mut() {
                 // File keys default to collapsed (true); sections/hunks default to expanded (false).
-                if k.starts_with("file:") {
+                if matches!(k, crate::git_status::CollapseKey::File { .. }) {
                     let collapsed = view.collapsed.entry(k).or_insert(true);
                     *collapsed = !*collapsed;
                 } else {
-                    view.toggle(&k);
+                    view.toggle(k);
                 }
             }
             // Rebuild and restore cursor position (clamped to new line count).

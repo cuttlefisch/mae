@@ -256,23 +256,6 @@ fn render_window_area(
             let buf = &editor.buffers[win.buffer_idx];
             let is_focused = *win_id == focused_id;
             match buf.kind {
-                mae_core::BufferKind::Conversation => {
-                    // Route through standard render pipeline with inline markdown.
-                    let conv_spans = if let Some(conv) = buf.conversation() {
-                        conv.highlight_spans_with_markup(buf.rope())
-                    } else {
-                        Vec::new()
-                    };
-                    buffer_render::render_window(
-                        frame,
-                        ratatui_rect,
-                        buf,
-                        win,
-                        is_focused,
-                        editor,
-                        Some(&conv_spans),
-                    );
-                }
                 mae_core::BufferKind::Messages => {
                     messages_render::render_messages_window(
                         frame,
@@ -281,32 +264,6 @@ fn render_window_area(
                         win,
                         is_focused,
                         editor,
-                    );
-                }
-                mae_core::BufferKind::Help => {
-                    let help_spans = mae_core::render_common::help::compute_help_spans(buf);
-
-                    buffer_render::render_window(
-                        frame,
-                        ratatui_rect,
-                        buf,
-                        win,
-                        is_focused,
-                        editor,
-                        Some(&help_spans),
-                    );
-                }
-                mae_core::BufferKind::GitStatus => {
-                    let git_spans =
-                        mae_core::render_common::git_status::compute_git_status_spans(buf);
-                    buffer_render::render_window(
-                        frame,
-                        ratatui_rect,
-                        buf,
-                        win,
-                        is_focused,
-                        editor,
-                        Some(&git_spans),
                     );
                 }
                 mae_core::BufferKind::Debug => {
@@ -348,11 +305,14 @@ fn render_window_area(
                     );
                 }
                 _ => {
-                    // Diff buffers get line-level diff highlighting.
-                    let diff_spans_storage;
-                    let spans = if buf.name == "*AI-Diff*" {
-                        diff_spans_storage = mae_core::diff::diff_highlight_spans(buf.rope());
-                        Some(diff_spans_storage.as_slice())
+                    // Standard text pipeline: shared span selection for Conversation,
+                    // Help, GitStatus, *AI-Diff*; syntax spans for Text/Preview/Dashboard.
+                    let shared_spans_storage;
+                    let spans = if let Some(shared) =
+                        mae_core::render_common::spans::highlight_spans_for_buffer(buf)
+                    {
+                        shared_spans_storage = shared;
+                        Some(shared_spans_storage.as_slice())
                     } else {
                         syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
                     };

@@ -663,25 +663,49 @@ const CONCEPT_GIT_STATUS: &str = "\
 The **Git Status** buffer (`*git-status*`) is a high-fidelity \"porcelain\" UI \
 inspired by Emacs Magit. It allows you to manage your repository state \
 without leaving the editor.\n\n\
+## Multi-Level Fold\n\
+Press `TAB` on a section header, file entry, or hunk header to fold/unfold \
+that level independently. Collapse indicators (`▸`/`▾`) show fold state.\n\n\
 ## Keybindings\n\
 | Key | Action | Command |\n\
 |-----|--------|---------|\n\
-| `s` | Stage file/hunk | [[cmd:git-stage]] |\n\
-| `u` | Unstage file/hunk | [[cmd:git-unstage]] |\n\
+| `s` | Stage (context-aware) | [[cmd:git-stage]] |\n\
+| `u` | Unstage (context-aware) | [[cmd:git-unstage]] |\n\
+| `x` | Discard (context-aware) | [[cmd:git-discard]] |\n\
 | `S` | Stage ALL | [[cmd:git-stage-all]] |\n\
 | `U` | Unstage ALL | [[cmd:git-unstage-all]] |\n\
 | `c c` | Commit | [[cmd:git-commit]] |\n\
+| `c a` | Amend | [[cmd:git-amend]] |\n\
 | `l l` | Log view | [[cmd:git-log]] |\n\
 | `g r` | Refresh | [[cmd:git-status]] |\n\
-| `TAB` | Toggle visibility | [[cmd:git-status-toggle]] |\n\
+| `TAB` | Toggle fold (section/file/hunk) | [[cmd:git-toggle-fold]] |\n\
+| `n` / `p` | Next/prev hunk | [[cmd:git-next-hunk]] / [[cmd:git-prev-hunk]] |\n\
+| `P p` | Push | [[cmd:git-push]] |\n\
+| `F p` | Pull | [[cmd:git-pull]] |\n\
+| `f f` | Fetch | [[cmd:git-fetch]] |\n\
+| `b b` | Switch branch | [[cmd:git-branch-switch]] |\n\
+| `b n` | Create branch | [[cmd:git-branch-create]] |\n\
+| `b d` | Delete branch | [[cmd:git-branch-delete]] |\n\
+| `z z` | Stash push | [[cmd:git-stash-push]] |\n\
+| `z p` | Stash pop | [[cmd:git-stash-pop]] |\n\
+| `z a` | Stash apply | [[cmd:git-stash-apply]] |\n\
+| `z d` | Stash drop | [[cmd:git-stash-drop]] |\n\
 | `Enter` | Open file | [[cmd:git-status-open]] |\n\
 | `q` | Exit | [[cmd:enter-normal-mode]] |\n\n\
+## Context-Aware Dispatch\n\
+`s`/`u`/`x` operate based on cursor position:\n\
+- **On a diff hunk/line**: stage/unstage/discard that hunk.\n\
+- **On a file entry**: stage/unstage/discard the whole file.\n\
+- **On a section header**: stage/unstage all files in that section.\n\n\
+## Inline Diff\n\
+Press `TAB` on a file entry to expand/collapse its inline diff. Each hunk \
+can be further folded independently.\n\n\
 ## Workflow\n\
 1. Open status via `SPC g s`.\n\
-2. Navigate with `j`/`k`.\n\
-3. Stage files with `s`.\n\
+2. Navigate with `j`/`k`, jump hunks with `n`/`p`.\n\
+3. Stage files/hunks with `s`.\n\
 4. Commit with `c c` (opens a commit message buffer).\n\n\
-See also: [[concept:project]], [[concept:terminal]]\n";
+See also: [[concept:project]], [[concept:terminal]], [[concept:buffer-mode]]\n";
 
 const CONCEPT_ORG_MODE: &str = "\
 **Org-mode** in MAE provides structural editing and task management \
@@ -890,6 +914,49 @@ const CONCEPT_DIFF_DISPLAY: &str = "\
 All 8 bundled themes include `diff.added`, `diff.removed`, `diff.hunk`, \
 and `diff.header` style definitions.\n\n\
 See also: [[concept:ai-as-peer]], [[concept:options]]\n";
+
+const CONCEPT_BUFFER_MODE: &str = "\
+The **BufferMode** trait (`buffer_mode.rs`) is the contract every buffer kind implements. \
+It replaces scattered `match buf.kind` blocks with polymorphic dispatch.\n\n\
+## Methods\n\
+| Method | Purpose |\n\
+|--------|---------|\n\
+| `mode_name()` | Display name for the status bar |\n\
+| `keymap_name()` | Overlay keymap name (e.g. `git-status`, `help`) |\n\
+| `read_only()` | Whether inserts are blocked |\n\
+| `default_word_wrap()` | Whether word-wrap defaults to on |\n\
+| `has_gutter()` | Whether line numbers render |\n\
+| `status_hint()` | One-line discoverability text on mode entry |\n\
+| `mode_theme_key()` | Status-bar mode indicator color |\n\
+| `insert_mode()` | Which insert mode to enter (Insert vs ShellInsert) |\n\n\
+`BufferKind` implements `BufferMode`. New buffer types add trait arms, not scattered matches.\n\n\
+See also: [[concept:buffer]], [[concept:mode]], [[concept:keymap-inheritance]]\n";
+
+const CONCEPT_BUFFER_VIEW: &str = "\
+The **BufferView** enum (`buffer_view.rs`) stores mode-specific state on `Buffer`. \
+Variants: `Conversation`, `Help`, `Debug`, `GitStatus`, `Visual`, `FileTree`, `None`.\n\n\
+Accessor methods: `buf.conversation()`, `buf.help_view()`, `buf.git_status_view()`, etc. \
+Each returns `Option<&T>` (or `Option<&mut T>` for the `_mut` variant).\n\n\
+This replaced 6 `Option<T>` fields that were always mutually exclusive.\n\n\
+See also: [[concept:buffer]], [[concept:buffer-mode]]\n";
+
+const CONCEPT_KEYMAP_INHERITANCE: &str = "\
+**Keymap inheritance** lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) \
+inherit bindings from a parent keymap.\n\n\
+## Mechanism\n\
+- `Keymap` has a `parent: Option<String>` field.\n\
+- Key lookup: overlay keymap -> parent -> fallback.\n\
+- `which_key_entries_for_current_keymap()` merges overlay + parent entries for the which-key popup.\n\n\
+## Scheme API\n\
+`(define-keymap \"name\" \"parent\")` creates a keymap with inheritance.\n\n\
+## Current Overlay Keymaps\n\
+| Keymap | Parent | Buffer Kind |\n\
+|--------|--------|-------------|\n\
+| `git-status` | `normal` | GitStatus |\n\
+| `help` | `normal` | Help |\n\
+| `debug` | `normal` | Debug |\n\
+| `file-tree` | `normal` | FileTree |\n\n\
+See also: [[concept:mode]], [[concept:buffer-mode]]\n";
 
 const CONCEPT_CONCEAL: &str = "\
 **Link & Markup Rendering** controls how inline markup is displayed — \
@@ -1264,6 +1331,27 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_CONCEAL,
         )
         .with_tags(["rendering", "configuration", "conversation"]),
+        Node::new(
+            "concept:buffer-mode",
+            "Concept: BufferMode Trait",
+            NodeKind::Concept,
+            CONCEPT_BUFFER_MODE,
+        )
+        .with_tags(["data-model", "core", "extensibility"]),
+        Node::new(
+            "concept:buffer-view",
+            "Concept: BufferView Enum",
+            NodeKind::Concept,
+            CONCEPT_BUFFER_VIEW,
+        )
+        .with_tags(["data-model", "core"]),
+        Node::new(
+            "concept:keymap-inheritance",
+            "Concept: Keymap Inheritance",
+            NodeKind::Concept,
+            CONCEPT_KEYMAP_INHERITANCE,
+        )
+        .with_tags(["data-model", "modal-editing", "extensibility"]),
     ]
 }
 
@@ -1297,7 +1385,10 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:file-tree|File Tree]] — project sidebar with icons and directory expansion\n\
 - [[concept:diff-display|Diff Display]] — syntax-highlighted unified diffs for AI changes\n\
 - [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode\n\
-- [[concept:conceal|Link & Markup Rendering]] — Descriptive links and inline styling
+- [[concept:conceal|Link & Markup Rendering]] — Descriptive links and inline styling\n\
+- [[concept:buffer-mode|BufferMode Trait]] — the contract every buffer kind implements\n\
+- [[concept:buffer-view|BufferView Enum]] — mode-specific state on Buffer\n\
+- [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]

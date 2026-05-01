@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// A section in the git status buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GitSection {
     Untracked,
     Unstaged,
@@ -67,17 +67,27 @@ impl GitStatusLine {
     }
 }
 
+/// Type-safe collapse key for multi-level fold in git status buffers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CollapseKey {
+    Section(GitSection),
+    File {
+        path: String,
+        section: GitSection,
+    },
+    Hunk {
+        path: String,
+        section: GitSection,
+        index: usize,
+    },
+}
+
 /// Structured state for the `*Git Status*` buffer.
-///
-/// Collapse keys use structured prefixes:
-/// - `"section:Unstaged"` — section-level
-/// - `"file:src/main.rs:Unstaged"` — file-level
-/// - `"hunk:src/main.rs:Unstaged:0"` — hunk-level
 #[derive(Debug, Clone)]
 pub struct GitStatusView {
     pub lines: Vec<GitStatusLine>,
-    /// Multi-level collapse state. Keys use structured prefixes (see above).
-    pub collapsed: HashMap<String, bool>,
+    /// Multi-level collapse state.
+    pub collapsed: HashMap<CollapseKey, bool>,
     /// Root directory of the repository.
     pub repo_root: PathBuf,
 }
@@ -97,31 +107,35 @@ impl GitStatusView {
     }
 
     /// Toggle collapse state for a key. Default state is "not collapsed" (expanded).
-    pub fn toggle(&mut self, key: &str) {
-        let collapsed = self.collapsed.entry(key.to_string()).or_insert(false);
+    pub fn toggle(&mut self, key: CollapseKey) {
+        let collapsed = self.collapsed.entry(key).or_insert(false);
         *collapsed = !*collapsed;
     }
 
     /// Check if a key is collapsed.
-    pub fn is_collapsed(&self, key: &str) -> bool {
+    pub fn is_collapsed(&self, key: &CollapseKey) -> bool {
         self.collapsed.get(key).copied().unwrap_or(false)
     }
 
     /// Build the collapse key for a given line.
-    pub fn collapse_key_for_line(line: &GitStatusLine) -> Option<String> {
+    pub fn collapse_key_for_line(line: &GitStatusLine) -> Option<CollapseKey> {
         match &line.kind {
-            GitLineKind::SectionHeader(section) => {
-                Some(format!("section:{}", section_name(section)))
+            GitLineKind::SectionHeader(section) => Some(CollapseKey::Section(*section)),
+            GitLineKind::File { section, .. } => {
+                line.file_path.as_ref().map(|p| CollapseKey::File {
+                    path: p.clone(),
+                    section: *section,
+                })
             }
-            GitLineKind::File { section, .. } => line
-                .file_path
-                .as_ref()
-                .map(|p| format!("file:{}:{}", p, section_name(section))),
             GitLineKind::DiffHunk => {
                 if let (Some(path), Some(section), Some(idx)) =
                     (&line.file_path, &line.section, line.hunk_index)
                 {
-                    Some(format!("hunk:{}:{}:{}", path, section_name(section), idx))
+                    Some(CollapseKey::Hunk {
+                        path: path.clone(),
+                        section: *section,
+                        index: idx,
+                    })
                 } else {
                     None
                 }
@@ -130,17 +144,23 @@ impl GitStatusView {
         }
     }
 
-    // Legacy compatibility: check if a file's diff is expanded.
-    // Files default to collapsed (diffs hidden). Expanded = collapsed entry is `false`.
+    /// Check if a file's diff is expanded.
+    /// Files default to collapsed (diffs hidden). Expanded = collapsed entry is `false`.
     pub fn is_file_expanded(&self, path: &str, section: &GitSection) -> bool {
-        let key = format!("file:{}:{}", path, section_name(section));
+        let key = CollapseKey::File {
+            path: path.to_string(),
+            section: *section,
+        };
         self.collapsed.get(&key).copied() == Some(false)
     }
 
-    /// Toggle expansion/collapse of a file's inline diff (legacy helper).
+    /// Toggle expansion/collapse of a file's inline diff.
     /// Default is `true` (collapsed); first toggle flips to `false` (expanded).
     pub fn toggle_file_expansion(&mut self, path: &str, section: &GitSection) {
-        let key = format!("file:{}:{}", path, section_name(section));
+        let key = CollapseKey::File {
+            path: path.to_string(),
+            section: *section,
+        };
         let collapsed = self.collapsed.entry(key).or_insert(true);
         *collapsed = !*collapsed;
     }
@@ -179,19 +199,29 @@ mod tests {
     fn multi_level_collapse_keys() {
         let mut view = GitStatusView::new(PathBuf::from("/tmp"));
         // Section collapse
-        assert!(!view.is_collapsed("section:Unstaged"));
-        view.toggle("section:Unstaged");
-        assert!(view.is_collapsed("section:Unstaged"));
+        let section_key = CollapseKey::Section(GitSection::Unstaged);
+        assert!(!view.is_collapsed(&section_key));
+        view.toggle(section_key.clone());
+        assert!(view.is_collapsed(&section_key));
 
         // File collapse
-        assert!(!view.is_collapsed("file:src/main.rs:Unstaged"));
-        view.toggle("file:src/main.rs:Unstaged");
-        assert!(view.is_collapsed("file:src/main.rs:Unstaged"));
+        let file_key = CollapseKey::File {
+            path: "src/main.rs".to_string(),
+            section: GitSection::Unstaged,
+        };
+        assert!(!view.is_collapsed(&file_key));
+        view.toggle(file_key.clone());
+        assert!(view.is_collapsed(&file_key));
 
         // Hunk collapse
-        assert!(!view.is_collapsed("hunk:src/main.rs:Unstaged:0"));
-        view.toggle("hunk:src/main.rs:Unstaged:0");
-        assert!(view.is_collapsed("hunk:src/main.rs:Unstaged:0"));
+        let hunk_key = CollapseKey::Hunk {
+            path: "src/main.rs".to_string(),
+            section: GitSection::Unstaged,
+            index: 0,
+        };
+        assert!(!view.is_collapsed(&hunk_key));
+        view.toggle(hunk_key.clone());
+        assert!(view.is_collapsed(&hunk_key));
     }
 
     #[test]
@@ -206,7 +236,7 @@ mod tests {
         };
         assert_eq!(
             GitStatusView::collapse_key_for_line(&section_line),
-            Some("section:Unstaged".to_string())
+            Some(CollapseKey::Section(GitSection::Unstaged))
         );
 
         let file_line = GitStatusLine {
@@ -222,7 +252,10 @@ mod tests {
         };
         assert_eq!(
             GitStatusView::collapse_key_for_line(&file_line),
-            Some("file:src/main.rs:Unstaged".to_string())
+            Some(CollapseKey::File {
+                path: "src/main.rs".to_string(),
+                section: GitSection::Unstaged,
+            })
         );
 
         let hunk_line = GitStatusLine {
@@ -235,7 +268,11 @@ mod tests {
         };
         assert_eq!(
             GitStatusView::collapse_key_for_line(&hunk_line),
-            Some("hunk:src/main.rs:Unstaged:0".to_string())
+            Some(CollapseKey::Hunk {
+                path: "src/main.rs".to_string(),
+                section: GitSection::Unstaged,
+                index: 0,
+            })
         );
     }
 

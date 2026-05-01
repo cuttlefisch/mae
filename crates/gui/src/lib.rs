@@ -485,162 +485,10 @@ fn render_window_area(
             let is_focused = *win_id == focused_id;
 
             match buf.kind {
-                BufferKind::Conversation => {
-                    // Generate highlight spans with inline markdown styling.
-                    let conv_spans = if let Some(conv) = buf.conversation() {
-                        conv.highlight_spans_with_markup(buf.rope())
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Border + streaming indicator.
-                    let border_fg = if is_focused {
-                        theme::ts_fg(editor, "ui.window.border.active")
-                    } else {
-                        theme::ts_fg(editor, "ui.window.border")
-                    };
-                    let streaming_indicator = if let Some(conv) = buf.conversation() {
-                        if conv.streaming {
-                            if let Some(start) = conv.streaming_start {
-                                format!(" [waiting... {}s] ", start.elapsed().as_secs())
-                            } else {
-                                " [waiting...] ".to_string()
-                            }
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-                    let title = format!(" {}{} ", buf.name, streaming_indicator);
-                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
-
-                    let inner_row = r_row + 1;
-                    let inner_col = r_col + 1;
-                    let inner_width = r_width.saturating_sub(2);
-                    let inner_height = r_height.saturating_sub(2);
-                    let (_, cell_height) = canvas.cell_size();
-                    let fl = layout::compute_layout(
-                        editor,
-                        buf,
-                        win,
-                        inner_row,
-                        inner_col,
-                        inner_width,
-                        inner_height,
-                        cell_height,
-                        cw,
-                        Some(&conv_spans),
-                        Some(&glyph_advance_fn),
-                    );
-                    buffer_render::render_buffer_content(
-                        canvas,
-                        editor,
-                        buf,
-                        win,
-                        is_focused,
-                        &fl,
-                        Some(&conv_spans),
-                    );
-                    scrollbar::render_scrollbar(canvas, editor, &fl);
-                    if is_focused {
-                        focused_layout = Some(fl);
-                    }
-                }
                 BufferKind::Messages => {
                     messages_render::render_messages_window(
                         canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
-                }
-                BufferKind::Help => {
-                    let help_spans = mae_core::render_common::help::compute_help_spans(buf);
-
-                    // Render with border — CRITICAL: pass same help_spans to both
-                    // compute_layout() and render_buffer_content() (span parity).
-                    let border_fg = if is_focused {
-                        theme::ts_fg(editor, "ui.window.border.active")
-                    } else {
-                        theme::ts_fg(editor, "ui.window.border")
-                    };
-                    let modified = if buf.modified { " [+]" } else { "" };
-                    let title = format!(" {}{} ", buf.name, modified);
-                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
-
-                    let inner_row = r_row + 1;
-                    let inner_col = r_col + 1;
-                    let inner_width = r_width.saturating_sub(2);
-                    let inner_height = r_height.saturating_sub(2);
-                    let (_, cell_height) = canvas.cell_size();
-                    let fl = layout::compute_layout(
-                        editor,
-                        buf,
-                        win,
-                        inner_row,
-                        inner_col,
-                        inner_width,
-                        inner_height,
-                        cell_height,
-                        cw,
-                        Some(&help_spans),
-                        Some(&glyph_advance_fn),
-                    );
-                    buffer_render::render_buffer_content(
-                        canvas,
-                        editor,
-                        buf,
-                        win,
-                        is_focused,
-                        &fl,
-                        Some(&help_spans),
-                    );
-                    scrollbar::render_scrollbar(canvas, editor, &fl);
-                    if is_focused {
-                        focused_layout = Some(fl);
-                    }
-                }
-                BufferKind::GitStatus => {
-                    let git_spans =
-                        mae_core::render_common::git_status::compute_git_status_spans(buf);
-
-                    let border_fg = if is_focused {
-                        theme::ts_fg(editor, "ui.window.border.active")
-                    } else {
-                        theme::ts_fg(editor, "ui.window.border")
-                    };
-                    let title = format!(" {} ", buf.name);
-                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
-
-                    let inner_row = r_row + 1;
-                    let inner_col = r_col + 1;
-                    let inner_width = r_width.saturating_sub(2);
-                    let inner_height = r_height.saturating_sub(2);
-                    let (_, cell_height) = canvas.cell_size();
-                    let fl = layout::compute_layout(
-                        editor,
-                        buf,
-                        win,
-                        inner_row,
-                        inner_col,
-                        inner_width,
-                        inner_height,
-                        cell_height,
-                        cw,
-                        Some(&git_spans),
-                        Some(&glyph_advance_fn),
-                    );
-                    buffer_render::render_buffer_content(
-                        canvas,
-                        editor,
-                        buf,
-                        win,
-                        is_focused,
-                        &fl,
-                        Some(&git_spans),
-                    );
-                    scrollbar::render_scrollbar(canvas, editor, &fl);
-                    if is_focused {
-                        focused_layout = Some(fl);
-                    }
                 }
                 BufferKind::Debug => {
                     debug_render::render_debug_window(
@@ -667,28 +515,49 @@ fn render_window_area(
                     );
                 }
                 _ => {
-                    // Text (and Preview) buffers: border + syntax-highlighted content.
+                    // Standard text pipeline: shared span selection for Conversation,
+                    // Help, GitStatus, *AI-Diff*; syntax spans for Text/Preview/Dashboard.
+                    let shared_spans_storage;
+                    let spans = if let Some(shared) =
+                        mae_core::render_common::spans::highlight_spans_for_buffer(buf)
+                    {
+                        shared_spans_storage = shared;
+                        Some(shared_spans_storage.as_slice())
+                    } else {
+                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                    };
+
                     let border_fg = if is_focused {
                         theme::ts_fg(editor, "ui.window.border.active")
                     } else {
                         theme::ts_fg(editor, "ui.window.border")
                     };
-                    let modified = if buf.modified { " [+]" } else { "" };
-                    let title = format!(" {}{} ", buf.name, modified);
+                    // Conversation buffers show streaming indicator in title.
+                    let title = if buf.kind == BufferKind::Conversation {
+                        let streaming_indicator = if let Some(conv) = buf.conversation() {
+                            if conv.streaming {
+                                if let Some(start) = conv.streaming_start {
+                                    format!(" [waiting... {}s] ", start.elapsed().as_secs())
+                                } else {
+                                    " [waiting...] ".to_string()
+                                }
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        format!(" {}{} ", buf.name, streaming_indicator)
+                    } else {
+                        let modified = if buf.modified { " [+]" } else { "" };
+                        format!(" {}{} ", buf.name, modified)
+                    };
                     draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
 
                     let inner_row = r_row + 1;
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    // Diff buffers get line-level diff highlighting.
-                    let diff_spans_storage;
-                    let spans = if buf.name == "*AI-Diff*" {
-                        diff_spans_storage = mae_core::diff::diff_highlight_spans(buf.rope());
-                        Some(diff_spans_storage.as_slice())
-                    } else {
-                        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
-                    };
                     let (_, cell_height) = canvas.cell_size();
                     let fl = layout::compute_layout(
                         editor,
