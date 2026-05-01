@@ -497,6 +497,35 @@ impl LspClient {
         Ok(DocumentSymbolResponse::from_value(result))
     }
 
+    /// textDocument/codeAction — returns code actions available at `range`.
+    pub async fn request_code_action(
+        &self,
+        uri: &str,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Result<CodeActionResponse, String> {
+        let params = CodeActionParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            range,
+            context: CodeActionContext { diagnostics },
+        };
+        let resp = self
+            .request(
+                "textDocument/codeAction",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(CodeActionResponse::from_value(result))
+    }
+
     /// Send shutdown request and exit notification for graceful teardown.
     pub async fn shutdown(&mut self) -> Result<(), String> {
         let _ = self

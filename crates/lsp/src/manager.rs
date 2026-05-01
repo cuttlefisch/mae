@@ -70,6 +70,13 @@ pub enum LspCommand {
     WorkspaceSymbol { language_id: String, query: String },
     /// List symbols in a document.
     DocumentSymbols { uri: String, language_id: String },
+    /// Request code actions at a range.
+    CodeAction {
+        uri: String,
+        language_id: String,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    },
     /// Shut down all clients.
     Shutdown,
 }
@@ -124,6 +131,11 @@ pub enum LspTaskEvent {
     DocumentSymbolResult {
         uri: String,
         symbols: Vec<crate::protocol::DocumentSymbol>,
+    },
+    /// Code action response.
+    CodeActionResult {
+        uri: String,
+        actions: Vec<crate::protocol::CodeAction>,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -287,6 +299,18 @@ impl LspManager {
         let client = self.ensure_client(language_id).await?;
         let resp = client.request_document_symbols(uri).await?;
         Ok(resp.symbols)
+    }
+
+    pub async fn code_action(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Result<Vec<crate::protocol::CodeAction>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_code_action(uri, range, diagnostics).await?;
+        Ok(resp.actions)
     }
 
     pub async fn shutdown_all(&mut self) {
@@ -516,6 +540,24 @@ async fn handle_command(
                 }
             }
         }
+        LspCommand::CodeAction {
+            uri,
+            language_id,
+            range,
+            diagnostics,
+        } => match manager
+            .code_action(&language_id, &uri, range, diagnostics)
+            .await
+        {
+            Ok(actions) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::CodeActionResult { uri, actions })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
         LspCommand::Shutdown => {
             manager.shutdown_all().await;
         }

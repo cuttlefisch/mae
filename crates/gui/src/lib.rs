@@ -401,6 +401,30 @@ impl Renderer for GuiRenderer {
                     focused_frame_layout.as_ref(),
                 );
             }
+
+            // Hover popup.
+            if editor.hover_popup.is_some() {
+                popup_render::render_hover_popup(
+                    canvas,
+                    editor,
+                    0,
+                    cols,
+                    window_height,
+                    focused_frame_layout.as_ref(),
+                );
+            }
+
+            // Code action popup.
+            if editor.code_action_menu.is_some() {
+                popup_render::render_code_action_popup(
+                    canvas,
+                    editor,
+                    0,
+                    cols,
+                    window_height,
+                    focused_frame_layout.as_ref(),
+                );
+            }
         }
 
         // Cache focused layout for mouse click positioning.

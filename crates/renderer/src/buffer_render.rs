@@ -337,6 +337,28 @@ pub(crate) fn render_buffer(
                 }
             }
 
+            // Diagnostic underlines (wavy in GUI, underlined in TUI).
+            if editor.lsp_diagnostics_inline {
+                if let Some(path) = buf.file_path() {
+                    let uri = mae_core::path_to_uri(path);
+                    let diag_spans = mae_core::render_common::diagnostics::compute_diagnostic_spans(
+                        &editor.diagnostics,
+                        &uri,
+                        line_idx,
+                        line_idx + 1,
+                    );
+                    for ds in &diag_spans {
+                        let diag_style = ts(editor, ds.severity.theme_key())
+                            .add_modifier(ratatui::style::Modifier::UNDERLINED);
+                        let cs = ds.col_start.min(full_count);
+                        let ce = ds.col_end.max(cs + 1).min(full_count);
+                        for s in styles[cs..ce].iter_mut() {
+                            *s = s.patch(diag_style);
+                        }
+                    }
+                }
+            }
+
             // Gutter spans — cursorline bg on gutter cells too.
             let gutter_line_style = if show_cursorline && line_idx == win.cursor_row {
                 if let Some(bg) = cursorline_style.bg {

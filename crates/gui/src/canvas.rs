@@ -774,6 +774,52 @@ impl SkiaCanvas {
         );
     }
 
+    /// Draw a wavy underline (diagnostic indicator) at cell-based coordinates.
+    /// Sine-wave pattern: 3px amplitude, 6px wavelength.
+    #[allow(dead_code)]
+    pub fn draw_wavy_underline_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        count: usize,
+        color: Color4f,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let width = count as f32 * self.cell_width;
+        self.draw_wavy_underline_at_pixel(x, pixel_y, width, color);
+    }
+
+    /// Draw a wavy underline at exact pixel coordinates.
+    pub fn draw_wavy_underline_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let baseline_y = pixel_y + self.ascent + 2.0;
+        let mut paint = Paint::new(color, None);
+        paint.set_anti_alias(true);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+
+        let mut builder = skia_safe::PathBuilder::new();
+        let wave_len = 4.0_f32;
+        let amplitude = 1.5_f32;
+        let mut x = pixel_x;
+        builder.move_to((x, baseline_y));
+        let mut up = true;
+        while x < pixel_x + pixel_w {
+            let next_x = (x + wave_len).min(pixel_x + pixel_w);
+            let dy = if up { -amplitude } else { amplitude };
+            builder.quad_to((x + wave_len * 0.5, baseline_y + dy), (next_x, baseline_y));
+            x = next_x;
+            up = !up;
+        }
+        let path = builder.detach();
+        self.surface.canvas().draw_path(&path, &paint);
+    }
+
     /// Draw a strikethrough span at pixel Y. Column is cell-based.
     /// Line is drawn at 60% of ascent (roughly vertical center of glyphs).
     pub fn draw_strikethrough_at_y(

@@ -371,6 +371,42 @@ impl OptionRegistry {
                     config_key: Some("editor.render_markup"),
                     valid_values: &[],
                 },
+                OptionDef {
+                    name: "lsp_hover_popup",
+                    aliases: &["lsp-hover-popup"],
+                    doc: "Show hover info in a floating popup instead of the status bar",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.lsp_hover_popup"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "lsp_diagnostics_inline",
+                    aliases: &["lsp-diagnostics-inline"],
+                    doc: "Show inline diagnostic underlines on error/warning ranges",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.lsp_diagnostics_inline"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "lsp_diagnostics_virtual_text",
+                    aliases: &["lsp-diagnostics-virtual-text"],
+                    doc: "Show diagnostic messages as virtual text at end of line",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.lsp_diagnostics_virtual_text"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "lsp_completion",
+                    aliases: &["lsp-completion"],
+                    doc: "Enable LSP auto-completion popup in insert mode",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.lsp_completion"),
+                    valid_values: &[],
+                },
             ],
         }
     }
@@ -439,6 +475,34 @@ mod tests {
     fn registry_lists_all_options() {
         let reg = OptionRegistry::new();
         assert!(reg.list().len() >= 8);
+    }
+
+    #[test]
+    fn lsp_options_registered() {
+        let reg = OptionRegistry::new();
+        assert!(reg.find("lsp_hover_popup").is_some());
+        assert!(reg.find("lsp-hover-popup").is_some());
+        assert!(reg.find("lsp_diagnostics_inline").is_some());
+        assert!(reg.find("lsp_diagnostics_virtual_text").is_some());
+        assert!(reg.find("lsp_completion").is_some());
+        assert!(reg.find("lsp-completion").is_some());
+    }
+
+    #[test]
+    fn lsp_options_defaults() {
+        let reg = OptionRegistry::new();
+        assert_eq!(reg.find("lsp_hover_popup").unwrap().default_value, "true");
+        assert_eq!(
+            reg.find("lsp_diagnostics_inline").unwrap().default_value,
+            "true"
+        );
+        assert_eq!(
+            reg.find("lsp_diagnostics_virtual_text")
+                .unwrap()
+                .default_value,
+            "true"
+        );
+        assert_eq!(reg.find("lsp_completion").unwrap().default_value, "true");
     }
 
     #[test]

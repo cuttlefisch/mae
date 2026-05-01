@@ -9,7 +9,7 @@
 
 use crate::lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 
-use super::{CompletionItem, Editor};
+use super::{CompletionItem, Editor, HoverPopup, LspServerStatus};
 
 /// A span in an LSP response. Mirrors `mae_lsp::protocol::Range` but with
 /// the core-friendly type so this module has no dep on the LSP crate.
@@ -26,6 +26,16 @@ pub struct LspRange {
 pub struct LspLocation {
     pub uri: String,
     pub range: LspRange,
+}
+
+/// Deserialization helper for workspace edit text edits.
+#[derive(serde::Deserialize)]
+struct TextEditJson {
+    start_line: u32,
+    start_character: u32,
+    end_line: u32,
+    end_character: u32,
+    new_text: String,
 }
 
 impl Editor {
@@ -221,6 +231,88 @@ impl Editor {
         self.set_status("LSP code-action: awaiting server response");
     }
 
+    /// Apply code action results from LSP — populate the code action menu.
+    pub fn apply_code_action_result_items(&mut self, items: Vec<super::CodeActionItem>) {
+        if items.is_empty() {
+            self.set_status("[LSP] no code actions available");
+            return;
+        }
+        let count = items.len();
+        self.code_action_menu = Some(super::CodeActionMenu { items, selected: 0 });
+        self.set_status(format!("[LSP] {} code action(s)", count));
+    }
+
+    /// Navigate code action menu down.
+    pub fn code_action_next(&mut self) {
+        if let Some(ref mut menu) = self.code_action_menu {
+            let len = menu.items.len();
+            menu.selected = (menu.selected + 1) % len;
+        }
+    }
+
+    /// Navigate code action menu up.
+    pub fn code_action_prev(&mut self) {
+        if let Some(ref mut menu) = self.code_action_menu {
+            let len = menu.items.len();
+            menu.selected = menu.selected.checked_sub(1).unwrap_or(len - 1);
+        }
+    }
+
+    /// Dismiss the code action menu without applying.
+    pub fn code_action_dismiss(&mut self) {
+        self.code_action_menu = None;
+    }
+
+    /// Apply the selected code action's workspace edit.
+    pub fn code_action_select(&mut self) {
+        let menu = match self.code_action_menu.take() {
+            Some(m) => m,
+            None => return,
+        };
+        let item = &menu.items[menu.selected];
+        if let Some(ref edit_json) = item.edit_json {
+            self.apply_workspace_edit_json(edit_json);
+        }
+        self.set_status(format!("[LSP] applied: {}", item.title));
+    }
+
+    /// Apply a workspace edit from JSON (TextEdits per URI).
+    fn apply_workspace_edit_json(&mut self, json: &str) {
+        let Ok(edits) = serde_json::from_str::<Vec<(String, Vec<TextEditJson>)>>(json) else {
+            self.set_status("[LSP] failed to parse workspace edit");
+            return;
+        };
+        for (uri, text_edits) in edits {
+            let path = uri.strip_prefix("file://").unwrap_or(&uri);
+            let buf_idx = self
+                .buffers
+                .iter()
+                .position(|b| b.file_path().map(|p| p.to_string_lossy()) == Some(path.into()));
+            let Some(idx) = buf_idx else {
+                continue; // buffer not open — skip
+            };
+            // Apply edits in reverse order to preserve offsets.
+            let mut sorted_edits = text_edits;
+            sorted_edits.sort_by(|a, b| {
+                b.start_line
+                    .cmp(&a.start_line)
+                    .then(b.start_character.cmp(&a.start_character))
+            });
+            for edit in sorted_edits {
+                let start = self.buffers[idx]
+                    .char_offset_at(edit.start_line as usize, edit.start_character as usize);
+                let end = self.buffers[idx]
+                    .char_offset_at(edit.end_line as usize, edit.end_character as usize);
+                if start < end {
+                    self.buffers[idx].delete_range(start, end);
+                }
+                if !edit.new_text.is_empty() {
+                    self.buffers[idx].insert_text_at(start, &edit.new_text);
+                }
+            }
+        }
+    }
+
     /// Queue a `textDocument/formatting` request for the active buffer.
     pub fn lsp_request_format(&mut self) {
         let idx = self.active_buffer_idx();
@@ -316,27 +408,55 @@ impl Editor {
         });
     }
 
-    /// Handle a hover response — display the contents in the status line
-    /// (truncated to fit on one line). Multi-line contents are collapsed.
+    /// Handle a hover response — show in popup or status bar depending on option.
     pub fn apply_hover_result(&mut self, contents: String) {
         if contents.is_empty() {
             self.set_status("[LSP] no hover info");
             return;
         }
-        // Collapse newlines and trim for single-line status display.
-        let single = contents
-            .lines()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string();
-        let truncated = if single.chars().count() > 200 {
-            let s: String = single.chars().take(197).collect();
-            format!("{}...", s)
+        if self.lsp_hover_popup {
+            let win = self.window_mgr.focused_window();
+            self.hover_popup = Some(HoverPopup {
+                contents,
+                anchor_row: win.cursor_row,
+                anchor_col: win.cursor_col,
+                scroll_offset: 0,
+            });
         } else {
-            single
-        };
-        self.set_status(truncated);
+            // Collapse newlines and trim for single-line status display.
+            let single = contents
+                .lines()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+            let truncated = if single.chars().count() > 200 {
+                let s: String = single.chars().take(197).collect();
+                format!("{}...", s)
+            } else {
+                single
+            };
+            self.set_status(truncated);
+        }
+    }
+
+    /// Dismiss the hover popup.
+    pub fn dismiss_hover_popup(&mut self) {
+        self.hover_popup = None;
+    }
+
+    /// Scroll the hover popup down.
+    pub fn hover_scroll_down(&mut self) {
+        if let Some(ref mut popup) = self.hover_popup {
+            popup.scroll_offset += 1;
+        }
+    }
+
+    /// Scroll the hover popup up.
+    pub fn hover_scroll_up(&mut self) {
+        if let Some(ref mut popup) = self.hover_popup {
+            popup.scroll_offset = popup.scroll_offset.saturating_sub(1);
+        }
     }
 
     /// Handle a definition response.
@@ -389,6 +509,59 @@ impl Editor {
         } else {
             self.set_status(format!("[LSP] {} reference(s)", locations.len()));
         }
+    }
+
+    /// Show a `*LSP Status*` buffer listing all configured language servers,
+    /// their commands, binary discovery status, and connection state.
+    pub fn show_lsp_status_buffer(&mut self) {
+        let mut body = String::new();
+        body.push_str("*LSP Status*\n\n");
+        body.push_str(&format!(
+            "{:<14} {:<30} {:<12} {}\n",
+            "Language", "Command", "Status", "Binary"
+        ));
+        body.push_str(&format!("{}\n", "─".repeat(72)));
+
+        if self.lsp_servers.is_empty() {
+            body.push_str("No LSP servers configured.\n");
+        } else {
+            let mut langs: Vec<_> = self.lsp_servers.keys().cloned().collect();
+            langs.sort();
+            for lang in &langs {
+                let info = &self.lsp_servers[lang];
+                let status_str = match info.status {
+                    LspServerStatus::Starting => "Starting",
+                    LspServerStatus::Connected => "Connected",
+                    LspServerStatus::Failed => "Failed",
+                    LspServerStatus::Exited => "Exited",
+                };
+                let binary_str = if info.binary_found {
+                    &info.command
+                } else {
+                    "not found"
+                };
+                body.push_str(&format!(
+                    "{:<14} {:<30} {:<12} {}\n",
+                    lang, info.command, status_str, binary_str
+                ));
+            }
+        }
+
+        // Reuse or create the buffer.
+        let existing = self.buffers.iter().position(|b| b.name == "*LSP Status*");
+        let idx = if let Some(i) = existing {
+            self.buffers[i].replace_contents(&body);
+            i
+        } else {
+            let mut buf = crate::buffer::Buffer::new();
+            buf.replace_contents(&body);
+            buf.name = "*LSP Status*".into();
+            self.buffers.push(buf);
+            self.buffers.len() - 1
+        };
+        self.window_mgr.focused_window_mut().buffer_idx = idx;
+        let count = self.lsp_servers.len();
+        self.set_status(format!("LSP: {} server(s) configured", count));
     }
 }
 
@@ -559,8 +732,17 @@ mod tests {
     }
 
     #[test]
+    fn apply_hover_result_creates_popup() {
+        let mut ed = Editor::new();
+        ed.apply_hover_result("fn main()".into());
+        assert!(ed.hover_popup.is_some());
+        assert_eq!(ed.hover_popup.as_ref().unwrap().contents, "fn main()");
+    }
+
+    #[test]
     fn apply_hover_result_collapses_newlines() {
         let mut ed = Editor::new();
+        ed.lsp_hover_popup = false; // test status-bar path
         ed.apply_hover_result("fn main()\n  does stuff".into());
         assert_eq!(ed.status_msg, "fn main()   does stuff");
     }
@@ -568,10 +750,33 @@ mod tests {
     #[test]
     fn apply_hover_result_truncates_long_text() {
         let mut ed = Editor::new();
+        ed.lsp_hover_popup = false; // test status-bar path
         let long: String = "a".repeat(500);
         ed.apply_hover_result(long);
         assert!(ed.status_msg.ends_with("..."));
         assert!(ed.status_msg.chars().count() <= 200);
+    }
+
+    #[test]
+    fn hover_popup_dismiss() {
+        let mut ed = Editor::new();
+        ed.apply_hover_result("hello".into());
+        assert!(ed.hover_popup.is_some());
+        ed.dismiss_hover_popup();
+        assert!(ed.hover_popup.is_none());
+    }
+
+    #[test]
+    fn hover_popup_scroll() {
+        let mut ed = Editor::new();
+        ed.apply_hover_result("hello\nworld\nfoo\nbar".into());
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        ed.hover_scroll_down();
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 1);
+        ed.hover_scroll_up();
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        ed.hover_scroll_up(); // doesn't underflow
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
     }
 
     #[test]
@@ -745,5 +950,138 @@ mod tests {
         let mut ed = editor_with_file("/tmp/a.rs", "hello\n");
         ed.lsp_accept_completion(); // must not panic
         assert_eq!(ed.active_buffer().line_text(0), "hello\n");
+    }
+
+    #[test]
+    fn lsp_status_buffer_empty() {
+        let mut ed = Editor::new();
+        ed.show_lsp_status_buffer();
+        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        assert_eq!(buf.name, "*LSP Status*");
+        assert!(buf.text().contains("No LSP servers configured"));
+    }
+
+    #[test]
+    fn lsp_status_buffer_shows_servers() {
+        use crate::editor::{LspServerInfo, LspServerStatus};
+        let mut ed = Editor::new();
+        ed.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Connected,
+                command: "rust-analyzer".into(),
+                binary_found: true,
+            },
+        );
+        ed.lsp_servers.insert(
+            "python".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Failed,
+                command: "pylsp".into(),
+                binary_found: false,
+            },
+        );
+        ed.show_lsp_status_buffer();
+        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        let text = buf.text();
+        assert!(text.contains("rust"));
+        assert!(text.contains("rust-analyzer"));
+        assert!(text.contains("Connected"));
+        assert!(text.contains("python"));
+        assert!(text.contains("pylsp"));
+        assert!(text.contains("Failed"));
+        assert!(text.contains("not found"));
+    }
+
+    #[test]
+    fn lsp_status_buffer_reuses_existing() {
+        use crate::editor::{LspServerInfo, LspServerStatus};
+        let mut ed = Editor::new();
+        ed.show_lsp_status_buffer();
+        let initial_count = ed.buffers.len();
+        ed.lsp_servers.insert(
+            "go".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "gopls".into(),
+                binary_found: true,
+            },
+        );
+        ed.show_lsp_status_buffer();
+        assert_eq!(ed.buffers.len(), initial_count); // no new buffer created
+        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        assert!(buf.text().contains("gopls"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Code action menu tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn code_action_menu_navigation() {
+        use crate::editor::CodeActionItem;
+        let mut ed = Editor::new();
+        ed.apply_code_action_result_items(vec![
+            CodeActionItem {
+                title: "Import foo".into(),
+                kind: Some("quickfix".into()),
+                edit_json: None,
+            },
+            CodeActionItem {
+                title: "Extract function".into(),
+                kind: Some("refactor".into()),
+                edit_json: None,
+            },
+            CodeActionItem {
+                title: "Remove unused import".into(),
+                kind: Some("source".into()),
+                edit_json: None,
+            },
+        ]);
+        assert!(ed.code_action_menu.is_some());
+        let menu = ed.code_action_menu.as_ref().unwrap();
+        assert_eq!(menu.selected, 0);
+        assert_eq!(menu.items.len(), 3);
+
+        ed.code_action_next();
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 1);
+
+        ed.code_action_next();
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 2);
+
+        ed.code_action_next(); // wraps
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 0);
+
+        ed.code_action_prev(); // wraps back
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 2);
+
+        ed.code_action_dismiss();
+        assert!(ed.code_action_menu.is_none());
+    }
+
+    #[test]
+    fn code_action_select_applies_workspace_edit() {
+        use crate::editor::CodeActionItem;
+        let mut ed = editor_with_file("/tmp/a.rs", "hello world\n");
+        // Format: Vec<(uri, Vec<TextEdit>)>
+        let edit_json = serde_json::json!([
+            ["file:///tmp/a.rs", [{
+                "start_line": 0,
+                "start_character": 0,
+                "end_line": 0,
+                "end_character": 5,
+                "new_text": "goodbye"
+            }]]
+        ])
+        .to_string();
+        ed.apply_code_action_result_items(vec![CodeActionItem {
+            title: "Replace hello".into(),
+            kind: Some("quickfix".into()),
+            edit_json: Some(edit_json),
+        }]);
+        ed.code_action_select();
+        let text = ed.active_buffer().text();
+        assert!(text.starts_with("goodbye world"));
+        assert!(ed.code_action_menu.is_none());
     }
 }

@@ -530,6 +530,55 @@ pub fn render_buffer_content(
         }
     }
 
+    // Pass 5: Diagnostic inline underlines (wavy) + virtual text.
+    if editor.lsp_diagnostics_inline {
+        if let Some(path) = buf.file_path() {
+            let uri = mae_core::path_to_uri(path);
+            let start_line = frame_layout.lines.first().map(|ll| ll.buf_row).unwrap_or(0);
+            let end_line = frame_layout
+                .lines
+                .last()
+                .map(|ll| ll.buf_row + 1)
+                .unwrap_or(0);
+            let diag_spans = mae_core::render_common::diagnostics::compute_diagnostic_spans(
+                &editor.diagnostics,
+                &uri,
+                start_line,
+                end_line,
+            );
+
+            let (cw, _) = canvas.cell_size();
+            for ds in &diag_spans {
+                // Find the layout line for this diagnostic's buffer row.
+                if let Some(ll) = frame_layout.lines.iter().find(|ll| ll.buf_row == ds.line) {
+                    let severity_key = ds.severity.theme_key();
+                    let diag_color = theme::ts_fg(editor, severity_key);
+
+                    // Wavy underline from col_start to col_end.
+                    let col_start = ds.col_start;
+                    let col_end = ds.col_end.max(col_start + 1);
+                    let x = text_col as f32 * cw + col_start as f32 * cw;
+                    let w = (col_end - col_start) as f32 * cw;
+                    canvas.draw_wavy_underline_at_pixel(x, ll.pixel_y, w, diag_color);
+
+                    // Virtual text at end of line (if enabled).
+                    let line_len = buf.line_len(ds.line);
+                    let vt_col = text_col + line_len + 2;
+                    let available = text_width.saturating_sub(line_len + 2);
+                    if available > 10 {
+                        let (vt_text, _) =
+                            mae_core::render_common::diagnostics::format_virtual_text(
+                                ds.severity,
+                                &ds.message,
+                                available,
+                            );
+                        canvas.draw_text_at_y(ll.pixel_y, vt_col, &vt_text, diag_color, 1.0);
+                    }
+                }
+            }
+        }
+    }
+
     // Tilde lines past EOF.
     let last_pixel_y = frame_layout
         .lines

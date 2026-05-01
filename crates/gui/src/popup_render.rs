@@ -544,6 +544,178 @@ fn format_keypress(kp: &mae_core::KeyPress) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Hover popup
+// ---------------------------------------------------------------------------
+
+pub fn render_hover_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+) {
+    let popup = match &editor.hover_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 78);
+    if lines.is_empty() {
+        return;
+    }
+
+    const MAX_VISIBLE: usize = 15;
+    let visible_count = lines.len().min(MAX_VISIBLE);
+    let popup_width = lines
+        .iter()
+        .take(visible_count)
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(20)
+        .min(78)
+        + 2; // border
+    let popup_height = visible_count + 2; // border top+bottom
+
+    // Position above cursor if not enough room below.
+    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
+        area_row + cursor_screen_row + 1
+    } else {
+        area_row + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let bg = theme::ts_bg(editor, "ui.popup.text").unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " Hover ",
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    let scroll = popup.scroll_offset;
+    for (i, line) in lines.iter().skip(scroll).take(visible_count).enumerate() {
+        let display: String = line.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
+    }
+
+    // Scroll indicator.
+    if lines.len() > MAX_VISIBLE {
+        let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
+        let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
+        canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Code action popup
+// ---------------------------------------------------------------------------
+
+pub fn render_code_action_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+) {
+    let menu = match &editor.code_action_menu {
+        Some(m) => m,
+        None => return,
+    };
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+
+    if menu.items.is_empty() {
+        return;
+    }
+
+    const MAX_ITEMS: usize = 12;
+    let visible_count = menu.items.len().min(MAX_ITEMS);
+    let popup_width = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|item| {
+            let kind_w = item.kind.as_deref().map(|k| k.len() + 3).unwrap_or(2);
+            kind_w + item.title.len()
+        })
+        .max()
+        .unwrap_or(20)
+        .min(60)
+        + 4; // padding + border
+    let popup_height = visible_count + 2;
+
+    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
+        area_row + cursor_screen_row + 1
+    } else {
+        area_row + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let normal_fg = theme::ts_fg(editor, "ui.popup.text");
+    let normal_bg = theme::ts_bg(editor, "ui.popup.text");
+    let selected_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selected_bg = theme::ts_bg(editor, "ui.popup.key");
+
+    let bg = normal_bg.unwrap_or(theme::DEFAULT_BG);
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " Code Actions ",
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    for (i, item) in menu.items.iter().take(MAX_ITEMS).enumerate() {
+        let is_selected = i == menu.selected;
+        let fg = if is_selected { selected_fg } else { normal_fg };
+        let item_bg = if is_selected { selected_bg } else { normal_bg };
+
+        if let Some(bg) = item_bg {
+            canvas.draw_rect_fill(inner_top + i, inner_left, inner_width, 1, bg);
+        }
+
+        let icon = match item.kind.as_deref() {
+            Some(k) if k.contains("quickfix") => "💡",
+            Some(k) if k.contains("refactor") => "🔧",
+            Some(k) if k.contains("source") => "📦",
+            _ => "•",
+        };
+        let text = format!("{} {}", icon, item.title);
+        let display: String = text.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top + i, inner_left, &display, fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Border drawing helper
 // ---------------------------------------------------------------------------
 

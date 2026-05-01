@@ -21,6 +21,26 @@ impl Editor {
     /// This is the shared dispatch point for human keybindings and the AI agent.
     /// Scheme-defined commands are handled by the binary (which has the SchemeRuntime).
     pub fn dispatch_builtin(&mut self, name: &str) -> bool {
+        // Auto-dismiss hover popup on any command that isn't hover-related.
+        if self.hover_popup.is_some()
+            && !matches!(name, "lsp-hover" | "hover-scroll-down" | "hover-scroll-up")
+        {
+            self.hover_popup = None;
+        }
+        // Auto-dismiss code action menu on non-code-action commands.
+        if self.code_action_menu.is_some()
+            && !matches!(
+                name,
+                "lsp-code-action"
+                    | "lsp-code-action-next"
+                    | "lsp-code-action-prev"
+                    | "lsp-code-action-select"
+                    | "lsp-code-action-dismiss"
+            )
+        {
+            self.code_action_menu = None;
+        }
+
         // Consume the count prefix at the top of every dispatch.
         // `count` is Some(n) if user typed a digit prefix, None if not.
         // `n` is the effective repeat count (default 1).

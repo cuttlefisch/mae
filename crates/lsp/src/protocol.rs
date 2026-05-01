@@ -909,6 +909,124 @@ fn parse_document_symbol(v: &serde_json::Value) -> Option<DocumentSymbol> {
 }
 
 // ---------------------------------------------------------------------------
+// Code Action (textDocument/codeAction)
+// ---------------------------------------------------------------------------
+
+/// A code action returned by the server.
+#[derive(Debug, Clone)]
+pub struct CodeAction {
+    /// Display title of the code action.
+    pub title: String,
+    /// The kind of the code action (e.g. "quickfix", "refactor", "refactor.extract").
+    pub kind: Option<String>,
+    /// The workspace edit to apply when this action is selected.
+    pub edit: Option<WorkspaceEdit>,
+    /// A command to execute after applying the edit (optional).
+    pub command: Option<CodeActionCommand>,
+}
+
+/// A workspace edit consisting of text edits per document.
+#[derive(Debug, Clone)]
+pub struct WorkspaceEdit {
+    /// Map from document URI to text edits.
+    pub changes: Vec<(String, Vec<TextEdit>)>,
+}
+
+/// A single text edit (replacement) within a document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
+}
+
+/// A command that can be executed by the client.
+#[derive(Debug, Clone)]
+pub struct CodeActionCommand {
+    pub title: String,
+    pub command: String,
+    pub arguments: Option<serde_json::Value>,
+}
+
+/// Params for textDocument/codeAction request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeActionParams {
+    pub text_document: TextDocumentIdentifier,
+    pub range: Range,
+    pub context: CodeActionContext,
+}
+
+/// Context for the code action request.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeActionContext {
+    pub diagnostics: Vec<serde_json::Value>,
+}
+
+/// Parsed response from textDocument/codeAction.
+#[derive(Debug, Clone)]
+pub struct CodeActionResponse {
+    pub actions: Vec<CodeAction>,
+}
+
+impl CodeActionResponse {
+    /// Parse code action response — handles array of (CodeAction | Command) or null.
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return CodeActionResponse { actions: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            let actions = arr.iter().filter_map(parse_code_action).collect();
+            return CodeActionResponse { actions };
+        }
+        CodeActionResponse { actions: vec![] }
+    }
+}
+
+fn parse_code_action(v: &serde_json::Value) -> Option<CodeAction> {
+    let obj = v.as_object()?;
+    let title = obj.get("title")?.as_str()?.to_string();
+    let kind = obj.get("kind").and_then(|k| k.as_str()).map(String::from);
+    let edit = obj.get("edit").and_then(parse_workspace_edit);
+    let command = obj.get("command").and_then(parse_code_action_command);
+    Some(CodeAction {
+        title,
+        kind,
+        edit,
+        command,
+    })
+}
+
+fn parse_workspace_edit(v: &serde_json::Value) -> Option<WorkspaceEdit> {
+    let obj = v.as_object()?;
+    let changes_obj = obj.get("changes")?.as_object()?;
+    let mut changes = Vec::new();
+    for (uri, edits_val) in changes_obj {
+        if let Some(arr) = edits_val.as_array() {
+            let edits: Vec<TextEdit> = arr
+                .iter()
+                .filter_map(|e| serde_json::from_value(e.clone()).ok())
+                .collect();
+            changes.push((uri.clone(), edits));
+        }
+    }
+    Some(WorkspaceEdit { changes })
+}
+
+fn parse_code_action_command(v: &serde_json::Value) -> Option<CodeActionCommand> {
+    let obj = v.as_object()?;
+    let title = obj.get("title")?.as_str()?.to_string();
+    let command = obj.get("command")?.as_str()?.to_string();
+    let arguments = obj.get("arguments").cloned();
+    Some(CodeActionCommand {
+        title,
+        command,
+        arguments,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Text document sync kind (from server capabilities)
 // ---------------------------------------------------------------------------
 

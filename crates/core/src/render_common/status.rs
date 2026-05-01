@@ -6,6 +6,9 @@
 
 use crate::buffer_mode::BufferMode;
 use crate::{Buffer, BufferKind, Editor, InputLock, LspServerStatus, Mode, VisualType, Window};
+
+#[cfg(test)]
+use crate::LspServerInfo;
 use unicode_width::UnicodeWidthStr;
 
 /// A status bar segment with a priority (1 = highest = last to drop).
@@ -465,11 +468,11 @@ pub fn format_lsp_status(editor: &Editor) -> String {
     let any_connected = editor
         .lsp_servers
         .values()
-        .any(|s| *s == LspServerStatus::Connected);
+        .any(|s| s.status == LspServerStatus::Connected);
     let any_starting = editor
         .lsp_servers
         .values()
-        .any(|s| *s == LspServerStatus::Starting);
+        .any(|s| s.status == LspServerStatus::Starting);
     if any_connected {
         " LSP:✓".to_string()
     } else if any_starting {
@@ -587,18 +590,28 @@ mod tests {
     #[test]
     fn lsp_status_connected() {
         let mut editor = Editor::new();
-        editor
-            .lsp_servers
-            .insert("rust".to_string(), LspServerStatus::Connected);
+        editor.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Connected,
+                command: "rust-analyzer".into(),
+                binary_found: true,
+            },
+        );
         assert_eq!(format_lsp_status(&editor), " LSP:✓");
     }
 
     #[test]
     fn lsp_status_all_failed() {
         let mut editor = Editor::new();
-        editor
-            .lsp_servers
-            .insert("rust".to_string(), LspServerStatus::Failed);
+        editor.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Failed,
+                command: "rust-analyzer".into(),
+                binary_found: false,
+            },
+        );
         assert_eq!(format_lsp_status(&editor), " LSP:✗");
     }
 

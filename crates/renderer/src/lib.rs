@@ -225,6 +225,12 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if !editor.completion_items.is_empty() {
             popup_render::render_completion_popup(frame, chunks[0], editor);
         }
+        if editor.hover_popup.is_some() {
+            popup_render::render_hover_popup(frame, chunks[0], editor);
+        }
+        if editor.code_action_menu.is_some() {
+            popup_render::render_code_action_popup(frame, chunks[0], editor);
+        }
     }
 }
 

@@ -3,13 +3,49 @@
 
 use mae_ai::{DeferredKind, ToolResult};
 use mae_core::{
-    CompletionItem as CoreCompletionItem, Diagnostic as CoreDiagnostic,
+    CodeActionItem, CompletionItem as CoreCompletionItem, Diagnostic as CoreDiagnostic,
     DiagnosticSeverity as CoreSeverity, Editor, LspIntent, LspLocation, LspRange,
 };
 use mae_lsp::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, LspCommand, LspTaskEvent, Position,
 };
 use tracing::{debug, info, warn};
+
+/// Convert LSP code actions to core CodeActionItems.
+fn lsp_actions_to_items(actions: Vec<mae_lsp::CodeAction>) -> Vec<CodeActionItem> {
+    actions
+        .into_iter()
+        .map(|a| {
+            let edit_json = a.edit.as_ref().map(|we| {
+                let entries: Vec<(String, Vec<serde_json::Value>)> = we
+                    .changes
+                    .iter()
+                    .map(|(uri, edits)| {
+                        let edits_json: Vec<serde_json::Value> = edits
+                            .iter()
+                            .map(|e| {
+                                serde_json::json!({
+                                    "start_line": e.range.start.line,
+                                    "start_character": e.range.start.character,
+                                    "end_line": e.range.end.line,
+                                    "end_character": e.range.end.character,
+                                    "new_text": e.new_text,
+                                })
+                            })
+                            .collect();
+                        (uri.clone(), edits_json)
+                    })
+                    .collect();
+                serde_json::to_string(&entries).unwrap_or_default()
+            });
+            CodeActionItem {
+                title: a.title,
+                kind: a.kind,
+                edit_json,
+            }
+        })
+        .collect()
+}
 
 /// Drain all pending LSP intents from the editor and forward them to the LSP task.
 /// Safe to call every loop iteration — the Vec is cleared in place.
@@ -108,14 +144,26 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
         LspIntent::DocumentSymbols { uri, language_id } => {
             LspCommand::DocumentSymbols { uri, language_id }
         }
+        LspIntent::CodeAction {
+            uri,
+            language_id,
+            line,
+            character,
+        } => LspCommand::CodeAction {
+            uri,
+            language_id,
+            range: mae_lsp::Range {
+                start: Position { line, character },
+                end: Position { line, character },
+            },
+            diagnostics: Vec::new(),
+        },
         // Stubs: these intents are queued but the LSP client doesn't
-        // handle them yet. Log and ignore until Phase 4a M5.
-        LspIntent::CodeAction { .. } | LspIntent::Rename { .. } | LspIntent::Format { .. } => {
-            LspCommand::DidClose {
-                uri: String::new(),
-                language_id: String::new(),
-            }
-        }
+        // handle them yet.
+        LspIntent::Rename { .. } | LspIntent::Format { .. } => LspCommand::DidClose {
+            uri: String::new(),
+            language_id: String::new(),
+        },
     }
 }
 
@@ -129,25 +177,52 @@ pub(crate) fn handle_lsp_event(
     match event {
         LspTaskEvent::ServerStarted { language_id } => {
             info!(language = %language_id, "LSP server started");
-            editor
-                .lsp_servers
-                .insert(language_id.clone(), mae_core::LspServerStatus::Connected);
+            if let Some(info) = editor.lsp_servers.get_mut(&language_id) {
+                info.status = mae_core::LspServerStatus::Connected;
+            } else {
+                editor.lsp_servers.insert(
+                    language_id.clone(),
+                    mae_core::LspServerInfo {
+                        status: mae_core::LspServerStatus::Connected,
+                        command: String::new(),
+                        binary_found: true,
+                    },
+                );
+            }
             editor.set_status(format!("[LSP] {} server started", language_id));
             true
         }
         LspTaskEvent::ServerStartFailed { language_id, error } => {
             warn!(language = %language_id, error = %error, "LSP server failed to start");
-            editor
-                .lsp_servers
-                .insert(language_id.clone(), mae_core::LspServerStatus::Failed);
+            if let Some(info) = editor.lsp_servers.get_mut(&language_id) {
+                info.status = mae_core::LspServerStatus::Failed;
+            } else {
+                editor.lsp_servers.insert(
+                    language_id.clone(),
+                    mae_core::LspServerInfo {
+                        status: mae_core::LspServerStatus::Failed,
+                        command: String::new(),
+                        binary_found: false,
+                    },
+                );
+            }
             editor.set_status(format!("[LSP] {}: {}", language_id, error));
             true
         }
         LspTaskEvent::ServerExited { language_id } => {
             warn!(language = %language_id, "LSP server exited");
-            editor
-                .lsp_servers
-                .insert(language_id.clone(), mae_core::LspServerStatus::Exited);
+            if let Some(info) = editor.lsp_servers.get_mut(&language_id) {
+                info.status = mae_core::LspServerStatus::Exited;
+            } else {
+                editor.lsp_servers.insert(
+                    language_id.clone(),
+                    mae_core::LspServerInfo {
+                        status: mae_core::LspServerStatus::Exited,
+                        command: String::new(),
+                        binary_found: false,
+                    },
+                );
+            }
             editor.set_status(format!("[LSP] {} server exited", language_id));
             true
         }
@@ -230,6 +305,11 @@ pub(crate) fn handle_lsp_event(
         // Workspace/document symbol results are only consumed by the deferred
         // AI tool flow (try_complete_deferred). If no deferred call is pending
         // they are silently dropped here — no redraw needed.
+        LspTaskEvent::CodeActionResult { uri: _, actions } => {
+            let items = lsp_actions_to_items(actions);
+            editor.apply_code_action_result_items(items);
+            true
+        }
         LspTaskEvent::WorkspaceSymbolResult { .. } => false,
         LspTaskEvent::DocumentSymbolResult { .. } => false,
         LspTaskEvent::Error { message } => {

@@ -613,6 +613,9 @@ impl CommandRegistry {
             "lsp-hover",
             "Show hover information for symbol under cursor (K)",
         );
+        reg.register_builtin("dismiss-hover-popup", "Dismiss the LSP hover popup");
+        reg.register_builtin("hover-scroll-down", "Scroll the LSP hover popup down");
+        reg.register_builtin("hover-scroll-up", "Scroll the LSP hover popup up");
         reg.register_builtin(
             "lsp-next-diagnostic",
             "Jump to next diagnostic in buffer (]d)",
@@ -640,10 +643,22 @@ impl CommandRegistry {
             "Select previous completion item (Ctrl-p)",
         );
 
-        // LSP code actions (Phase 4a stubs)
+        // LSP code actions
         reg.register_builtin("lsp-code-action", "Run LSP code action at cursor (SPC c a)");
+        reg.register_builtin("lsp-code-action-next", "Select next code action");
+        reg.register_builtin("lsp-code-action-prev", "Select previous code action");
+        reg.register_builtin("lsp-code-action-select", "Apply selected code action");
+        reg.register_builtin("lsp-code-action-dismiss", "Dismiss code action menu");
         reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
         reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
+        reg.register_builtin("lsp-status", "Show LSP server status buffer (SPC c s)");
+        reg.register_builtin(
+            "toggle-lsp-diagnostics-inline",
+            "Toggle inline diagnostic underlines (SPC t d)",
+        );
+        reg.register_builtin("dismiss-hover-popup", "Dismiss the hover popup");
+        reg.register_builtin("hover-scroll-down", "Scroll hover popup down");
+        reg.register_builtin("hover-scroll-up", "Scroll hover popup up");
 
         // Folding
         reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");

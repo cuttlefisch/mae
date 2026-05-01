@@ -74,6 +74,17 @@ pub enum LspServerStatus {
     Exited,
 }
 
+/// Rich LSP server info — status plus discovery metadata.
+#[derive(Debug, Clone)]
+pub struct LspServerInfo {
+    /// Current connection status.
+    pub status: LspServerStatus,
+    /// The command used to start this server (e.g. "rust-analyzer").
+    pub command: String,
+    /// Whether the binary was found on PATH at startup.
+    pub binary_found: bool,
+}
+
 /// A single item in the LSP completion popup.
 #[derive(Debug, Clone)]
 pub struct CompletionItem {
@@ -85,6 +96,37 @@ pub struct CompletionItem {
     pub detail: Option<String>,
     /// Single-char sigil for the kind (f=function, v=variable, t=type, …).
     pub kind_sigil: char,
+}
+
+/// Floating popup showing LSP hover info near the cursor.
+#[derive(Debug, Clone)]
+pub struct HoverPopup {
+    /// Raw markdown from LSP.
+    pub contents: String,
+    /// Buffer row where K was pressed.
+    pub anchor_row: usize,
+    /// Buffer col where K was pressed.
+    pub anchor_col: usize,
+    /// Scroll offset for long content.
+    pub scroll_offset: usize,
+}
+
+/// A single item in the LSP code action popup menu.
+#[derive(Debug, Clone)]
+pub struct CodeActionItem {
+    /// Display title of the code action.
+    pub title: String,
+    /// The kind of the code action (e.g. "quickfix", "refactor").
+    pub kind: Option<String>,
+    /// JSON-serialized WorkspaceEdit to apply when selected.
+    pub edit_json: Option<String>,
+}
+
+/// Code action popup menu shown after `SPC c a`.
+#[derive(Debug, Clone)]
+pub struct CodeActionMenu {
+    pub items: Vec<CodeActionItem>,
+    pub selected: usize,
 }
 
 /// Record of a repeatable edit for dot-repeat (`.`).
@@ -297,8 +339,8 @@ pub struct Editor {
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
-    /// LSP server connection status, keyed by language_id.
-    pub lsp_servers: HashMap<String, LspServerStatus>,
+    /// LSP server info (status + discovery metadata), keyed by language_id.
+    pub lsp_servers: HashMap<String, LspServerInfo>,
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
@@ -496,6 +538,18 @@ pub struct Editor {
     pub link_descriptive: bool,
     /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
     pub render_markup: bool,
+    /// Show hover info in a floating popup (true) or status bar (false). Default true.
+    pub lsp_hover_popup: bool,
+    /// Active hover popup (shown via K when lsp_hover_popup=true).
+    pub hover_popup: Option<HoverPopup>,
+    /// Show inline diagnostic underlines on error/warning ranges. Default true.
+    pub lsp_diagnostics_inline: bool,
+    /// Show diagnostic messages as virtual text at end of line. Default true.
+    pub lsp_diagnostics_virtual_text: bool,
+    /// Enable LSP auto-completion popup in insert mode. Default true.
+    pub lsp_completion: bool,
+    /// Active code action menu (shown via SPC c a).
+    pub code_action_menu: Option<CodeActionMenu>,
     /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
     /// is pressed in block visual mode. On insert-mode exit, the typed text is
     /// replicated to all rows in the range.
@@ -696,6 +750,12 @@ impl Editor {
             nyan_mode: false,
             link_descriptive: true,
             render_markup: true,
+            lsp_hover_popup: true,
+            hover_popup: None,
+            lsp_diagnostics_inline: true,
+            lsp_diagnostics_virtual_text: true,
+            lsp_completion: true,
+            code_action_menu: None,
             pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1033,6 +1093,10 @@ impl Editor {
             "nyan_mode" => self.nyan_mode.to_string(),
             "link_descriptive" => self.link_descriptive.to_string(),
             "render_markup" => self.render_markup.to_string(),
+            "lsp_hover_popup" => self.lsp_hover_popup.to_string(),
+            "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
+            "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
+            "lsp_completion" => self.lsp_completion.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1189,6 +1253,18 @@ impl Editor {
             }
             "render_markup" => {
                 self.render_markup = parse_option_bool(value)?;
+            }
+            "lsp_hover_popup" => {
+                self.lsp_hover_popup = parse_option_bool(value)?;
+            }
+            "lsp_diagnostics_inline" => {
+                self.lsp_diagnostics_inline = parse_option_bool(value)?;
+            }
+            "lsp_diagnostics_virtual_text" => {
+                self.lsp_diagnostics_virtual_text = parse_option_bool(value)?;
+            }
+            "lsp_completion" => {
+                self.lsp_completion = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

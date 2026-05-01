@@ -315,12 +315,13 @@ fn main() -> io::Result<()> {
             "AI agent setup complete"
         );
 
-        let (lsp_event_rx, lsp_command_tx) = {
+        let (lsp_event_rx, lsp_command_tx, lsp_server_info) = {
             let root_uri = editor
                 .active_project_root()
                 .map(|p| format!("file://{}", p.display()));
-            setup_lsp(root_uri)
+            setup_lsp(root_uri, &app_config)
         };
+        editor.lsp_servers = lsp_server_info;
         info!("LSP task spawned");
 
         // AI session restoration

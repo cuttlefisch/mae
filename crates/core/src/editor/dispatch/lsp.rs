@@ -41,6 +41,9 @@ impl Editor {
                     }
                 }
             }
+            "dismiss-hover-popup" => self.dismiss_hover_popup(),
+            "hover-scroll-down" => self.hover_scroll_down(),
+            "hover-scroll-up" => self.hover_scroll_up(),
             "lsp-complete" => self.lsp_request_completion(),
             "lsp-accept-completion" => self.lsp_accept_completion(),
             "lsp-dismiss-completion" => self.lsp_dismiss_completion(),
@@ -55,8 +58,22 @@ impl Editor {
                 self.jump_prev_diagnostic();
             }
             "lsp-show-diagnostics" => self.show_diagnostics_buffer(),
+            "lsp-status" => self.show_lsp_status_buffer(),
             "lsp-code-action" => {
                 self.lsp_request_code_action();
+            }
+            "lsp-code-action-next" => self.code_action_next(),
+            "lsp-code-action-prev" => self.code_action_prev(),
+            "lsp-code-action-select" => self.code_action_select(),
+            "lsp-code-action-dismiss" => self.code_action_dismiss(),
+            "toggle-lsp-diagnostics-inline" => {
+                self.lsp_diagnostics_inline = !self.lsp_diagnostics_inline;
+                let state = if self.lsp_diagnostics_inline {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.set_status(format!("Inline diagnostics: {}", state));
             }
             "lsp-rename" => {
                 self.set_mode(crate::Mode::Command);

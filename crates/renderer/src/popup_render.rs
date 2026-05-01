@@ -1,4 +1,5 @@
-//! Popup overlays: file picker, file browser, command palette, LSP completion.
+//! Popup overlays: file picker, file browser, command palette, LSP completion,
+//! hover popup, code action menu.
 
 use mae_core::Editor;
 use ratatui::prelude::*;
@@ -421,4 +422,159 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         inner.x + 2 + palette.query.len() as u16,
         inner.y,
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Hover popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let popup = match &editor.hover_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 76);
+    if lines.is_empty() {
+        return;
+    }
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    const MAX_VISIBLE: usize = 15;
+    let visible_count = lines.len().min(MAX_VISIBLE) as u16;
+    let popup_width = lines
+        .iter()
+        .take(MAX_VISIBLE)
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(20)
+        .min(76) as u16
+        + 2;
+    let popup_height = visible_count + 2;
+
+    let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
+        editor_area.y + cursor_screen_row + 1
+    } else {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = (editor_area.x + win.cursor_col as u16)
+        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let text_style = ts(editor, "ui.popup.text");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Hover ")
+        .style(text_style);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let scroll = popup.scroll_offset;
+    let content_lines: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(MAX_VISIBLE)
+        .map(|l| Line::styled(l.as_str(), text_style))
+        .collect();
+
+    let para = Paragraph::new(content_lines);
+    frame.render_widget(para, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Code action popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let menu = match &editor.code_action_menu {
+        Some(m) => m,
+        None => return,
+    };
+    if menu.items.is_empty() {
+        return;
+    }
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    const MAX_ITEMS: usize = 12;
+    let visible_count = menu.items.len().min(MAX_ITEMS) as u16;
+    let popup_width = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|item| item.title.len() + 4)
+        .max()
+        .unwrap_or(20)
+        .min(60) as u16
+        + 2;
+    let popup_height = visible_count + 2;
+
+    let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
+        editor_area.y + cursor_screen_row + 1
+    } else {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = (editor_area.x + win.cursor_col as u16)
+        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let normal_style = ts(editor, "ui.popup.text");
+    let selected_style = ts(editor, "ui.popup.key");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Code Actions ")
+        .style(normal_style);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let content_lines: Vec<Line> = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == menu.selected {
+                selected_style
+            } else {
+                normal_style
+            };
+            let icon = match item.kind.as_deref() {
+                Some(k) if k.contains("quickfix") => "* ",
+                Some(k) if k.contains("refactor") => "~ ",
+                Some(k) if k.contains("source") => "+ ",
+                _ => "- ",
+            };
+            Line::styled(format!("{}{}", icon, item.title), style)
+        })
+        .collect();
+
+    let para = Paragraph::new(content_lines);
+    frame.render_widget(para, inner);
 }

@@ -30,6 +30,46 @@ pub struct Config {
     pub editor: EditorSection,
     #[serde(default)]
     pub agents: AgentsSection,
+    #[serde(default)]
+    pub lsp: LspSection,
+}
+
+/// Per-language LSP server configuration.
+/// Extensible: any language key is valid (e.g. `[lsp.zig]`, `[lsp.haskell]`).
+///
+/// ```toml
+/// [lsp.rust]
+/// command = "rust-analyzer"
+///
+/// [lsp.python]
+/// command = "pylsp"
+///
+/// [lsp.typescript]
+/// command = "typescript-language-server"
+/// args = ["--stdio"]
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LspSection {
+    /// Per-language server configs. Key is the language ID (e.g. "rust", "python").
+    #[serde(flatten)]
+    pub servers: std::collections::HashMap<String, LspLanguageConfig>,
+}
+
+/// Configuration for a single LSP language server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspLanguageConfig {
+    /// The command to run (e.g. "rust-analyzer", "pylsp").
+    pub command: String,
+    /// Arguments to pass to the command.
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+impl LspLanguageConfig {
+    /// Convert args to `&[&str]` for compatibility with resolve functions.
+    pub fn args_as_strs(&self) -> Vec<&str> {
+        self.args.iter().map(|s| s.as_str()).collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -676,6 +716,19 @@ pub fn default_config_template() -> String {
 # so MCP tools run without per-call approval prompts.\n\
 # Set to false to disable. Env override: MAE_AGENTS_AUTO_APPROVE=0\n\
 # auto_approve_tools = true\n\
+\n\
+# [lsp]\n\
+# Per-language LSP server configuration. Any language key is valid.\n\
+# Env var overrides: MAE_LSP_RUST, MAE_LSP_PYTHON, MAE_LSP_TYPESCRIPT, etc.\n\
+# [lsp.rust]\n\
+# command = \"rust-analyzer\"\n\
+# [lsp.python]\n\
+# command = \"pylsp\"\n\
+# [lsp.typescript]\n\
+# command = \"typescript-language-server\"\n\
+# args = [\"--stdio\"]\n\
+# [lsp.go]\n\
+# command = \"gopls\"\n\
 ",
         config_path().display()
     )
@@ -1008,5 +1061,55 @@ mod tests {
         let s = toml::to_string(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert!(!back.agents.auto_approve_tools);
+    }
+
+    #[test]
+    fn lsp_section_parses() {
+        let s = r#"
+            [lsp.rust]
+            command = "rust-analyzer"
+
+            [lsp.python]
+            command = "pylsp"
+
+            [lsp.typescript]
+            command = "typescript-language-server"
+            args = ["--stdio"]
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(cfg.lsp.servers.len(), 3);
+        assert_eq!(cfg.lsp.servers["rust"].command, "rust-analyzer");
+        assert_eq!(cfg.lsp.servers["python"].command, "pylsp");
+        assert_eq!(
+            cfg.lsp.servers["typescript"].command,
+            "typescript-language-server"
+        );
+        assert_eq!(cfg.lsp.servers["typescript"].args, vec!["--stdio"]);
+        assert!(cfg.lsp.servers["rust"].args.is_empty());
+    }
+
+    #[test]
+    fn lsp_section_empty_by_default() {
+        let cfg = Config::default();
+        assert!(cfg.lsp.servers.is_empty());
+    }
+
+    #[test]
+    fn lsp_section_round_trips() {
+        let mut servers = std::collections::HashMap::new();
+        servers.insert(
+            "zig".to_string(),
+            LspLanguageConfig {
+                command: "zls".into(),
+                args: vec![],
+            },
+        );
+        let cfg = Config {
+            lsp: LspSection { servers },
+            ..Default::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.lsp.servers["zig"].command, "zls");
     }
 }

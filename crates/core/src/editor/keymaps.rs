@@ -335,6 +335,10 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC t s"), "toggle-scrollbar");
         normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
         normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
+        normal.bind(
+            parse_key_seq_spaced("SPC t d"),
+            "toggle-lsp-diagnostics-inline",
+        );
         // +git
         normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
         normal.bind(parse_key_seq_spaced("SPC g g"), "git-status");
@@ -361,6 +365,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
         normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
         normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
+        normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
