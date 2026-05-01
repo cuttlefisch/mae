@@ -41,6 +41,8 @@ pub enum BufferKind {
     Visual,
     /// File tree sidebar — project-level directory browser.
     FileTree,
+    /// AI-generated unified diff view (read-only).
+    Diff,
 }
 
 /// A single edit operation, stored for undo/redo.

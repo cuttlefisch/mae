@@ -373,6 +373,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 None => {
                     let mut b = mae_core::Buffer::new();
                     b.name = diff_buf_name.to_string();
+                    b.kind = mae_core::BufferKind::Diff;
                     editor.buffers.push(b);
                     editor.buffers.len() - 1
                 }

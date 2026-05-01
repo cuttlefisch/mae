@@ -69,6 +69,7 @@ impl BufferMode for BufferKind {
             Self::Dashboard => "Dashboard",
             Self::Preview => "Preview",
             Self::Visual => "Visual",
+            Self::Diff => "Diff",
         }
     }
 
@@ -85,7 +86,7 @@ impl BufferMode for BufferKind {
     fn has_gutter(&self) -> bool {
         !matches!(
             self,
-            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard
+            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard | Self::Diff
         )
     }
 
@@ -129,6 +130,7 @@ impl BufferMode for BufferKind {
                 | Self::GitStatus
                 | Self::FileTree
                 | Self::Shell
+                | Self::Diff
         )
     }
 
@@ -247,5 +249,20 @@ mod tests {
         assert_eq!(BufferKind::Text.markup_flavor(), None);
         assert_eq!(BufferKind::Shell.markup_flavor(), None);
         assert_eq!(BufferKind::GitStatus.markup_flavor(), None);
+    }
+
+    #[test]
+    fn diff_buffer_kind_is_read_only() {
+        assert!(BufferKind::Diff.read_only());
+    }
+
+    #[test]
+    fn diff_buffer_kind_has_no_gutter() {
+        assert!(!BufferKind::Diff.has_gutter());
+    }
+
+    #[test]
+    fn diff_buffer_kind_mode_name() {
+        assert_eq!(BufferKind::Diff.mode_name(), "Diff");
     }
 }

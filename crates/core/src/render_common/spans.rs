@@ -31,7 +31,7 @@ pub fn highlight_spans_for_buffer(buf: &Buffer) -> Option<Vec<HighlightSpan>> {
                 .map(|c| c.highlight_spans_with_markup(buf.rope()))
                 .unwrap_or_default(),
         ),
-        _ if buf.name == "*AI-Diff*" => Some(crate::diff::diff_highlight_spans(buf.rope())),
+        crate::buffer::BufferKind::Diff => Some(crate::diff::diff_highlight_spans(buf.rope())),
         _ => None,
     }
 }
