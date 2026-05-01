@@ -228,6 +228,78 @@ impl Editor {
                 }
                 true
             }
+            "recover" => {
+                let idx = self.active_buffer_idx();
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                if let Some(fp) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    let swap_path = crate::swap::swap_path_for(&fp, custom_dir);
+                    match crate::swap::read_swap(&swap_path) {
+                        Ok((_header, rope)) => {
+                            self.buffers[idx].replace_rope(rope);
+                            self.buffers[idx].modified = true;
+                            let _ = crate::swap::delete_swap(&fp, custom_dir);
+                            self.buffers[idx].swap = crate::swap::SwapState::default();
+                            self.set_status(
+                                "Recovered from swap file. Review and :w to save.".to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            self.set_status(format!("No swap file to recover: {}", e));
+                        }
+                    }
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+                true
+            }
+            "recover-session" => {
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                let orphans = crate::swap::find_orphaned_swaps(custom_dir);
+                if orphans.is_empty() {
+                    self.set_status("No orphaned swap files found");
+                } else {
+                    let list: Vec<String> = orphans
+                        .iter()
+                        .map(|(_, h)| format!("{}", h.original_path.display()))
+                        .collect();
+                    self.set_status(format!(
+                        "Recoverable files ({}): {}",
+                        orphans.len(),
+                        list.join(", ")
+                    ));
+                }
+                true
+            }
+            "delete-swap" => {
+                let idx = self.active_buffer_idx();
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                if let Some(fp) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    match crate::swap::delete_swap(&fp, custom_dir) {
+                        Ok(()) => {
+                            self.buffers[idx].swap = crate::swap::SwapState::default();
+                            self.set_status("Swap file deleted");
+                        }
+                        Err(e) => {
+                            self.set_status(format!("Failed to delete swap: {}", e));
+                        }
+                    }
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+                true
+            }
             "lsp-rename" => {
                 if let Some(new_name) = args.map(str::trim).filter(|s| !s.is_empty()) {
                     let idx = self.active_buffer_idx();

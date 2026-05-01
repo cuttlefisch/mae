@@ -52,21 +52,9 @@ pub(crate) fn render_messages_window(
         if visual_rows >= viewport_height {
             break;
         }
-        let level_style = match entry.level {
-            mae_core::MessageLevel::Error => ts(editor, "diagnostic.error"),
-            mae_core::MessageLevel::Warn => ts(editor, "diagnostic.warn"),
-            mae_core::MessageLevel::Info => ts(editor, "diagnostic.info"),
-            mae_core::MessageLevel::Debug => ts(editor, "diagnostic.debug"),
-            mae_core::MessageLevel::Trace => ts(editor, "diagnostic.trace"),
-        };
-
-        let level_tag = match entry.level {
-            mae_core::MessageLevel::Error => "ERROR",
-            mae_core::MessageLevel::Warn => " WARN",
-            mae_core::MessageLevel::Info => " INFO",
-            mae_core::MessageLevel::Debug => "DEBUG",
-            mae_core::MessageLevel::Trace => "TRACE",
-        };
+        let mp = mae_core::render_common::messages::message_prefix(entry.level);
+        let level_style = ts(editor, mp.theme_key);
+        let level_tag = mp.tag;
 
         // Approximate prefix width: "[ERROR] [target] "
         let prefix_len = 2 + level_tag.len() + 3 + entry.target.len() + 2;

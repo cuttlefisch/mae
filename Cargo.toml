@@ -13,6 +13,7 @@ members = [
     "crates/mcp",
     "test_fixtures",
 ]
+exclude = ["tools/code-map"]
 resolver = "2"
 
 [workspace.package]

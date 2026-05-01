@@ -7,6 +7,25 @@ use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 use super::Editor;
 
 impl Editor {
+    /// Clean up swap files on clean exit: delete all swap files for open
+    /// buffers and remove the session index.
+    pub fn cleanup_swap_files(&mut self) {
+        let custom_dir = if self.swap_directory.is_empty() {
+            None
+        } else {
+            Some(std::path::Path::new(&self.swap_directory))
+        };
+        for buf in &mut self.buffers {
+            if buf.swap.written {
+                if let Some(fp) = buf.file_path().map(|p| p.to_path_buf()) {
+                    let _ = crate::swap::delete_swap(&fp, custom_dir);
+                    buf.swap = crate::swap::SwapState::default();
+                }
+            }
+        }
+        crate::swap::delete_session_index(custom_dir);
+    }
+
     /// Save all modified file-backed buffers. Returns the count saved.
     /// Errors are collected and returned as a Vec of "(name: error)" strings.
     pub fn save_all_modified_buffers(&mut self) -> (usize, Vec<String>) {
@@ -32,31 +51,102 @@ impl Editor {
     /// interval has elapsed. Called from event loop idle ticks.
     /// Returns the number of buffers saved (0 if nothing to do or disabled).
     pub fn try_autosave(&mut self) -> usize {
-        if self.autosave_interval == 0 {
+        if self.autosave_interval == 0 && !self.swap_file {
             return 0;
         }
         let elapsed = self.last_autosave.elapsed().as_secs();
-        if elapsed < self.autosave_interval {
+        let interval = if self.autosave_interval > 0 {
+            self.autosave_interval
+        } else {
+            30 // Default swap interval when autosave disabled but swap enabled.
+        };
+        if elapsed < interval {
             return 0;
         }
         // Don't save mid-typing: require 5s idle since last edit.
         if self.last_edit_time.elapsed().as_secs() < 5 {
             return 0;
         }
-        let (saved, errors) = self.save_all_modified_buffers();
-        if saved > 0 {
-            if errors.is_empty() {
-                self.set_status(format!("Autosaved {} buffer(s)", saved));
-            } else {
-                self.set_status(format!(
-                    "Autosaved {}, errors: {}",
-                    saved,
-                    errors.join(", ")
-                ));
+
+        // In-place autosave (destructive, only if autosave_interval > 0).
+        let mut saved = 0;
+        if self.autosave_interval > 0 {
+            let (s, errors) = self.save_all_modified_buffers();
+            saved = s;
+            if saved > 0 {
+                if errors.is_empty() {
+                    self.set_status(format!("Autosaved {} buffer(s)", saved));
+                } else {
+                    self.set_status(format!(
+                        "Autosaved {}, errors: {}",
+                        saved,
+                        errors.join(", ")
+                    ));
+                }
             }
         }
+
+        // Swap file writing (non-destructive crash recovery).
+        if self.swap_file {
+            self.write_swap_files();
+        }
+
         self.last_autosave = std::time::Instant::now();
         saved
+    }
+
+    /// Write swap files for all modified file-backed buffers.
+    fn write_swap_files(&mut self) {
+        let custom_dir = if self.swap_directory.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(&self.swap_directory))
+        };
+
+        for buf in &mut self.buffers {
+            // Only file-visiting text buffers get swap files (Emacs lesson #9).
+            if buf.kind != crate::BufferKind::Text {
+                continue;
+            }
+            let Some(file_path) = buf.file_path().map(|p| p.to_path_buf()) else {
+                continue;
+            };
+            if !buf.modified {
+                continue;
+            }
+
+            // Check modiff (Emacs lesson #1).
+            if !buf.swap.should_write(buf.generation) {
+                continue;
+            }
+
+            // Bulk-delete protection (Emacs lesson #3).
+            let rope_len = buf.rope().len_bytes();
+            if !buf.swap.bulk_delete_safe(rope_len) {
+                tracing::warn!(
+                    file = %file_path.display(),
+                    "swap: bulk delete detected ({}B → {}B), skipping",
+                    buf.swap.swap_last_len,
+                    rope_len
+                );
+                continue;
+            }
+
+            match crate::swap::write_swap(&file_path, buf.rope(), custom_dir.as_deref()) {
+                Ok(swap_path) => {
+                    buf.swap.record_success(buf.generation, rope_len);
+                    let _ = crate::swap::append_session_index(
+                        &file_path,
+                        &swap_path,
+                        custom_dir.as_deref(),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(file = %file_path.display(), error = %e, "swap write failed");
+                    buf.swap.record_failure();
+                }
+            }
+        }
     }
 
     pub(crate) fn save_current_buffer(&mut self) {
@@ -66,6 +156,18 @@ impl Editor {
             Ok(()) => {
                 let name = self.buffers[idx].name.clone();
                 self.set_status(format!("\"{}\" written", name));
+                // Delete swap file on successful save.
+                if self.buffers[idx].swap.written {
+                    if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                        let custom_dir = if self.swap_directory.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::Path::new(&self.swap_directory))
+                        };
+                        let _ = crate::swap::delete_swap(&path, custom_dir);
+                        self.buffers[idx].swap = crate::swap::SwapState::default();
+                    }
+                }
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
                 self.refresh_git_diff(idx);
@@ -998,7 +1100,34 @@ impl Editor {
                         .local_options
                         .apply_defaults(&lang.default_local_options());
                 }
-                self.set_status(format!("\"{}\" opened", name));
+                // Check for existing swap file (Emacs lesson #7: no auto-recovery).
+                if let Some(ref fp) = self.buffers[new_idx].file_path().map(|p| p.to_path_buf()) {
+                    let custom_dir = if self.swap_directory.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&self.swap_directory))
+                    };
+                    if crate::swap::swap_exists(fp, custom_dir) {
+                        let swap_path = crate::swap::swap_path_for(fp, custom_dir);
+                        if let Ok((header, _)) = crate::swap::read_swap(&swap_path) {
+                            if crate::swap::is_pid_alive(header.pid) {
+                                self.set_status(format!(
+                                    "Warning: {} is being edited by PID {}",
+                                    name, header.pid
+                                ));
+                            } else {
+                                self.set_status(format!(
+                                    "Swap file found for {}. Use :recover to restore or :delete-swap to discard",
+                                    name
+                                ));
+                            }
+                        }
+                    } else {
+                        self.set_status(format!("\"{}\" opened", name));
+                    }
+                } else {
+                    self.set_status(format!("\"{}\" opened", name));
+                }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
                 self.refresh_git_diff(new_idx);

@@ -188,6 +188,8 @@ pub struct Buffer {
     /// display region, that region is suppressed so raw text is visible.
     /// Set per-frame from the focused window's cursor position. `None` = no reveal.
     pub display_reveal_cursor: Option<usize>,
+    /// Swap file state for crash recovery (Emacs-style autosave).
+    pub swap: crate::swap::SwapState,
 }
 
 impl Default for Buffer {
@@ -224,6 +226,7 @@ impl Buffer {
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
             display_reveal_cursor: None,
+            swap: crate::swap::SwapState::default(),
         }
     }
 
@@ -390,6 +393,14 @@ impl Buffer {
 
     pub fn file_path(&self) -> Option<&Path> {
         self.file_path.as_deref()
+    }
+
+    /// Replace the entire rope content (used by `:recover` from swap file).
+    pub fn replace_rope(&mut self, rope: Rope) {
+        self.rope = rope;
+        self.generation += 1;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Check whether the backing file has been modified externally since we

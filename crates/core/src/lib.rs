@@ -32,6 +32,7 @@ pub mod project;
 pub mod render_common;
 pub mod search;
 pub mod session;
+pub mod swap;
 pub mod syntax;
 pub mod theme;
 pub mod visual_buffer;

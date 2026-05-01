@@ -56,21 +56,9 @@ pub fn render_messages_window(
             break;
         }
 
-        let level_fg = match entry.level {
-            mae_core::MessageLevel::Error => theme::ts_fg(editor, "diagnostic.error"),
-            mae_core::MessageLevel::Warn => theme::ts_fg(editor, "diagnostic.warn"),
-            mae_core::MessageLevel::Info => theme::ts_fg(editor, "diagnostic.info"),
-            mae_core::MessageLevel::Debug => theme::ts_fg(editor, "diagnostic.debug"),
-            mae_core::MessageLevel::Trace => theme::ts_fg(editor, "diagnostic.trace"),
-        };
-
-        let level_tag = match entry.level {
-            mae_core::MessageLevel::Error => "ERROR",
-            mae_core::MessageLevel::Warn => " WARN",
-            mae_core::MessageLevel::Info => " INFO",
-            mae_core::MessageLevel::Debug => "DEBUG",
-            mae_core::MessageLevel::Trace => "TRACE",
-        };
+        let mp = mae_core::render_common::messages::message_prefix(entry.level);
+        let level_fg = theme::ts_fg(editor, mp.theme_key);
+        let level_tag = mp.tag;
 
         let prefix = format!("[{}] [{}] ", level_tag, entry.target);
         let prefix_len = prefix.len();

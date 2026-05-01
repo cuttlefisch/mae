@@ -6,9 +6,12 @@
 
 pub mod color;
 pub mod debug;
+pub mod file_tree;
 pub mod git_status;
 pub mod gutter;
 pub mod help;
+pub mod messages;
+pub mod shell;
 pub mod spans;
 pub mod splash;
 pub mod status;

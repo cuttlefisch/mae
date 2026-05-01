@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config code-map code-map-check help
 
 # Default target: release build
 all: build
@@ -151,6 +151,14 @@ check-config: build-tui
 ## self-test: run AI-driven e2e self-test headless (requires AI provider)
 self-test: build
 	$(RELEASE_BIN) --self-test $(CATS)
+
+## code-map: generate docs/CODE_MAP.md and docs/CODE_MAP.json
+code-map:
+	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../..
+
+## code-map-check: verify code map is up to date (for CI)
+code-map-check:
+	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 
 ## clean: remove all build artefacts
 clean:

@@ -521,6 +521,10 @@ pub struct Editor {
     pub last_autosave: std::time::Instant,
     /// Autosave interval in seconds (0 = disabled). Parsed from option registry.
     pub autosave_interval: u64,
+    /// Enable swap file writing for crash recovery (default true).
+    pub swap_file: bool,
+    /// Custom swap directory (empty = XDG default).
+    pub swap_directory: String,
     /// When `true`, the renderer shows a which-key popup with all bindings
     /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
     /// cleared on the next keypress.
@@ -694,6 +698,8 @@ impl Editor {
             self_test_active: false,
             last_autosave: std::time::Instant::now(),
             autosave_interval: 0,
+            swap_file: true,
+            swap_directory: String::new(),
             buffer_keys_popup: false,
         }
     }
@@ -958,6 +964,8 @@ impl Editor {
             "ignorecase" => self.ignorecase.to_string(),
             "smartcase" => self.smartcase.to_string(),
             "autosave_interval" => self.autosave_interval.to_string(),
+            "swap_file" => self.swap_file.to_string(),
+            "swap_directory" => self.swap_directory.clone(),
             "scrollbar" => self.scrollbar.to_string(),
             "nyan_mode" => self.nyan_mode.to_string(),
             "link_descriptive" => self.link_descriptive.to_string(),
@@ -1100,6 +1108,12 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.autosave_interval = secs;
+            }
+            "swap_file" => {
+                self.swap_file = parse_option_bool(value)?;
+            }
+            "swap_directory" => {
+                self.swap_directory = value.to_string();
             }
             "scrollbar" => {
                 self.scrollbar = parse_option_bool(value)?;

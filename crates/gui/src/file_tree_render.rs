@@ -42,57 +42,24 @@ pub fn render_file_tree_window(
         let dir_fg = theme::ts_fg(editor, "keyword");
         let file_fg = theme::ts_fg(editor, "ui.text");
 
-        // Compute effective scroll offset to keep selected visible.
-        let mut scroll = ft.scroll_offset;
-        if ft.selected < scroll {
-            scroll = ft.selected;
-        }
-        if inner_height > 0 && ft.selected >= scroll + inner_height {
-            scroll = ft.selected.saturating_sub(inner_height - 1);
-        }
+        let (lines, _scroll) =
+            mae_core::render_common::file_tree::format_file_tree_lines(ft, inner_height);
 
-        for (i, entry) in ft
-            .entries
-            .iter()
-            .skip(scroll)
-            .take(inner_height)
-            .enumerate()
-        {
+        for (i, line) in lines.iter().enumerate() {
             let row = inner_row + i;
-            let global_idx = scroll + i;
 
-            // Selection highlight.
-            if global_idx == ft.selected {
+            if line.is_selected {
                 canvas.draw_rect_fill(row, inner_col, inner_width, 1, sel_bg);
             }
 
-            // Build display line: indent + icon + name.
-            let indent = "  ".repeat(entry.depth);
-            let is_expanded = entry.is_dir && ft.expanded_dirs.contains(&entry.path);
-            let icon = mae_core::file_tree::icon_for_path(&entry.path, entry.is_dir, is_expanded);
-            let display = format!("{}{} {}", indent, icon, entry.name);
-
-            let fg = if let Some(gs) = entry.git_status {
-                if gs != mae_core::file_tree::FileGitStatus::Clean {
-                    theme::ts_fg(editor, gs.theme_key())
-                } else if entry.is_dir {
-                    dir_fg
-                } else {
-                    file_fg
-                }
-            } else if entry.is_dir {
+            let fg = if let Some(theme_key) = line.git_theme_key {
+                theme::ts_fg(editor, theme_key)
+            } else if line.is_dir {
                 dir_fg
             } else {
                 file_fg
             };
-            let suffix = match entry.git_status {
-                Some(gs) if gs != mae_core::file_tree::FileGitStatus::Clean => {
-                    format!(" [{}]", gs.marker_char())
-                }
-                _ => String::new(),
-            };
-            let full = format!("{}{}", display, suffix);
-            let truncated: String = full.chars().take(inner_width).collect();
+            let truncated: String = line.display.chars().take(inner_width).collect();
             canvas.draw_text_at(row, inner_col, &truncated, fg);
         }
     }
