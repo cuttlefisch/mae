@@ -31,7 +31,7 @@ impl Editor {
                     let total = self.message_log.len();
                     let vh = self.viewport_height;
                     let max = total.saturating_sub(vh);
-                    let line_count = self.buffers[idx].line_count().saturating_sub(1);
+                    let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         win.scroll_offset = (win.scroll_offset + 1).min(max);
@@ -205,7 +205,7 @@ impl Editor {
                 if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
                     let vh = self.viewport_height;
-                    let last_line = self.buffers[idx].line_count().saturating_sub(1);
+                    let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
                     win.scroll_offset = total.saturating_sub(vh);
                     win.cursor_row = last_line;
@@ -379,7 +379,7 @@ impl Editor {
                 match kind {
                     crate::BufferKind::Messages => {
                         let total = self.message_log.len();
-                        let line_count = self.buffers[idx].line_count().saturating_sub(1);
+                        let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
                         let win = self.window_mgr.focused_window_mut();
                         let max = total.saturating_sub(vh);
                         for _ in 0..n {

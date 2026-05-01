@@ -379,7 +379,7 @@ pub fn command_line_text(editor: &Editor) -> String {
 /// Build a nyan cat progress indicator: filled bar + cat at scroll position.
 /// Width: 20 chars. Format: `[=========>          ]` style with rainbow fill + cat emoji.
 fn build_nyan_segment(buf: &Buffer, win: &Window) -> String {
-    let total = buf.line_count();
+    let total = buf.display_line_count();
     let ratio = if total <= 1 {
         0.0
     } else {
@@ -427,7 +427,7 @@ fn compute_scroll_pct(buf: &Buffer, win: &Window) -> String {
             "All".to_string()
         }
     } else {
-        let total_lines = buf.line_count();
+        let total_lines = buf.display_line_count();
         if total_lines <= 1 {
             "All".to_string()
         } else if win.cursor_row == 0 {

@@ -222,7 +222,7 @@ impl Editor {
 
     fn jump_to_diagnostic(&mut self, d: &Diagnostic) {
         let idx = self.active_buffer_idx();
-        let line_count = self.buffers[idx].line_count();
+        let line_count = self.buffers[idx].display_line_count();
         let target_row = (d.line as usize).min(line_count.saturating_sub(1));
         let target_col = d.col_start as usize;
         let win = self.window_mgr.focused_window_mut();

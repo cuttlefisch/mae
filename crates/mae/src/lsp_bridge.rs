@@ -486,7 +486,7 @@ fn open_location(
 
     // Place the cursor.
     let idx = editor.active_buffer_idx();
-    let line_count = editor.buffers[idx].line_count();
+    let line_count = editor.buffers[idx].display_line_count();
     let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
     let target_col = loc.range.start_character as usize;
     let win = editor.window_mgr.focused_window_mut();

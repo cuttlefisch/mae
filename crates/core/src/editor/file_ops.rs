@@ -230,7 +230,7 @@ impl Editor {
         self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
         // Also position cursor at the last line so yank etc. work from the bottom.
         let buf_idx = self.active_buffer_idx();
-        let last_line = self.buffers[buf_idx].line_count().saturating_sub(1);
+        let last_line = self.buffers[buf_idx].display_line_count().saturating_sub(1);
         self.window_mgr.focused_window_mut().cursor_row = last_line;
         self.window_mgr.focused_window_mut().cursor_col = 0;
         self.set_status(format!("{} log entries", total));

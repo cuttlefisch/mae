@@ -511,7 +511,7 @@ impl Editor {
         if current_uri.as_deref() == Some(loc.uri.as_str()) {
             // Same file — jump in place.
             let idx = self.active_buffer_idx();
-            let line_count = self.buffers[idx].line_count();
+            let line_count = self.buffers[idx].display_line_count();
             let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
             let target_col = loc.range.start_character as usize;
             let win = self.window_mgr.focused_window_mut();

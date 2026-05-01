@@ -175,10 +175,10 @@ fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
     buf.delete_range(one_line, total);
 
     // Before clamp, anchor is stale
-    assert!(editor.visual_anchor_row > editor.buffers[0].line_count().saturating_sub(1));
+    assert!(editor.visual_anchor_row > editor.buffers[0].display_line_count().saturating_sub(1));
 
     editor.clamp_all_cursors();
-    assert!(editor.visual_anchor_row < editor.buffers[0].line_count());
+    assert!(editor.visual_anchor_row < editor.buffers[0].display_line_count());
     assert!(editor.visual_anchor_col <= editor.buffers[0].line_len(editor.visual_anchor_row));
 }
 
@@ -199,8 +199,8 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
     editor.clamp_all_cursors();
 
     let (ar, ac, cr, cc, _) = editor.last_visual.unwrap();
-    assert!(ar < editor.buffers[0].line_count());
-    assert!(cr < editor.buffers[0].line_count());
+    assert!(ar < editor.buffers[0].display_line_count());
+    assert!(cr < editor.buffers[0].display_line_count());
     assert!(ac <= editor.buffers[0].line_len(ar));
     assert!(cc <= editor.buffers[0].line_len(cr));
 }

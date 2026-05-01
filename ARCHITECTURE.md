@@ -96,9 +96,27 @@ that use the standard text pipeline (Conversation, Help, GitStatus, *AI-Diff*). 
 renderers call this in their `_` arm — if `Some`, use shared spans; if `None`, use syntax spans.
 Specialized renderers (Shell, Debug, Messages, Visual, FileTree) keep dedicated arms.
 
+## Line Counting Rules
+
+Ropey adds a phantom empty line after trailing `\n`. Two functions exist:
+
+| Function | Includes phantom? | Use for |
+|---|---|---|
+| `line_count()` | Yes | `clamp_cursor()`, rope index lookups, search iteration |
+| `display_line_count()` | No | **Navigation cursor positioning**, scroll bounds, gutter width |
+
+**Rule**: If you're setting `cursor_row` during navigation (jumps, marks, goto, LSP, diagnostics),
+use `display_line_count()`. Using `line_count()` allows the cursor to land on an invisible phantom
+line (ghost line bug). `clamp_cursor()` is the exception — insert mode needs the phantom line
+after pressing Enter at EOF.
+
+See `crates/gui/src/RENDERING.md` for the full decision table and pixel budget rules.
+
 ## Key Invariants
 
 1. **Span parity**: Layout and renderer must see identical spans. Divergence causes cursor misalignment.
 2. **No `markup.heading` in conversation buffers**: Would trigger heading scaling, breaking uniform line heights.
-3. **Module boundaries**: No 10k+ line files. Each crate has clear responsibilities.
-4. **Runtime redefinability**: Users can redefine any function via Scheme while running.
+3. **Line counting**: Navigation uses `display_line_count()`; rope indexing uses `line_count()`. See above.
+4. **Layout pixel tolerance**: Overflow checks in `compute_layout()` use 0.5px FP tolerance. Do not remove.
+5. **Module boundaries**: No 10k+ line files. Each crate has clear responsibilities.
+6. **Runtime redefinability**: Users can redefine any function via Scheme while running.

@@ -44,6 +44,62 @@ using the standard text pipeline (Conversation, Help, GitStatus, *AI-Diff*). Bot
 this in their `_` arm — if `Some`, use shared spans; if `None`, use syntax spans. Specialized
 renderers (Shell, Debug, Messages, Visual, FileTree) keep dedicated match arms.
 
+## Line Counting: `line_count()` vs `display_line_count()`
+
+Ropey adds a phantom empty line after a trailing `\n`. A 2-line file `"a\nb\n"` has
+`line_count() == 3` but `display_line_count() == 2`. Using the wrong one causes the
+cursor to land on an invisible line (ghost line bug).
+
+### When to use `display_line_count()`
+
+**All navigation and positioning** — anywhere cursor_row or target_row is being
+set during movement, jumps, or external input:
+
+- LSP go-to-definition / references / diagnostics
+- Marks, jumplist, changelist navigation
+- `:goto`, `:read`, `:g` cursor positioning
+- Messages buffer scroll/cursor clamping
+- Visual anchor clamping
+- Nyan mode / scroll percentage display
+
+### When to use `line_count()`
+
+- **`clamp_cursor()`** — insert mode needs the phantom line (pressing Enter at EOF
+  creates `"text\n"` where cursor must sit on the empty line below)
+- Rope char/byte index lookups (`line_to_char`, `char_to_byte`)
+- Search iteration over all rope lines (`:s`, `:g` line scanning)
+- Any context that indexes into the rope (phantom line is a real rope line)
+
+### Rule of thumb
+
+> If you're **setting a cursor position**, use `display_line_count()`.
+> If you're **iterating rope data** or in `clamp_cursor`, use `line_count()`.
+
+## Layout Pixel Budget
+
+`compute_layout()` accumulates `pixel_y` via repeated `+= cell_height` while
+`pixel_y_limit` is computed as a single multiplication. After ~36+ lines,
+floating-point drift (~0.002px) can cause the accumulated value to exceed the
+limit by a fraction of a ULP.
+
+**All overflow checks use a 0.5px tolerance** to absorb this drift:
+
+```rust
+if pixel_y + line_height > pixel_y_limit + 0.5 { break; }
+```
+
+0.5px is safe because the smallest possible line is ~14px (minimum font size),
+so the tolerance can never admit an extra line. Without it, the layout emits
+one fewer line than `ensure_scroll_wrapped` expects, creating a ghost line
+where tildes render but no content is visible.
+
+### If you modify the layout loop
+
+- Never remove the `+ 0.5` tolerance without also switching to integer line counting
+- If adding new `pixel_y` comparisons, include the same tolerance
+- The tolerance covers FP drift only — it does NOT replace proper bounds checking
+- Test with fractional `cell_height` values (e.g. 20.3) to stress the accumulation path
+
 ## DO NOT
 
 - Pass `markup.heading` spans to conversation buffer layout — triggers heading scaling

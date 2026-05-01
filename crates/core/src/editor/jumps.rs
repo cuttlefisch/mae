@@ -140,7 +140,7 @@ impl Editor {
         }
 
         // Clamp to the buffer's current dimensions.
-        let line_count = self.buffers[target_idx].line_count();
+        let line_count = self.buffers[target_idx].display_line_count();
         let row = entry.row.min(line_count.saturating_sub(1));
         let col_max = self.buffers[target_idx].line_len(row);
         let col = entry.col.min(col_max);
@@ -305,6 +305,6 @@ mod tests {
 
         ed.jump_backward(1);
         let win = ed.window_mgr.focused_window();
-        assert!(win.cursor_row < ed.buffers[0].line_count());
+        assert!(win.cursor_row < ed.buffers[0].display_line_count());
     }
 }

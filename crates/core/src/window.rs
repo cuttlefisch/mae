@@ -1476,7 +1476,7 @@ mod tests {
         win.scroll_half_down(&buf, 20);
         // max_row = 10 (10 lines + trailing newline = 11 lines, so max = 10)
         // cursor_row = min(8+10, 10) = 10
-        assert!(win.cursor_row <= buf.line_count().saturating_sub(1));
+        assert!(win.cursor_row <= buf.display_line_count().saturating_sub(1));
     }
 
     #[test]
@@ -1832,5 +1832,26 @@ mod tests {
         win.move_up(&buf);
         // Should skip lines 3, 2 and land on 1
         assert_eq!(win.cursor_row, 1);
+    }
+
+    #[test]
+    fn clamp_cursor_allows_phantom_but_nav_uses_display() {
+        // clamp_cursor uses line_count() (allows phantom line for insert mode),
+        // but navigation call sites use display_line_count() to prevent cursor
+        // from reaching the invisible phantom line during normal movement.
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "a\nb\n");
+        assert_eq!(buf.line_count(), 3); // includes phantom
+        assert_eq!(buf.display_line_count(), 2); // excludes phantom
+
+        // clamp_cursor allows phantom line (needed for insert mode after Enter at EOF)
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 2; // phantom line
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 2); // allowed — insert mode needs this
+
+        // But navigation should use display_line_count for bounds
+        let nav_max = buf.display_line_count().saturating_sub(1);
+        assert_eq!(nav_max, 1);
     }
 }

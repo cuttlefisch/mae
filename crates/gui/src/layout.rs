@@ -295,7 +295,9 @@ pub fn compute_layout(
         }
     }
 
-    while pixel_y < pixel_y_limit && line_idx < total_lines {
+    // Use 0.5px tolerance for FP drift: accumulated pixel_y via repeated += cell_height
+    // can drift ~0.002px over 40 lines vs the single-multiply pixel_y_limit.
+    while pixel_y < pixel_y_limit + 0.5 && line_idx < total_lines {
         // Skip lines outside narrowed range.
         if let Some((_, ne)) = narrow {
             if line_idx >= ne {
@@ -404,14 +406,14 @@ pub fn compute_layout(
             let mut pos = 0;
             let mut is_first = true;
             loop {
-                if pixel_y >= pixel_y_limit {
+                if pixel_y >= pixel_y_limit + 0.5 {
                     break;
                 }
                 let seg_scale = if is_first { org_heading_scale } else { 1.0 };
                 let seg_height = seg_scale * cell_height;
 
-                // Don't emit lines whose bottom overflows the viewport.
-                if pixel_y + seg_height > pixel_y_limit {
+                // Don't emit lines whose bottom overflows the viewport (0.5px FP tolerance).
+                if pixel_y + seg_height > pixel_y_limit + 0.5 {
                     break;
                 }
 
@@ -465,8 +467,8 @@ pub fn compute_layout(
             // No wrap — single entry per line.
             let line_height = org_heading_scale * cell_height;
 
-            // Don't emit lines whose bottom overflows the viewport.
-            if pixel_y + line_height > pixel_y_limit {
+            // Don't emit lines whose bottom overflows the viewport (0.5px FP tolerance).
+            if pixel_y + line_height > pixel_y_limit + 0.5 {
                 break;
             }
 
@@ -666,6 +668,44 @@ mod tests {
     #[test]
     fn scaled_col_precise_zero() {
         assert_eq!(FrameLayout::scaled_col_precise("abc", 0, 1.5), 0.0);
+    }
+
+    #[test]
+    fn layout_renders_all_viewport_lines() {
+        // Regression: FP drift in accumulated pixel_y vs single-multiply limit
+        // caused the last line to be rejected. Use a fractional cell_height
+        // to stress the accumulation path.
+        let cell_height = 20.3; // fractional to trigger FP drift
+        let area_height = 40; // 40 lines
+        let text = (0..50)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut e = make_editor(&text);
+        e.heading_scale = false;
+        let idx = e.active_buffer_idx();
+        let buf = &e.buffers[idx];
+        let win = e.window_mgr.focused_window();
+        let layout = compute_layout(
+            &e,
+            buf,
+            win,
+            0,
+            0,
+            80,
+            area_height,
+            cell_height,
+            8.0,
+            None,
+            None,
+        );
+        assert_eq!(
+            layout.lines.len(),
+            area_height,
+            "expected {} lines but got {} (FP drift rejected the last line)",
+            area_height,
+            layout.lines.len()
+        );
     }
 
     #[test]

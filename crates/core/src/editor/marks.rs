@@ -89,7 +89,7 @@ impl Editor {
 
         // Clamp row/col to current buffer dimensions (handles truncation
         // since the mark was set).
-        let line_count = self.buffers[target_idx].line_count();
+        let line_count = self.buffers[target_idx].display_line_count();
         let row = mark.row.min(line_count.saturating_sub(1));
         let col_max = self.buffers[target_idx].line_len(row);
         let col = mark.col.min(col_max);
@@ -195,9 +195,8 @@ mod tests {
 
         ed.jump_to_mark('e').unwrap();
         let win = ed.window_mgr.focused_window();
-        // Row must be within the current line count (trailing empty line
-        // after the last newline is a valid cursor position).
-        assert!(win.cursor_row < ed.buffers[0].line_count());
+        // Row must be within the display line count (phantom line excluded).
+        assert!(win.cursor_row < ed.buffers[0].display_line_count());
         assert!(win.cursor_row < 3, "was {}", win.cursor_row);
     }
 

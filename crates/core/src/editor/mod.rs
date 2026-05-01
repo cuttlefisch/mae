@@ -1411,7 +1411,7 @@ impl Editor {
 
         // Clamp visual anchor to focused buffer bounds.
         let idx = self.active_buffer_idx();
-        let line_count = self.buffers[idx].line_count();
+        let line_count = self.buffers[idx].display_line_count();
         if line_count == 0 {
             self.visual_anchor_row = 0;
             self.visual_anchor_col = 0;
@@ -2162,7 +2162,9 @@ impl Editor {
             // Navigate to line:col if specified
             if let Some(ln) = line {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                let target_row = ln.saturating_sub(1).min(buf.line_count().saturating_sub(1));
+                let target_row = ln
+                    .saturating_sub(1)
+                    .min(buf.display_line_count().saturating_sub(1));
                 let target_col = col.unwrap_or(1).saturating_sub(1);
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = target_row;
