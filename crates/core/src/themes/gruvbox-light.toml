@@ -56,6 +56,10 @@ gray = "#928374"
 "diagnostic.debug" = { fg = "gray" }
 "diagnostic.target" = { fg = "aqua" }
 
+"lsp.highlight.read" = { bg = "bg1" }
+"lsp.highlight.write" = { bg = "bg2" }
+"lsp.highlight.text" = { bg = "bg1" }
+
 "conversation.user" = { fg = "aqua", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

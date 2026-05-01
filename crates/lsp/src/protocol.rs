@@ -193,6 +193,8 @@ pub struct ServerCapabilities {
     pub definition_provider: bool,
     #[serde(default)]
     pub references_provider: bool,
+    #[serde(default)]
+    pub document_highlight_provider: bool,
 }
 
 /// Initialize response result.
@@ -1024,6 +1026,66 @@ fn parse_code_action_command(v: &serde_json::Value) -> Option<CodeActionCommand>
         command,
         arguments,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Document highlight
+// ---------------------------------------------------------------------------
+
+/// The kind of a document highlight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentHighlightKind {
+    Text = 1,
+    Read = 2,
+    Write = 3,
+}
+
+impl DocumentHighlightKind {
+    pub fn from_i64(n: i64) -> Self {
+        match n {
+            2 => DocumentHighlightKind::Read,
+            3 => DocumentHighlightKind::Write,
+            _ => DocumentHighlightKind::Text,
+        }
+    }
+}
+
+/// A single highlight occurrence from `textDocument/documentHighlight`.
+#[derive(Debug, Clone)]
+pub struct DocumentHighlight {
+    pub range: Range,
+    pub kind: DocumentHighlightKind,
+}
+
+/// Response from `textDocument/documentHighlight`.
+pub struct DocumentHighlightResponse {
+    pub highlights: Vec<DocumentHighlight>,
+}
+
+impl DocumentHighlightResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return DocumentHighlightResponse { highlights: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            let highlights = arr
+                .iter()
+                .filter_map(|item| {
+                    let obj = item.as_object()?;
+                    let range_val = obj.get("range")?;
+                    let range = parse_range(range_val)?;
+                    let kind = obj
+                        .get("kind")
+                        .and_then(|k| k.as_i64())
+                        .map(DocumentHighlightKind::from_i64)
+                        .unwrap_or(DocumentHighlightKind::Text);
+                    Some(DocumentHighlight { range, kind })
+                })
+                .collect();
+            return DocumentHighlightResponse { highlights };
+        }
+        DocumentHighlightResponse { highlights: vec![] }
+    }
 }
 
 // ---------------------------------------------------------------------------

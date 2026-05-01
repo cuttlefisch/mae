@@ -66,6 +66,10 @@ crust = "#11111b"
 "diagnostic.trace" = { fg = "overlay0", dim = true }
 "diagnostic.target" = { fg = "teal" }
 
+"lsp.highlight.read" = { bg = "surface0" }
+"lsp.highlight.write" = { bg = "surface1" }
+"lsp.highlight.text" = { bg = "surface0" }
+
 "conversation.user" = { fg = "sapphire", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

@@ -305,6 +305,39 @@ pub(crate) fn render_buffer(
                 }
             }
 
+            // LSP document highlights (background-only, behind selection).
+            if !editor.highlight_ranges.is_empty() {
+                for hr in &editor.highlight_ranges {
+                    if line_idx < hr.start_line || line_idx > hr.end_line {
+                        continue;
+                    }
+                    let key = match hr.kind {
+                        mae_core::HighlightKind::Read => "lsp.highlight.read",
+                        mae_core::HighlightKind::Write => "lsp.highlight.write",
+                        mae_core::HighlightKind::Text => "lsp.highlight.text",
+                    };
+                    let hl_style = editor.theme.style(key);
+                    if let Some(bg) = hl_style.bg {
+                        let bg_rat = crate::theme_convert::to_ratatui_color(bg);
+                        let sc = if line_idx == hr.start_line {
+                            hr.start_col
+                        } else {
+                            0
+                        };
+                        let ec = if line_idx == hr.end_line {
+                            hr.end_col
+                        } else {
+                            full_count
+                        };
+                        let sc = sc.min(full_count);
+                        let ec = ec.min(full_count);
+                        for s in styles[sc..ec].iter_mut() {
+                            *s = s.patch(ratatui::style::Style::default().bg(bg_rat));
+                        }
+                    }
+                }
+            }
+
             // Apply selection highlight (overrides syntax).
             if let Some((br_min, br_max, bc_min, bc_max)) = block_rect {
                 if line_idx >= br_min && line_idx <= br_max {

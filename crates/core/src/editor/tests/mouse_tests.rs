@@ -335,4 +335,34 @@ fn line_visual_rows_single_source_of_truth() {
     assert_eq!(editor.line_visual_rows(0, 2), 2); // fold start still visible
 }
 
+#[test]
+fn mouse_click_dismisses_hover_popup() {
+    let mut editor = Editor::new();
+    editor.hover_popup = Some(crate::editor::HoverPopup {
+        contents: "test hover".into(),
+        anchor_row: 0,
+        anchor_col: 0,
+        scroll_offset: 0,
+    });
+    editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
+    assert!(
+        editor.hover_popup.is_none(),
+        "hover popup should be dismissed on click"
+    );
+}
+
+#[test]
+fn mouse_click_dismisses_code_action_menu() {
+    let mut editor = Editor::new();
+    editor.code_action_menu = Some(crate::editor::CodeActionMenu {
+        items: vec![],
+        selected: 0,
+    });
+    editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
+    assert!(
+        editor.code_action_menu.is_none(),
+        "code action menu should be dismissed on click"
+    );
+}
+
 // --- Debug mode tests ---

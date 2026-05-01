@@ -53,6 +53,10 @@ gutter = "#4b5263"
 "diagnostic.trace" = { fg = "gutter", dim = true }
 "diagnostic.target" = { fg = "cyan" }
 
+"lsp.highlight.read" = { bg = "bg_light" }
+"lsp.highlight.write" = { bg = "bg_highlight" }
+"lsp.highlight.text" = { bg = "bg_light" }
+
 "conversation.user" = { fg = "cyan", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

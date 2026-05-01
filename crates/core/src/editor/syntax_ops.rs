@@ -1079,11 +1079,7 @@ impl Editor {
                 .to_string();
         }
         if has_pct {
-            let pct = if total > 0 {
-                (checked * 100) / total
-            } else {
-                0
-            };
+            let pct = (checked * 100).checked_div(total).unwrap_or(0);
             new_line = cookie_pct
                 .replace(&new_line, format!("[{}%]", pct).as_str())
                 .to_string();

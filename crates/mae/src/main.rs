@@ -972,6 +972,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
                 self.input_dirty = true;
                 self.editor.last_edit_time = std::time::Instant::now();
+                self.editor.clear_highlights();
                 // Default to full redraw for keyboard input. Commands that only
                 // move the cursor can downgrade this via mark_cursor_moved().
                 self.editor.mark_full_redraw();
@@ -1065,6 +1066,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         // (handles scaled headings and folded lines correctly).
                         let px_x = self.cursor_x as f32;
                         let px_y = self.cursor_y as f32;
+                        // Dismiss stale popups on any mouse click.
+                        self.editor.hover_popup = None;
+                        self.editor.code_action_menu = None;
+
                         if let Some(fl) = self.renderer.last_focused_layout() {
                             if let Some((buf_row, char_col)) =
                                 fl.pixel_to_buffer_position(px_x, px_y)
@@ -1224,6 +1229,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let buf_idx = self.editor.active_buffer_idx();
                 let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
                 let scroll = self.editor.window_mgr.focused_window().scroll_offset;
+                let so = self.editor.scrolloff;
                 let range_start = scroll.min(cursor_row);
                 let range_end = (scroll.max(cursor_row) + vh + 2)
                     .min(self.editor.buffers[buf_idx].display_line_count());
@@ -1234,7 +1240,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.editor
                     .window_mgr
                     .focused_window_mut()
-                    .ensure_scroll_wrapped(vh, |line| {
+                    .ensure_scroll_wrapped_with_margin(vh, so, |line| {
                         row_cache
                             .iter()
                             .find(|(l, _)| *l == line)
@@ -1273,6 +1279,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         {
             mae_core::syntax::drain_pending_reparses(&mut self.editor);
             self.dirty = true;
+        }
+
+        // Debounced document highlight: request after 300ms cursor idle.
+        if self.editor.highlight_ranges.is_empty()
+            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
+        {
+            self.editor.lsp_request_document_highlight();
         }
 
         // Frame-capped redraw (60fps = 16.667ms).

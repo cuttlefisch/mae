@@ -52,6 +52,10 @@ gray = "#a89984"
 "diagnostic.trace" = { fg = "dark_gray", dim = true }
 "diagnostic.target" = { fg = "cyan" }
 
+"lsp.highlight.read" = { bg = "dark_gray" }
+"lsp.highlight.write" = { bg = "gray" }
+"lsp.highlight.text" = { bg = "dark_gray" }
+
 "conversation.user" = { fg = "cyan", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

@@ -52,6 +52,10 @@ yellow = "#f1fa8c"
 "diagnostic.trace" = { fg = "comment", dim = true }
 "diagnostic.target" = { fg = "cyan" }
 
+"lsp.highlight.read" = { bg = "bg_light" }
+"lsp.highlight.write" = { bg = "comment" }
+"lsp.highlight.text" = { bg = "bg_light" }
+
 "conversation.user" = { fg = "cyan", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

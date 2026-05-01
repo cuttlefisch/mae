@@ -901,5 +901,17 @@ fn checkbox_toggle_undo_is_single_step() {
     assert_eq!(original, after_undo, "single undo should restore original");
 }
 
+#[test]
+fn set_font_size_updates_default() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.gui_font_size_default, 14.0);
+    editor.set_option("font_size", "18").unwrap();
+    assert_eq!(editor.gui_font_size, 18.0);
+    assert_eq!(
+        editor.gui_font_size_default, 18.0,
+        "font_size_default should track set_option"
+    );
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

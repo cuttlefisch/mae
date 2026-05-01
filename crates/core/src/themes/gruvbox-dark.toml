@@ -64,6 +64,10 @@ bright_orange = "#fe8019"
 "diagnostic.trace" = { fg = "bg3", dim = true }
 "diagnostic.target" = { fg = "bright_aqua" }
 
+"lsp.highlight.read" = { bg = "bg1" }
+"lsp.highlight.write" = { bg = "bg2" }
+"lsp.highlight.text" = { bg = "bg1" }
+
 "conversation.user" = { fg = "bright_aqua", bold = true }
 "conversation.assistant" = { fg = "bright_green", bold = true }
 "conversation.system" = { fg = "bright_yellow" }

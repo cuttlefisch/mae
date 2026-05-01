@@ -465,26 +465,33 @@ pub fn format_lsp_status(editor: &Editor) -> String {
     if editor.lsp_servers.is_empty() {
         return String::new();
     }
+
+    // Show status for the active buffer's language server (most relevant to the user).
+    let active_lang = editor
+        .active_buffer()
+        .file_path()
+        .and_then(crate::lsp_intent::language_id_from_path);
+
+    if let Some(ref lang) = active_lang {
+        if let Some(info) = editor.lsp_servers.get(lang.as_str()) {
+            return match info.status {
+                LspServerStatus::Connected => " LSP:✓".to_string(),
+                LspServerStatus::Starting => format!(" LSP:⟳ {}", info.command),
+                LspServerStatus::Failed => " LSP:✗".to_string(),
+                LspServerStatus::Exited => " LSP:✗".to_string(),
+            };
+        }
+    }
+
+    // Fallback: no active language — show aggregate across all servers.
     let any_connected = editor
         .lsp_servers
         .values()
         .any(|s| s.status == LspServerStatus::Connected);
-    let any_starting = editor
-        .lsp_servers
-        .values()
-        .any(|s| s.status == LspServerStatus::Starting);
     if any_connected {
         " LSP:✓".to_string()
-    } else if any_starting {
-        let starting_name = editor
-            .lsp_servers
-            .values()
-            .find(|s| s.status == LspServerStatus::Starting)
-            .map(|s| s.command.as_str())
-            .unwrap_or("…");
-        format!(" LSP:⟳ {}", starting_name)
     } else {
-        " LSP:✗".to_string()
+        String::new()
     }
 }
 
@@ -610,6 +617,11 @@ mod tests {
     #[test]
     fn lsp_status_all_failed() {
         let mut editor = Editor::new();
+        // Need an active buffer with a .rs path so the language matches
+        let mut buf = crate::buffer::Buffer::new();
+        buf.set_file_path(std::path::Path::new("/tmp/test.rs").to_path_buf());
+        editor.buffers.push(buf);
+        editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
         editor.lsp_servers.insert(
             "rust".to_string(),
             LspServerInfo {
@@ -624,6 +636,10 @@ mod tests {
     #[test]
     fn lsp_status_starting_shows_server_name() {
         let mut editor = Editor::new();
+        let mut buf = crate::buffer::Buffer::new();
+        buf.set_file_path(std::path::Path::new("/tmp/test.rs").to_path_buf());
+        editor.buffers.push(buf);
+        editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
         editor.lsp_servers.insert(
             "rust".to_string(),
             LspServerInfo {
@@ -635,6 +651,54 @@ mod tests {
         let status = format_lsp_status(&editor);
         assert!(status.contains("rust-analyzer"), "got: {}", status);
         assert!(status.contains("⟳"), "got: {}", status);
+    }
+
+    #[test]
+    fn lsp_status_irrelevant_starting_ignored() {
+        // A server for a language with no open buffer should not show ⟳
+        let mut editor = Editor::new();
+        editor.lsp_servers.insert(
+            "python".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "pylsp".into(),
+                binary_found: true,
+            },
+        );
+        // Active buffer is scratch (no language) — should not show starting
+        assert_eq!(format_lsp_status(&editor), "");
+    }
+
+    #[test]
+    fn lsp_status_connected_shows_checkmark_for_active_buffer() {
+        // Regression: the modeline should show ✓ once the server for the
+        // active buffer's language is Connected, not ⟳ forever.
+        let mut editor = Editor::new();
+        let mut buf = crate::buffer::Buffer::new();
+        buf.set_file_path(std::path::Path::new("/tmp/test.rs").to_path_buf());
+        editor.buffers.push(buf);
+        editor.window_mgr.focused_window_mut().buffer_idx = editor.buffers.len() - 1;
+
+        // Initially Starting — should show ⟳
+        editor.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "rust-analyzer".into(),
+                binary_found: true,
+            },
+        );
+        let status = format_lsp_status(&editor);
+        assert!(
+            status.contains("⟳"),
+            "starting should show ⟳, got: {}",
+            status
+        );
+
+        // Simulate ServerStarted / diagnostics arrival → Connected
+        editor.lsp_servers.get_mut("rust").unwrap().status = LspServerStatus::Connected;
+        let status = format_lsp_status(&editor);
+        assert_eq!(status, " LSP:✓", "connected should show ✓, got: {}", status);
     }
 
     #[test]

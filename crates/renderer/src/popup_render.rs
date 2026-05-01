@@ -454,8 +454,11 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
         + 2;
     let popup_height = visible_count + 2;
 
+    // Position below cursor with a 1-line gap so the trigger line stays visible.
     let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
-        editor_area.y + cursor_screen_row + 1
+        editor_area.y + cursor_screen_row + 2
+    } else if cursor_screen_row > popup_height {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height + 1)
     } else {
         editor_area.y + cursor_screen_row.saturating_sub(popup_height)
     };

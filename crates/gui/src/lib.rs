@@ -250,8 +250,10 @@ impl Renderer for GuiRenderer {
         // Begin frame.
         canvas.begin_frame(&editor.theme);
 
-        // Clip rendering to allocated row height — prevents descender overflow.
-        let clip_height = self.rows as f32 * self.cell_height;
+        // Clip rendering to actual pixel height — prevents descender overflow
+        // while avoiding rounding artifacts that cut off the status bar after
+        // font size changes.
+        let clip_height = canvas.pixel_size().1 as f32;
         canvas.set_clip_height(clip_height);
 
         // Pre-compute syntax-highlight spans for every visible text buffer.

@@ -149,6 +149,7 @@ pub(crate) async fn run_terminal_loop(
             let buf_idx = editor.active_buffer_idx();
             let cursor_row = editor.window_mgr.focused_window().cursor_row;
             let scroll = editor.window_mgr.focused_window().scroll_offset;
+            let so = editor.scrolloff;
             let range_start = scroll.min(cursor_row);
             let range_end = (scroll.max(cursor_row) + viewport_height + 2)
                 .min(editor.buffers[buf_idx].display_line_count());
@@ -159,7 +160,7 @@ pub(crate) async fn run_terminal_loop(
             editor
                 .window_mgr
                 .focused_window_mut()
-                .ensure_scroll_wrapped(viewport_height, |line| {
+                .ensure_scroll_wrapped_with_margin(viewport_height, so, |line| {
                     row_cache
                         .iter()
                         .find(|(l, _)| *l == line)
@@ -174,6 +175,13 @@ pub(crate) async fn run_terminal_loop(
         {
             mae_core::syntax::drain_pending_reparses(editor);
             tui_dirty = true;
+        }
+
+        // Debounced document highlight: request after 300ms cursor idle.
+        if editor.highlight_ranges.is_empty()
+            && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
+        {
+            editor.lsp_request_document_highlight();
         }
 
         if tui_dirty {
@@ -341,6 +349,7 @@ pub(crate) async fn run_terminal_loop(
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         tui_dirty = true;
                         editor.last_edit_time = std::time::Instant::now();
+                        editor.clear_highlights();
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc

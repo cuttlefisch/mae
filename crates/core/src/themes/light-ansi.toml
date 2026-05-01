@@ -41,6 +41,10 @@
 "diagnostic.trace" = { fg = "dark_gray", dim = true }
 "diagnostic.target" = { fg = "cyan" }
 
+"lsp.highlight.read" = { bg = "gray" }
+"lsp.highlight.write" = { bg = "dark_gray" }
+"lsp.highlight.text" = { bg = "gray" }
+
 "conversation.user" = { fg = "blue", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

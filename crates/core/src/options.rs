@@ -372,6 +372,15 @@ impl OptionRegistry {
                     valid_values: &[],
                 },
                 OptionDef {
+                    name: "scrolloff",
+                    aliases: &["scroll-off", "so"],
+                    doc: "Minimum lines of context above/below cursor during scrolling",
+                    kind: OptionKind::String,
+                    default_value: "5",
+                    config_key: Some("editor.scrolloff"),
+                    valid_values: &[],
+                },
+                OptionDef {
                     name: "lsp_hover_popup",
                     aliases: &["lsp-hover-popup"],
                     doc: "Show hover info in a floating popup instead of the status bar",
@@ -513,5 +522,18 @@ mod tests {
         assert_eq!(parse_option_bool("false"), Ok(false));
         assert_eq!(parse_option_bool("0"), Ok(false));
         assert!(parse_option_bool("maybe").is_err());
+    }
+
+    #[test]
+    fn scrolloff_option_registered() {
+        let reg = OptionRegistry::new();
+        let opt = reg.find("scrolloff").unwrap();
+        assert_eq!(opt.name, "scrolloff");
+        assert_eq!(opt.default_value, "5");
+        assert_eq!(opt.config_key, Some("editor.scrolloff"));
+        // Alias lookup
+        assert!(reg.find("so").is_some());
+        assert_eq!(reg.find("so").unwrap().name, "scrolloff");
+        assert!(reg.find("scroll-off").is_some());
     }
 }

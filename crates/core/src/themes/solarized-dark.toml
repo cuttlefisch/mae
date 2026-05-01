@@ -55,6 +55,10 @@ green = "#859900"
 "diagnostic.debug" = { fg = "base01" }
 "diagnostic.target" = { fg = "cyan" }
 
+"lsp.highlight.read" = { bg = "base02" }
+"lsp.highlight.write" = { bg = "base01" }
+"lsp.highlight.text" = { bg = "base02" }
+
 "conversation.user" = { fg = "cyan", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
 "conversation.system" = { fg = "yellow" }

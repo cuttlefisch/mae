@@ -497,6 +497,33 @@ impl LspClient {
         Ok(DocumentSymbolResponse::from_value(result))
     }
 
+    /// textDocument/documentHighlight — returns symbol occurrences at `position`.
+    pub async fn request_document_highlight(
+        &self,
+        uri: &str,
+        position: Position,
+    ) -> Result<DocumentHighlightResponse, String> {
+        let params = TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+        };
+        let resp = self
+            .request(
+                "textDocument/documentHighlight",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(DocumentHighlightResponse::from_value(result))
+    }
+
     /// textDocument/codeAction — returns code actions available at `range`.
     pub async fn request_code_action(
         &self,

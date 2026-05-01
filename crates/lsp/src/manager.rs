@@ -77,6 +77,13 @@ pub enum LspCommand {
         range: Range,
         diagnostics: Vec<serde_json::Value>,
     },
+    /// Request document highlights at a position.
+    DocumentHighlight {
+        uri: String,
+        language_id: String,
+        position: Position,
+        generation: u64,
+    },
     /// Shut down all clients.
     Shutdown,
 }
@@ -136,6 +143,11 @@ pub enum LspTaskEvent {
     CodeActionResult {
         uri: String,
         actions: Vec<crate::protocol::CodeAction>,
+    },
+    /// Document highlight response.
+    DocumentHighlightResult {
+        highlights: Vec<crate::protocol::DocumentHighlight>,
+        generation: u64,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -311,6 +323,20 @@ impl LspManager {
         let client = self.ensure_client(language_id).await?;
         let resp = client.request_code_action(uri, range, diagnostics).await?;
         Ok(resp.actions)
+    }
+
+    pub async fn document_highlight(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<Vec<crate::protocol::DocumentHighlight>, String> {
+        let client = match self.clients.get(language_id) {
+            Some(_) => self.clients.get(language_id).unwrap(),
+            None => return Ok(vec![]),
+        };
+        let resp = client.request_document_highlight(uri, position).await?;
+        Ok(resp.highlights)
     }
 
     pub async fn shutdown_all(&mut self) {
@@ -556,6 +582,27 @@ async fn handle_command(
             }
             Err(e) => {
                 let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::DocumentHighlight {
+            uri,
+            language_id,
+            position,
+            generation,
+        } => match manager
+            .document_highlight(&language_id, &uri, position)
+            .await
+        {
+            Ok(highlights) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::DocumentHighlightResult {
+                        highlights,
+                        generation,
+                    })
+                    .await;
+            }
+            Err(_) => {
+                // Silently ignore highlight errors — they're not user-initiated.
             }
         },
         LspCommand::Shutdown => {

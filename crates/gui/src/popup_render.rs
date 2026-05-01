@@ -582,9 +582,11 @@ pub fn render_hover_popup(
         + 2; // border
     let popup_height = visible_count + 2; // border top+bottom
 
-    // Position above cursor if not enough room below.
+    // Position below cursor with a 1-line gap so the trigger line stays visible.
     let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
-        area_row + cursor_screen_row + 1
+        area_row + cursor_screen_row + 2
+    } else if cursor_screen_row > popup_height {
+        area_row + cursor_screen_row.saturating_sub(popup_height + 1)
     } else {
         area_row + cursor_screen_row.saturating_sub(popup_height)
     };

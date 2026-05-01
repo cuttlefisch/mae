@@ -53,8 +53,8 @@ pub use debug::{
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
     CodeActionItem, CodeActionMenu, CompletionItem, Diagnostic, DiagnosticSeverity,
-    DiagnosticStore, EditRecord, Editor, HoverPopup, InputLock, LspLocation, LspRange,
-    LspServerInfo, LspServerStatus,
+    DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup,
+    InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

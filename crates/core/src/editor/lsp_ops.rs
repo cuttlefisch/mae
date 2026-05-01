@@ -21,6 +21,24 @@ pub struct LspRange {
     pub end_character: u32,
 }
 
+/// The kind of a document highlight (read vs write vs text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightKind {
+    Text,
+    Read,
+    Write,
+}
+
+/// A highlighted range from `textDocument/documentHighlight`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentHighlightRange {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub kind: HighlightKind,
+}
+
 /// A file+range returned by definition/references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LspLocation {
@@ -57,16 +75,16 @@ impl Editor {
         ))
     }
 
-    /// Check if the LSP server for `language_id` is still starting.
-    /// If so, set a helpful status message and return `true`.
-    fn lsp_server_is_starting(&mut self, language_id: &str) -> bool {
+    /// Return a status suffix if the LSP server for `language_id` is still
+    /// starting. Requests are no longer blocked — they queue in the LSP
+    /// command channel and execute once the server finishes initializing.
+    fn lsp_starting_suffix(&self, language_id: &str) -> &'static str {
         if let Some(info) = self.lsp_servers.get(language_id) {
             if info.status == LspServerStatus::Starting {
-                self.set_status(format!("[LSP] {} server starting\u{2026}", language_id));
-                return true;
+                return " (server starting\u{2026})";
             }
         }
-        false
+        ""
     }
 
     /// Queue a `textDocument/definition` request at the cursor.
@@ -74,16 +92,14 @@ impl Editor {
     pub fn lsp_request_definition(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
-                if self.lsp_server_is_starting(&language_id) {
-                    return;
-                }
+                let suffix = self.lsp_starting_suffix(&language_id);
                 self.pending_lsp_requests.push(LspIntent::GotoDefinition {
                     uri,
                     language_id,
                     line,
                     character,
                 });
-                self.set_status("[LSP] definition...");
+                self.set_status(format!("[LSP] definition...{}", suffix));
             }
             None => self.set_status("[LSP] no language server for this buffer"),
         }
@@ -93,9 +109,7 @@ impl Editor {
     pub fn lsp_request_references(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
-                if self.lsp_server_is_starting(&language_id) {
-                    return;
-                }
+                let suffix = self.lsp_starting_suffix(&language_id);
                 self.pending_lsp_requests.push(LspIntent::FindReferences {
                     uri,
                     language_id,
@@ -103,7 +117,7 @@ impl Editor {
                     character,
                     include_declaration: true,
                 });
-                self.set_status("[LSP] references...");
+                self.set_status(format!("[LSP] references...{}", suffix));
             }
             None => self.set_status("[LSP] no language server for this buffer"),
         }
@@ -113,16 +127,14 @@ impl Editor {
     pub fn lsp_request_hover(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
-                if self.lsp_server_is_starting(&language_id) {
-                    return;
-                }
+                let suffix = self.lsp_starting_suffix(&language_id);
                 self.pending_lsp_requests.push(LspIntent::Hover {
                     uri,
                     language_id,
                     line,
                     character,
                 });
-                self.set_status("[LSP] hover...");
+                self.set_status(format!("[LSP] hover...{}", suffix));
             }
             None => self.set_status("[LSP] no language server for this buffer"),
         }
@@ -243,9 +255,7 @@ impl Editor {
             };
             (crate::lsp_intent::path_to_uri(path), lang_id)
         };
-        if self.lsp_server_is_starting(&lang_id) {
-            return;
-        }
+        let suffix = self.lsp_starting_suffix(&lang_id);
         let win = self.window_mgr.focused_window();
         self.pending_lsp_requests
             .push(crate::LspIntent::CodeAction {
@@ -254,7 +264,10 @@ impl Editor {
                 line: win.cursor_row as u32,
                 character: win.cursor_col as u32,
             });
-        self.set_status("LSP code-action: awaiting server response");
+        self.set_status(format!(
+            "LSP code-action: awaiting server response{}",
+            suffix
+        ));
     }
 
     /// Apply code action results from LSP — populate the code action menu.
@@ -514,10 +527,12 @@ impl Editor {
             let line_count = self.buffers[idx].display_line_count();
             let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
             let target_col = loc.range.start_character as usize;
+            let vh = self.viewport_height;
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = target_row;
             win.cursor_col = target_col;
             win.clamp_cursor(&self.buffers[idx]);
+            win.scroll_center(vh);
             self.set_status(format!(
                 "[LSP] definition at {}:{}",
                 target_row + 1,
@@ -539,6 +554,58 @@ impl Editor {
         } else {
             self.set_status(format!("[LSP] {} reference(s)", locations.len()));
         }
+    }
+
+    /// Queue a `textDocument/documentHighlight` request for the symbol under cursor.
+    /// Called on idle timer (~300ms after last cursor move).
+    pub fn lsp_request_document_highlight(&mut self) {
+        let pos = {
+            let win = self.window_mgr.focused_window();
+            (win.cursor_row, win.cursor_col)
+        };
+        // Don't re-request if cursor hasn't moved since last request.
+        if self.highlight_last_pos == Some(pos) {
+            return;
+        }
+        self.highlight_last_pos = Some(pos);
+
+        if let Some((uri, language_id, line, character)) = self.lsp_context_at_cursor() {
+            // Only request if server is connected.
+            if self
+                .lsp_servers
+                .get(&language_id)
+                .map(|s| s.status == LspServerStatus::Connected)
+                .unwrap_or(false)
+            {
+                self.pending_lsp_requests
+                    .push(LspIntent::DocumentHighlight {
+                        uri,
+                        language_id,
+                        line,
+                        character,
+                        generation: self.highlight_generation,
+                    });
+            }
+        }
+    }
+
+    /// Store document highlight ranges from the LSP response.
+    pub fn apply_document_highlight_result(
+        &mut self,
+        highlights: Vec<DocumentHighlightRange>,
+        generation: u64,
+    ) {
+        // Only apply if the generation matches (cursor hasn't moved since request).
+        if generation == self.highlight_generation {
+            self.highlight_ranges = highlights;
+        }
+    }
+
+    /// Clear highlights and bump generation (called on cursor move).
+    pub fn clear_highlights(&mut self) {
+        self.highlight_ranges.clear();
+        self.highlight_generation = self.highlight_generation.wrapping_add(1);
+        self.highlight_last_pos = None;
     }
 
     /// Show a `*LSP Status*` buffer listing all configured language servers,
@@ -1204,7 +1271,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn lsp_request_blocked_when_server_starting() {
+    fn lsp_request_queued_even_when_server_starting() {
         use crate::editor::{LspServerInfo, LspServerStatus};
         let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
         ed.lsp_servers.insert(
@@ -1216,17 +1283,21 @@ mod tests {
             },
         );
         ed.lsp_request_definition();
-        assert!(
-            ed.pending_lsp_requests.is_empty(),
-            "should not queue when starting"
+        assert_eq!(
+            ed.pending_lsp_requests.len(),
+            1,
+            "should queue even when starting"
         );
-        assert!(ed.status_msg.contains("server starting"));
+        assert!(
+            ed.status_msg.contains("server starting"),
+            "status should mention server starting"
+        );
 
         ed.lsp_request_hover();
-        assert!(ed.pending_lsp_requests.is_empty());
+        assert_eq!(ed.pending_lsp_requests.len(), 2);
 
         ed.lsp_request_references();
-        assert!(ed.pending_lsp_requests.is_empty());
+        assert_eq!(ed.pending_lsp_requests.len(), 3);
     }
 
     #[test]
@@ -1248,5 +1319,83 @@ mod tests {
         }]);
         assert!(ed.status_msg.contains("j/k navigate"));
         assert!(ed.status_msg.contains("Esc dismiss"));
+    }
+
+    // --- Center-on-jump tests ---
+
+    #[test]
+    fn apply_definition_same_file_centers_viewport() {
+        // Buffer with 100 lines, viewport height 20.
+        let text: String = (0..100).map(|i| format!("line{}\n", i)).collect();
+        let mut ed = editor_with_file("/tmp/a.rs", &text);
+        ed.viewport_height = 20;
+        let loc = LspLocation {
+            uri: "file:///tmp/a.rs".into(),
+            range: LspRange {
+                start_line: 50,
+                start_character: 0,
+                end_line: 50,
+                end_character: 4,
+            },
+        };
+        ed.apply_definition_result(vec![loc]);
+        // Cursor should be on row 50 and scroll_offset should center it.
+        assert_eq!(ed.window_mgr.focused_window().cursor_row, 50);
+        assert_eq!(ed.window_mgr.focused_window().scroll_offset, 40);
+    }
+
+    // --- Document highlight tests ---
+
+    #[test]
+    fn clear_highlights_increments_generation() {
+        let mut ed = Editor::new();
+        let gen0 = ed.highlight_generation;
+        ed.clear_highlights();
+        assert_eq!(ed.highlight_generation, gen0 + 1);
+    }
+
+    #[test]
+    fn clear_highlights_empties_ranges() {
+        let mut ed = Editor::new();
+        ed.highlight_ranges.push(DocumentHighlightRange {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 5,
+            kind: HighlightKind::Read,
+        });
+        ed.clear_highlights();
+        assert!(ed.highlight_ranges.is_empty());
+    }
+
+    #[test]
+    fn apply_document_highlight_stores_ranges() {
+        let mut ed = Editor::new();
+        let gen = ed.highlight_generation;
+        let highlights = vec![DocumentHighlightRange {
+            start_line: 5,
+            start_col: 2,
+            end_line: 5,
+            end_col: 7,
+            kind: HighlightKind::Write,
+        }];
+        ed.apply_document_highlight_result(highlights, gen);
+        assert_eq!(ed.highlight_ranges.len(), 1);
+        assert_eq!(ed.highlight_ranges[0].kind, HighlightKind::Write);
+    }
+
+    #[test]
+    fn apply_document_highlight_stale_generation_ignored() {
+        let mut ed = Editor::new();
+        let highlights = vec![DocumentHighlightRange {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 3,
+            kind: HighlightKind::Text,
+        }];
+        // Apply with a stale generation (gen + 1 != current).
+        ed.apply_document_highlight_result(highlights, ed.highlight_generation + 1);
+        assert!(ed.highlight_ranges.is_empty());
     }
 }

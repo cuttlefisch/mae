@@ -28,7 +28,7 @@ mod visual;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
-pub use lsp_ops::{LspLocation, LspRange};
+pub use lsp_ops::{DocumentHighlightRange, HighlightKind, LspLocation, LspRange};
 pub use marks::Mark;
 
 #[cfg(test)]
@@ -532,6 +532,8 @@ pub struct Editor {
     pub ignorecase: bool,
     /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
     pub smartcase: bool,
+    /// Minimum lines of context above/below cursor (vim scrolloff). Default 5.
+    pub scrolloff: usize,
     pub scrollbar: bool,
     pub nyan_mode: bool,
     /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
@@ -550,6 +552,14 @@ pub struct Editor {
     pub lsp_completion: bool,
     /// Active code action menu (shown via SPC c a).
     pub code_action_menu: Option<CodeActionMenu>,
+    /// Symbol occurrence highlights from `textDocument/documentHighlight`.
+    /// Cleared on every cursor move; repopulated after idle timeout.
+    pub highlight_ranges: Vec<DocumentHighlightRange>,
+    /// Generation counter — incremented on cursor move to invalidate stale highlights.
+    pub highlight_generation: u64,
+    /// Last cursor position when a documentHighlight request was sent.
+    /// Used to avoid duplicate requests when the cursor hasn't moved.
+    pub highlight_last_pos: Option<(usize, usize)>,
     /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
     /// is pressed in block visual mode. On insert-mode exit, the typed text is
     /// replicated to all rows in the range.
@@ -746,6 +756,7 @@ impl Editor {
             heading_scale: true,
             ignorecase: false,
             smartcase: false,
+            scrolloff: 5,
             scrollbar: true,
             nyan_mode: false,
             link_descriptive: true,
@@ -756,6 +767,9 @@ impl Editor {
             lsp_diagnostics_virtual_text: true,
             lsp_completion: true,
             code_action_menu: None,
+            highlight_ranges: Vec::new(),
+            highlight_generation: 0,
+            highlight_last_pos: None,
             pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1089,6 +1103,7 @@ impl Editor {
             "autosave_interval" => self.autosave_interval.to_string(),
             "swap_file" => self.swap_file.to_string(),
             "swap_directory" => self.swap_directory.clone(),
+            "scrolloff" => self.scrolloff.to_string(),
             "scrollbar" => self.scrollbar.to_string(),
             "nyan_mode" => self.nyan_mode.to_string(),
             "link_descriptive" => self.link_descriptive.to_string(),
@@ -1139,6 +1154,7 @@ impl Editor {
                     return Err("Font size must be between 6 and 72".into());
                 }
                 self.gui_font_size = size;
+                self.gui_font_size_default = size;
             }
             "font_family" => {
                 self.gui_font_family = value.to_string();
@@ -1241,6 +1257,12 @@ impl Editor {
             }
             "swap_directory" => {
                 self.swap_directory = value.to_string();
+            }
+            "scrolloff" => {
+                let n: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.scrolloff = n;
             }
             "scrollbar" => {
                 self.scrollbar = parse_option_bool(value)?;
@@ -2013,6 +2035,10 @@ impl Editor {
         button: crate::input::MouseButton,
     ) {
         use crate::input::MouseButton;
+
+        // Dismiss stale popups on any mouse click.
+        self.hover_popup = None;
+        self.code_action_menu = None;
 
         // Shell buffers: route to pending_shell_click for the binary to drain.
         // Subtract window border offset (1 row top, 1 col left).

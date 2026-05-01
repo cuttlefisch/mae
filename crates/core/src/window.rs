@@ -387,16 +387,23 @@ impl Window {
 
     // --- Scrolling ---
 
-    /// Adjust scroll_offset so the cursor stays visible within the viewport.
+    /// Adjust scroll_offset so the cursor stays visible within the viewport,
+    /// keeping at least `scrolloff` lines of context above/below the cursor.
     pub fn ensure_scroll(&mut self, viewport_height: usize) {
+        self.ensure_scroll_with_margin(viewport_height, 0);
+    }
+
+    /// Like `ensure_scroll` but respects a scroll margin (vim `scrolloff`).
+    pub fn ensure_scroll_with_margin(&mut self, viewport_height: usize, scrolloff: usize) {
         if viewport_height == 0 {
             return;
         }
-        if self.cursor_row < self.scroll_offset {
-            self.scroll_offset = self.cursor_row;
+        let margin = scrolloff.min(viewport_height / 2);
+        if self.cursor_row < self.scroll_offset + margin {
+            self.scroll_offset = self.cursor_row.saturating_sub(margin);
         }
-        if self.cursor_row >= self.scroll_offset + viewport_height {
-            self.scroll_offset = self.cursor_row - viewport_height + 1;
+        if self.cursor_row + margin >= self.scroll_offset + viewport_height {
+            self.scroll_offset = (self.cursor_row + margin + 1).saturating_sub(viewport_height);
         }
     }
 
@@ -413,37 +420,68 @@ impl Window {
     where
         F: Fn(usize) -> usize,
     {
+        self.ensure_scroll_wrapped_with_margin(viewport_height, 0, line_visual_rows);
+    }
+
+    /// Like `ensure_scroll_wrapped` but respects a scroll margin (vim `scrolloff`).
+    /// The margin is applied as extra visual rows required above/below the cursor.
+    pub fn ensure_scroll_wrapped_with_margin<F>(
+        &mut self,
+        viewport_height: usize,
+        scrolloff: usize,
+        line_visual_rows: F,
+    ) where
+        F: Fn(usize) -> usize,
+    {
         if viewport_height == 0 {
             return;
         }
+        let margin = scrolloff.min(viewport_height / 2);
 
-        // Cursor above viewport — scroll up.
-        if self.cursor_row < self.scroll_offset {
-            self.scroll_offset = self.cursor_row;
+        // Cursor above viewport (with margin) — scroll up.
+        // Count visual rows for margin lines above the cursor.
+        let mut margin_above_lines = 0;
+        let mut margin_above_rows = 0;
+        {
+            let mut line = self.cursor_row;
+            while margin_above_rows < margin && line > 0 {
+                line -= 1;
+                margin_above_rows += line_visual_rows(line);
+                margin_above_lines += 1;
+            }
+        }
+        let top_target = self.cursor_row.saturating_sub(margin_above_lines);
+        if top_target < self.scroll_offset {
+            self.scroll_offset = top_target;
             return;
         }
 
-        // Fast check: is cursor already visible from current scroll_offset?
+        // Fast check: is cursor already visible with margin below?
         let mut visual = 0;
+        let mut cursor_visible = false;
         for line in self.scroll_offset..=self.cursor_row {
             let rows = line_visual_rows(line);
             if line == self.cursor_row {
-                if visual + rows <= viewport_height {
-                    return; // cursor is visible
+                if visual + rows + margin <= viewport_height {
+                    cursor_visible = true;
                 }
                 break;
             }
             visual += rows;
             if visual >= viewport_height {
-                break; // cursor below viewport
+                break;
             }
+        }
+        if cursor_visible {
+            return;
         }
 
         // Cursor not visible — walk backward from cursor_row to find the
-        // right scroll_offset. This is O(viewport_height) regardless of
-        // how far the cursor jumped.
+        // right scroll_offset, reserving margin rows below the cursor.
         let cursor_rows = line_visual_rows(self.cursor_row);
-        let mut budget = viewport_height.saturating_sub(cursor_rows);
+        let mut budget = viewport_height
+            .saturating_sub(cursor_rows)
+            .saturating_sub(margin);
         let mut new_offset = self.cursor_row;
         while new_offset > 0 {
             let prev_rows = line_visual_rows(new_offset - 1);
@@ -1832,6 +1870,95 @@ mod tests {
         win.move_up(&buf);
         // Should skip lines 3, 2 and land on 1
         assert_eq!(win.cursor_row, 1);
+    }
+
+    // --- Scrolloff (ensure_scroll_with_margin) tests ---
+
+    #[test]
+    fn scrolloff_keeps_margin_above_cursor() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 3;
+        // scrolloff=5, viewport=20: margin = min(5, 10) = 5
+        // cursor_row (3) < scroll_offset (0) + margin (5) → adjust
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset should be max(0, 3-5) = 0 (can't go negative)
+        assert_eq!(win.scroll_offset, 0);
+
+        // Now cursor at row 10, scroll_offset at 8
+        win.cursor_row = 10;
+        win.scroll_offset = 8;
+        // cursor_row (10) < scroll_offset (8) + margin (5) = 13? yes
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset = max(0, 10 - 5) = 5
+        assert_eq!(win.scroll_offset, 5);
+    }
+
+    #[test]
+    fn scrolloff_keeps_margin_below_cursor() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 17;
+        // scrolloff=5, viewport=20: margin=5
+        // cursor_row (17) + margin (5) = 22 >= scroll_offset (0) + viewport (20) = 20
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset = (17 + 5 + 1) - 20 = 3
+        assert_eq!(win.scroll_offset, 3);
+    }
+
+    #[test]
+    fn scrolloff_capped_at_half_viewport() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 3;
+        // scrolloff=15, viewport=10: margin = min(15, 5) = 5
+        win.ensure_scroll_with_margin(10, 15);
+        // cursor_row (3) < 0 + 5 → adjust: scroll_offset = max(0, 3-5) = 0
+        assert_eq!(win.scroll_offset, 0);
+
+        // Cursor at bottom area
+        win.cursor_row = 7;
+        win.scroll_offset = 0;
+        win.ensure_scroll_with_margin(10, 15);
+        // 7 + 5 = 12 >= 0 + 10 → scroll_offset = (7+5+1) - 10 = 3
+        assert_eq!(win.scroll_offset, 3);
+    }
+
+    #[test]
+    fn scrolloff_zero_behaves_like_no_margin() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 19;
+        // scrolloff=0, viewport=20: margin=0
+        // 19 + 0 = 19 < 0 + 20 = 20 → no adjustment
+        win.ensure_scroll_with_margin(20, 0);
+        assert_eq!(win.scroll_offset, 0);
+
+        // Just past edge
+        win.cursor_row = 20;
+        win.ensure_scroll_with_margin(20, 0);
+        // 20 + 0 = 20 >= 0 + 20 → scroll_offset = (20+0+1) - 20 = 1
+        assert_eq!(win.scroll_offset, 1);
+    }
+
+    #[test]
+    fn scrolloff_wrapped_keeps_margin() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 8;
+        // All lines 1 visual row, scrolloff=3, viewport=10
+        // Margin below: cursor_row(8) visual row 1 + margin 3 = needs 4 rows below
+        // 8 visible lines (0..7) = 8 rows + cursor(1) + margin(3) = 12 > 10
+        win.ensure_scroll_wrapped_with_margin(10, 3, |_| 1);
+        // Should scroll forward so cursor has 3 lines of margin below
+        assert!(
+            win.scroll_offset > 0,
+            "should have scrolled: offset={}",
+            win.scroll_offset
+        );
+        // Verify: budget = 10 - 1(cursor) - 3(margin) = 6 rows above cursor
+        // so scroll_offset = 8 - 6 = 2
+        assert_eq!(win.scroll_offset, 2);
     }
 
     #[test]
