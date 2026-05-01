@@ -429,19 +429,55 @@ Your `init.scm` is loaded at startup. Use `SPC f c` to edit it.\n\n\
 
 const LESSON_LSP: &str = "\
 ## Lesson 7: LSP\n\n\
-MAE has first-class LSP (Language Server Protocol) support.\n\n\
-### Navigation\n\
-  `gd` — [[cmd:lsp-goto-definition|go to definition]]\n\
-  `gr` — find references\n\
-  `K` — hover documentation\n\n\
-### Diagnostics\n\
-  `SPC l d` — show diagnostics\n\
-  Errors and warnings appear in the gutter.\n\n\
-### Code actions\n\
-  `SPC c a` — code action\n\
-  `SPC c R` — rename symbol\n\
-  `SPC c f` — format\n\n\
+MAE has first-class LSP (Language Server Protocol) support.\n\
 LSP starts automatically when you open a supported file type.\n\n\
+### Navigation\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `gd` | [[cmd:lsp-goto-definition]] | Go to definition |\n\
+| `gr` | [[cmd:lsp-find-references]] | Find all references |\n\
+| `K` | [[cmd:lsp-hover]] | Show hover documentation |\n\n\
+### Hover Popup\n\
+When `K` shows a hover popup:\n\
+- Press `K` again to scroll down\n\
+- Any other key dismisses the popup\n\
+- `:set nolsp_hover_popup` falls back to status bar display\n\n\
+### Diagnostics\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `]d` | [[cmd:lsp-next-diagnostic]] | Jump to next diagnostic |\n\
+| `[d` | [[cmd:lsp-prev-diagnostic]] | Jump to previous diagnostic |\n\
+| `SPC c x` | [[cmd:lsp-show-diagnostics]] | List all diagnostics |\n\
+| `SPC t d` | [[cmd:toggle-lsp-diagnostics-inline]] | Toggle inline underlines |\n\n\
+Diagnostics appear as wavy underlines with end-of-line virtual text.\n\
+Gutter markers show severity: `E` error, `W` warning, `I` info, `H` hint.\n\n\
+### Completion (Insert Mode)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| (auto) | [[cmd:lsp-complete]] | Triggered on typing |\n\
+| `Tab` | [[cmd:lsp-accept-completion]] | Accept selected item |\n\
+| `C-n` | [[cmd:lsp-complete-next]] | Next item |\n\
+| `C-p` | [[cmd:lsp-complete-prev]] | Previous item |\n\n\
+### Code Actions & Refactoring\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC c a` | [[cmd:lsp-code-action]] | Show code actions at cursor |\n\
+| `j`/`k` | next/prev | Navigate the action menu |\n\
+| `Enter` | [[cmd:lsp-code-action-select]] | Apply selected action |\n\
+| `Esc` | dismiss | Close action menu |\n\
+| `SPC c R` | [[cmd:lsp-rename]] | Rename symbol |\n\
+| `SPC c f` | [[cmd:lsp-format]] | Format buffer |\n\n\
+### Status & Configuration\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC c s` | [[cmd:lsp-status]] | Show LSP server status |\n\n\
+Configure servers in `~/.config/mae/config.toml`:\n\
+```toml\n\
+[lsp.rust]\n\
+command = \"rust-analyzer\"\n\n\
+[lsp.python]\n\
+command = \"pylsp\"\n\
+```\n\n\
 **Prev:** [[lesson:scheme|Lesson 6]]  |  \
 **Next:** [[lesson:terminal|Lesson 8: Terminal]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n";

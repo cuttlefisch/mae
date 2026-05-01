@@ -10,6 +10,11 @@ impl Editor {
             }
             "lsp-find-references" => self.lsp_request_references(),
             "lsp-hover" => {
+                // If hover popup is already visible, pressing K again scrolls down.
+                if self.hover_popup.is_some() {
+                    self.hover_scroll_down();
+                    return Some(true);
+                }
                 self.lsp_request_hover();
                 // Also show debug variable value if stopped.
                 if let Some(state) = &self.debug_state {

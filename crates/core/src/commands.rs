@@ -656,9 +656,6 @@ impl CommandRegistry {
             "toggle-lsp-diagnostics-inline",
             "Toggle inline diagnostic underlines (SPC t d)",
         );
-        reg.register_builtin("dismiss-hover-popup", "Dismiss the hover popup");
-        reg.register_builtin("hover-scroll-down", "Scroll hover popup down");
-        reg.register_builtin("hover-scroll-up", "Scroll hover popup up");
 
         // Folding
         reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");

@@ -592,7 +592,11 @@ pub fn render_hover_popup(
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let text_fg = theme::ts_fg(editor, "ui.popup.text");
-    let bg = theme::ts_bg(editor, "ui.popup.text").unwrap_or(theme::DEFAULT_BG);
+    // Use ui.popup bg → ui.popup.text bg → ui.background bg → DEFAULT_BG.
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
     draw_border_titled(
@@ -615,10 +619,11 @@ pub fn render_hover_popup(
         canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
     }
 
-    // Scroll indicator.
+    // Scroll indicator (clear border chars beneath it first to avoid strikethrough artifact).
     if lines.len() > MAX_VISIBLE {
         let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
         let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
+        canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);
         canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
     }
 }
@@ -674,7 +679,9 @@ pub fn render_code_action_popup(
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let normal_fg = theme::ts_fg(editor, "ui.popup.text");
-    let normal_bg = theme::ts_bg(editor, "ui.popup.text");
+    let normal_bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"));
     let selected_fg = theme::ts_fg(editor, "ui.popup.key");
     let selected_bg = theme::ts_bg(editor, "ui.popup.key");
 

@@ -1084,4 +1084,88 @@ mod tests {
         assert!(text.starts_with("goodbye world"));
         assert!(ed.code_action_menu.is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // E2E dispatch-level tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hover_auto_dismiss_on_motion() {
+        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        ed.apply_hover_result("some hover docs".into());
+        assert!(ed.hover_popup.is_some());
+        // Moving cursor should dismiss via dispatch_builtin auto-dismiss.
+        ed.dispatch_builtin("move-down");
+        assert!(ed.hover_popup.is_none());
+    }
+
+    #[test]
+    fn hover_k_again_scrolls_down() {
+        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        ed.apply_hover_result("line1\nline2\nline3".into());
+        assert!(ed.hover_popup.is_some());
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 0);
+        // Pressing K again (lsp-hover) when popup visible scrolls.
+        ed.dispatch_builtin("lsp-hover");
+        assert!(ed.hover_popup.is_some()); // not dismissed
+        assert_eq!(ed.hover_popup.as_ref().unwrap().scroll_offset, 1);
+    }
+
+    #[test]
+    fn code_action_menu_auto_dismiss_on_motion() {
+        use crate::editor::CodeActionItem;
+        let mut ed = Editor::new();
+        ed.apply_code_action_result_items(vec![CodeActionItem {
+            title: "Fix".into(),
+            kind: None,
+            edit_json: None,
+        }]);
+        assert!(ed.code_action_menu.is_some());
+        ed.dispatch_builtin("move-down");
+        assert!(ed.code_action_menu.is_none());
+    }
+
+    #[test]
+    fn code_action_dispatch_navigation() {
+        use crate::editor::CodeActionItem;
+        let mut ed = Editor::new();
+        ed.apply_code_action_result_items(vec![
+            CodeActionItem {
+                title: "A".into(),
+                kind: None,
+                edit_json: None,
+            },
+            CodeActionItem {
+                title: "B".into(),
+                kind: None,
+                edit_json: None,
+            },
+        ]);
+        ed.dispatch_builtin("lsp-code-action-next");
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 1);
+        ed.dispatch_builtin("lsp-code-action-prev");
+        assert_eq!(ed.code_action_menu.as_ref().unwrap().selected, 0);
+        ed.dispatch_builtin("lsp-code-action-dismiss");
+        assert!(ed.code_action_menu.is_none());
+    }
+
+    #[test]
+    fn toggle_diagnostics_inline_via_dispatch() {
+        let mut ed = Editor::new();
+        assert!(ed.lsp_diagnostics_inline); // default on
+        ed.dispatch_builtin("toggle-lsp-diagnostics-inline");
+        assert!(!ed.lsp_diagnostics_inline);
+        ed.dispatch_builtin("toggle-lsp-diagnostics-inline");
+        assert!(ed.lsp_diagnostics_inline);
+    }
+
+    #[test]
+    fn lsp_status_via_dispatch() {
+        let mut ed = Editor::new();
+        let initial = ed.buffers.len();
+        ed.dispatch_builtin("lsp-status");
+        assert!(ed.buffers.len() > initial);
+        let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
+        assert!(buf.name.contains("LSP Status"));
+    }
 }
