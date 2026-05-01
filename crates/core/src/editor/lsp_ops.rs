@@ -57,11 +57,26 @@ impl Editor {
         ))
     }
 
+    /// Check if the LSP server for `language_id` is still starting.
+    /// If so, set a helpful status message and return `true`.
+    fn lsp_server_is_starting(&mut self, language_id: &str) -> bool {
+        if let Some(info) = self.lsp_servers.get(language_id) {
+            if info.status == LspServerStatus::Starting {
+                self.set_status(format!("[LSP] {} server starting\u{2026}", language_id));
+                return true;
+            }
+        }
+        false
+    }
+
     /// Queue a `textDocument/definition` request at the cursor.
     /// Sets a status message if no language is detected.
     pub fn lsp_request_definition(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
+                if self.lsp_server_is_starting(&language_id) {
+                    return;
+                }
                 self.pending_lsp_requests.push(LspIntent::GotoDefinition {
                     uri,
                     language_id,
@@ -78,6 +93,9 @@ impl Editor {
     pub fn lsp_request_references(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
+                if self.lsp_server_is_starting(&language_id) {
+                    return;
+                }
                 self.pending_lsp_requests.push(LspIntent::FindReferences {
                     uri,
                     language_id,
@@ -95,6 +113,9 @@ impl Editor {
     pub fn lsp_request_hover(&mut self) {
         match self.lsp_context_at_cursor() {
             Some((uri, language_id, line, character)) => {
+                if self.lsp_server_is_starting(&language_id) {
+                    return;
+                }
                 self.pending_lsp_requests.push(LspIntent::Hover {
                     uri,
                     language_id,
@@ -209,18 +230,23 @@ impl Editor {
 
     /// Queue a `textDocument/codeAction` request at the cursor.
     pub fn lsp_request_code_action(&mut self) {
-        let idx = self.active_buffer_idx();
-        let buf = &self.buffers[idx];
-        let Some(path) = buf.file_path() else {
-            self.set_status("LSP code-action: buffer has no file path");
-            return;
+        let (uri, lang_id) = {
+            let idx = self.active_buffer_idx();
+            let buf = &self.buffers[idx];
+            let Some(path) = buf.file_path() else {
+                self.set_status("LSP code-action: buffer has no file path");
+                return;
+            };
+            let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
+                self.set_status("LSP code-action: unsupported language");
+                return;
+            };
+            (crate::lsp_intent::path_to_uri(path), lang_id)
         };
-        let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
-            self.set_status("LSP code-action: unsupported language");
+        if self.lsp_server_is_starting(&lang_id) {
             return;
-        };
+        }
         let win = self.window_mgr.focused_window();
-        let uri = crate::lsp_intent::path_to_uri(path);
         self.pending_lsp_requests
             .push(crate::LspIntent::CodeAction {
                 uri,
@@ -239,7 +265,10 @@ impl Editor {
         }
         let count = items.len();
         self.code_action_menu = Some(super::CodeActionMenu { items, selected: 0 });
-        self.set_status(format!("[LSP] {} code action(s)", count));
+        self.set_status(format!(
+            "[LSP] {} code action(s) — j/k navigate, Enter apply, Esc dismiss",
+            count
+        ));
     }
 
     /// Navigate code action menu down.
@@ -422,6 +451,7 @@ impl Editor {
                 anchor_col: win.cursor_col,
                 scroll_offset: 0,
             });
+            self.set_status("[LSP] K to scroll, any key to dismiss");
         } else {
             // Collapse newlines and trim for single-line status display.
             let single = contents
@@ -1167,5 +1197,56 @@ mod tests {
         assert!(ed.buffers.len() > initial);
         let buf = &ed.buffers[ed.window_mgr.focused_window().buffer_idx];
         assert!(buf.name.contains("LSP Status"));
+    }
+
+    // -----------------------------------------------------------------------
+    // LSP UX: starting-server early return + popup hints
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn lsp_request_blocked_when_server_starting() {
+        use crate::editor::{LspServerInfo, LspServerStatus};
+        let mut ed = editor_with_file("/tmp/a.rs", "fn main() {}\n");
+        ed.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "rust-analyzer".into(),
+                binary_found: true,
+            },
+        );
+        ed.lsp_request_definition();
+        assert!(
+            ed.pending_lsp_requests.is_empty(),
+            "should not queue when starting"
+        );
+        assert!(ed.status_msg.contains("server starting"));
+
+        ed.lsp_request_hover();
+        assert!(ed.pending_lsp_requests.is_empty());
+
+        ed.lsp_request_references();
+        assert!(ed.pending_lsp_requests.is_empty());
+    }
+
+    #[test]
+    fn hover_popup_sets_hint_status() {
+        let mut ed = Editor::new();
+        ed.apply_hover_result("fn main()".into());
+        assert!(ed.hover_popup.is_some());
+        assert!(ed.status_msg.contains("K to scroll"));
+    }
+
+    #[test]
+    fn code_action_menu_shows_hint() {
+        use crate::editor::CodeActionItem;
+        let mut ed = Editor::new();
+        ed.apply_code_action_result_items(vec![CodeActionItem {
+            title: "Fix".into(),
+            kind: None,
+            edit_json: None,
+        }]);
+        assert!(ed.status_msg.contains("j/k navigate"));
+        assert!(ed.status_msg.contains("Esc dismiss"));
     }
 }

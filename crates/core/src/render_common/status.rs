@@ -476,7 +476,13 @@ pub fn format_lsp_status(editor: &Editor) -> String {
     if any_connected {
         " LSP:✓".to_string()
     } else if any_starting {
-        " LSP:…".to_string()
+        let starting_name = editor
+            .lsp_servers
+            .values()
+            .find(|s| s.status == LspServerStatus::Starting)
+            .map(|s| s.command.as_str())
+            .unwrap_or("…");
+        format!(" LSP:⟳ {}", starting_name)
     } else {
         " LSP:✗".to_string()
     }
@@ -613,6 +619,22 @@ mod tests {
             },
         );
         assert_eq!(format_lsp_status(&editor), " LSP:✗");
+    }
+
+    #[test]
+    fn lsp_status_starting_shows_server_name() {
+        let mut editor = Editor::new();
+        editor.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "rust-analyzer".into(),
+                binary_found: true,
+            },
+        );
+        let status = format_lsp_status(&editor);
+        assert!(status.contains("rust-analyzer"), "got: {}", status);
+        assert!(status.contains("⟳"), "got: {}", status);
     }
 
     #[test]
