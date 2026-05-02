@@ -40,8 +40,12 @@ crust = "#11111b"
 "ui.statusline.mode.insert" = { fg = "base", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "base", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "base", bg = "mauve", bold = true }
+"ui.statusline.mode.visual" = { fg = "base", bg = "mauve", bold = true }
 "ui.statusline.mode.locked" = { fg = "base", bg = "red", bold = true }
 "ui.statusline.mode.mcp" = { fg = "base", bg = "yellow", bold = true }
+"ui.statusline.ai.standard" = { fg = "base", bg = "green", bold = true }
+"ui.statusline.ai.auto" = { fg = "base", bg = "yellow", bold = true }
+"ui.statusline.ai.plan" = { fg = "base", bg = "blue", bold = true }
 "ui.gutter" = { fg = "overlay0" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "text", bg = "surface0" }
@@ -61,6 +65,10 @@ crust = "#11111b"
 "diagnostic.debug" = { fg = "overlay1" }
 "diagnostic.trace" = { fg = "overlay0", dim = true }
 "diagnostic.target" = { fg = "teal" }
+
+"lsp.highlight.read" = { bg = "surface0" }
+"lsp.highlight.write" = { bg = "surface1" }
+"lsp.highlight.text" = { bg = "surface0" }
 
 "conversation.user" = { fg = "sapphire", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
@@ -92,3 +100,12 @@ crust = "#11111b"
 "namespace" = { fg = "blue" }
 "punctuation" = { fg = "overlay2" }
 "markup.link" = { fg = "sapphire", underline = true }
+"markup.todo" = { fg = "red", bold = true }
+"markup.done" = { fg = "green" }
+"markup.checkbox" = { fg = "yellow", bold = true }
+"markup.checkbox.checked" = { fg = "green" }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "mauve" }
+"diff.header" = { fg = "teal", bold = true }

@@ -98,6 +98,9 @@ pub(crate) async fn run_terminal_loop(
             last_health_check = tokio::time::Instant::now();
         }
 
+        // Autosave check (runs on every loop iteration, try_autosave gates on interval).
+        editor.try_autosave();
+
         editor.clamp_all_cursors();
 
         let (term_w, term_h) = renderer.size()?;
@@ -123,12 +126,15 @@ pub(crate) async fn run_terminal_loop(
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &editor.buffers[editor.active_buffer_idx()];
-                let gutter_w = if editor.show_line_numbers {
+                let gutter_w = if !mae_core::BufferMode::has_gutter(&buf.kind) {
+                    0
+                } else if editor.show_line_numbers {
                     mae_renderer::gutter_width(buf.display_line_count())
                 } else {
                     2
                 };
-                let text_w = inner_w.saturating_sub(gutter_w);
+                let scrollbar_w: usize = if editor.scrollbar { 1 } else { 0 };
+                let text_w = inner_w.saturating_sub(gutter_w).saturating_sub(scrollbar_w);
                 editor.text_area_width = text_w;
                 if !editor.word_wrap {
                     editor
@@ -139,30 +145,28 @@ pub(crate) async fn run_terminal_loop(
             }
         }
 
-        if editor.word_wrap && editor.text_area_width > 0 {
-            let tw = editor.text_area_width;
-            let bi = editor.break_indent;
-            let sb_w = editor.show_break.chars().count();
+        {
             let buf_idx = editor.active_buffer_idx();
-            let rope = editor.buffers[buf_idx].rope().clone();
-            let line_count = rope.len_lines();
+            let cursor_row = editor.window_mgr.focused_window().cursor_row;
+            let scroll = editor.window_mgr.focused_window().scroll_offset;
+            let so = editor.scrolloff;
+            let range_start = scroll.min(cursor_row);
+            let range_end = (scroll.max(cursor_row) + viewport_height + 2)
+                .min(editor.buffers[buf_idx].display_line_count());
+            let row_cache: Vec<(usize, usize)> = (range_start..range_end)
+                .map(|l| (l, editor.line_visual_rows(buf_idx, l)))
+                .collect();
+
             editor
                 .window_mgr
                 .focused_window_mut()
-                .ensure_scroll_wrapped(viewport_height, |line| {
-                    if line >= line_count {
-                        return 1;
-                    }
-                    let rope_line = rope.line(line);
-                    let text: String = rope_line.chars().collect();
-                    let text = text.trim_end_matches('\n');
-                    mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                .ensure_scroll_wrapped_with_margin(viewport_height, so, |line| {
+                    row_cache
+                        .iter()
+                        .find(|(l, _)| *l == line)
+                        .map(|(_, r)| *r)
+                        .unwrap_or(1)
                 });
-        } else {
-            editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll(viewport_height);
         }
 
         // Debounced syntax reparse: drain pending reparses after 50ms idle.
@@ -171,6 +175,13 @@ pub(crate) async fn run_terminal_loop(
         {
             mae_core::syntax::drain_pending_reparses(editor);
             tui_dirty = true;
+        }
+
+        // Debounced document highlight: request after 300ms cursor idle.
+        if editor.highlight_ranges.is_empty()
+            && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
+        {
+            editor.lsp_request_document_highlight();
         }
 
         if tui_dirty {
@@ -338,6 +349,7 @@ pub(crate) async fn run_terminal_loop(
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         tui_dirty = true;
                         editor.last_edit_time = std::time::Instant::now();
+                        editor.clear_highlights();
                         if editor.input_lock != mae_core::InputLock::None {
                             use crossterm::event::{KeyCode, KeyModifiers};
                             if key.code == KeyCode::Esc
@@ -395,6 +407,7 @@ pub(crate) async fn run_terminal_loop(
                     dap_command_tx,
                     ai_event_tx,
                     ai_command_tx,
+                    scheme,
                 };
                 ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }

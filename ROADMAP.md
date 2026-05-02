@@ -1,6 +1,12 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M4.5 COMPLETE, v0.5.1 (1,673 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.5.0: agent reliability (progress checkpoints, workflow tracker, watchdog recovery, prompt caching, token dashboard, context compaction, graceful degradation, web fetch, tool tier system, tool categories, editor state save/restore, tool visibility fixes, conversation buffer compaction). M4.5: display optimization (input-pending pattern, CJK correctness, layout fix). v0.5.1: cached lazy theme resolution (org heading colors change on theme cycle), scaled heading overflow fix in splits.
+Current state: Phases 1-6 complete, Phase 8 M1-M6 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (2,103 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
+
+---
+
+## Known Bugs
+
+- [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause suspected: buffer type / component info plumbing mismatch — the conversation buffer doesn't provide the same layout metadata (line count, cursor position, scroll state) that the cursor renderer expects. Likely needs a refactor of how buffer types expose state to FrameLayout and cursor computation. Low priority (output buffer is read-only, navigation still works).
 
 ---
 
@@ -45,9 +51,9 @@ Agent reliability improvements from crash log analysis and self-test failures.
 User-facing AI interaction quality — from org-roam exploration notes (2026-04-23).
 
 ### Editing UX
-- [ ] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. Must inherit from theme (no raw ANSI escape codes). Used for both "preview changes" and "changes made" display.
-- [ ] **Clickable Links in Output**: File paths in AI/shell output open in editor on click/Enter. User-configurable: open in current window or new split.
-- [ ] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers.
+- [x] **Diff Display Per Edit**: Claude Code / Gemini-style diff view for proposed and applied changes. LCS-based unified diff with `diff.*` theme keys in all 8 themes, syntax-highlighted (v0.6.0).
+- [x] **Clickable Links in Output**: `gx` opens URL/file path under cursor in any buffer. Mouse clicks detect links on-the-fly. File paths with `:line:col` navigate to position. (v0.6.0)
+- [x] **Rendered Links**: Display markdown links and org links as rendered/clickable (not raw markup) in conversation and document buffers. (v0.6.0: display regions with link concealment, cursor reveal, `gx` link following)
 - [ ] **AI Session Playback & Undo**: Code changes from an AI session saved to a tmp file for step-through replay. GC policy: storage limit, file count limit, or age-based expiry.
 
 ### Agent Quality
@@ -67,39 +73,62 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 ### Vim Parity
 - [x] **C-e / C-y**: Single-line scroll down/up (v0.5.0 M4.5).
 - [x] **C-o in Insert Mode**: Execute one normal-mode command then return to insert (*Practical Vim* ch. 15) (v0.5.0).
-- [ ] **Chained Ex Command Abbreviations**: Parse compound ex commands like `:wqa` (write-quit-all), `:xa` (save-all-quit), `:wqa!` (force variant). Tokenize the command string into a sequence of known abbreviations (`w`→write, `q`→quit, `a`→all, `!`→force) and execute in order. Also: `:wa` (write-all), `:qa!` (quit-all-force). Vim users expect these as muscle memory.
+- [x] **Chained Ex Command Abbreviations**: Tokenizer framework in `ex_parse.rs` — parses `w`/`q`/`x`/`a`/`!` grammar into structured `ExWriteQuit` actions. Supports `:wq`, `:wq!`, `:wqa`, `:wqa!`, `:xa`, `:xa!` and all combinations (v0.6.0).
 
 ### Setup & Onboarding
 - [ ] **Free AI-Assisted Setup**: Gemini free tier running in embedded shell for guided first-run config. API key storage via `pass` (Linux standard password manager) or platform keychain.
 
 ### Project Navigation
-- [ ] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, follow-focus, git status markers, eye icon for files in AI context.
+- [x] **File Tree Sidebar (NERDTree)**: Persistent project tree pane with expand/collapse, file ops, NERDTree-style keymap (j/k/gg/G/C-e/C-y/C-d/C-u, S-Tab fold cycling), git status markers (v0.6.0).
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
-- [ ] **Org Table Styling**: Column alignment with `|` delimiters, Tab to next cell, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection. Emacs `org-table-align` equivalent. Prerequisite for org-mode spreadsheet features.
-- [ ] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files.
-- [ ] **Org Heading Depth Manipulation**: `M-Left`/`M-Right` (or `<<`/`>>` on heading lines) to decrease/increase heading depth (remove/add `*` prefix). Evil-org parity.
-- [ ] **Org Heading Movement**: `M-j`/`M-k` to move heading (and its subtree) down/up past sibling headings. `M-h`/`M-l` for promote/demote. Evil-org parity for structural editing.
+- [ ] **Org Table Mode** (Emacs `org-table-mode` parity): Full table editing and formatting.
+  - **Styling**: Column alignment with `|` delimiters, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection
+  - **Navigation**: Tab to next cell, S-Tab to previous cell, RET to next row, auto-create new row at end
+  - **Structure editing**: `M-Left`/`M-Right` move column, `M-Up`/`M-Down` move row, `M-S-Left` delete column, `M-S-Right` insert column, `M-S-Up` delete row, `M-S-Down` insert row
+  - **Sorting**: Sort by column (alphabetic, numeric, time)
+  - **Formulas**: `#+TBLFM:` field/column formulas with Calc-like syntax, recalculation
+  - **Import/Export**: Convert region to table, export to CSV/TSV, org table → markdown table
+- [x] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files. (v0.6.0)
+- [x] **Org Heading Depth Manipulation**: `M-h`/`M-l` and `M-Left`/`M-Right` to promote/demote heading depth. Evil-org parity. (v0.6.0)
+- [x] **Org Heading Movement**: `M-j`/`M-k` and `M-Up`/`M-Down` to move heading subtree up/down. Fold-aware (clears folds in affected range). (v0.6.0)
+- [x] **Three-State Org Heading Cycle**: TAB cycles SUBTREE→FOLDED→CHILDREN→SUBTREE (Doom Emacs parity). Leaf headings two-state toggle. (v0.6.0)
+- [x] **Org/Markdown Narrow/Widen**: `SPC m s n` narrows to subtree, `SPC m s w` widens. Cursor clamped, status bar shows `[Narrowed]`. (v0.6.0)
+- [x] **Markdown Structural Editing Parity**: `#` headings get the same UX as org `*` headings — three-state cycle, promote/demote, move subtree, fold-all, narrow/widen, heading font scaling. Markdown keymap with normal fallback. (v0.6.0)
+- [x] **heading_scale Option**: `:set heading_scale false` to disable heading font scaling. (v0.6.0)
+- [x] **zM/zR for Org and Markdown**: `close-all-folds`/`open-all-folds` dispatch to heading scan for org/markdown buffers. (v0.6.0)
 
 ### Rendering Infrastructure
-- [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `PixelYMap`. Enables zero-gap heading rendering, future inline images, code block padding.
-- [ ] **Popup Pixel-Y Migration**: Migrate `popup_render.rs` from `heading_extra_rows()` integer-row estimation to `PixelYMap`-based pixel-Y positioning. Popups (completion, file picker, command palette) should anchor to exact pixel positions near variable-height lines.
+- [x] **Pixel-Based Variable-Height Lines**: Pixel-Y accumulator in the GUI buffer renderer. Each line advances by `scale * cell_height` pixels (exact). Canvas `_at_y` pixel-positioned methods; gutter/cursor use `FrameLayout`. Enables zero-gap heading rendering, future inline images, code block padding.
+- [x] **FrameLayout Unified Layout Pass**: Single source of truth for text positioning (`layout.rs`). `compute_layout()` runs once per frame per window; renderer, cursor, and completion popup all consume the same `FrameLayout`. Fold-aware, scale-aware, wrap-aware. Eliminated `PixelYMap`, `accumulated_scaled_col()`, `heading_extra_rows()`.
+- [x] **Popup Pixel-Y Migration**: Completion popup now uses `FrameLayout::display_row_of()` for fold/scale-aware cursor positioning.
+- [x] **Canvas Clip**: `set_clip_height()` prevents descender overflow at window bottom edge.
+- [x] **Mouse Click FrameLayout**: `pixel_to_buffer_position()` in FrameLayout for pixel-precise mouse conversion. GUI caches `last_focused_layout`, falls back to grid math. Scrollbar click detection included (v0.6.0).
 
 ### Buffer Safety
-- [ ] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (e.g. 5s after last edit), configurable interval via `:set autosave_interval`. Write to swap files (`.mae.swp`) or in-place. Recovery on crash. Emacs `auto-save-mode` equivalent. Uses the same idle timer infrastructure as debounced syntax reparse.
+- [x] **Autosave**: Timer-based auto-save for dirty buffers. Idle debounce (5s after last edit), configurable interval via `:set autosave_interval`. Swap file crash recovery (`.swp`), session index, `:recover`/`:delete-swap`. Emacs `auto-save-mode` equivalent (v0.6.0: swap files + timer).
+
+### Editor Modes & Buffer-Local Options
+- [x] **Per-Buffer Word Wrap (`BufferLocalOptions`)**: `BufferLocalOptions` struct on `Buffer` with `Option<T>` overrides. `:setlocal word_wrap true` for per-buffer override. Conversation, Help, Messages buffers default to `word_wrap=true`. `toggle-word-wrap` flips buffer-local value. Infrastructure supports `line_numbers`, `relative_line_numbers` too (v0.6.0).
+- [ ] **Mode Refactoring & Initialization**: Restructure `Mode` enum and mode transitions. Per-mode configuration in user config (e.g. mode-specific keybindings, default options per mode). Emacs `define-derived-mode` equivalent for Scheme layer. Mode-line indicators for active minor modes.
+- [x] **Buffer-Local Options Expansion**: Extended `BufferLocalOptions` with `break_indent`, `show_break`, `heading_scale`. Accessors + `:setlocal` support for all 6 options (v0.6.0).
+- [x] **File-Type Mode Hooks**: Shebang/modeline/extension priority chain, `language_for_buffer()`, parameterized hooks (`buffer-open:rust`), `set-local-option!` Scheme function, `*buffer-language*`/`*buffer-file-path*` injection, per-language default options (v0.6.0).
+
+### Self-Test Infrastructure
+- [x] **Atomic Self-Test Categories**: Each category wrapped with `editor_save_state`/`editor_restore_state` — buffers cleaned up per-category (v0.6.0).
 
 ### Project Intelligence
 - [ ] **LSP Code Map**: Generate a visual symbol map from `textDocument/documentSymbols` + `textDocument/references`. Output formats: JSON (machine-readable), Mermaid (renders in GitHub), SVG (high-fidelity). Auto-publish to git on minor/major releases via CI. Shows module hierarchy, function signatures, cross-references, and dependency graph. Enables architecture documentation that stays in sync with the code.
 
 ### Test Infrastructure
-- [ ] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code.
+- [x] **Test Suite Breakout**: Split monolithic test files into smaller focused modules. Improve LLM processability of test code (v0.5.0).
 
 ---
 
 ## Comprehensive Feature Checklist
 
-### What We Have (1,673 tests)
+### What We Have (1,949 tests)
 
 | Category | Features |
 |----------|----------|
@@ -113,7 +142,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **Scroll** | Ctrl-U/D/F/B, zz/zt/zb, horizontal scroll in split windows |
 | **Windows** | split v/h, close, focus hjkl, binary tree layout |
 | **Buffers** | next/prev/kill/switch, Ctrl-^ alternate, modified tracking |
-| **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker) |
+| **Files** | :e (tab complete), :w, :w path, :wq, :q, :q!, SPC f f (fuzzy picker), ex-command tokenizer (w/q/x/a/! compounds) |
 | **Commands** | :!cmd (shell escape), command history (up/down), :ai-status |
 | **AI** | Gemini/Claude/OpenAI/DeepSeek tool-calling, transactional callstack, conversation buffer, streaming, elapsed timer, multi-file tools, project search, structured git tools, web fetch, prompt caching, context compaction, graceful degradation, token budget dashboard, tool tiers (Core/Extended), 10 tool categories, `request_tools`, editor state save/restore, 107 AI tools |
 | **Scheme** | Steel runtime, init.scm, history.scm persistence, define-key, eval REPL, 12 hooks |
@@ -123,7 +152,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | **LSP** | Connection, go-to-definition, references, hover, diagnostics, completion, workspace/document symbols |
 | **DAP** | Adapter presets (lldb/debugpy/codelldb), breakpoints (incl. conditional/logpoint), step/continue, attach, evaluate, 13 AI debug tools |
 | **KB/Help** | SQLite-backed graph, org parser, help buffer with links, Tab/Enter/C-o navigation, AI kb_* tools |
-| **GUI** | winit+Skia, mouse (click+scroll), splash screen, font config/zoom, FPS overlay, desktop launcher |
+| **GUI** | winit+Skia, mouse (click+scroll, FrameLayout pixel-precise), splash screen, font config/zoom, FPS overlay, desktop launcher, vertical scrollbar, nyan mode |
 | **Renderer** | Line numbers, status bar (git/LSP/tier), which-key popup, multi-window, search/selection highlights, FPS display |
 | **CI** | GitHub Actions (check/test/clippy/fmt/e2e), tag-based release, dependabot, git-cliff changelog, `--check-config` validation |
 
@@ -166,11 +195,20 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
 | 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
 | 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
-| 31 | Org table styling: column alignment, Tab-to-cell, auto-align, horizontal rules, cell highlighting | future |
-| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | future |
+| 31 | Org table mode: alignment, Tab-to-cell, structure editing, sorting, formulas, import/export | future |
+| 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | v0.6.0 ✅ |
 | 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | v0.5.1 ✅ |
-| 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — compound command parsing | future |
+| 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — ex-command tokenizer framework | v0.6.0 ✅ |
+| 35 | Vertical scrollbar: pixel-precise track+thumb, theme-aware, 1-col allocation | v0.6.0 ✅ |
+| 36 | Nyan mode: rainbow progress bar in status line (`:set nyan_mode true`) | v0.6.0 ✅ |
+| 37 | `:set` vim-style parsing: `no`-prefix, `!` toggle, `?` query, quoted values, value tab completion | v0.6.0 ✅ |
+| 38 | Mouse click FrameLayout: pixel-precise positioning for scaled/folded lines | v0.6.0 ✅ |
+| 39 | Insert heading (M-Enter): respects level, inserts after subtree | v0.6.0 ✅ |
 | 35 | Cached lazy theme resolution: unresolved style strings → palette-aware cache rebuild on theme cycle/mutation | v0.5.1 ✅ |
+| 40 | V-line conversation buffer fix: sync viewport start with `win.scroll_offset` for visual-mode selection | v0.6.0 ✅ |
+| 41 | Autosave config.toml + idle debounce: `autosave_interval` in config, 5s idle guard | v0.6.0 ✅ |
+| 42 | Diff display syntax highlighting: `diff.added`/`removed`/`hunk`/`header` theme keys, all 8 themes | v0.6.0 ✅ |
+| 43 | File tree sidebar: `SPC f t`, icons, expand/collapse, j/k/Enter/o/R/q, AI `toggle_file_tree` tool | v0.6.0 ✅ |
 
 ---
 
@@ -346,8 +384,8 @@ Standard readline/Emacs editing bindings that users expect from any Unix program
 - [x] `C-r {register}` — paste from named register while in insert mode
        (from *Practical Vim* ch. 15 — "use registers in insert mode").
        Implemented in M5 via `pending_insert_register` + `insert_from_register`.
-- [ ] `C-o` — execute one normal-mode command then return to insert
-       (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode")
+- [x] `C-o` — execute one normal-mode command then return to insert
+       (from *Practical Vim* ch. 15 — "Run a Normal Mode Command Without Leaving Insert Mode") (v0.5.0)
 
 ### M2: Terminal Keybinds in Command Mode ✅
 Command line (`:` prompt) should behave like a readline/zsh command line.
@@ -903,10 +941,14 @@ agent can observe, suggest, and execute commands alongside the user.
 Full git porcelain in a dedicated buffer — the magit experience. Builds on
 M1 PTY shell and the existing `SPC g` stubs.
 
-- [ ] `SPC g s` — git status buffer with staged/unstaged/untracked sections
-- [ ] Stage/unstage: `s` to stage file or hunk, `u` to unstage, `S`/`U` for all
-- [ ] `c c` — commit (inline message editing), `c a` — amend
-- [ ] Diff view: per-file and per-hunk diffs with syntax-highlighted context
+- [x] `SPC g s` — git status buffer with staged/unstaged/untracked/stash sections
+- [x] Stage/unstage: `s` to stage file or hunk, `u` to unstage, `S`/`U` for all
+- [x] `c c` — commit, `c a` — amend
+- [x] Diff view: Tab on file toggles inline diff with added/removed/context coloring
+- [x] Discard: `x` — discard unstaged changes for file at cursor
+- [x] `BufferView` enum replaces 6 `Option<T>` fields; `BufferMode` trait encodes mode contract
+- [x] Shared `render_common::help` deduplicates ~65 LOC between TUI/GUI help renderers
+- [x] `GitLineKind` + `DiffLineType` semantic types for rendering and dispatch
 - [ ] Log view: `l l` — commit history with graph, `l b` — branch log
 - [ ] Blame: `SPC g b` — line-by-line blame in gutter or dedicated buffer
 - [ ] Stash: `z z` — stash, `z p` — pop, `z l` — list stashes
@@ -1079,19 +1121,25 @@ Emacs-inspired display patterns and CJK correctness.
 - [x] `draw_styled_at` display-width-aware column tracking for CJK text rendering
 - [x] Regression tests: row layout (7 heights x 5 cell sizes), CJK wrap/break/width (6 tests)
 
-### M5: Emacs Display Patterns (Future)
-Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
-- [ ] Glyph matrix hashing — hash visible lines, skip unchanged rows on redraw (`dispnew.c:1262`)
-- [ ] Line-level dirty tracking — per-line content hash, only re-render changed rows (`dispnew.c:4263`)
+### M5: Emacs Display Patterns
+Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.6.0: infrastructure)
+- [x] Glyph matrix hashing — `content_hash: u64` on `LineLayout`, hashed over chars + scale (v0.6.0)
+- [x] Line-level dirty tracking — `RedrawLevel` enum (None/CursorOnly/Scroll/PartialLines/Full), `dirty_line_range` on Editor (v0.6.0)
+- [x] CursorOnly fast path — skip `compute_visible_syntax_spans()`, reuse cached Arc spans (v0.6.0)
 - [ ] Scroll region blit — Skia surface copy for scroll optimization (`dispnew.c:5107`)
+- [ ] Partial render skip — use content_hash to skip unchanged line draws (infrastructure ready)
 - [ ] Idle deferred work — defer syntax highlighting and LSP requests to idle periods (`xdisp.c:4531`)
 
 ### M6: Variable-Height Lines & Mixed Fonts
 - [ ] Paragraph-based text layout (Skia SkParagraph)
-- [ ] Headings rendered at larger font sizes
+- [x] Headings rendered at larger font sizes (v0.5.0: heading_scale)
 - [ ] Code blocks rendered in monospace, prose in proportional
-- [ ] Bold/italic/underline/strikethrough font decorations
-- [ ] Line-height varies per line type (heading, code, prose)
+- [x] Bold/italic/underline/strikethrough font decorations (v0.6.0: strikethrough + italic typeface)
+- [x] Line-height varies per line type (v0.5.0: heading scale affects line height)
+- [x] Heading top padding — h1: 4px, h2: 3px, h3: 2px (v0.6.0)
+- [x] Strikethrough rendering — `~~text~~` detection + draw at 60% ascent (v0.6.0)
+- [x] Code block tinted backgrounds — fenced/src block detection + full-width bg rect (v0.6.0)
+- [x] Proper italic typeface — system italic font loading with skew fallback (v0.6.0)
 
 ### M7: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
@@ -1106,7 +1154,7 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
 ### M9: Mouse & Selection
 - [x] Click to place cursor (done in M3)
 - [x] Click-drag to select text (mouse press/drag/release → visual selection)
-- [ ] Scrollbar (vertical)
+- [x] Scrollbar (vertical) — pixel-precise track+thumb in `scrollbar.rs`, theme-aware colors, allocates 1 col from text area (v0.6.0)
 - [x] Mouse wheel scroll (done in M3)
 - [x] Selection highlighting (done in M3 — visual mode bg/fg in buffer_render.rs)
 
@@ -1117,11 +1165,13 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis.
 Full org-mode editing support — MAE as a first-class org-mode environment.
 Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 
-### M1: Structural Editing
-- [ ] Heading promotion/demotion (M-Left/M-Right or TAB cycling)
-- [ ] Heading folding (TAB to cycle visibility: folded → children → subtree)
-- [ ] Move subtree up/down (M-Up/M-Down)
-- [ ] Insert heading (M-Enter respects level)
+### M1: Structural Editing ✅ (v0.6.0)
+- [x] Heading promotion/demotion (`M-h`/`M-l`, `M-Left`/`M-Right`)
+- [x] Heading folding — three-state TAB cycle (SUBTREE→FOLDED→CHILDREN)
+- [x] Move subtree up/down (`M-j`/`M-k`, `M-Up`/`M-Down`) — fold-aware
+- [x] Narrow/widen subtree (`SPC m s n`/`SPC m s w`)
+- [x] zM/zR fold-all/unfold-all for org headings
+- [x] Insert heading (M-Enter respects level) — inserts at same level after subtree, enters insert mode (v0.6.0)
 
 ### M2: TODO & Agenda
 - [ ] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked)
@@ -1130,7 +1180,7 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 - [ ] Agenda view: query across org files for TODO items
 
 ### M3: Tables & Lists
-- [ ] Org table alignment (Tab to next cell, auto-align)
+- [ ] Org table mode (alignment, navigation, structure editing, sorting, formulas)
 - [ ] Checkbox lists (`- [ ]` / `- [x]`) with toggle
 - [ ] Ordered/unordered list continuation on Enter
 

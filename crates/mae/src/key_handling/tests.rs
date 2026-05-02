@@ -44,7 +44,7 @@ fn splash_j_increments_selection() {
     assert_eq!(editor.splash_selection, 2);
 
     // Wraps at action count
-    let count = mae_renderer::splash_render::splash_action_count();
+    let count = mae_core::render_common::splash::splash_action_count();
     editor.splash_selection = count - 1;
     dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('j')));
     assert_eq!(editor.splash_selection, 0);
@@ -53,7 +53,7 @@ fn splash_j_increments_selection() {
 #[test]
 fn splash_k_decrements_selection() {
     let (mut editor, mut scheme) = setup_splash();
-    let count = mae_renderer::splash_render::splash_action_count();
+    let count = mae_core::render_common::splash::splash_action_count();
 
     // From 0, k wraps to count-1
     dispatch(&mut editor, &mut scheme, make_key(KeyCode::Char('k')));
@@ -236,6 +236,76 @@ fn conversation_input_mode_excluded_from_gui_cursor() {
     // The actual ghost cursor fix is in crates/gui/src/lib.rs:
     // render_gui_cursor is skipped for both ShellInsert and ConversationInput.
     // We can't render in tests, but we verify the mode distinction.
+}
+
+// -----------------------------------------------------------------------
+// E2E: ConversationInput multiline submit
+// -----------------------------------------------------------------------
+
+#[test]
+fn conversation_multiline_submit_reads_all_lines() {
+    let mut editor = Editor::new();
+    let mut scheme = SchemeRuntime::new().unwrap();
+
+    // Open conversation (creates pair: *AI* output + *ai-input* input).
+    editor.dispatch_builtin("ai-prompt");
+    assert_eq!(editor.mode, Mode::ConversationInput);
+    let pair = editor.conversation_pair.as_ref().unwrap().clone();
+
+    // Type "hello" into the input buffer.
+    for ch in "hello".chars() {
+        dispatch(
+            &mut editor,
+            &mut scheme,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        );
+    }
+
+    // Insert a newline via Shift+Enter.
+    dispatch(
+        &mut editor,
+        &mut scheme,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+    );
+
+    // Type "world" on the second line.
+    for ch in "world".chars() {
+        dispatch(
+            &mut editor,
+            &mut scheme,
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+        );
+    }
+
+    // The input buffer should now have "hello\nworld\n" (ropey trailing newline).
+    let rope = editor.buffers[pair.input_buffer_idx].rope().clone();
+    let text: String = rope.chars().collect();
+    assert_eq!(text.trim_end_matches('\n'), "hello\nworld");
+
+    // Now submit with Enter — should clear input and push to conversation.
+    dispatch(
+        &mut editor,
+        &mut scheme,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+
+    // Input buffer should be cleared.
+    let rope_after = editor.buffers[pair.input_buffer_idx].rope().clone();
+    let text_after: String = rope_after.chars().collect();
+    assert_eq!(
+        text_after.trim_end_matches('\n'),
+        "",
+        "input buffer should be empty after submit"
+    );
+
+    // Conversation should have the user message.
+    let conv = editor.buffers[pair.output_buffer_idx]
+        .conversation()
+        .unwrap();
+    assert!(
+        conv.entries.iter().any(|e| e.content == "hello\nworld"),
+        "conversation should contain the multiline prompt"
+    );
 }
 
 // -----------------------------------------------------------------------

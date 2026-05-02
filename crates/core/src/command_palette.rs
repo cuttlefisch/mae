@@ -35,6 +35,26 @@ pub enum PalettePurpose {
     SwitchProject,
     AiMode,
     AiProfile,
+    GitBranch,
+}
+
+impl PalettePurpose {
+    /// Human-readable label for this palette kind, used in popup titles.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Execute => "Commands",
+            Self::Describe => "Describe Command",
+            Self::SetTheme => "Themes",
+            Self::HelpSearch => "Help Topics",
+            Self::SwitchBuffer => "Buffers",
+            Self::SetSplashArt => "Splash Art",
+            Self::RecentFile => "Recent Files",
+            Self::SwitchProject => "Projects",
+            Self::AiMode => "AI Operating Mode",
+            Self::AiProfile => "AI Prompt Profile",
+            Self::GitBranch => "Git Branch",
+        }
+    }
 }
 
 /// State for the command palette overlay.
@@ -115,6 +135,11 @@ impl CommandPalette {
     /// AI profile picker palette. Used by `:ai-set-profile`.
     pub fn for_ai_profile(profiles: &[&str]) -> Self {
         Self::with_name_list(profiles, PalettePurpose::AiProfile)
+    }
+
+    /// Git branch picker palette. Used by `b b` in git-status.
+    pub fn for_git_branch(branches: &[&str]) -> Self {
+        Self::with_name_list(branches, PalettePurpose::GitBranch)
     }
 
     /// Splash art picker palette. More art variants will be added in a
@@ -234,6 +259,28 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_purpose_labels_non_empty() {
+        let purposes = [
+            PalettePurpose::Execute,
+            PalettePurpose::Describe,
+            PalettePurpose::SetTheme,
+            PalettePurpose::HelpSearch,
+            PalettePurpose::SwitchBuffer,
+            PalettePurpose::SetSplashArt,
+            PalettePurpose::RecentFile,
+            PalettePurpose::SwitchProject,
+            PalettePurpose::AiMode,
+            PalettePurpose::AiProfile,
+            PalettePurpose::GitBranch,
+        ];
+        for p in &purposes {
+            assert!(!p.label().is_empty(), "{:?} has empty label", p);
+        }
+        assert_eq!(PalettePurpose::Execute.label(), "Commands");
+        assert_eq!(PalettePurpose::GitBranch.label(), "Git Branch");
+    }
 
     #[test]
     fn from_registry_sorts_alphabetically() {

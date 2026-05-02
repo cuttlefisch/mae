@@ -70,6 +70,24 @@ pub enum LspCommand {
     WorkspaceSymbol { language_id: String, query: String },
     /// List symbols in a document.
     DocumentSymbols { uri: String, language_id: String },
+    /// Request code actions at a range.
+    CodeAction {
+        uri: String,
+        language_id: String,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    },
+    /// Request document highlights at a position.
+    DocumentHighlight {
+        uri: String,
+        language_id: String,
+        position: Position,
+        generation: u64,
+    },
+    /// Update workspace folders (late project detection).
+    DidChangeWorkspaceFolders {
+        added: Vec<String>, // URIs
+    },
     /// Shut down all clients.
     Shutdown,
 }
@@ -124,6 +142,16 @@ pub enum LspTaskEvent {
     DocumentSymbolResult {
         uri: String,
         symbols: Vec<crate::protocol::DocumentSymbol>,
+    },
+    /// Code action response.
+    CodeActionResult {
+        uri: String,
+        actions: Vec<crate::protocol::CodeAction>,
+    },
+    /// Document highlight response.
+    DocumentHighlightResult {
+        highlights: Vec<crate::protocol::DocumentHighlight>,
+        generation: u64,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -287,6 +315,48 @@ impl LspManager {
         let client = self.ensure_client(language_id).await?;
         let resp = client.request_document_symbols(uri).await?;
         Ok(resp.symbols)
+    }
+
+    pub async fn code_action(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Result<Vec<crate::protocol::CodeAction>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_code_action(uri, range, diagnostics).await?;
+        Ok(resp.actions)
+    }
+
+    pub async fn document_highlight(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<Vec<crate::protocol::DocumentHighlight>, String> {
+        let client = match self.clients.get(language_id) {
+            Some(_) => self.clients.get(language_id).unwrap(),
+            None => return Ok(vec![]),
+        };
+        let resp = client.request_document_highlight(uri, position).await?;
+        Ok(resp.highlights)
+    }
+
+    /// Notify all running clients that workspace folders changed, and update
+    /// `root_uri` in configs so future server starts inherit the project root.
+    pub async fn did_change_workspace_folders(&mut self, added_uris: &[String]) {
+        for client in self.clients.values() {
+            let _ = client.did_change_workspace_folders(added_uris).await;
+        }
+        // Update root_uri for future server starts.
+        if let Some(first) = added_uris.first() {
+            for config in self.configs.values_mut() {
+                if config.root_uri.is_none() {
+                    config.root_uri = Some(first.clone());
+                }
+            }
+        }
     }
 
     pub async fn shutdown_all(&mut self) {
@@ -516,6 +586,48 @@ async fn handle_command(
                 }
             }
         }
+        LspCommand::CodeAction {
+            uri,
+            language_id,
+            range,
+            diagnostics,
+        } => match manager
+            .code_action(&language_id, &uri, range, diagnostics)
+            .await
+        {
+            Ok(actions) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::CodeActionResult { uri, actions })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::DocumentHighlight {
+            uri,
+            language_id,
+            position,
+            generation,
+        } => match manager
+            .document_highlight(&language_id, &uri, position)
+            .await
+        {
+            Ok(highlights) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::DocumentHighlightResult {
+                        highlights,
+                        generation,
+                    })
+                    .await;
+            }
+            Err(_) => {
+                // Silently ignore highlight errors — they're not user-initiated.
+            }
+        },
+        LspCommand::DidChangeWorkspaceFolders { added } => {
+            manager.did_change_workspace_folders(&added).await;
+        }
         LspCommand::Shutdown => {
             manager.shutdown_all().await;
         }
@@ -582,6 +694,45 @@ mod tests {
         // Task should exit within a reasonable time.
         let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn did_change_workspace_folders_updates_config_root_uri() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "rust".into(),
+            LspServerConfig {
+                command: "rust-analyzer".into(),
+                args: vec![],
+                root_uri: None,
+            },
+        );
+        configs.insert(
+            "python".into(),
+            LspServerConfig {
+                command: "pylsp".into(),
+                args: vec![],
+                root_uri: Some("file:///old".into()),
+            },
+        );
+        let (tx, _rx) = mpsc::channel(16);
+        let mut manager = LspManager::new(configs, tx);
+
+        // No running clients, so this only updates configs.
+        manager
+            .did_change_workspace_folders(&["file:///home/user/project".into()])
+            .await;
+
+        // The rust config had root_uri=None, should now be updated.
+        assert_eq!(
+            manager.configs["rust"].root_uri.as_deref(),
+            Some("file:///home/user/project"),
+        );
+        // The python config already had a root_uri, should be unchanged.
+        assert_eq!(
+            manager.configs["python"].root_uri.as_deref(),
+            Some("file:///old"),
+        );
     }
 
     #[tokio::test]

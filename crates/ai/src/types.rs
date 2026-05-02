@@ -164,6 +164,10 @@ pub enum AiEvent {
         cache_creation_tokens: u64,
         context_window: u64,
         context_used_tokens: u64,
+        /// Per-turn token counts (for per-message display).
+        turn_tokens_in: u64,
+        turn_tokens_out: u64,
+        turn_cache_read: u64,
     },
     /// Fired once the first time cumulative session cost crosses the
     /// configured warning threshold. The editor posts this to

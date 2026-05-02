@@ -239,6 +239,9 @@ fn main() -> io::Result<()> {
     if let Some(restore) = app_config.editor.restore_session {
         editor.restore_session = restore;
     }
+    if let Some(interval) = app_config.editor.autosave_interval {
+        editor.autosave_interval = interval;
+    }
 
     // Apply font settings from config early (init.scm can override).
     if let Some(size) = app_config.editor.font_size {
@@ -312,12 +315,13 @@ fn main() -> io::Result<()> {
             "AI agent setup complete"
         );
 
-        let (lsp_event_rx, lsp_command_tx) = {
+        let (lsp_event_rx, lsp_command_tx, lsp_server_info) = {
             let root_uri = editor
                 .active_project_root()
                 .map(|p| format!("file://{}", p.display()));
-            setup_lsp(root_uri)
+            setup_lsp(root_uri, &app_config)
         };
+        editor.lsp_servers = lsp_server_info;
         info!("LSP task spawned");
 
         // AI session restoration
@@ -505,6 +509,7 @@ fn run_gui(
         },
         Some(editor.gui_font_size),
     );
+    renderer.set_window_title(editor.window_title.clone());
     editor.renderer_name = "gui".to_string();
     editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
     editor.clipboard = "unnamedplus".to_string();
@@ -566,6 +571,7 @@ fn run_gui(
         cursor_x: 0.0,
         cursor_y: 0.0,
         scroll_accumulator: 0.0,
+        scroll_accumulator_x: 0.0,
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
@@ -697,6 +703,7 @@ struct GuiApp {
     cursor_x: f64,
     cursor_y: f64,
     scroll_accumulator: f64,
+    scroll_accumulator_x: f64,
     mouse_pressed: bool,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
@@ -829,6 +836,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     dap_command_tx: &self.dap_command_tx,
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
+                    scheme: &mut self.scheme,
                 };
                 ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
@@ -909,6 +917,8 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.deferred_ai_reply.is_some(),
                     self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
                 );
+                // Autosave check (piggybacks on 30s health tick).
+                self.editor.try_autosave();
             }
         }
     }
@@ -936,12 +946,37 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.alt_held = state.alt_key();
                 self.shift_held = state.shift_key();
             }
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state == winit::event::ElementState::Pressed =>
-            {
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Track modifier keys directly from KeyboardInput events.
+                // On some Wayland compositors (GNOME), ModifiersChanged may
+                // arrive AFTER KeyboardInput, causing shift_held to be stale.
+                // Tracking from physical key press/release fixes this.
+                use winit::keyboard::{Key as WinitKey, NamedKey};
+                match &event.logical_key {
+                    WinitKey::Named(NamedKey::Shift) => {
+                        self.shift_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    WinitKey::Named(NamedKey::Control) => {
+                        self.ctrl_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    WinitKey::Named(NamedKey::Alt) => {
+                        self.alt_held = event.state == winit::event::ElementState::Pressed;
+                    }
+                    _ => {}
+                }
+
+                // Only process non-release events for actual key dispatch.
+                if event.state != winit::event::ElementState::Pressed {
+                    return;
+                }
+
                 self.dirty = true;
                 self.input_dirty = true;
                 self.editor.last_edit_time = std::time::Instant::now();
+                self.editor.clear_highlights();
+                // Default to full redraw for keyboard input. Commands that only
+                // move the cursor can downgrade this via mark_cursor_moved().
+                self.editor.mark_full_redraw();
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1028,11 +1063,38 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     }
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        let col = (self.cursor_x / cell_w as f64) as u16;
-                        let row = (self.cursor_y / cell_h as f64) as u16;
-                        self.editor
-                            .handle_mouse_click(row as usize, col as usize, mae_button);
-                        self.dirty = true;
+                        // Try pixel-precise positioning via cached FrameLayout
+                        // (handles scaled headings and folded lines correctly).
+                        let px_x = self.cursor_x as f32;
+                        let px_y = self.cursor_y as f32;
+                        // Dismiss stale popups on any mouse click.
+                        self.editor.hover_popup = None;
+                        self.editor.code_action_menu = None;
+
+                        if let Some(fl) = self.renderer.last_focused_layout() {
+                            if let Some((buf_row, char_col)) =
+                                fl.pixel_to_buffer_position(px_x, px_y)
+                            {
+                                self.editor.set_cursor_position(buf_row, char_col);
+                                self.dirty = true;
+                            } else {
+                                // Click outside text area — fall back to grid math.
+                                let col = (self.cursor_x / cell_w as f64) as u16;
+                                let row = (self.cursor_y / cell_h as f64) as u16;
+                                self.editor.handle_mouse_click(
+                                    row as usize,
+                                    col as usize,
+                                    mae_button,
+                                );
+                                self.dirty = true;
+                            }
+                        } else {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            self.editor
+                                .handle_mouse_click(row as usize, col as usize, mae_button);
+                            self.dirty = true;
+                        }
                     }
                 }
             }
@@ -1052,28 +1114,33 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 use tracing::debug;
-                let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        debug!(y, "MouseWheel: LineDelta");
-                        y as i16
+                let (h_delta, v_delta) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        debug!(x, y, "MouseWheel: LineDelta");
+                        (x as i16, y as i16)
                     }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
                         self.scroll_accumulator += pos.y;
+                        self.scroll_accumulator_x += pos.x;
                         let whole_lines = (self.scroll_accumulator / 20.0) as i16;
-                        debug!(
-                            pos_y = pos.y,
-                            accum = self.scroll_accumulator,
-                            whole_lines,
-                            "MouseWheel: PixelDelta"
-                        );
+                        let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
+                        debug!(pos_x = pos.x, pos_y = pos.y, "MouseWheel: PixelDelta");
                         if whole_lines != 0 {
                             self.scroll_accumulator -= whole_lines as f64 * 20.0;
                         }
-                        whole_lines
+                        if whole_cols != 0 {
+                            self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
+                        }
+                        (whole_cols, whole_lines)
                     }
                 };
-                if lines != 0 {
-                    self.editor.handle_mouse_scroll(lines);
+                if v_delta != 0 {
+                    self.editor.handle_mouse_scroll(v_delta);
+                    self.dirty = true;
+                    self.input_dirty = true;
+                }
+                if h_delta != 0 {
+                    self.editor.handle_mouse_scroll_horizontal(h_delta);
                     self.dirty = true;
                     self.input_dirty = true;
                 }
@@ -1093,6 +1160,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.editor.perf_stats.sample_process_stats();
                 }
                 self.dirty = false;
+                self.editor.clear_redraw();
             }
             _ => {}
         }
@@ -1138,38 +1206,48 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
                 let inner_w = win_rect.width.saturating_sub(2) as usize;
                 let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
-                let gutter_w = if self.editor.show_line_numbers {
+                let gutter_w = if !mae_core::BufferMode::has_gutter(&buf.kind) {
+                    0
+                } else if self.editor.show_line_numbers {
                     mae_renderer::gutter_width(buf.display_line_count())
                 } else {
                     2 // marker column + padding
                 };
-                self.editor.text_area_width = inner_w.saturating_sub(gutter_w);
+                let scrollbar_w: usize = if self.editor.scrollbar { 1 } else { 0 };
+                let text_w = inner_w.saturating_sub(gutter_w).saturating_sub(scrollbar_w);
+                self.editor.text_area_width = text_w;
+                if !self.editor.word_wrap {
+                    self.editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_horizontal(text_w);
+                }
             }
 
-            if self.editor.word_wrap && self.editor.text_area_width > 0 {
-                let tw = self.editor.text_area_width;
-                let bi = self.editor.break_indent;
-                let sb_w = self.editor.show_break.chars().count();
+            {
+                // Pre-compute visual rows for the viewport range so the
+                // ensure_scroll_wrapped closure doesn't need &self.editor.
                 let buf_idx = self.editor.active_buffer_idx();
-                let rope = self.editor.buffers[buf_idx].rope().clone();
-                let line_count = rope.len_lines();
+                let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
+                let scroll = self.editor.window_mgr.focused_window().scroll_offset;
+                let so = self.editor.scrolloff;
+                let range_start = scroll.min(cursor_row);
+                let range_end = (scroll.max(cursor_row) + vh + 2)
+                    .min(self.editor.buffers[buf_idx].display_line_count());
+                let row_cache: Vec<(usize, usize)> = (range_start..range_end)
+                    .map(|l| (l, self.editor.line_visual_rows(buf_idx, l)))
+                    .collect();
+
                 self.editor
                     .window_mgr
                     .focused_window_mut()
-                    .ensure_scroll_wrapped(vh, |line| {
-                        if line >= line_count {
-                            return 1;
-                        }
-                        let rope_line = rope.line(line);
-                        let text: String = rope_line.chars().collect();
-                        let text = text.trim_end_matches('\n');
-                        mae_core::wrap::wrap_line_display_rows(text, tw, bi, sb_w)
+                    .ensure_scroll_wrapped_with_margin(vh, so, |line| {
+                        row_cache
+                            .iter()
+                            .find(|(l, _)| *l == line)
+                            .map(|(_, r)| *r)
+                            .unwrap_or(1)
                     });
-            } else {
-                self.editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll(vh);
             }
         }
 
@@ -1202,6 +1280,13 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         {
             mae_core::syntax::drain_pending_reparses(&mut self.editor);
             self.dirty = true;
+        }
+
+        // Debounced document highlight: request after 300ms cursor idle.
+        if self.editor.highlight_ranges.is_empty()
+            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
+        {
+            self.editor.lsp_request_document_highlight();
         }
 
         // Frame-capped redraw (60fps = 16.667ms).

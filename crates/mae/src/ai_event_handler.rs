@@ -22,7 +22,7 @@ fn find_buffer_by_name_or_default_mut<'a>(
 ) -> Option<&'a mut mae_core::conversation::Conversation> {
     if let Some(n) = name {
         if let Some(idx) = editor.find_buffer_by_name(n) {
-            return editor.buffers[idx].conversation.as_mut();
+            return editor.buffers[idx].conversation_mut();
         }
     }
     find_conversation_buffer_mut(editor)
@@ -90,6 +90,7 @@ pub struct AiEventContext<'a> {
     pub ai_event_tx: &'a tokio::sync::mpsc::Sender<AiEvent>,
     #[allow(dead_code)]
     pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    pub scheme: &'a mut mae_scheme::SchemeRuntime,
 }
 
 /// Handle a single AI event. Shared between terminal and GUI loops.
@@ -108,8 +109,15 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             }
             let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
+            // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
+            let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
             match exec_result {
-                ExecuteResult::Immediate(result) => {
+                ExecuteResult::Immediate(mut result) => {
+                    // If the tool queued a Scheme eval, replace the output with the result.
+                    if let Some(output) = scheme_output {
+                        result.output = output;
+                        result.success = true;
+                    }
                     let elapsed = tool_start.elapsed().as_millis() as u64;
                     info!(
                         tool = %call.name,
@@ -234,7 +242,23 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.sync_conversation_buffer_rope();
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
-            editor.set_status("[AI] Done");
+
+            // Auto-restore editor state after self-test session.
+            if editor.self_test_active {
+                editor.self_test_active = false;
+                match editor.restore_state() {
+                    Ok(summary) => {
+                        info!(summary = %summary, "auto-restored editor state after self-test");
+                        editor.set_status(format!("[AI] Done — {}", summary));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "failed to auto-restore state after self-test");
+                        editor.set_status("[AI] Done (state restore failed)");
+                    }
+                }
+            } else {
+                editor.set_status("[AI] Done");
+            }
         }
         AiEvent::CostUpdate {
             session_usd,
@@ -244,6 +268,9 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             cache_creation_tokens,
             context_window,
             context_used_tokens,
+            turn_tokens_in,
+            turn_tokens_out,
+            turn_cache_read,
             ..
         } => {
             editor.ai_session_cost_usd = session_usd;
@@ -253,6 +280,26 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai_cache_creation_tokens = cache_creation_tokens;
             editor.ai_context_window = context_window;
             editor.ai_context_used_tokens = context_used_tokens;
+            // Attach per-turn usage to the last assistant entry.
+            if turn_tokens_in > 0 || turn_tokens_out > 0 {
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    // Walk backwards to find the last assistant entry.
+                    for entry in conv.entries.iter_mut().rev() {
+                        if matches!(
+                            entry.role,
+                            mae_core::conversation::ConversationRole::Assistant
+                        ) {
+                            entry.token_usage = Some(mae_core::conversation::TokenUsage {
+                                input: turn_tokens_in as u32,
+                                output: turn_tokens_out as u32,
+                                cache_read: turn_cache_read as u32,
+                            });
+                            break;
+                        }
+                    }
+                    conv.rebuild_render_cache();
+                }
+            }
         }
         AiEvent::BudgetWarning {
             session_usd,
@@ -326,6 +373,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 None => {
                     let mut b = mae_core::Buffer::new();
                     b.name = diff_buf_name.to_string();
+                    b.kind = mae_core::BufferKind::Diff;
                     editor.buffers.push(b);
                     editor.buffers.len() - 1
                 }
@@ -359,9 +407,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
 
             // Create a dedicated conversation buffer for the sub-agent.
             // Users can switch to this buffer to monitor progress in real-time.
-            let mut sub_buf = mae_core::Buffer::new();
-            sub_buf.name = target_buf_name.clone();
-            sub_buf.conversation = Some(mae_core::conversation::Conversation::new());
+            let sub_buf = mae_core::Buffer::new_conversation(&target_buf_name);
             editor.buffers.push(sub_buf);
             if let Some(conv) = find_buffer_by_name_or_default_mut(editor, Some(&target_buf_name)) {
                 conv.push_system(format!("Objective: {}", objective));
@@ -486,6 +532,11 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.set_status(format!("AI Error: {}", msg));
         }
     }
+
+    // After every AI event that may have mutated conversation state,
+    // sync the output rope and auto-scroll the output window to bottom.
+    editor.sync_conversation_buffer_rope();
+    crate::key_handling::conversation::scroll_output_to_bottom(editor);
 }
 
 fn render_changes_to_diff(changes: &serde_json::Value) -> String {
@@ -496,18 +547,25 @@ fn render_changes_to_diff(changes: &serde_json::Value) -> String {
                 .get("file_path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            let content = change
+            let new_content = change
                 .get("new_content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            out.push_str(&format!("--- a/{}\n", path));
-            out.push_str(&format!("+++ b/{}\n", path));
-            out.push_str("@@ -1,1 +1,1 @@\n");
-            // Simplified: just show the new content
-            out.push_str(content);
-            if !content.ends_with('\n') {
-                out.push('\n');
-            }
+
+            // Read old file content for diff comparison.
+            let old_content = if std::path::Path::new(path).exists() {
+                std::fs::read_to_string(path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            out.push_str(&mae_core::diff::unified_diff_string(
+                &old_content,
+                new_content,
+                path,
+                path,
+                3,
+            ));
         }
     }
     out
@@ -997,4 +1055,23 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
             resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
         }
     }
+}
+
+/// Drain any pending Scheme evaluations queued by AI tools (e.g. `eval_scheme`).
+/// Returns `Some(output)` if any expressions were evaluated, `None` otherwise.
+fn drain_pending_scheme_evals(
+    editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
+) -> Option<String> {
+    if editor.pending_scheme_eval.is_empty() {
+        return None;
+    }
+    let exprs: Vec<String> = editor.pending_scheme_eval.drain(..).collect();
+    let mut results = Vec::new();
+    for code in &exprs {
+        let output = scheme.eval_for_repl(code, editor);
+        editor.append_to_scheme_repl(&output);
+        results.push(output);
+    }
+    Some(results.join("\n"))
 }

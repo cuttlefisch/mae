@@ -15,8 +15,12 @@
 "ui.statusline.mode.insert" = { fg = "white", bg = "green", bold = true }
 "ui.statusline.mode.command" = { fg = "white", bg = "yellow", bold = true }
 "ui.statusline.mode.conversation" = { fg = "white", bg = "magenta", bold = true }
+"ui.statusline.mode.visual" = { fg = "white", bg = "magenta", bold = true }
 "ui.statusline.mode.locked" = { fg = "white", bg = "red", bold = true }
 "ui.statusline.mode.mcp" = { fg = "white", bg = "yellow", bold = true }
+"ui.statusline.ai.standard" = { fg = "white", bg = "green", bold = true }
+"ui.statusline.ai.auto" = { fg = "white", bg = "yellow", bold = true }
+"ui.statusline.ai.plan" = { fg = "white", bg = "blue", bold = true }
 "ui.gutter" = { fg = "gray" }
 "ui.gutter.selected" = { fg = "yellow" }
 "ui.popup" = { fg = "black" }
@@ -36,6 +40,10 @@
 "diagnostic.debug" = { fg = "dark_gray" }
 "diagnostic.trace" = { fg = "dark_gray", dim = true }
 "diagnostic.target" = { fg = "cyan" }
+
+"lsp.highlight.read" = { bg = "gray" }
+"lsp.highlight.write" = { bg = "dark_gray" }
+"lsp.highlight.text" = { bg = "gray" }
 
 "conversation.user" = { fg = "blue", bold = true }
 "conversation.assistant" = { fg = "green", bold = true }
@@ -76,3 +84,14 @@
 "markup.italic" = { fg = "black", italic = true }
 "markup.list" = { fg = "magenta" }
 "markup.quote" = { fg = "dark_gray", italic = true }
+"markup.strikethrough" = { fg = "gray", strikethrough = true }
+"markup.todo" = { fg = "red", bold = true }
+"markup.done" = { fg = "green" }
+"markup.checkbox" = { fg = "yellow", bold = true }
+"markup.checkbox.checked" = { fg = "green" }
+"markup.code_block" = { bg = "#f0f0f0" }
+
+"diff.added" = { fg = "green" }
+"diff.removed" = { fg = "red" }
+"diff.hunk" = { fg = "magenta" }
+"diff.header" = { fg = "cyan", bold = true }

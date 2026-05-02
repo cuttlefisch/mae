@@ -66,8 +66,17 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 See `ROADMAP.md` for granular milestone tracking. All core phases (1-8) are complete:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
 - Knowledge base, embedded shell, MCP bridge, GUI backend
-- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction redesign, graceful degradation, web fetch, 25 regression tests)
-- 1,603 tests, CI green
+- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction, graceful degradation, web fetch)
+- v0.5.1: GUI polish, pixel-based variable-height lines, cached lazy theme resolution
+- v0.6.0 (in progress): QoL + Doom parity — code folding (za/zM/zR), window management (resize/move/maximize), incremental syntax reparse, unified diff for AI edits, per-message token display, dispatch modularization (dispatch.rs → 10 submodules)
+- 1,796 tests, CI green
+
+### Key Modules (v0.6.0)
+
+- **`crates/core/src/editor/dispatch/`** — command dispatch split into 10 submodules: `git.rs`, `fold_org.rs`, `nav.rs`, `edit.rs`, `visual.rs`, `window.rs`, `lsp.rs`, `dap.rs`, `file.rs`, `ui.rs`. Each has `fn dispatch_X(&mut self, name, ...) -> Option<bool>`. `mod.rs` delegates.
+- **`crates/core/src/diff.rs`** — LCS-based unified diff (DiffLine enum, unified_diff/unified_diff_string)
+- **`crates/core/src/syntax.rs`** — tree-sitter syntax highlighting + incremental reparse (Tree::edit) + fold range computation
+- **`crates/gui/src/canvas.rs`** — Skia canvas with font pre-scaling cache (HashMap<u32, Font>)
 
 ## File Conventions
 

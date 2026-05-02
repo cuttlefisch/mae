@@ -334,7 +334,8 @@ impl Editor {
             // For simplicity, we process in reverse to keep line indices stable.
             for &line_idx in matching_lines.iter().rev() {
                 let win = self.window_mgr.focused_window_mut();
-                win.cursor_row = line_idx.min(self.buffers[idx].line_count().saturating_sub(1));
+                win.cursor_row =
+                    line_idx.min(self.buffers[idx].display_line_count().saturating_sub(1));
                 win.cursor_col = 0;
                 // Dispatch each char as a normal-mode command name.
                 for ch in normal_keys.chars() {

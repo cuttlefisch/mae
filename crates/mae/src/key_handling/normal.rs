@@ -10,6 +10,15 @@ pub(super) fn handle_keymap_mode(
     key: KeyEvent,
     pending_keys: &mut Vec<KeyPress>,
 ) {
+    // Dismiss buffer-keys popup on any keypress.
+    // Esc/q dismiss only; other keys dismiss AND fall through to normal processing.
+    if editor.buffer_keys_popup {
+        editor.buffer_keys_popup = false;
+        if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
+            return;
+        }
+    }
+
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         editor.running = false;
         return;
@@ -21,25 +30,29 @@ pub(super) fn handle_keymap_mode(
 
     pending_keys.push(kp);
 
-    let mode_name = match editor.mode {
-        Mode::Normal => "normal",
-        Mode::Insert => "insert",
-        Mode::Visual(_) => "visual",
-        Mode::Command
-        | Mode::ConversationInput
-        | Mode::Search
-        | Mode::FilePicker
-        | Mode::FileBrowser
-        | Mode::CommandPalette => "command",
-        Mode::GitStatus => "git-status",
-        Mode::ShellInsert => return, // Handled by main.rs handle_shell_key
+    let Some((mode_name, fallback_name)) = editor.current_keymap_names() else {
+        return; // ShellInsert — handled by main.rs handle_shell_key
     };
 
-    let result = editor
+    let mut result = editor
         .keymaps
         .get(mode_name)
         .map(|km| km.lookup(pending_keys))
         .unwrap_or(LookupResult::None);
+
+    // Overlay keymaps (org, git-status) fall back to normal if no match.
+    if matches!(result, LookupResult::None) {
+        if let Some(fb) = fallback_name {
+            let fb_result = editor
+                .keymaps
+                .get(fb)
+                .map(|km| km.lookup(pending_keys))
+                .unwrap_or(LookupResult::None);
+            if !matches!(fb_result, LookupResult::None) {
+                result = fb_result;
+            }
+        }
+    }
 
     match result {
         LookupResult::Exact(cmd) => {
@@ -74,20 +87,27 @@ pub(super) fn handle_keymap_mode(
             // E.g. `dgg` → split at 1: `d` (operator-delete) + `gg`
             //       `ysw` → split at 2: `ys` (operator-surround) + `w`
             // Longest match wins (try from len-1 down to 1).
+            // For operator splitting, check both the overlay and fallback keymaps.
+            let lookup_names: Vec<&str> = std::iter::once(mode_name).chain(fallback_name).collect();
             let mut split_at = 0;
             let mut split_cmd = String::new();
             if pending_keys.len() > 1 {
                 for i in (1..pending_keys.len()).rev() {
-                    if let Some(cmd) = editor
-                        .keymaps
-                        .get(mode_name)
-                        .and_then(|km| km.exact_match(&pending_keys[..i]))
-                    {
-                        if is_operator_command(cmd) {
-                            split_at = i;
-                            split_cmd = cmd.to_string();
-                            break;
+                    for &km_name in &lookup_names {
+                        if let Some(cmd) = editor
+                            .keymaps
+                            .get(km_name)
+                            .and_then(|km| km.exact_match(&pending_keys[..i]))
+                        {
+                            if is_operator_command(cmd) {
+                                split_at = i;
+                                split_cmd = cmd.to_string();
+                                break;
+                            }
                         }
+                    }
+                    if split_at > 0 {
+                        break;
                     }
                 }
             }
@@ -132,11 +152,18 @@ pub(super) fn handle_keymap_mode(
                     return;
                 }
 
-                let result2 = editor
-                    .keymaps
-                    .get(mode_name)
-                    .map(|km| km.lookup(pending_keys))
-                    .unwrap_or(LookupResult::None);
+                let mut result2 = LookupResult::None;
+                for &km_name in &lookup_names {
+                    let r = editor
+                        .keymaps
+                        .get(km_name)
+                        .map(|km| km.lookup(pending_keys))
+                        .unwrap_or(LookupResult::None);
+                    if !matches!(r, LookupResult::None) {
+                        result2 = r;
+                        break;
+                    }
+                }
                 match result2 {
                     LookupResult::Exact(cmd) => {
                         let cmd = cmd.to_string();
@@ -343,162 +370,170 @@ pub(super) fn handle_normal_mode(
         }
     }
 
-    // Help buffer: intercept only link-navigation and help-specific keys.
-    // All normal vim navigation (j/k/G/gg/C-d/C-u/etc.) falls through to
-    // the standard keymap — the help buffer is a read-only rope buffer.
-    let is_help = {
-        let idx = editor.active_buffer_idx();
-        editor.buffers[idx].kind == BufferKind::Help
-    };
-    if is_help && pending_keys.is_empty() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Enter => {
-                editor.help_follow_link();
-                editor.count_prefix = None;
-                return;
+    // Help buffer and Debug panel keys are now handled via their respective
+    // overlay keymaps ("help" and "debug"), so no inline interception needed.
+
+    // Pending file delete confirmation (y/n). Shared by file-tree-delete and delete-this-file.
+    if editor.pending_file_delete.is_some() && pending_keys.is_empty() {
+        if let KeyCode::Char('y') = key.code {
+            if let Some((path, close_buf)) = editor.pending_file_delete.take() {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let result = if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+                match result {
+                    Ok(()) => {
+                        if close_buf {
+                            // Close buffer associated with this file
+                            let idx = editor.active_buffer_idx();
+                            editor.dispatch_builtin("force-kill-buffer");
+                            let _ = idx; // buffer closed
+                        }
+                        // Refresh file tree if open
+                        let tree_idx = editor
+                            .buffers
+                            .iter()
+                            .position(|b| b.kind == BufferKind::FileTree);
+                        if let Some(ti) = tree_idx {
+                            if let Some(ft) = editor.buffers[ti].file_tree_mut() {
+                                ft.refresh();
+                            }
+                        }
+                        editor.set_status(format!("Deleted {}", name));
+                    }
+                    Err(e) => {
+                        editor.set_status(format!("Delete failed: {}", e));
+                    }
+                }
             }
-            KeyCode::Tab => {
-                editor.help_next_link();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::BackTab => {
-                editor.help_prev_link();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('q') if !ctrl => {
-                editor.help_close();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('o') if ctrl => {
-                editor.help_back();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('i') if ctrl => {
-                editor.help_forward();
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {} // Fall through to normal keymap
+        } else {
+            editor.pending_file_delete = None;
+            editor.set_status("Delete cancelled");
         }
+        editor.count_prefix = None;
+        return;
     }
 
-    // Debug panel: intercept navigation and action keys.
-    // j/k move between interactive items, Enter selects/expands,
-    // c/n/s/S drive execution, o toggles output, r refreshes, q closes.
-    let is_debug = {
-        let idx = editor.active_buffer_idx();
-        editor.buffers[idx].kind == BufferKind::Debug
-    };
-    if is_debug && pending_keys.is_empty() {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char('j') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
-                    view.move_down();
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(view) = editor.buffers[idx].debug_view.as_mut() {
-                    view.move_up();
-                }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Enter => {
-                editor.debug_panel_select();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('q') if !ctrl => {
-                editor.close_debug_panel();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('o') if !ctrl => {
-                editor.debug_toggle_output();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('r') if !ctrl => {
-                editor.dap_refresh();
-                editor.debug_panel_refresh_if_open();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('c') if !ctrl => {
-                editor.dap_continue();
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('n') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::Over);
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('s') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::In);
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('S') if !ctrl => {
-                editor.dap_step(mae_core::StepKind::Out);
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {} // Fall through to normal keymap
-        }
-    }
+    // File tree keys are now handled via the "file-tree" overlay keymap.
 
-    // In Normal mode, intercept j/k/G/gg for conversation buffer scrolling
-    // and `i` to re-enter ConversationInput mode.
-    let is_conv = {
+    // In the *AI* output buffer, `i`/`a` redirect focus to the input window
+    // --- Conversation pair intercepts ---
+    // Output buffer (*AI*): i/a redirect to input window. Double-Esc returns to input.
+    // Input buffer (*ai-input*): Enter submits, i/a enter ConversationInput mode.
+    if let Some(ref pair) = editor.conversation_pair.clone() {
         let idx = editor.active_buffer_idx();
-        editor.buffers[idx].conversation.is_some()
-    };
-    if is_conv && pending_keys.is_empty() {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let count = editor.count_prefix.unwrap_or(1).max(1);
-        match key.code {
-            KeyCode::Char('j') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_down(count);
+
+        // Output buffer: redirect insert commands to input window.
+        if idx == pair.output_buffer_idx && pending_keys.is_empty() {
+            match key.code {
+                KeyCode::Char('i')
+                | KeyCode::Char('a')
+                | KeyCode::Char('I')
+                | KeyCode::Char('A')
+                | KeyCode::Char('o')
+                | KeyCode::Char('O')
+                    if !ctrl =>
+                {
+                    editor.window_mgr.set_focused(pair.input_window_id);
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
                 }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('k') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_up(count);
+                // Double-Esc: return to input prompt (single Esc stays in output for nav).
+                KeyCode::Esc if !ctrl => {
+                    // Use count_prefix as a simple "was previous key also Esc" flag.
+                    // If the last key was Esc (tracked via a transient flag), jump to input.
+                    if editor.conv_esc_pending {
+                        editor.conv_esc_pending = false;
+                        editor.window_mgr.set_focused(pair.input_window_id);
+                        editor.set_mode(Mode::ConversationInput);
+                        editor.count_prefix = None;
+                        return;
+                    }
+                    editor.conv_esc_pending = true;
+                    editor.set_status("Press Esc again to return to prompt");
+                    return;
                 }
-                editor.count_prefix = None;
-                return;
-            }
-            KeyCode::Char('G') if !ctrl => {
-                let idx = editor.active_buffer_idx();
-                if let Some(ref mut conv) = editor.buffers[idx].conversation {
-                    conv.scroll_to_bottom();
+                _ => {
+                    editor.conv_esc_pending = false;
                 }
-                editor.count_prefix = None;
-                return;
             }
-            KeyCode::Char('i') | KeyCode::Char('a') if !ctrl => {
-                editor.set_mode(Mode::ConversationInput);
-                editor.count_prefix = None;
-                return;
-            }
-            _ => {}
         }
+
+        // Input buffer: insert commands enter ConversationInput with vi cursor semantics.
+        // (Enter-to-submit is handled in handle_key before dispatch.)
+        if idx == pair.input_buffer_idx && pending_keys.is_empty() {
+            match key.code {
+                KeyCode::Char('i') if !ctrl => {
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('a') if !ctrl => {
+                    // Append: move cursor right by 1 (past current char).
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    let win = editor.window_mgr.focused_window_mut();
+                    if win.cursor_col < line_len {
+                        win.cursor_col += 1;
+                    }
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('I') if !ctrl => {
+                    // Insert at first non-blank.
+                    editor.window_mgr.focused_window_mut().cursor_col = 0;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('A') if !ctrl => {
+                    // Append at end of line.
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    editor.window_mgr.focused_window_mut().cursor_col = line_len;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('o') if !ctrl => {
+                    // Open line below.
+                    let row = editor.window_mgr.focused_window().cursor_row;
+                    let line_len = editor.buffers[idx].line_len(row);
+                    let win = editor.window_mgr.focused_window_mut();
+                    win.cursor_col = line_len;
+                    editor.buffers[idx].insert_char(editor.window_mgr.focused_window_mut(), '\n');
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                KeyCode::Char('O') if !ctrl => {
+                    // Open line above.
+                    let win = editor.window_mgr.focused_window_mut();
+                    win.cursor_col = 0;
+                    editor.buffers[idx].insert_char(win, '\n');
+                    let win = editor.window_mgr.focused_window_mut();
+                    if win.cursor_row > 0 {
+                        win.cursor_row -= 1;
+                    }
+                    win.cursor_col = 0;
+                    editor.set_mode(Mode::ConversationInput);
+                    editor.count_prefix = None;
+                    return;
+                }
+                _ => {}
+            }
+        }
+    } else {
+        editor.conv_esc_pending = false;
     }
 
     handle_keymap_mode(editor, scheme, key, pending_keys);

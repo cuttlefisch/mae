@@ -99,12 +99,51 @@ pub enum ConversationRole {
     System,
 }
 
+/// Per-message token usage from the API response.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input: u32,
+    pub output: u32,
+    #[serde(default)]
+    pub cache_read: u32,
+}
+
+impl TokenUsage {
+    /// Format as a compact display string: `[in:1.2k out:340]`
+    pub fn display_compact(&self) -> String {
+        fn fmt_count(n: u32) -> String {
+            if n >= 1000 {
+                format!("{:.1}k", n as f64 / 1000.0)
+            } else {
+                n.to_string()
+            }
+        }
+        if self.cache_read > 0 {
+            format!(
+                "[in:{} out:{} cache:{}]",
+                fmt_count(self.input),
+                fmt_count(self.output),
+                fmt_count(self.cache_read)
+            )
+        } else {
+            format!(
+                "[in:{} out:{}]",
+                fmt_count(self.input),
+                fmt_count(self.output)
+            )
+        }
+    }
+}
+
 /// A single entry in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationEntry {
     pub role: ConversationRole,
     pub content: String,
     pub collapsed: bool,
+    /// Token usage for this message (populated from API response for assistant messages).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
 }
 
 /// Style hint for rendered lines.
@@ -138,11 +177,9 @@ pub struct RenderedLine {
 }
 
 /// Conversation state for an AI interaction pane.
+#[derive(Debug)]
 pub struct Conversation {
     pub entries: Vec<ConversationEntry>,
-    pub input_line: String,
-    /// Byte offset of the editing cursor within `input_line`.
-    pub input_cursor: usize,
     /// Conversation-specific scroll state: 0 = bottom (auto-follow),
     /// positive = scrolled up N lines from the bottom.
     pub scroll: usize,
@@ -164,6 +201,12 @@ pub struct Conversation {
     /// Maps entry index → first cached_line index, enabling incremental
     /// re-render of only the last entry during streaming.
     entry_start_indices: Vec<usize>,
+    /// Rendered links from markdown stripping — populated during render cache rebuild.
+    rendered_links: Vec<crate::link_detect::RenderedLink>,
+    /// Whether to strip markdown link markup (show labels only).
+    pub link_descriptive: bool,
+    /// Whether to render inline bold/italic/code spans.
+    pub render_markup: bool,
 }
 
 impl Default for Conversation {
@@ -182,8 +225,6 @@ impl Conversation {
     pub fn new() -> Self {
         let mut conv = Conversation {
             entries: Vec::new(),
-            input_line: String::new(),
-            input_cursor: 0,
             scroll: 0,
             streaming: false,
             streaming_start: None,
@@ -193,6 +234,9 @@ impl Conversation {
             cached_screen_width: 0,
             screen_counts_dirty: true,
             entry_start_indices: Vec::new(),
+            rendered_links: Vec::new(),
+            link_descriptive: true,
+            render_markup: true,
         };
         conv.rebuild_render_cache();
         conv
@@ -218,6 +262,7 @@ impl Conversation {
             role: ConversationRole::User,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -229,6 +274,7 @@ impl Conversation {
             role: ConversationRole::Assistant,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -249,6 +295,7 @@ impl Conversation {
             },
             content: String::new(),
             collapsed: true,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -325,6 +372,7 @@ impl Conversation {
             },
             content: output.into(),
             collapsed: true,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -336,6 +384,7 @@ impl Conversation {
             role: ConversationRole::System,
             content: text.into(),
             collapsed: false,
+            token_usage: None,
         });
         self.version += 1;
         self.trim_entries();
@@ -413,25 +462,12 @@ impl Conversation {
     }
 
     /// Rebuild the cached rendered lines. Called after every content mutation.
-    fn rebuild_render_cache(&mut self) {
+    pub fn rebuild_render_cache(&mut self) {
+        self.rendered_links.clear();
         self.cached_lines = self.compute_rendered_lines();
         self.cached_screen_counts.clear();
         self.screen_counts_dirty = true;
         self.rebuild_entry_start_indices();
-    }
-
-    /// O(1) update of just the input prompt line in the cache.
-    /// Used by input editing methods to avoid O(N) full rebuild.
-    fn update_input_in_cache(&mut self) {
-        if let Some(last) = self.cached_lines.last_mut() {
-            if last.style == LineStyle::InputPrompt {
-                last.text = format!("> {}", self.input_line);
-                self.cached_screen_counts.clear();
-                self.screen_counts_dirty = true;
-                return;
-            }
-        }
-        self.rebuild_render_cache();
     }
 
     /// Return pre-computed rendered lines (zero-allocation on read).
@@ -552,17 +588,15 @@ impl Conversation {
             self.cached_lines.extend(new_lines);
         }
 
-        // Separator before input prompt (always present)
-        self.cached_lines.push(RenderedLine {
-            text: String::new(),
-            style: LineStyle::Separator,
-            entry_index: None,
-        });
-        self.cached_lines.push(RenderedLine {
-            text: format!("> {}", self.input_line),
-            style: LineStyle::InputPrompt,
-            entry_index: None,
-        });
+        // Only add trailing separator if this is NOT the last entry
+        // (matches compute_rendered_lines which skips separator after last).
+        if last_entry_idx + 1 < self.entries.len() {
+            self.cached_lines.push(RenderedLine {
+                text: String::new(),
+                style: LineStyle::Separator,
+                entry_index: None,
+            });
+        }
 
         self.cached_screen_counts.clear();
         self.screen_counts_dirty = true;
@@ -574,7 +608,7 @@ impl Conversation {
 
     /// Render a single entry into the provided line buffer.
     fn render_entry_into(
-        &self,
+        &mut self,
         lines: &mut Vec<RenderedLine>,
         i: usize,
         entry: &ConversationEntry,
@@ -602,14 +636,36 @@ impl Conversation {
                 }
             }
             ConversationRole::Assistant => {
+                let marker = if let Some(ref usage) = entry.token_usage {
+                    format!("[AI] {}", usage.display_compact())
+                } else {
+                    "[AI]".into()
+                };
                 lines.push(RenderedLine {
-                    text: "[AI]".into(),
+                    text: marker,
                     style: LineStyle::RoleMarker,
                     entry_index: Some(i),
                 });
                 for line in entry.content.lines() {
+                    let text = if self.link_descriptive {
+                        let (clean, link_positions) =
+                            crate::link_detect::strip_markdown_links(line);
+                        let line_idx = lines.len();
+                        for (start, end, target) in link_positions {
+                            self.rendered_links.push(crate::link_detect::RenderedLink {
+                                line_idx,
+                                byte_start: start,
+                                byte_end: end,
+                                target,
+                                kind: crate::link_detect::LinkKind::Markdown,
+                            });
+                        }
+                        clean
+                    } else {
+                        line.to_string()
+                    };
                     lines.push(RenderedLine {
-                        text: line.to_string(),
+                        text,
                         style: LineStyle::AssistantText,
                         entry_index: Some(i),
                     });
@@ -701,13 +757,14 @@ impl Conversation {
     }
 
     /// Render all entries + input line into display lines.
-    fn compute_rendered_lines(&self) -> Vec<RenderedLine> {
+    fn compute_rendered_lines(&mut self) -> Vec<RenderedLine> {
         let mut lines = Vec::new();
+        let entry_count = self.entries.len();
 
-        for (i, entry) in self.entries.iter().enumerate() {
+        for i in 0..entry_count {
             // Skip ToolResult if the previous entry is a ToolCall that already
             // has the result merged (Completed/Error state with content).
-            if matches!(entry.role, ConversationRole::ToolResult { .. }) && i > 0 {
+            if matches!(self.entries[i].role, ConversationRole::ToolResult { .. }) && i > 0 {
                 if let ConversationRole::ToolCall { state, .. } = &self.entries[i - 1].role {
                     if matches!(state, ToolCallState::Completed | ToolCallState::Error) {
                         continue;
@@ -715,7 +772,8 @@ impl Conversation {
                 }
             }
 
-            self.render_entry_into(&mut lines, i, entry);
+            let entry = self.entries[i].clone();
+            self.render_entry_into(&mut lines, i, &entry);
 
             // Skip separator between consecutive tool entries for compact display
             let next_is_tool = self
@@ -729,27 +787,24 @@ impl Conversation {
                 })
                 .unwrap_or(false);
             let this_is_tool = matches!(
-                entry.role,
+                self.entries[i].role,
                 ConversationRole::ToolCall { .. } | ConversationRole::ToolResult { .. }
             );
             if this_is_tool && next_is_tool {
                 continue; // no separator between stacked tool lines
             }
 
-            // Separator between entries
-            lines.push(RenderedLine {
-                text: String::new(),
-                style: LineStyle::Separator,
-                entry_index: None,
-            });
+            // Separator between entries (skip after last entry to avoid phantom line)
+            if i + 1 < self.entries.len() {
+                lines.push(RenderedLine {
+                    text: String::new(),
+                    style: LineStyle::Separator,
+                    entry_index: None,
+                });
+            }
         }
 
-        // Input prompt
-        lines.push(RenderedLine {
-            text: format!("> {}", self.input_line),
-            style: LineStyle::InputPrompt,
-            entry_index: None,
-        });
+        // (Input prompt is now rendered separately in the *ai-input* split buffer.)
 
         lines
     }
@@ -767,122 +822,6 @@ impl Conversation {
     /// Total rendered line count (for scroll calculations).
     pub fn line_count(&self) -> usize {
         self.cached_lines.len()
-    }
-
-    /// Split the input prompt into spans for cursor rendering.
-    ///
-    /// Returns `(prefix, before_cursor, cursor_char, after_cursor)` where
-    /// `cursor_char` is the character under the cursor or `" "` at end of line.
-    /// The renderer applies `ui.cursor` style to `cursor_char`.
-    pub fn input_cursor_spans(&self) -> (&str, &str, String, &str) {
-        let input = &self.input_line;
-        let cursor_byte = self.input_cursor.min(input.len());
-        let before = &input[..cursor_byte];
-        if cursor_byte < input.len() {
-            let rest = &input[cursor_byte..];
-            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-            let cursor_ch = input[cursor_byte..cursor_byte + ch_len].to_string();
-            let after = &input[cursor_byte + ch_len..];
-            ("> ", before, cursor_ch, after)
-        } else {
-            ("> ", before, " ".to_string(), "")
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Input readline editing
-    // -----------------------------------------------------------------------
-
-    /// Insert `ch` at `input_cursor`, advancing the cursor.
-    pub fn input_insert_char(&mut self, ch: char) {
-        self.input_line.insert(self.input_cursor, ch);
-        self.input_cursor += ch.len_utf8();
-        self.update_input_in_cache();
-    }
-
-    /// Delete the char immediately before the cursor (Backspace / C-h).
-    pub fn input_backspace(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        let (prev_start, _) = before.char_indices().next_back().unwrap();
-        let removed_len = self.input_cursor - prev_start;
-        self.input_line.remove(prev_start);
-        self.input_cursor -= removed_len;
-        self.update_input_in_cache();
-    }
-
-    /// Delete the char at the cursor (C-d / Delete).
-    pub fn input_delete_forward(&mut self) {
-        if self.input_cursor >= self.input_line.len() {
-            return;
-        }
-        self.input_line.remove(self.input_cursor);
-        self.update_input_in_cache();
-    }
-
-    /// Move cursor to start of input (C-a / Home).
-    pub fn input_move_home(&mut self) {
-        self.input_cursor = 0;
-    }
-
-    /// Move cursor to end of input (C-e / End).
-    pub fn input_move_end(&mut self) {
-        self.input_cursor = self.input_line.len();
-    }
-
-    /// Move cursor one char backward (C-b / Left).
-    pub fn input_move_backward(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        let (prev_start, _) = before.char_indices().next_back().unwrap();
-        self.input_cursor = prev_start;
-    }
-
-    /// Move cursor one char forward (C-f / Right).
-    pub fn input_move_forward(&mut self) {
-        if self.input_cursor >= self.input_line.len() {
-            return;
-        }
-        let ch = self.input_line[self.input_cursor..].chars().next().unwrap();
-        self.input_cursor += ch.len_utf8();
-    }
-
-    /// Delete backward to the last whitespace boundary (C-w, bash-style).
-    pub fn input_kill_word_backward(&mut self) {
-        if self.input_cursor == 0 {
-            return;
-        }
-        let before = &self.input_line[..self.input_cursor];
-        // Strip trailing whitespace, then find last whitespace before the word.
-        let trimmed_end = before.trim_end().len();
-        let word_start = if trimmed_end == 0 {
-            0
-        } else {
-            self.input_line[..trimmed_end]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0)
-        };
-        self.input_line.drain(word_start..self.input_cursor);
-        self.input_cursor = word_start;
-        self.update_input_in_cache();
-    }
-
-    /// Delete from start of input to cursor (C-u).
-    pub fn input_kill_to_start(&mut self) {
-        self.input_line.drain(..self.input_cursor);
-        self.input_cursor = 0;
-        self.update_input_in_cache();
-    }
-
-    /// Delete from cursor to end of input (C-k).
-    pub fn input_kill_to_end(&mut self) {
-        self.input_line.truncate(self.input_cursor);
-        self.update_input_in_cache();
     }
 
     // -----------------------------------------------------------------------
@@ -914,6 +853,132 @@ impl Conversation {
         };
         self.scroll = total;
     }
+
+    /// Generate `HighlightSpan`s for the synced conversation rope.
+    ///
+    /// Each rendered line maps 1:1 to a rope line (via `sync_conversation_rope`).
+    /// The span covers the full line and assigns a theme key based on `LineStyle`.
+    pub fn highlight_spans(&self, rope: &ropey::Rope) -> Vec<crate::syntax::HighlightSpan> {
+        let rendered = self.rendered_lines();
+        let mut spans = Vec::with_capacity(rendered.len());
+        for (line_idx, rl) in rendered.iter().enumerate() {
+            if line_idx >= rope.len_lines() {
+                break;
+            }
+            let theme_key: &'static str = match &rl.style {
+                LineStyle::RoleMarker => {
+                    if rl.text.contains("[You]") {
+                        "conversation.user"
+                    } else if rl.text.contains("[AI]") {
+                        "conversation.assistant"
+                    } else {
+                        "conversation.system"
+                    }
+                }
+                LineStyle::UserText => "conversation.user.text",
+                LineStyle::AssistantText => "conversation.assistant.text",
+                LineStyle::ToolCallHeader => "conversation.tool",
+                LineStyle::ToolResultText => "conversation.tool.result",
+                LineStyle::ToolRunning => "conversation.tool",
+                LineStyle::ToolPending => "ui.text.dim",
+                LineStyle::ToolSuccess => "conversation.tool.result",
+                LineStyle::ToolError => "diagnostic.error",
+                LineStyle::SystemText => "conversation.system",
+                LineStyle::Separator => "ui.text",
+                LineStyle::InputPrompt => "conversation.input",
+            };
+            let line_start = rope.line_to_char(line_idx);
+            let line_len = rope.line(line_idx).len_chars();
+            // Strip trailing newline for byte range.
+            let text_len = if line_idx + 1 < rope.len_lines() {
+                line_len.saturating_sub(1)
+            } else {
+                line_len
+            };
+            if text_len == 0 {
+                continue;
+            }
+            let byte_start = rope.char_to_byte(line_start);
+            let byte_end = rope.char_to_byte(line_start + text_len);
+            spans.push(crate::syntax::HighlightSpan {
+                byte_start,
+                byte_end,
+                theme_key,
+            });
+        }
+        spans
+    }
+
+    /// Find a rendered link at a given cursor position (line_idx, byte_col).
+    pub fn link_at_position(
+        &self,
+        line_idx: usize,
+        byte_col: usize,
+    ) -> Option<&crate::link_detect::RenderedLink> {
+        self.rendered_links
+            .iter()
+            .find(|l| l.line_idx == line_idx && byte_col >= l.byte_start && byte_col < l.byte_end)
+    }
+
+    /// Access the rendered links list.
+    pub fn rendered_links(&self) -> &[crate::link_detect::RenderedLink] {
+        &self.rendered_links
+    }
+
+    /// Generate highlight spans with inline markdown styling for assistant text.
+    ///
+    /// Extends the base `highlight_spans()` with `markup.bold`, `markup.literal`,
+    /// and `markup.italic` spans for assistant messages. Intentionally excludes
+    /// `markup.heading` — adding heading spans would trigger `line_heading_scale()`
+    /// in `compute_layout()`, breaking uniform conversation line heights.
+    pub fn highlight_spans_with_markup(
+        &self,
+        rope: &ropey::Rope,
+    ) -> Vec<crate::syntax::HighlightSpan> {
+        let mut spans = self.highlight_spans(rope);
+        let rendered = self.rendered_lines();
+        for (line_idx, rl) in rendered.iter().enumerate() {
+            if line_idx >= rope.len_lines() {
+                break;
+            }
+            if !matches!(rl.style, LineStyle::AssistantText) {
+                continue;
+            }
+            let line_start_byte = rope.char_to_byte(rope.line_to_char(line_idx));
+            let line_text: String = rope.line(line_idx).chars().collect();
+
+            if self.render_markup {
+                // Markdown inline spans: **bold**, `code`, *italic*, ~~strikethrough~~
+                for mut span in crate::syntax::compute_markup_spans(
+                    &line_text,
+                    crate::syntax::MarkupFlavor::Markdown,
+                ) {
+                    span.byte_start += line_start_byte;
+                    span.byte_end += line_start_byte;
+                    spans.push(span);
+                }
+                // Org inline spans: *bold*, /italic/, =code=, ~verbatim~
+                for mut span in crate::syntax::compute_org_style_spans(&line_text) {
+                    span.byte_start += line_start_byte;
+                    span.byte_end += line_start_byte;
+                    spans.push(span);
+                }
+            }
+
+            // Link spans for concealed markdown links
+            for link in &self.rendered_links {
+                if link.line_idx == line_idx {
+                    spans.push(crate::syntax::HighlightSpan {
+                        byte_start: line_start_byte + link.byte_start,
+                        byte_end: line_start_byte + link.byte_end,
+                        theme_key: "markup.link",
+                    });
+                }
+            }
+        }
+        spans.sort_by_key(|s| s.byte_start);
+        spans
+    }
 }
 
 #[cfg(test)]
@@ -924,94 +989,9 @@ mod tests {
     fn new_conversation_is_empty() {
         let conv = Conversation::new();
         assert!(conv.entries.is_empty());
-        assert!(conv.input_line.is_empty());
-        assert_eq!(conv.input_cursor, 0);
         assert_eq!(conv.scroll, 0);
         assert!(!conv.streaming);
         assert_eq!(conv.version(), 0);
-    }
-
-    #[test]
-    fn input_insert_and_move() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('h');
-        conv.input_insert_char('i');
-        assert_eq!(conv.input_line, "hi");
-        assert_eq!(conv.input_cursor, 2);
-
-        conv.input_move_home();
-        assert_eq!(conv.input_cursor, 0);
-        conv.input_insert_char('!');
-        assert_eq!(conv.input_line, "!hi");
-        assert_eq!(conv.input_cursor, 1);
-    }
-
-    #[test]
-    fn input_backspace_moves_cursor() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('a');
-        conv.input_insert_char('b');
-        conv.input_insert_char('c');
-        conv.input_backspace();
-        assert_eq!(conv.input_line, "ab");
-        assert_eq!(conv.input_cursor, 2);
-
-        conv.input_move_home();
-        conv.input_backspace(); // no-op at start
-        assert_eq!(conv.input_line, "ab");
-        assert_eq!(conv.input_cursor, 0);
-    }
-
-    #[test]
-    fn input_delete_forward() {
-        let mut conv = Conversation::new();
-        conv.input_insert_char('a');
-        conv.input_insert_char('b');
-        conv.input_move_home();
-        conv.input_delete_forward();
-        assert_eq!(conv.input_line, "b");
-        assert_eq!(conv.input_cursor, 0);
-    }
-
-    #[test]
-    fn input_kill_word_backward() {
-        let mut conv = Conversation::new();
-        for ch in "hello world".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_kill_word_backward();
-        assert_eq!(conv.input_line, "hello ");
-        assert_eq!(conv.input_cursor, 6);
-
-        // Kill with trailing spaces
-        for ch in "  ".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_kill_word_backward();
-        assert_eq!(conv.input_line, "");
-    }
-
-    #[test]
-    fn input_kill_to_start_and_end() {
-        let mut conv = Conversation::new();
-        for ch in "abcdef".chars() {
-            conv.input_insert_char(ch);
-        }
-        conv.input_move_home();
-        conv.input_move_forward();
-        conv.input_move_forward();
-        conv.input_move_forward(); // cursor at 3
-        assert_eq!(conv.input_cursor, 3);
-
-        conv.input_kill_to_end();
-        assert_eq!(conv.input_line, "abc");
-
-        conv.input_move_forward(); // still at end, no-op
-        conv.input_move_home();
-        conv.input_move_forward(); // cursor at 1
-        conv.input_kill_to_start();
-        assert_eq!(conv.input_line, "bc");
-        assert_eq!(conv.input_cursor, 0);
     }
 
     #[test]
@@ -1086,11 +1066,50 @@ mod tests {
     }
 
     #[test]
+    fn no_trailing_separator_after_last_entry() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let lines = conv.rendered_lines();
+        assert!(!lines.is_empty());
+        let last = lines.last().unwrap();
+        // Last line should be content, not an empty separator
+        assert!(
+            !matches!(last.style, LineStyle::Separator) || !last.text.is_empty(),
+            "trailing empty separator found after last entry"
+        );
+        // flat_text should not end with a newline (which would cause phantom line)
+        let flat = conv.flat_text();
+        assert!(
+            !flat.ends_with('\n'),
+            "flat_text ends with trailing newline"
+        );
+    }
+
+    #[test]
+    fn separator_between_non_last_entries() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        conv.push_user("again");
+        let lines = conv.rendered_lines();
+        // Should have separators between entries but not after the last
+        let separator_count = lines
+            .iter()
+            .filter(|l| matches!(l.style, LineStyle::Separator) && l.text.is_empty())
+            .count();
+        assert_eq!(
+            separator_count, 2,
+            "expected separator between each pair of entries"
+        );
+    }
+
+    #[test]
     fn flat_text_empty_conversation() {
         let conv = Conversation::new();
         let flat = conv.flat_text();
-        // Should just be the input prompt
-        assert!(flat.contains("> "));
+        // Empty conversation: no entries, no input prompt (input is in separate buffer)
+        assert!(flat.is_empty());
     }
 
     #[test]
@@ -1135,15 +1154,15 @@ mod tests {
     }
 
     #[test]
-    fn line_count_includes_input_prompt() {
+    fn line_count_no_input_prompt() {
         let conv = Conversation::new();
-        // Empty conversation: just the input prompt line
-        assert_eq!(conv.line_count(), 1);
+        // Empty conversation: no entries, no input prompt
+        assert_eq!(conv.line_count(), 0);
 
         let mut conv = Conversation::new();
         conv.push_user("hello");
-        // [You] + "hello" + separator + "> "
-        assert!(conv.line_count() >= 3);
+        // [You] + "hello" (no trailing separator after last entry)
+        assert!(conv.line_count() >= 2);
     }
 
     #[test]
@@ -1222,62 +1241,6 @@ mod tests {
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"entries\""));
         assert!(json.contains("\"User\""));
-    }
-
-    // ---- input_cursor_spans tests ----
-
-    #[test]
-    fn cursor_spans_empty_input() {
-        let conv = Conversation::new();
-        let (prefix, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(prefix, "> ");
-        assert_eq!(before, "");
-        assert_eq!(cursor, " "); // block cursor at end
-        assert_eq!(after, "");
-    }
-
-    #[test]
-    fn cursor_spans_at_end() {
-        let mut conv = Conversation::new();
-        conv.input_line = "hello".into();
-        conv.input_cursor = 5;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "hello");
-        assert_eq!(cursor, " "); // block at end
-        assert_eq!(after, "");
-    }
-
-    #[test]
-    fn cursor_spans_in_middle() {
-        let mut conv = Conversation::new();
-        conv.input_line = "hello".into();
-        conv.input_cursor = 2;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "he");
-        assert_eq!(cursor, "l");
-        assert_eq!(after, "lo");
-    }
-
-    #[test]
-    fn cursor_spans_at_start() {
-        let mut conv = Conversation::new();
-        conv.input_line = "abc".into();
-        conv.input_cursor = 0;
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "");
-        assert_eq!(cursor, "a");
-        assert_eq!(after, "bc");
-    }
-
-    #[test]
-    fn cursor_spans_multibyte() {
-        let mut conv = Conversation::new();
-        conv.input_line = "héllo".into();
-        conv.input_cursor = 1; // before 'é' (byte offset 1)
-        let (_, before, cursor, after) = conv.input_cursor_spans();
-        assert_eq!(before, "h");
-        assert_eq!(cursor, "é");
-        assert_eq!(after, "llo");
     }
 
     // ---- char_boundary_at tests (migrated from GUI) ----
@@ -1397,11 +1360,8 @@ mod tests {
         assert!(total10 > total80);
     }
 
-    /// Regression: the InputPrompt must be included in screen counts so the
-    /// viewport shows it at scroll=0 (bottom). Previously a width mismatch
-    /// between pre-computation and render caused the prompt to be clipped.
     #[test]
-    fn screen_counts_include_input_prompt() {
+    fn screen_counts_cover_all_rendered_lines() {
         let mut conv = Conversation::new();
         conv.push_user("test");
         conv.push_assistant("response");
@@ -1409,13 +1369,8 @@ mod tests {
 
         let rendered = conv.rendered_lines();
         let (counts, total) = conv.screen_counts_total();
-        // counts must cover all rendered lines including InputPrompt
         assert_eq!(counts.len(), rendered.len());
         assert!(total > 0);
-        // Last rendered line should be the InputPrompt
-        assert_eq!(rendered.last().unwrap().style, LineStyle::InputPrompt,);
-        // Its screen count must be included in the total
-        assert!(*counts.last().unwrap() >= 1);
     }
 
     /// Regression: cached_screen_width must reflect the width used for
@@ -1505,5 +1460,194 @@ mod tests {
     fn chars_to_cols_mixed() {
         // "hi日本" — 2 ASCII (2 cols) + 1 CJK (2 cols) = 4 cols for 3 chars
         assert_eq!(chars_to_display_cols("hi日本", 3), 4);
+    }
+
+    #[test]
+    fn token_usage_display_compact() {
+        let usage = TokenUsage {
+            input: 1200,
+            output: 340,
+            cache_read: 0,
+        };
+        assert_eq!(usage.display_compact(), "[in:1.2k out:340]");
+    }
+
+    #[test]
+    fn token_usage_display_with_cache() {
+        let usage = TokenUsage {
+            input: 500,
+            output: 200,
+            cache_read: 8000,
+        };
+        assert_eq!(usage.display_compact(), "[in:500 out:200 cache:8.0k]");
+    }
+
+    #[test]
+    fn token_usage_serde_roundtrip() {
+        let usage = TokenUsage {
+            input: 100,
+            output: 50,
+            cache_read: 0,
+        };
+        let json = serde_json::to_string(&usage).unwrap();
+        let parsed: TokenUsage = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.input, 100);
+        assert_eq!(parsed.output, 50);
+    }
+
+    #[test]
+    fn conversation_entry_with_token_usage_renders() {
+        let mut conv = Conversation::new();
+        conv.push_assistant("Hello");
+        // Set token usage on last entry.
+        conv.entries.last_mut().unwrap().token_usage = Some(TokenUsage {
+            input: 1500,
+            output: 300,
+            cache_read: 0,
+        });
+        conv.rebuild_render_cache();
+        let lines = conv.rendered_lines();
+        let marker = lines.iter().find(|l| l.style == LineStyle::RoleMarker);
+        assert!(marker.is_some());
+        assert!(
+            marker.unwrap().text.contains("[in:1.5k out:300]"),
+            "role marker should contain token display: {}",
+            marker.unwrap().text
+        );
+    }
+
+    #[test]
+    fn highlight_spans_covers_all_lines() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans(&rope);
+        // Every non-empty rendered line should have a span.
+        let non_empty = conv
+            .rendered_lines()
+            .iter()
+            .filter(|l| !l.text.is_empty())
+            .count();
+        assert_eq!(spans.len(), non_empty);
+    }
+
+    #[test]
+    fn highlight_spans_role_markers() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("world");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans(&rope);
+        // First span should be [You] role marker → conversation.user
+        assert_eq!(spans[0].theme_key, "conversation.user");
+        // Find the [AI] marker span
+        let ai_span = spans
+            .iter()
+            .find(|s| s.theme_key == "conversation.assistant");
+        assert!(ai_span.is_some());
+    }
+
+    #[test]
+    fn highlight_spans_with_markup_adds_inline_styles() {
+        let mut conv = Conversation::new();
+        conv.push_user("hello");
+        conv.push_assistant("This is **bold** and `code`");
+
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+
+        // Should contain base conversation spans
+        assert!(spans
+            .iter()
+            .any(|s| s.theme_key == "conversation.assistant.text"));
+        // Should also contain inline markup spans
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected markup.bold from **bold**"
+        );
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected markup.literal from `code`"
+        );
+        // Must NOT contain heading spans
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.heading"),
+            "highlight_spans_with_markup must not produce heading spans"
+        );
+    }
+
+    // --- Rendered link tests ---
+
+    #[test]
+    fn rendered_lines_strip_markdown_links() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        let lines = conv.rendered_lines();
+        let text_line = lines.iter().find(|l| l.style == LineStyle::AssistantText);
+        assert!(text_line.is_some());
+        assert_eq!(text_line.unwrap().text, "See docs for info");
+    }
+
+    #[test]
+    fn link_at_position_finds_link() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        // The rendered text is "See docs for info"
+        // "docs" starts at byte 4, ends at byte 8
+        // Line index: 0=[AI], 1="See docs for info"
+        let link = conv.link_at_position(1, 4);
+        assert!(link.is_some(), "expected link at position (1, 4)");
+        assert_eq!(link.unwrap().target, "https://docs.rs");
+        // No link at position 0 (before the label)
+        assert!(conv.link_at_position(1, 0).is_none());
+    }
+
+    #[test]
+    fn highlight_spans_include_link_style() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = true;
+        conv.push_assistant("See [docs](https://docs.rs) here");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+        assert!(
+            spans.iter().any(|s| s.theme_key == "markup.link"),
+            "expected markup.link span for concealed link"
+        );
+    }
+
+    #[test]
+    fn link_descriptive_disabled_shows_raw() {
+        let mut conv = Conversation::new();
+        conv.link_descriptive = false;
+        conv.push_assistant("See [docs](https://docs.rs) for info");
+        let lines = conv.rendered_lines();
+        let text_line = lines.iter().find(|l| l.style == LineStyle::AssistantText);
+        assert!(text_line.is_some());
+        assert_eq!(
+            text_line.unwrap().text,
+            "See [docs](https://docs.rs) for info"
+        );
+        assert!(conv.rendered_links().is_empty());
+    }
+
+    #[test]
+    fn render_markup_disabled_no_markup_spans() {
+        let mut conv = Conversation::new();
+        conv.render_markup = false;
+        conv.push_assistant("This is **bold** and `code`");
+        let rope = ropey::Rope::from_str(&conv.flat_text());
+        let spans = conv.highlight_spans_with_markup(&rope);
+        // Should NOT have markup.bold or markup.literal since render_markup is off
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.bold"),
+            "expected no markup.bold when render_markup=false"
+        );
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.literal"),
+            "expected no markup.literal when render_markup=false"
+        );
     }
 }

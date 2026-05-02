@@ -21,6 +21,10 @@ README.org
 # Test artifacts
 test_sandbox/
 
+# Standalone tool build artifacts
+tools/*/target/
+tools/*/Cargo.lock
+
 # AI agent configs (user-local settings, not project config)
 .claude/
 **/.claude/

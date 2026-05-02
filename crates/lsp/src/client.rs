@@ -300,6 +300,21 @@ impl LspClient {
         self.send_notification_raw(&notif).await
     }
 
+    /// Send a workspace/didChangeWorkspaceFolders notification.
+    pub async fn did_change_workspace_folders(&self, added_uris: &[String]) -> Result<(), String> {
+        let params = serde_json::json!({
+            "event": {
+                "added": added_uris.iter().map(|uri| serde_json::json!({
+                    "uri": uri,
+                    "name": "project"
+                })).collect::<Vec<serde_json::Value>>(),
+                "removed": []
+            }
+        });
+        let notif = Notification::new("workspace/didChangeWorkspaceFolders", Some(params));
+        self.send_notification_raw(&notif).await
+    }
+
     /// Send a request and wait for the matching response via oneshot.
     ///
     /// Registers a pending entry in the correlation map before writing the
@@ -495,6 +510,62 @@ impl LspClient {
         }
         let result = resp.result.unwrap_or(serde_json::Value::Null);
         Ok(DocumentSymbolResponse::from_value(result))
+    }
+
+    /// textDocument/documentHighlight — returns symbol occurrences at `position`.
+    pub async fn request_document_highlight(
+        &self,
+        uri: &str,
+        position: Position,
+    ) -> Result<DocumentHighlightResponse, String> {
+        let params = TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+        };
+        let resp = self
+            .request(
+                "textDocument/documentHighlight",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(DocumentHighlightResponse::from_value(result))
+    }
+
+    /// textDocument/codeAction — returns code actions available at `range`.
+    pub async fn request_code_action(
+        &self,
+        uri: &str,
+        range: Range,
+        diagnostics: Vec<serde_json::Value>,
+    ) -> Result<CodeActionResponse, String> {
+        let params = CodeActionParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            range,
+            context: CodeActionContext { diagnostics },
+        };
+        let resp = self
+            .request(
+                "textDocument/codeAction",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(CodeActionResponse::from_value(result))
     }
 
     /// Send shutdown request and exit notification for graceful teardown.

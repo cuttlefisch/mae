@@ -1,10 +1,11 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
+    cursor::SetCursorStyle,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use mae_core::{Editor, HighlightSpan};
+use mae_core::{Editor, SyntaxSpanMap};
 use mae_shell::ShellTerminal;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -14,6 +15,7 @@ mod buffer_render;
 mod conversation_render;
 mod cursor;
 mod debug_render;
+mod file_tree_render;
 mod help_render;
 mod messages_render;
 mod popup_render;
@@ -23,8 +25,8 @@ mod status_render;
 mod theme_convert;
 mod which_key_render;
 
-// Re-export gutter_width for external use (e.g. cursor module).
-pub use buffer_render::gutter_width;
+// Re-export gutter_width for external use.
+pub use mae_core::render_common::gutter::gutter_width;
 
 /// Backend-agnostic rendering interface.
 ///
@@ -85,6 +87,12 @@ impl Renderer for TerminalRenderer {
         shells: &HashMap<usize, ShellTerminal>,
     ) -> io::Result<()> {
         let _span = tracing::trace_span!("tui_render").entered();
+        // Set terminal cursor style based on mode (bar for insert-like, block otherwise).
+        let cursor_style = match editor.mode {
+            mae_core::Mode::Insert | mae_core::Mode::ConversationInput => SetCursorStyle::SteadyBar,
+            _ => SetCursorStyle::SteadyBlock,
+        };
+        execute!(self.terminal.backend_mut(), cursor_style)?;
         self.terminal.draw(|frame| {
             render_frame(frame, editor, shells);
         })?;
@@ -104,7 +112,11 @@ impl Renderer for TerminalRenderer {
 
     fn cleanup(&mut self) -> io::Result<()> {
         disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            self.terminal.backend_mut(),
+            SetCursorStyle::DefaultUserShape,
+            LeaveAlternateScreen
+        )?;
         Ok(())
     }
 }
@@ -159,11 +171,14 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
         popup_render::render_command_palette(frame, area, editor);
-    } else if !editor.which_key_prefix.is_empty() {
-        let entries = if let Some(km) = editor.keymaps.get("normal") {
-            km.which_key_entries(&editor.which_key_prefix, &editor.commands)
+    } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
+        let (entries, title_override) = if editor.buffer_keys_popup {
+            let kind = editor.active_buffer().kind;
+            use mae_core::buffer_mode::BufferMode;
+            let title = kind.mode_name().to_string();
+            (editor.buffer_keys_entries(), Some(title))
         } else {
-            vec![]
+            (editor.which_key_entries_for_current_keymap(), None)
         };
 
         let cols = (area.width as usize / 25).max(1);
@@ -174,8 +189,14 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             Layout::vertical([Constraint::Min(1), Constraint::Length(popup_height)]).split(area);
 
         render_window_area(frame, chunks[0], editor, &syntax_spans, shells);
-        which_key_render::render_which_key_popup(frame, chunks[1], editor, &entries);
-    } else if splash_render::should_show_splash(editor) {
+        which_key_render::render_which_key_popup(
+            frame,
+            chunks[1],
+            editor,
+            &entries,
+            title_override.as_deref(),
+        );
+    } else if mae_core::render_common::splash::should_show_splash(editor) {
         let chunks = Layout::vertical([
             Constraint::Min(1),
             Constraint::Length(1),
@@ -183,7 +204,7 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         ])
         .split(area);
 
-        splash_render::render_splash(frame, chunks[0], editor);
+        splash_render::render_splash_if_needed(frame, chunks[0], editor);
         status_render::render_status_bar(frame, chunks[1], editor);
         status_render::render_command_line(frame, chunks[2], editor);
     } else {
@@ -204,6 +225,12 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if !editor.completion_items.is_empty() {
             popup_render::render_completion_popup(frame, chunks[0], editor);
         }
+        if editor.hover_popup.is_some() {
+            popup_render::render_hover_popup(frame, chunks[0], editor);
+        }
+        if editor.code_action_menu.is_some() {
+            popup_render::render_code_action_popup(frame, chunks[0], editor);
+        }
     }
 }
 
@@ -217,7 +244,7 @@ fn render_window_area(
     frame: &mut Frame,
     area: Rect,
     editor: &Editor,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
     shells: &HashMap<usize, ShellTerminal>,
 ) {
     let window_area = mae_core::WinRect {
@@ -235,58 +262,14 @@ fn render_window_area(
             let buf = &editor.buffers[win.buffer_idx];
             let is_focused = *win_id == focused_id;
             match buf.kind {
-                mae_core::BufferKind::Conversation => {
-                    conversation_render::render_conversation_window(
-                        frame,
-                        ratatui_rect,
-                        buf,
-                        win,
-                        is_focused,
-                        editor,
-                    );
-                }
                 mae_core::BufferKind::Messages => {
                     messages_render::render_messages_window(
                         frame,
                         ratatui_rect,
-                        win,
-                        is_focused,
-                        editor,
-                    );
-                }
-                mae_core::BufferKind::Help => {
-                    // Help buffers go through the normal render path.
-                    // Convert HelpLinkSpans → HighlightSpans for link styling.
-                    let help_spans: Vec<HighlightSpan> = buf
-                        .help_view
-                        .as_ref()
-                        .map(|view| {
-                            view.rendered_links
-                                .iter()
-                                .enumerate()
-                                .map(|(i, link)| {
-                                    let is_focused_link = view.focused_link == Some(i);
-                                    HighlightSpan {
-                                        byte_start: link.byte_start,
-                                        byte_end: link.byte_end,
-                                        theme_key: if is_focused_link {
-                                            "ui.selection"
-                                        } else {
-                                            "markup.link"
-                                        },
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    buffer_render::render_window(
-                        frame,
-                        ratatui_rect,
                         buf,
                         win,
                         is_focused,
                         editor,
-                        Some(&help_spans),
                     );
                 }
                 mae_core::BufferKind::Debug => {
@@ -313,12 +296,50 @@ fn render_window_area(
                     }
                 }
                 mae_core::BufferKind::Visual => {
-                    if let Some(ref vb) = buf.visual {
+                    if let Some(vb) = buf.visual() {
                         render_visual_buffer(frame, ratatui_rect, vb);
                     }
                 }
+                mae_core::BufferKind::FileTree => {
+                    file_tree_render::render_file_tree_window(
+                        frame,
+                        ratatui_rect,
+                        buf,
+                        win,
+                        is_focused,
+                        editor,
+                    );
+                }
                 _ => {
-                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
+                    // Standard text pipeline: shared span selection for Conversation,
+                    // Help, GitStatus, *AI-Diff*; syntax spans for Text/Preview/Dashboard.
+                    // Text buffers with a markup flavor get inline markup spans merged.
+                    let owned_spans: Option<Vec<mae_core::HighlightSpan>>;
+                    let spans = if let Some(shared) =
+                        mae_core::render_common::spans::highlight_spans_for_buffer(buf)
+                    {
+                        owned_spans = Some(shared);
+                        owned_spans.as_deref()
+                    } else {
+                        let flavor = editor.effective_markup_flavor(win.buffer_idx);
+                        if flavor != mae_core::MarkupFlavor::None {
+                            let mut enriched = syntax_spans
+                                .get(&win.buffer_idx)
+                                .map(|v| v.as_ref().clone())
+                                .unwrap_or_default();
+                            mae_core::render_common::spans::enrich_spans_with_markup(
+                                &mut enriched,
+                                buf,
+                                flavor,
+                            );
+                            owned_spans = Some(enriched);
+                            owned_spans.as_deref()
+                        } else {
+                            owned_spans = None;
+                            let _ = &owned_spans;
+                            syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                        }
+                    };
                     buffer_render::render_window(
                         frame,
                         ratatui_rect,

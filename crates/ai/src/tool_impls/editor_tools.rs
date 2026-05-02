@@ -434,13 +434,9 @@ pub fn execute_org_cycle(editor: &mut Editor) -> Result<String, String> {
 
 pub fn execute_org_todo_cycle(
     editor: &mut Editor,
-    args: &serde_json::Value,
+    _args: &serde_json::Value,
 ) -> Result<String, String> {
-    let forward = args
-        .get("forward")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    editor.org_todo_cycle(forward);
+    editor.org_todo_cycle();
     Ok(editor.status_msg.clone())
 }
 
@@ -483,7 +479,7 @@ pub fn execute_visual_buffer_add_rect(
     let buf_idx = editor.active_buffer_idx();
     ensure_visual_buffer(editor, buf_idx)?;
 
-    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+    if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
         vb.add(VisualElement::Rect {
             x,
             y,
@@ -533,7 +529,7 @@ pub fn execute_visual_buffer_add_line(
     let buf_idx = editor.active_buffer_idx();
     ensure_visual_buffer(editor, buf_idx)?;
 
-    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+    if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
         vb.add(VisualElement::Line {
             x1,
             y1,
@@ -581,7 +577,7 @@ pub fn execute_visual_buffer_add_circle(
     let buf_idx = editor.active_buffer_idx();
     ensure_visual_buffer(editor, buf_idx)?;
 
-    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+    if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
         vb.add(VisualElement::Circle {
             cx,
             cy,
@@ -627,7 +623,7 @@ pub fn execute_visual_buffer_add_text(
     let buf_idx = editor.active_buffer_idx();
     ensure_visual_buffer(editor, buf_idx)?;
 
-    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+    if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
         vb.add(VisualElement::Text {
             x,
             y,
@@ -648,7 +644,9 @@ fn ensure_visual_buffer(editor: &mut Editor, buf_idx: usize) -> Result<(), Strin
             && !editor.buffers[buf_idx].modified
         {
             editor.buffers[buf_idx].kind = mae_core::BufferKind::Visual;
-            editor.buffers[buf_idx].visual = Some(mae_core::visual_buffer::VisualBuffer::new());
+            editor.buffers[buf_idx].view = mae_core::buffer_view::BufferView::Visual(Box::new(
+                mae_core::visual_buffer::VisualBuffer::new(),
+            ));
         } else {
             return Err("Active buffer is not a visual buffer".into());
         }
@@ -658,7 +656,7 @@ fn ensure_visual_buffer(editor: &mut Editor, buf_idx: usize) -> Result<(), Strin
 
 pub fn execute_visual_buffer_clear(editor: &mut Editor) -> Result<String, String> {
     let buf_idx = editor.active_buffer_idx();
-    if let Some(ref mut vb) = editor.buffers[buf_idx].visual {
+    if let Some(vb) = editor.buffers[buf_idx].visual_mut() {
         vb.clear();
         Ok("Visual buffer cleared".into())
     } else {

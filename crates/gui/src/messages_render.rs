@@ -1,6 +1,6 @@
 //! *Messages* buffer rendering for the GUI backend.
 
-use mae_core::{Editor, Window};
+use mae_core::{Buffer, Editor, Window};
 
 use crate::canvas::SkiaCanvas;
 use crate::draw_window_border;
@@ -9,6 +9,7 @@ use crate::theme;
 /// Render the *Messages* log buffer.
 pub fn render_messages_window(
     canvas: &mut SkiaCanvas,
+    buf: &Buffer,
     win: &Window,
     focused: bool,
     editor: &Editor,
@@ -47,7 +48,7 @@ pub fn render_messages_window(
     let target_fg = theme::ts_fg(editor, "diagnostic.target");
     let text_fg = theme::ts_fg(editor, "ui.text");
 
-    let wrap_enabled = editor.word_wrap && inner_width > 0;
+    let wrap_enabled = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && inner_width > 0;
     let mut visual_row = 0usize;
 
     for entry in entries.iter().skip(start) {
@@ -55,21 +56,9 @@ pub fn render_messages_window(
             break;
         }
 
-        let level_fg = match entry.level {
-            mae_core::MessageLevel::Error => theme::ts_fg(editor, "diagnostic.error"),
-            mae_core::MessageLevel::Warn => theme::ts_fg(editor, "diagnostic.warn"),
-            mae_core::MessageLevel::Info => theme::ts_fg(editor, "diagnostic.info"),
-            mae_core::MessageLevel::Debug => theme::ts_fg(editor, "diagnostic.debug"),
-            mae_core::MessageLevel::Trace => theme::ts_fg(editor, "diagnostic.trace"),
-        };
-
-        let level_tag = match entry.level {
-            mae_core::MessageLevel::Error => "ERROR",
-            mae_core::MessageLevel::Warn => " WARN",
-            mae_core::MessageLevel::Info => " INFO",
-            mae_core::MessageLevel::Debug => "DEBUG",
-            mae_core::MessageLevel::Trace => "TRACE",
-        };
+        let mp = mae_core::render_common::messages::message_prefix(entry.level);
+        let level_fg = theme::ts_fg(editor, mp.theme_key);
+        let level_tag = mp.tag;
 
         let prefix = format!("[{}] [{}] ", level_tag, entry.target);
         let prefix_len = prefix.len();

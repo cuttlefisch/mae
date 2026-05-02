@@ -206,4 +206,163 @@ fn mouse_right_click_is_noop() {
     assert_eq!(win.cursor_col, orig_col);
 }
 
+#[test]
+fn mouse_scroll_horizontal_right() {
+    let mut editor = Editor::new();
+    // Need a long line so horizontal scroll isn't clamped to 0.
+    let long_line = "x".repeat(200);
+    editor.buffers[0].replace_contents(&long_line);
+    editor.viewport_height = 40;
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 0;
+    editor.handle_mouse_scroll_horizontal(2); // positive = right
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 6); // 2 * scroll_speed(3)
+}
+
+#[test]
+fn mouse_scroll_horizontal_left() {
+    let mut editor = Editor::new();
+    let long_line = "x".repeat(200);
+    editor.buffers[0].replace_contents(&long_line);
+    editor.viewport_height = 40;
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 10;
+    editor.handle_mouse_scroll_horizontal(-2); // negative = left
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 4); // 10 - 2*3
+}
+
+#[test]
+fn mouse_scroll_horizontal_saturates_at_zero() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    win.col_offset = 2;
+    editor.handle_mouse_scroll_horizontal(-5); // Would go negative
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.col_offset, 0);
+}
+
+#[test]
+fn mouse_scroll_horizontal_clamped_to_max_line_width() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("short");
+    editor.viewport_height = 40;
+    // Try to scroll way past the 5-char line.
+    editor.handle_mouse_scroll_horizontal(100);
+    let win = editor.window_mgr.focused_window();
+    // Clamped to max_line_width - 1 = 4.
+    assert_eq!(win.col_offset, 4);
+}
+
+#[test]
+fn mouse_scroll_skips_folded_lines() {
+    let mut editor = Editor::new();
+    // Create 50 lines.
+    let content = (0..50)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    editor.buffers[0].replace_contents(&content);
+    editor.viewport_height = 40;
+    let win = editor.window_mgr.focused_window_mut();
+    win.scroll_offset = 0;
+
+    // Fold lines 2..10 (lines 3-9 become invisible).
+    editor.buffers[0].folded_ranges.push((2, 10));
+
+    // Scroll down by 1 click (delta = -1, scroll_speed = 3 → 3 visible lines).
+    editor.handle_mouse_scroll(-1);
+    let offset = editor.window_mgr.focused_window().scroll_offset;
+    // Should skip past the fold: 0→1→2→10 (3 visible-line steps).
+    assert_eq!(offset, 10, "scroll should skip folded range");
+}
+
+#[test]
+fn fold_navigation_next_visible_skips_fold() {
+    let mut buf = crate::buffer::Buffer::new();
+    let content = (0..20)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    buf.replace_contents(&content);
+    buf.folded_ranges.push((3, 8)); // lines 4-7 hidden
+
+    assert_eq!(buf.next_visible_line(2), 3); // 3 is fold start, visible
+    assert_eq!(buf.next_visible_line(3), 8); // 4 is inside fold → skip to 8
+    assert_eq!(buf.next_visible_line(8), 9); // 8 is fold end, visible; next is 9
+}
+
+#[test]
+fn fold_navigation_prev_visible_skips_fold() {
+    let mut buf = crate::buffer::Buffer::new();
+    let content = (0..20)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
+    buf.replace_contents(&content);
+    buf.folded_ranges.push((3, 8)); // lines 4-7 hidden
+
+    assert_eq!(buf.prev_visible_line(9), 8); // 8 is visible
+    assert_eq!(buf.prev_visible_line(8), 3); // 7 is inside fold → skip to 3
+    assert_eq!(buf.prev_visible_line(3), 2); // 2 is visible
+    assert_eq!(buf.prev_visible_line(0), 0); // already at 0
+}
+
+#[test]
+fn line_visual_rows_single_source_of_truth() {
+    let mut editor = Editor::new();
+    let content = "# Heading 1\nplain line\n## Heading 2\nanother line\nfolded inner\nmore\n";
+    editor.buffers[0].replace_contents(content);
+
+    // Without heading scale: all visible lines = 1 row.
+    editor.heading_scale = false;
+    assert_eq!(editor.line_visual_rows(0, 0), 1);
+    assert_eq!(editor.line_visual_rows(0, 1), 1);
+    assert_eq!(editor.line_visual_rows(0, 2), 1);
+
+    // With heading scale: headings take ceil(scale) rows.
+    editor.heading_scale = true;
+    assert_eq!(editor.line_visual_rows(0, 0), 2); // # = level 1, scale 1.5 → 2
+    assert_eq!(editor.line_visual_rows(0, 1), 1); // plain
+    assert_eq!(editor.line_visual_rows(0, 2), 2); // ## = level 2, scale 1.3 → 2
+    assert_eq!(editor.line_visual_rows(0, 3), 1); // plain
+
+    // Folded lines = 0 rows.
+    editor.buffers[0].folded_ranges.push((2, 5)); // lines 3,4 hidden
+    assert_eq!(editor.line_visual_rows(0, 3), 0);
+    assert_eq!(editor.line_visual_rows(0, 4), 0);
+    assert_eq!(editor.line_visual_rows(0, 2), 2); // fold start still visible
+}
+
+#[test]
+fn mouse_click_dismisses_hover_popup() {
+    let mut editor = Editor::new();
+    editor.hover_popup = Some(crate::editor::HoverPopup {
+        contents: "test hover".into(),
+        anchor_row: 0,
+        anchor_col: 0,
+        scroll_offset: 0,
+    });
+    editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
+    assert!(
+        editor.hover_popup.is_none(),
+        "hover popup should be dismissed on click"
+    );
+}
+
+#[test]
+fn mouse_click_dismisses_code_action_menu() {
+    let mut editor = Editor::new();
+    editor.code_action_menu = Some(crate::editor::CodeActionMenu {
+        items: vec![],
+        selected: 0,
+    });
+    editor.handle_mouse_click(0, 0, crate::input::MouseButton::Left);
+    assert!(
+        editor.code_action_menu.is_none(),
+        "code action menu should be dismissed on click"
+    );
+}
+
 // --- Debug mode tests ---

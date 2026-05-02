@@ -52,6 +52,10 @@
 ;; (set-option! "show-break" "↪ ")
 ;; (set-option! "org-hide-emphasis-markers" "false")
 
+;; Link and markup rendering (Emacs org-link-descriptive pattern)
+;; (set-option! "link-descriptive" "true")  ; show labels instead of raw [label](url)
+;; (set-option! "render-markup" "true")     ; apply inline bold/italic/code styling
+
 ;; Clipboard: "unnamed" (vim default) or "unnamedplus" (system)
 ;; (set-option! "clipboard-mode" "unnamed")
 
@@ -64,6 +68,10 @@
 
 ;; Auto-restore previous session on startup
 ;; (set-option! "restore-session" "false")
+
+;; Autosave: interval in seconds (0 = disabled).
+;; Saves all modified file-backed buffers after idle timeout.
+;; (set-option! "autosave-interval" "300")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; 4. Keybindings

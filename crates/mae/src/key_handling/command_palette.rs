@@ -47,6 +47,9 @@ pub(super) fn handle_command_palette_mode(
                     if buf_name == "*Messages*" {
                         // Create on demand if not yet opened
                         editor.open_messages_buffer();
+                    } else if buf_name == "*AI*" || buf_name == "*ai-input*" {
+                        // Restore the 85%/15% conversation split layout.
+                        editor.open_conversation_buffer();
                     } else if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name)
                     {
                         editor.switch_to_buffer(idx);
@@ -68,6 +71,9 @@ pub(super) fn handle_command_palette_mode(
                 (Some(profile), PalettePurpose::AiProfile) => {
                     let _ = editor.set_option("ai-profile", &profile);
                     crate::config::persist_editor_preference("ai.profile", &profile);
+                }
+                (Some(branch), PalettePurpose::GitBranch) => {
+                    editor.git_branch_switch(&branch);
                 }
                 (Some(root_str), PalettePurpose::SwitchProject) => {
                     editor.add_project(&root_str);

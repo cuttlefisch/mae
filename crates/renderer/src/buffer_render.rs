@@ -1,11 +1,13 @@
 //! Text buffer rendering: gutter, syntax spans, hex color preview,
 //! search/selection highlights, cursorline, diagnostics, breakpoints.
 
+use mae_core::render_common::gutter::{
+    self as gutter_common, collect_breakpoints, collect_line_severities, gutter_width,
+};
 use mae_core::wrap::{find_wrap_break, leading_indent_len};
-use mae_core::{DiagnosticSeverity, Editor, HighlightSpan, Mode, Window};
+use mae_core::{Editor, HighlightSpan, Mode, Window};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
-use std::collections::HashMap;
 
 use crate::theme_convert::ts;
 
@@ -87,61 +89,46 @@ pub(crate) fn render_buffer(
     let show_cursorline = focused && !highlight_selection && cursorline_style.bg.is_some();
     let needs_spans = highlight_search || highlight_selection || has_syntax || show_cursorline;
 
-    // Per-line worst-severity diagnostic for gutter markers.
-    let line_severities: HashMap<u32, DiagnosticSeverity> = {
-        let mut map: HashMap<u32, DiagnosticSeverity> = HashMap::new();
-        if let Some(path) = buf.file_path() {
-            let uri = mae_core::path_to_uri(path);
-            if let Some(diags) = editor.diagnostics.get(&uri) {
-                for d in diags {
-                    let cur = map.get(&d.line).copied();
-                    if severity_higher(cur, Some(d.severity)) {
-                        map.insert(d.line, d.severity);
-                    }
-                }
-            }
-        }
-        map
-    };
-
-    // Breakpoint lines + stopped line for the current buffer's source.
-    let (breakpoint_lines, stopped_line): (std::collections::HashSet<u32>, Option<u32>) = {
-        let mut bps: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        let mut stopped: Option<u32> = None;
-        if let (Some(path), Some(state)) = (buf.file_path(), editor.debug_state.as_ref()) {
-            let path_str = path.to_string_lossy();
-            if let Some(list) = state.breakpoints.get(path_str.as_ref()) {
-                for bp in list {
-                    if bp.line >= 1 {
-                        bps.insert((bp.line - 1) as u32);
-                    }
-                }
-            }
-            if let Some((src, line)) = &state.stopped_location {
-                if src.as_str() == path_str.as_ref() && *line >= 1 {
-                    stopped = Some((*line - 1) as u32);
-                }
-            }
-        }
-        (bps, stopped)
-    };
+    // Per-line diagnostic severities + breakpoints from shared gutter logic.
+    let line_severities = collect_line_severities(buf, editor);
+    let (breakpoint_lines, stopped_line) = collect_breakpoints(buf, editor);
     let stopped_line_style = ts(editor, "debug.current_line");
 
     let mut lines = Vec::with_capacity(viewport_height);
 
     let col_offset = win.col_offset;
     let text_width = (area.width as usize).saturating_sub(gutter_w);
-    let wrap = editor.word_wrap && text_width > 0;
+    let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && text_width > 0;
     let show_break_width = if wrap {
         editor.show_break.chars().count()
     } else {
         0
     };
 
+    // Pre-compute effective display regions (org-appear: cursor reveals its region).
+    let effective_regions = mae_core::display_region::regions_with_cursor_reveal(
+        &buf.display_regions,
+        buf.display_reveal_cursor,
+    );
+
     let mut display_row = 0;
     let mut line_idx = win.scroll_offset;
 
+    // Narrow range: if set, clamp rendering to visible lines.
+    let narrow = buf.narrowed_range;
+    if let Some((ns, _)) = narrow {
+        if line_idx < ns {
+            line_idx = ns;
+        }
+    }
+
     while display_row < viewport_height && line_idx < display_lines {
+        // Skip lines outside narrowed range
+        if let Some((_, ne)) = narrow {
+            if line_idx >= ne {
+                break;
+            }
+        }
         // Skip folded lines
         let mut is_folded = false;
         for (start, end) in &buf.folded_ranges {
@@ -156,27 +143,59 @@ pub(crate) fn render_buffer(
         }
 
         let line_text = buf.rope().line(line_idx);
-        let full_display: String = line_text
+        let rope_chars: Vec<char> = line_text
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
 
-        let line_num = if !editor.show_line_numbers {
-            " ".to_string()
-        } else if editor.relative_line_numbers && line_idx != win.cursor_row {
-            let offset = line_idx.abs_diff(win.cursor_row);
-            format!("{:>width$}", offset, width = gutter_w - 1)
+        // Apply display regions (link concealment).
+        let line_char_start_dr = buf.rope().line_to_char(line_idx);
+        let line_byte_start_dr = buf.rope().char_to_byte(line_char_start_dr);
+        let line_byte_end_dr = buf
+            .rope()
+            .char_to_byte(line_char_start_dr + rope_chars.len());
+        let has_display_regions = !effective_regions.is_empty()
+            && effective_regions
+                .iter()
+                .any(|r| r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr);
+        let (display_chars_vec, display_map_vec) = if has_display_regions {
+            mae_core::display_region::apply_display_regions_to_line(
+                &rope_chars,
+                line_byte_start_dr,
+                line_byte_end_dr,
+                &effective_regions,
+            )
         } else {
-            format!("{:>width$}", line_idx + 1, width = gutter_w - 1)
+            (Vec::new(), Vec::new())
         };
+        let full_display: String = if has_display_regions {
+            display_chars_vec.iter().collect()
+        } else {
+            rope_chars.iter().collect()
+        };
+
+        let line_num = gutter_common::format_line_number(
+            line_idx,
+            win.cursor_row,
+            gutter_w,
+            editor.show_line_numbers,
+            editor.relative_line_numbers,
+        );
         let line_idx_u32 = line_idx as u32;
-        let marker = resolve_gutter_marker(
+        let marker = gutter_common::resolve_gutter_marker(
             stopped_line == Some(line_idx_u32),
             breakpoint_lines.contains(&line_idx_u32),
             line_severities.get(&line_idx_u32).copied(),
         );
         let (marker_char, marker_style) = match marker.glyph_and_theme_key() {
             Some((ch, key)) => (ch, ts(editor, key)),
+            None if gutter_common::git_line_marker(buf, line_idx).is_some() => {
+                let (ch, key) = gutter_common::git_line_marker(buf, line_idx).unwrap();
+                (ch, ts(editor, key))
+            }
+            None if gutter_common::is_line_changed(buf, line_idx) => {
+                ('│', ts(editor, "diff.modified"))
+            }
             None => (' ', gutter_style),
         };
         let line_text_style = if stopped_line == Some(line_idx_u32) {
@@ -189,7 +208,8 @@ pub(crate) fn render_buffer(
             let line_char_start = buf.rope().line_to_char(line_idx);
             let full_chars: Vec<char> = full_display.chars().collect();
             let full_count = full_chars.len();
-            let line_char_end = line_char_start + full_count;
+            let rope_char_count = rope_chars.len();
+            let line_char_end = line_char_start + rope_char_count;
 
             let mut styles: Vec<Style> = vec![line_text_style; full_count];
 
@@ -203,12 +223,26 @@ pub(crate) fn render_buffer(
                     }
                     let sb = span.byte_start.max(line_byte_start);
                     let eb = span.byte_end.min(line_byte_end);
-                    let sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
-                    let ec = buf
+                    let rope_sc = buf.rope().byte_to_char(sb).saturating_sub(line_char_start);
+                    let rope_ec = buf
                         .rope()
                         .byte_to_char(eb)
                         .saturating_sub(line_char_start)
-                        .min(full_count);
+                        .min(rope_char_count);
+                    // Map rope char offsets to display char offsets when display regions are active.
+                    let (sc, ec) = if has_display_regions {
+                        let dsc = mae_core::display_region::rope_col_to_display_col(
+                            rope_sc,
+                            &display_map_vec,
+                        );
+                        let dec = mae_core::display_region::rope_col_to_display_col(
+                            rope_ec,
+                            &display_map_vec,
+                        );
+                        (dsc.min(full_count), dec.min(full_count))
+                    } else {
+                        (rope_sc.min(full_count), rope_ec.min(full_count))
+                    };
 
                     if editor.org_hide_emphasis_markers
                         && (span.theme_key == "markup.bold.marker"
@@ -226,6 +260,39 @@ pub(crate) fn render_buffer(
                 }
             }
 
+            // Display region link styling (underline + markup.link color).
+            if has_display_regions {
+                let link_style = ts(editor, "markup.link");
+                let line_byte_start = buf.rope().char_to_byte(line_char_start);
+                let line_byte_end = buf.rope().char_to_byte(line_char_end);
+                for region in &effective_regions {
+                    if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start {
+                        continue;
+                    }
+                    if region.link_target.is_none() {
+                        continue;
+                    }
+                    let rope_start = buf
+                        .rope()
+                        .byte_to_char(region.byte_start.max(line_byte_start))
+                        .saturating_sub(line_char_start);
+                    let dsc = mae_core::display_region::rope_col_to_display_col(
+                        rope_start,
+                        &display_map_vec,
+                    );
+                    let replacement_len = region
+                        .replacement
+                        .as_ref()
+                        .map(|r| r.chars().count())
+                        .unwrap_or(0);
+                    let dec = (dsc + replacement_len).min(full_count);
+                    let ul_style = link_style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+                    for s in styles[dsc..dec].iter_mut() {
+                        *s = s.patch(ul_style);
+                    }
+                }
+            }
+
             // Inline hex color preview.
             apply_hex_color_preview(&full_chars, &mut styles);
 
@@ -234,6 +301,39 @@ pub(crate) fn render_buffer(
                 if let Some(bg) = cursorline_style.bg {
                     for s in styles.iter_mut() {
                         *s = s.patch(Style::default().bg(bg));
+                    }
+                }
+            }
+
+            // LSP document highlights (background-only, behind selection).
+            if !editor.highlight_ranges.is_empty() {
+                for hr in &editor.highlight_ranges {
+                    if line_idx < hr.start_line || line_idx > hr.end_line {
+                        continue;
+                    }
+                    let key = match hr.kind {
+                        mae_core::HighlightKind::Read => "lsp.highlight.read",
+                        mae_core::HighlightKind::Write => "lsp.highlight.write",
+                        mae_core::HighlightKind::Text => "lsp.highlight.text",
+                    };
+                    let hl_style = editor.theme.style(key);
+                    if let Some(bg) = hl_style.bg {
+                        let bg_rat = crate::theme_convert::to_ratatui_color(bg);
+                        let sc = if line_idx == hr.start_line {
+                            hr.start_col
+                        } else {
+                            0
+                        };
+                        let ec = if line_idx == hr.end_line {
+                            hr.end_col
+                        } else {
+                            full_count
+                        };
+                        let sc = sc.min(full_count);
+                        let ec = ec.min(full_count);
+                        for s in styles[sc..ec].iter_mut() {
+                            *s = s.patch(ratatui::style::Style::default().bg(bg_rat));
+                        }
                     }
                 }
             }
@@ -266,6 +366,28 @@ pub(crate) fn render_buffer(
                     let me = (m.end - line_char_start).min(full_count);
                     for style in styles[ms..me].iter_mut() {
                         *style = search_style;
+                    }
+                }
+            }
+
+            // Diagnostic underlines (wavy in GUI, underlined in TUI).
+            if editor.lsp_diagnostics_inline {
+                if let Some(path) = buf.file_path() {
+                    let uri = mae_core::path_to_uri(path);
+                    let diag_spans = mae_core::render_common::diagnostics::compute_diagnostic_spans(
+                        &editor.diagnostics,
+                        &uri,
+                        line_idx,
+                        line_idx + 1,
+                    );
+                    for ds in &diag_spans {
+                        let diag_style = ts(editor, ds.severity.theme_key())
+                            .add_modifier(ratatui::style::Modifier::UNDERLINED);
+                        let cs = ds.col_start.min(full_count);
+                        let ce = ds.col_end.max(cs + 1).min(full_count);
+                        for s in styles[cs..ce].iter_mut() {
+                            *s = s.patch(diag_style);
+                        }
                     }
                 }
             }
@@ -359,6 +481,16 @@ pub(crate) fn render_buffer(
                     emit_styled_spans(display_chars, visible_styles, &mut spans);
                 }
 
+                // Fold indicator
+                if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                    let folded_count = end - line_idx - 1;
+                    let comment_style = ts(editor, "comment");
+                    spans.push(Span::styled(
+                        format!(" ··· {} lines", folded_count),
+                        comment_style,
+                    ));
+                }
+
                 lines.push(Line::from(spans));
                 display_row += 1;
             }
@@ -420,11 +552,21 @@ pub(crate) fn render_buffer(
         } else {
             // No wrap, no spans: apply horizontal scroll to simple lines.
             let display: String = full_display.chars().skip(col_offset).collect();
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(line_num, gutter_style),
                 Span::styled(marker_char.to_string(), marker_style),
                 Span::styled(display, line_text_style),
-            ]));
+            ];
+            // Fold indicator
+            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                let folded_count = end - line_idx - 1;
+                let comment_style = ts(editor, "comment");
+                spans.push(Span::styled(
+                    format!(" ··· {} lines", folded_count),
+                    comment_style,
+                ));
+            }
+            lines.push(Line::from(spans));
             display_row += 1;
         }
 
@@ -509,101 +651,15 @@ pub(crate) fn apply_hex_color_preview(chars: &[char], styles: &mut [Style]) {
     }
 }
 
-fn parse_hex6(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some((r, g, b))
-}
-
-fn parse_hex3(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 3 {
-        return None;
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let r = u8::from_str_radix(&format!("{0}{0}", chars[0]), 16).ok()?;
-    let g = u8::from_str_radix(&format!("{0}{0}", chars[1]), 16).ok()?;
-    let b = u8::from_str_radix(&format!("{0}{0}", chars[2]), 16).ok()?;
-    Some((r, g, b))
-}
+use mae_core::render_common::color::{luminance, parse_hex3, parse_hex6};
 
 /// Pick black or white foreground for readability on the given bg color.
 fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
-    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if lum > 128.0 {
+    if luminance(r, g, b) > 128.0 {
         Color::Black
     } else {
         Color::White
     }
-}
-
-// ---------------------------------------------------------------------------
-// Diagnostic severity
-// ---------------------------------------------------------------------------
-
-/// Is `new` a higher-priority diagnostic severity than `cur`?
-fn severity_higher(cur: Option<DiagnosticSeverity>, new: Option<DiagnosticSeverity>) -> bool {
-    fn rank(s: Option<DiagnosticSeverity>) -> u8 {
-        match s {
-            Some(DiagnosticSeverity::Error) => 4,
-            Some(DiagnosticSeverity::Warning) => 3,
-            Some(DiagnosticSeverity::Information) => 2,
-            Some(DiagnosticSeverity::Hint) => 1,
-            None => 0,
-        }
-    }
-    rank(new) > rank(cur)
-}
-
-// ---------------------------------------------------------------------------
-// Gutter
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GutterMarker {
-    None,
-    Diagnostic(DiagnosticSeverity),
-    Breakpoint,
-    Stopped,
-}
-
-impl GutterMarker {
-    pub(crate) fn glyph_and_theme_key(self) -> Option<(char, &'static str)> {
-        match self {
-            GutterMarker::None => None,
-            GutterMarker::Diagnostic(sev) => Some((sev.gutter_char(), sev.theme_key())),
-            GutterMarker::Breakpoint => Some(('●', "debug.breakpoint")),
-            GutterMarker::Stopped => Some(('▶', "debug.current_line")),
-        }
-    }
-}
-
-pub(crate) fn resolve_gutter_marker(
-    is_stopped: bool,
-    has_breakpoint: bool,
-    diag_severity: Option<DiagnosticSeverity>,
-) -> GutterMarker {
-    if is_stopped {
-        GutterMarker::Stopped
-    } else if has_breakpoint {
-        GutterMarker::Breakpoint
-    } else if let Some(sev) = diag_severity {
-        GutterMarker::Diagnostic(sev)
-    } else {
-        GutterMarker::None
-    }
-}
-
-pub fn gutter_width(line_count: usize) -> usize {
-    let digits = if line_count == 0 {
-        1
-    } else {
-        (line_count as f64).log10().floor() as usize + 1
-    };
-    digits.max(2) + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -613,84 +669,6 @@ pub fn gutter_width(line_count: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- Gutter marker priority ---
-
-    #[test]
-    fn marker_priority_stopped_beats_breakpoint_and_diagnostic() {
-        let m = resolve_gutter_marker(true, true, Some(DiagnosticSeverity::Error));
-        assert_eq!(m, GutterMarker::Stopped);
-    }
-
-    #[test]
-    fn marker_priority_breakpoint_beats_diagnostic() {
-        let m = resolve_gutter_marker(false, true, Some(DiagnosticSeverity::Error));
-        assert_eq!(m, GutterMarker::Breakpoint);
-    }
-
-    #[test]
-    fn marker_priority_diagnostic_when_no_debug_state() {
-        let m = resolve_gutter_marker(false, false, Some(DiagnosticSeverity::Warning));
-        assert_eq!(m, GutterMarker::Diagnostic(DiagnosticSeverity::Warning));
-    }
-
-    #[test]
-    fn marker_none_when_nothing_present() {
-        let m = resolve_gutter_marker(false, false, None);
-        assert_eq!(m, GutterMarker::None);
-    }
-
-    // --- Marker glyph rendering ---
-
-    #[test]
-    fn stopped_glyph_uses_current_line_theme() {
-        let (ch, key) = GutterMarker::Stopped.glyph_and_theme_key().unwrap();
-        assert_eq!(ch, '▶');
-        assert_eq!(key, "debug.current_line");
-    }
-
-    #[test]
-    fn breakpoint_glyph_uses_debug_breakpoint_theme() {
-        let (ch, key) = GutterMarker::Breakpoint.glyph_and_theme_key().unwrap();
-        assert_eq!(ch, '●');
-        assert_eq!(key, "debug.breakpoint");
-    }
-
-    #[test]
-    fn diagnostic_glyph_matches_severity() {
-        let cases = [
-            DiagnosticSeverity::Error,
-            DiagnosticSeverity::Warning,
-            DiagnosticSeverity::Information,
-            DiagnosticSeverity::Hint,
-        ];
-        for sev in cases {
-            let (ch, key) = GutterMarker::Diagnostic(sev).glyph_and_theme_key().unwrap();
-            assert_eq!(ch, sev.gutter_char());
-            assert_eq!(key, sev.theme_key());
-        }
-    }
-
-    #[test]
-    fn none_marker_has_no_glyph() {
-        assert!(GutterMarker::None.glyph_and_theme_key().is_none());
-    }
-
-    // --- gutter_width ---
-
-    #[test]
-    fn gutter_width_minimum_is_three() {
-        assert_eq!(gutter_width(0), 3);
-        assert_eq!(gutter_width(1), 3);
-        assert_eq!(gutter_width(99), 3);
-    }
-
-    #[test]
-    fn gutter_width_scales_with_digits() {
-        assert_eq!(gutter_width(100), 4);
-        assert_eq!(gutter_width(999), 4);
-        assert_eq!(gutter_width(1000), 5);
-    }
 
     // --- Hex color preview ---
 

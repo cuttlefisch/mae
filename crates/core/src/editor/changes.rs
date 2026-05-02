@@ -151,14 +151,16 @@ impl Editor {
             }
         }
 
-        let line_count = self.buffers[target_idx].line_count();
+        let line_count = self.buffers[target_idx].display_line_count();
         let row = entry.row.min(line_count.saturating_sub(1));
         let col_max = self.buffers[target_idx].line_len(row);
         let col = entry.col.min(col_max);
 
+        let vh = self.viewport_height;
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = row;
         win.cursor_col = col;
+        win.scroll_center(vh);
     }
 
     /// Open `*Changes*` scratch buffer listing recorded change positions.
@@ -363,6 +365,6 @@ mod tests {
 
         ed.change_backward(1);
         let w = ed.window_mgr.focused_window();
-        assert!(w.cursor_row < ed.buffers[0].line_count());
+        assert!(w.cursor_row < ed.buffers[0].display_line_count());
     }
 }

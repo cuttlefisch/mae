@@ -36,13 +36,22 @@ impl Window {
     pub fn move_up(&mut self, buf: &crate::buffer::Buffer) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
+            // Skip folded lines
+            while self.cursor_row > 0 && buf.is_line_folded(self.cursor_row) {
+                self.cursor_row -= 1;
+            }
             self.clamp_cursor(buf);
         }
     }
 
     pub fn move_down(&mut self, buf: &crate::buffer::Buffer) {
-        if self.cursor_row + 1 < buf.display_line_count() {
+        let max = buf.display_line_count();
+        if self.cursor_row + 1 < max {
             self.cursor_row += 1;
+            // Skip folded lines
+            while self.cursor_row + 1 < max && buf.is_line_folded(self.cursor_row) {
+                self.cursor_row += 1;
+            }
             self.clamp_cursor(buf);
         }
     }
@@ -205,12 +214,23 @@ impl Window {
     // --- Cursor clamping ---
 
     /// Ensure cursor is within valid bounds after any structural change.
+    /// Respects narrowed range if set.
     pub fn clamp_cursor(&mut self, buf: &crate::buffer::Buffer) {
-        let line_count = buf.display_line_count();
+        let line_count = buf.line_count();
         if line_count == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;
             return;
+        }
+        // Respect narrowed range
+        if let Some((ns, ne)) = buf.narrowed_range {
+            if self.cursor_row < ns {
+                self.cursor_row = ns;
+            }
+            let max_narrow = ne.saturating_sub(1);
+            if self.cursor_row > max_narrow {
+                self.cursor_row = max_narrow;
+            }
         }
         let max_row = line_count.saturating_sub(1);
         if self.cursor_row > max_row {
@@ -275,22 +295,64 @@ impl Window {
     }
 
     /// Scroll up one line (C-y). Cursor stays on screen.
+    /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
-        // If cursor scrolled below the viewport, pull it up to the bottom visible line.
-        if viewport_height > 0 {
-            let bottom = self.scroll_offset + viewport_height - 1;
-            if self.cursor_row > bottom {
-                self.cursor_row = bottom;
-                self.clamp_cursor(buf);
+        self.scroll_up_line_wrapped(buf, viewport_height, |_| 1);
+    }
+
+    /// Scroll up one line (C-y) with wrap-aware cursor clamping.
+    ///
+    /// `line_visual_rows` returns how many display rows a buffer line occupies.
+    /// Folded (invisible) lines return 0 and are skipped.
+    /// The cursor is clamped to the last buffer line whose visual rows fit
+    /// within the viewport, preventing `ensure_scroll_wrapped` from undoing
+    /// the scroll on the next frame.
+    pub fn scroll_up_line_wrapped<F>(
+        &mut self,
+        buf: &crate::buffer::Buffer,
+        viewport_height: usize,
+        line_visual_rows: F,
+    ) where
+        F: Fn(usize) -> usize,
+    {
+        // Move to previous visible line (skip folds).
+        self.scroll_offset = buf.prev_visible_line(self.scroll_offset);
+        if viewport_height == 0 {
+            return;
+        }
+        // Walk forward from scroll_offset, counting visual rows, to find
+        // the last buffer row that fits entirely in the viewport.
+        let max_row = buf.display_line_count().saturating_sub(1);
+        let mut visual = 0;
+        let mut bottom = self.scroll_offset;
+        let mut line = self.scroll_offset;
+        while line <= max_row {
+            let rows = line_visual_rows(line);
+            if rows > 0 {
+                if visual + rows > viewport_height {
+                    break;
+                }
+                visual += rows;
+                bottom = line;
             }
+            line = buf.next_visible_line(line);
+            if line <= bottom {
+                break; // safety: prevent infinite loop
+            }
+        }
+        if self.cursor_row > bottom {
+            self.cursor_row = bottom;
+            self.clamp_cursor(buf);
         }
     }
 
     /// Scroll down one line (C-e). Cursor stays on screen.
+    /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         let max_row = buf.display_line_count().saturating_sub(1);
-        self.scroll_offset = (self.scroll_offset + 1).min(max_row);
+        // Move to next visible line (skip folds).
+        let next = buf.next_visible_line(self.scroll_offset);
+        self.scroll_offset = next.min(max_row);
         // If cursor scrolled above the viewport, push it down to the top visible line.
         if self.cursor_row < self.scroll_offset {
             self.cursor_row = self.scroll_offset;
@@ -325,68 +387,111 @@ impl Window {
 
     // --- Scrolling ---
 
-    /// Adjust scroll_offset so the cursor stays visible within the viewport.
+    /// Adjust scroll_offset so the cursor stays visible within the viewport,
+    /// keeping at least `scrolloff` lines of context above/below the cursor.
     pub fn ensure_scroll(&mut self, viewport_height: usize) {
+        self.ensure_scroll_with_margin(viewport_height, 0);
+    }
+
+    /// Like `ensure_scroll` but respects a scroll margin (vim `scrolloff`).
+    pub fn ensure_scroll_with_margin(&mut self, viewport_height: usize, scrolloff: usize) {
         if viewport_height == 0 {
             return;
         }
-        if self.cursor_row < self.scroll_offset {
-            self.scroll_offset = self.cursor_row;
+        let margin = scrolloff.min(viewport_height / 2);
+        if self.cursor_row < self.scroll_offset + margin {
+            self.scroll_offset = self.cursor_row.saturating_sub(margin);
         }
-        if self.cursor_row >= self.scroll_offset + viewport_height {
-            self.scroll_offset = self.cursor_row - viewport_height + 1;
+        if self.cursor_row + margin >= self.scroll_offset + viewport_height {
+            self.scroll_offset = (self.cursor_row + margin + 1).saturating_sub(viewport_height);
         }
     }
 
     /// Word-wrap-aware scroll adjustment. Counts visual rows consumed by
     /// wrapped lines between `scroll_offset` and `cursor_row`, and adjusts
-    /// `scroll_offset` upward until the cursor's wrapped line fits in the
-    /// viewport.
+    /// `scroll_offset` so the cursor line fits in the viewport.
     ///
     /// `line_visual_rows` returns how many visual rows a given buffer line
     /// occupies (>= 1). For non-wrapped buffers, always returns 1.
+    ///
+    /// O(viewport_height) — walks backward from the cursor line instead of
+    /// incrementing scroll_offset forward from its old position.
     pub fn ensure_scroll_wrapped<F>(&mut self, viewport_height: usize, line_visual_rows: F)
     where
+        F: Fn(usize) -> usize,
+    {
+        self.ensure_scroll_wrapped_with_margin(viewport_height, 0, line_visual_rows);
+    }
+
+    /// Like `ensure_scroll_wrapped` but respects a scroll margin (vim `scrolloff`).
+    /// The margin is applied as extra visual rows required above/below the cursor.
+    pub fn ensure_scroll_wrapped_with_margin<F>(
+        &mut self,
+        viewport_height: usize,
+        scrolloff: usize,
+        line_visual_rows: F,
+    ) where
         F: Fn(usize) -> usize,
     {
         if viewport_height == 0 {
             return;
         }
+        let margin = scrolloff.min(viewport_height / 2);
 
-        // Cursor above viewport — scroll up.
-        if self.cursor_row < self.scroll_offset {
-            self.scroll_offset = self.cursor_row;
-        }
-
-        // Cursor below viewport — scroll down until it fits.
-        loop {
-            let mut visual = 0;
-            let mut cursor_visible = false;
-            for line in self.scroll_offset.. {
-                let rows = line_visual_rows(line);
-                if line == self.cursor_row {
-                    if visual + rows <= viewport_height {
-                        cursor_visible = true;
-                    }
-                    break;
-                }
-                visual += rows;
-                if visual >= viewport_height {
-                    break;
-                }
-            }
-            if cursor_visible {
-                break;
-            }
-            self.scroll_offset += 1;
-            // Safety: if cursor_row == scroll_offset, the cursor is on the
-            // first visible line and always visible (even if it wraps past
-            // the viewport — we can't do better without horizontal scrolling).
-            if self.scroll_offset >= self.cursor_row {
-                self.scroll_offset = self.cursor_row;
-                break;
+        // Cursor above viewport (with margin) — scroll up.
+        // Count visual rows for margin lines above the cursor.
+        let mut margin_above_lines = 0;
+        let mut margin_above_rows = 0;
+        {
+            let mut line = self.cursor_row;
+            while margin_above_rows < margin && line > 0 {
+                line -= 1;
+                margin_above_rows += line_visual_rows(line);
+                margin_above_lines += 1;
             }
         }
+        let top_target = self.cursor_row.saturating_sub(margin_above_lines);
+        if top_target < self.scroll_offset {
+            self.scroll_offset = top_target;
+            return;
+        }
+
+        // Fast check: is cursor already visible with margin below?
+        let mut visual = 0;
+        let mut cursor_visible = false;
+        for line in self.scroll_offset..=self.cursor_row {
+            let rows = line_visual_rows(line);
+            if line == self.cursor_row {
+                if visual + rows + margin <= viewport_height {
+                    cursor_visible = true;
+                }
+                break;
+            }
+            visual += rows;
+            if visual >= viewport_height {
+                break;
+            }
+        }
+        if cursor_visible {
+            return;
+        }
+
+        // Cursor not visible — walk backward from cursor_row to find the
+        // right scroll_offset, reserving margin rows below the cursor.
+        let cursor_rows = line_visual_rows(self.cursor_row);
+        let mut budget = viewport_height
+            .saturating_sub(cursor_rows)
+            .saturating_sub(margin);
+        let mut new_offset = self.cursor_row;
+        while new_offset > 0 {
+            let prev_rows = line_visual_rows(new_offset - 1);
+            if prev_rows > budget {
+                break;
+            }
+            budget -= prev_rows;
+            new_offset -= 1;
+        }
+        self.scroll_offset = new_offset;
     }
 
     /// Adjust horizontal scroll so the cursor column stays visible.
@@ -495,6 +600,13 @@ impl WindowManager {
         self.focused
     }
 
+    /// Set the focused window by ID. No-op if the window doesn't exist.
+    pub fn set_focused(&mut self, id: WindowId) {
+        if self.windows.contains_key(&id) {
+            self.focused = id;
+        }
+    }
+
     /// Get a window by ID.
     pub fn window(&self, id: WindowId) -> Option<&Window> {
         self.windows.get(&id)
@@ -508,6 +620,18 @@ impl WindowManager {
     /// How many windows are open.
     pub fn window_count(&self) -> usize {
         self.windows.len()
+    }
+
+    /// Cycle focus to the next window (by ID order, wrapping around).
+    pub fn focus_next(&mut self) {
+        if self.windows.len() <= 1 {
+            return;
+        }
+        let mut ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        ids.sort();
+        let pos = ids.iter().position(|&id| id == self.focused).unwrap_or(0);
+        let next = (pos + 1) % ids.len();
+        self.focused = ids[next];
     }
 
     /// Iterate over all windows.
@@ -571,6 +695,63 @@ impl WindowManager {
             LayoutNode::Split {
                 direction,
                 ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(old_focused)),
+                second: Box::new(LayoutNode::Leaf(new_id)),
+            },
+        );
+
+        Ok(new_id)
+    }
+
+    /// Split the focused window with a custom ratio (0.0..1.0).
+    /// `ratio` is the proportion allocated to the first (original) child.
+    pub fn split_with_ratio(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        ratio: f32,
+    ) -> Result<WindowId, String> {
+        let rects = self.layout_rects(available);
+        let focused_rect = rects
+            .iter()
+            .find(|(id, _)| *id == self.focused)
+            .map(|(_, r)| *r)
+            .unwrap_or(available);
+
+        match direction {
+            SplitDirection::Vertical => {
+                let smaller = (focused_rect.width as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_WIDTH {
+                    return Err(format!(
+                        "Cannot split: pane width {} < minimum {}",
+                        smaller, MIN_WINDOW_WIDTH
+                    ));
+                }
+            }
+            SplitDirection::Horizontal => {
+                let smaller = (focused_rect.height as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_HEIGHT {
+                    return Err(format!(
+                        "Cannot split: pane height {} < minimum {}",
+                        smaller, MIN_WINDOW_HEIGHT
+                    ));
+                }
+            }
+        }
+
+        let new_id = self.next_id;
+        self.next_id += 1;
+
+        let new_window = Window::new(new_id, buffer_idx);
+        self.windows.insert(new_id, new_window);
+
+        let old_focused = self.focused;
+        self.replace_leaf(
+            old_focused,
+            LayoutNode::Split {
+                direction,
+                ratio: ratio.clamp(0.1, 0.9),
                 first: Box::new(LayoutNode::Leaf(old_focused)),
                 second: Box::new(LayoutNode::Leaf(new_id)),
             },
@@ -805,6 +986,158 @@ impl WindowManager {
         }
     }
 
+    // --- Resize / Balance / Maximize / Move ---
+
+    /// Adjust the split ratio of the split containing the focused window.
+    /// `delta` is ±0.05 typically. Direction: `Left`/`Up` adjust the first
+    /// child, `Right`/`Down` adjust the second.
+    pub fn adjust_ratio(&mut self, direction: Direction, delta: f32) {
+        Self::adjust_ratio_recursive(&mut self.layout, self.focused, direction, delta);
+    }
+
+    fn adjust_ratio_recursive(
+        node: &mut LayoutNode,
+        target: WindowId,
+        direction: Direction,
+        delta: f32,
+    ) -> bool {
+        match node {
+            LayoutNode::Leaf(_) => false,
+            LayoutNode::Split {
+                direction: split_dir,
+                ratio,
+                first,
+                second,
+            } => {
+                let in_first = Self::contains_leaf(first, target);
+                let in_second = Self::contains_leaf(second, target);
+                if !in_first && !in_second {
+                    return false;
+                }
+                // Only adjust if the split orientation matches the direction.
+                let matching = matches!(
+                    (split_dir, direction),
+                    (SplitDirection::Vertical, Direction::Left | Direction::Right)
+                        | (SplitDirection::Horizontal, Direction::Up | Direction::Down)
+                );
+                if matching && (in_first || in_second) {
+                    // "grow" = increase focused side. If focused is in first, grow means more ratio.
+                    let grow = matches!(direction, Direction::Right | Direction::Down);
+                    if in_first {
+                        *ratio = (*ratio + if grow { delta } else { -delta }).clamp(0.1, 0.9);
+                    } else {
+                        *ratio = (*ratio + if grow { -delta } else { delta }).clamp(0.1, 0.9);
+                    }
+                    return true;
+                }
+                // Recurse into the subtree that contains the target.
+                if in_first {
+                    Self::adjust_ratio_recursive(first, target, direction, delta)
+                } else {
+                    Self::adjust_ratio_recursive(second, target, direction, delta)
+                }
+            }
+        }
+    }
+
+    /// Set all split ratios to 0.5 recursively.
+    pub fn balance(&mut self) {
+        Self::balance_recursive(&mut self.layout);
+    }
+
+    fn balance_recursive(node: &mut LayoutNode) {
+        if let LayoutNode::Split {
+            ratio,
+            first,
+            second,
+            ..
+        } = node
+        {
+            *ratio = 0.5;
+            Self::balance_recursive(first);
+            Self::balance_recursive(second);
+        }
+    }
+
+    /// Toggle maximize: save layout and replace with single focused leaf,
+    /// or restore the saved layout.
+    pub fn maximize_toggle(
+        &mut self,
+        saved_layout: &mut Option<(HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId)>,
+    ) {
+        if let Some((windows, layout, focused, next_id)) = saved_layout.take() {
+            // Restore.
+            self.windows = windows;
+            self.layout = layout;
+            self.focused = focused;
+            self.next_id = next_id;
+        } else {
+            // Save and maximize.
+            *saved_layout = Some(self.snapshot());
+            // Keep only the focused window.
+            let focused = self.focused;
+            self.layout = LayoutNode::Leaf(focused);
+            self.windows.retain(|&id, _| id == focused);
+        }
+    }
+
+    /// Move the focused window in the given direction by swapping it with its
+    /// neighbor. Returns true if a swap occurred.
+    pub fn move_window(&mut self, dir: Direction, total: Rect) -> bool {
+        let rects = self.layout_rects(total);
+        let focused_rect = match rects.iter().find(|(id, _)| *id == self.focused) {
+            Some((_, r)) => *r,
+            None => return false,
+        };
+        let fx = focused_rect.x as i32 + focused_rect.width as i32 / 2;
+        let fy = focused_rect.y as i32 + focused_rect.height as i32 / 2;
+
+        let mut best: Option<(WindowId, i32)> = None;
+        for &(id, rect) in &rects {
+            if id == self.focused {
+                continue;
+            }
+            let cx = rect.x as i32 + rect.width as i32 / 2;
+            let cy = rect.y as i32 + rect.height as i32 / 2;
+            let is_valid = match dir {
+                Direction::Left => cx < fx,
+                Direction::Right => cx > fx,
+                Direction::Up => cy < fy,
+                Direction::Down => cy > fy,
+            };
+            if is_valid {
+                let dist = (cx - fx).abs() + (cy - fy).abs();
+                if best.is_none() || dist < best.unwrap().1 {
+                    best = Some((id, dist));
+                }
+            }
+        }
+
+        if let Some((neighbor_id, _)) = best {
+            // Swap the two window IDs in the layout tree.
+            Self::swap_leaves(&mut self.layout, self.focused, neighbor_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn swap_leaves(node: &mut LayoutNode, a: WindowId, b: WindowId) {
+        match node {
+            LayoutNode::Leaf(id) => {
+                if *id == a {
+                    *id = b;
+                } else if *id == b {
+                    *id = a;
+                }
+            }
+            LayoutNode::Split { first, second, .. } => {
+                Self::swap_leaves(first, a, b);
+                Self::swap_leaves(second, a, b);
+            }
+        }
+    }
+
     /// Take a snapshot of the window manager state (layout, windows, focus).
     pub fn snapshot(&self) -> (HashMap<WindowId, Window>, LayoutNode, WindowId, WindowId) {
         (
@@ -943,6 +1276,29 @@ mod tests {
 
         // Moving up should also do nothing (horizontal split doesn't exist)
         wm.focus_direction(Direction::Up, default_area());
+        assert_eq!(wm.focused_id(), 0);
+    }
+
+    #[test]
+    fn focus_next_cycles_windows() {
+        let mut wm = WindowManager::new(0);
+        let id1 = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert_eq!(wm.focused_id(), 0);
+
+        wm.focus_next();
+        assert_eq!(wm.focused_id(), id1);
+
+        // Wraps around
+        wm.focus_next();
+        assert_eq!(wm.focused_id(), 0);
+    }
+
+    #[test]
+    fn focus_next_single_window_noop() {
+        let mut wm = WindowManager::new(0);
+        wm.focus_next();
         assert_eq!(wm.focused_id(), 0);
     }
 
@@ -1158,7 +1514,7 @@ mod tests {
         win.scroll_half_down(&buf, 20);
         // max_row = 10 (10 lines + trailing newline = 11 lines, so max = 10)
         // cursor_row = min(8+10, 10) = 10
-        assert!(win.cursor_row <= buf.line_count().saturating_sub(1));
+        assert!(win.cursor_row <= buf.display_line_count().saturating_sub(1));
     }
 
     #[test]
@@ -1216,6 +1572,30 @@ mod tests {
         assert_eq!(win.scroll_offset, 30);
         // Cursor should be at top of viewport.
         assert_eq!(win.cursor_row, 30);
+    }
+
+    #[test]
+    fn scroll_up_line_wrapped_clamps_to_visual_bottom() {
+        // Simulate: 100-line buffer where line 44 wraps to 3 visual rows.
+        // With viewport_height=20, naive bottom = scroll_offset + 19 = 44,
+        // but visually only fits through line 42 because line 44 takes 3 rows.
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 50;
+        win.scroll_offset = 40;
+        // Scroll up 15 with a closure that reports line 44 as 3 visual rows.
+        for _ in 0..15 {
+            win.scroll_up_line_wrapped(&buf, 20, |line| if line == 44 { 3 } else { 1 });
+        }
+        assert_eq!(win.scroll_offset, 25);
+        // With line 44 being 3 rows, the viewport from 25 fits:
+        // lines 25..43 = 19 lines * 1 row = 19 rows, then line 44 = 3 rows
+        // = 22 rows > 20. So bottom should be 43, not 44.
+        assert!(
+            win.cursor_row <= 43,
+            "cursor={} should be <= 43",
+            win.cursor_row
+        );
     }
 
     // --- WindowManager tests ---
@@ -1296,5 +1676,309 @@ mod tests {
         win.ensure_scroll_horizontal(80);
         // One past edge — needs shift
         assert_eq!(win.col_offset, 1);
+    }
+
+    #[test]
+    fn ensure_scroll_wrapped_heading_scale_keeps_cursor_visible() {
+        // Regression: scaled headings take >1 visual row but ensure_scroll
+        // counted them as 1, allowing cursor to go below viewport.
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 9;
+
+        // Viewport = 10 cell rows.
+        // Lines 0, 3, 6 are headings taking 2 visual rows each.
+        // Visual budget: lines 0(2) + 1(1) + 2(1) + 3(2) + 4(1) + 5(1) + 6(2) = 10 rows.
+        // So only lines 0-6 fit. Line 9 should push scroll forward.
+        win.ensure_scroll_wrapped(10, |line| {
+            if line == 0 || line == 3 || line == 6 {
+                2 // heading: ceil(1.5)
+            } else {
+                1
+            }
+        });
+
+        // Cursor at row 9 should NOT be at scroll_offset 0 (that only fits 7 lines = 10 rows).
+        assert!(
+            win.scroll_offset > 0,
+            "scroll must advance when headings consume extra visual rows, got offset={}",
+            win.scroll_offset
+        );
+
+        // Verify cursor is actually within viewport by walking forward.
+        let mut visual = 0;
+        for line in win.scroll_offset..=win.cursor_row {
+            let rows = if line == 0 || line == 3 || line == 6 {
+                2
+            } else {
+                1
+            };
+            visual += rows;
+        }
+        assert!(
+            visual <= 10,
+            "cursor row {} should be within viewport (visual rows used: {}, viewport: 10)",
+            win.cursor_row,
+            visual
+        );
+    }
+
+    // --- Resize / Balance / Maximize / Move tests ---
+
+    #[test]
+    fn adjust_ratio_grows_and_shrinks() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Initial ratio is 0.5
+        assert!(
+            matches!(&wm.layout, LayoutNode::Split { ratio, .. } if (*ratio - 0.5).abs() < 0.01)
+        );
+        wm.adjust_ratio(Direction::Right, 0.05);
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!((*ratio - 0.55).abs() < 0.01, "ratio should grow: {}", ratio);
+        }
+        wm.adjust_ratio(Direction::Left, 0.05);
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!(
+                (*ratio - 0.5).abs() < 0.01,
+                "ratio should shrink back: {}",
+                ratio
+            );
+        }
+    }
+
+    #[test]
+    fn adjust_ratio_clamps() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Shrink many times — should clamp at 0.1
+        for _ in 0..100 {
+            wm.adjust_ratio(Direction::Left, 0.05);
+        }
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!(*ratio >= 0.1, "ratio should clamp at 0.1: {}", ratio);
+        }
+    }
+
+    #[test]
+    fn balance_resets_all_ratios() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.adjust_ratio(Direction::Right, 0.2);
+        wm.balance();
+        if let LayoutNode::Split { ratio, .. } = &wm.layout {
+            assert!((*ratio - 0.5).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn maximize_and_restore() {
+        let mut wm = WindowManager::new(0);
+        let new_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert_eq!(wm.window_count(), 2);
+
+        let mut saved = None;
+        // Maximize — saves layout, leaves only focused window.
+        wm.maximize_toggle(&mut saved);
+        assert!(saved.is_some(), "layout should be saved");
+        assert_eq!(wm.window_count(), 1);
+        assert!(matches!(wm.layout, LayoutNode::Leaf(id) if id == 0));
+
+        // Restore.
+        wm.maximize_toggle(&mut saved);
+        assert!(saved.is_none(), "saved should be consumed");
+        assert_eq!(wm.window_count(), 2);
+        assert!(wm.window(new_id).is_some());
+    }
+
+    #[test]
+    fn move_window_swaps_positions() {
+        let mut wm = WindowManager::new(0);
+        let new_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Window 0 is left (first), new_id is right (second).
+        assert_eq!(wm.focused_id(), 0);
+
+        wm.move_window(Direction::Right, default_area());
+        // After swap, window 0 should be on the right side of the layout.
+        // The layout tree's first child should now be new_id, second = 0.
+        if let LayoutNode::Split { first, second, .. } = &wm.layout {
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == new_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_window_at_boundary_is_noop() {
+        let mut wm = WindowManager::new(0);
+        let _ = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Window 0 is already at leftmost — moving left should be noop.
+        let moved = wm.move_window(Direction::Left, default_area());
+        assert!(!moved);
+    }
+
+    #[test]
+    fn single_window_resize_noop() {
+        let mut wm = WindowManager::new(0);
+        // No split → adjust_ratio should be harmless noop.
+        wm.adjust_ratio(Direction::Right, 0.05);
+        assert!(matches!(wm.layout, LayoutNode::Leaf(0)));
+    }
+
+    #[test]
+    fn single_window_maximize_noop() {
+        let mut wm = WindowManager::new(0);
+        let mut saved = None;
+        wm.maximize_toggle(&mut saved);
+        // Single window — save still works but it's already maximized.
+        assert_eq!(wm.window_count(), 1);
+    }
+
+    #[test]
+    fn cursor_move_down_skips_folded_lines() {
+        let mut win = Window::new(0, 0);
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        // Fold lines 1-3 (visible: 0, 1(start), 4)
+        buf.folded_ranges.push((1, 4));
+        win.cursor_row = 1;
+        win.move_down(&buf);
+        // Should skip lines 2, 3 and land on 4
+        assert_eq!(win.cursor_row, 4);
+    }
+
+    #[test]
+    fn cursor_move_up_skips_folded_lines() {
+        let mut win = Window::new(0, 0);
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        buf.folded_ranges.push((1, 4));
+        win.cursor_row = 4;
+        win.move_up(&buf);
+        // Should skip lines 3, 2 and land on 1
+        assert_eq!(win.cursor_row, 1);
+    }
+
+    // --- Scrolloff (ensure_scroll_with_margin) tests ---
+
+    #[test]
+    fn scrolloff_keeps_margin_above_cursor() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 3;
+        // scrolloff=5, viewport=20: margin = min(5, 10) = 5
+        // cursor_row (3) < scroll_offset (0) + margin (5) → adjust
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset should be max(0, 3-5) = 0 (can't go negative)
+        assert_eq!(win.scroll_offset, 0);
+
+        // Now cursor at row 10, scroll_offset at 8
+        win.cursor_row = 10;
+        win.scroll_offset = 8;
+        // cursor_row (10) < scroll_offset (8) + margin (5) = 13? yes
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset = max(0, 10 - 5) = 5
+        assert_eq!(win.scroll_offset, 5);
+    }
+
+    #[test]
+    fn scrolloff_keeps_margin_below_cursor() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 17;
+        // scrolloff=5, viewport=20: margin=5
+        // cursor_row (17) + margin (5) = 22 >= scroll_offset (0) + viewport (20) = 20
+        win.ensure_scroll_with_margin(20, 5);
+        // scroll_offset = (17 + 5 + 1) - 20 = 3
+        assert_eq!(win.scroll_offset, 3);
+    }
+
+    #[test]
+    fn scrolloff_capped_at_half_viewport() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 3;
+        // scrolloff=15, viewport=10: margin = min(15, 5) = 5
+        win.ensure_scroll_with_margin(10, 15);
+        // cursor_row (3) < 0 + 5 → adjust: scroll_offset = max(0, 3-5) = 0
+        assert_eq!(win.scroll_offset, 0);
+
+        // Cursor at bottom area
+        win.cursor_row = 7;
+        win.scroll_offset = 0;
+        win.ensure_scroll_with_margin(10, 15);
+        // 7 + 5 = 12 >= 0 + 10 → scroll_offset = (7+5+1) - 10 = 3
+        assert_eq!(win.scroll_offset, 3);
+    }
+
+    #[test]
+    fn scrolloff_zero_behaves_like_no_margin() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 19;
+        // scrolloff=0, viewport=20: margin=0
+        // 19 + 0 = 19 < 0 + 20 = 20 → no adjustment
+        win.ensure_scroll_with_margin(20, 0);
+        assert_eq!(win.scroll_offset, 0);
+
+        // Just past edge
+        win.cursor_row = 20;
+        win.ensure_scroll_with_margin(20, 0);
+        // 20 + 0 = 20 >= 0 + 20 → scroll_offset = (20+0+1) - 20 = 1
+        assert_eq!(win.scroll_offset, 1);
+    }
+
+    #[test]
+    fn scrolloff_wrapped_keeps_margin() {
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.cursor_row = 8;
+        // All lines 1 visual row, scrolloff=3, viewport=10
+        // Margin below: cursor_row(8) visual row 1 + margin 3 = needs 4 rows below
+        // 8 visible lines (0..7) = 8 rows + cursor(1) + margin(3) = 12 > 10
+        win.ensure_scroll_wrapped_with_margin(10, 3, |_| 1);
+        // Should scroll forward so cursor has 3 lines of margin below
+        assert!(
+            win.scroll_offset > 0,
+            "should have scrolled: offset={}",
+            win.scroll_offset
+        );
+        // Verify: budget = 10 - 1(cursor) - 3(margin) = 6 rows above cursor
+        // so scroll_offset = 8 - 6 = 2
+        assert_eq!(win.scroll_offset, 2);
+    }
+
+    #[test]
+    fn clamp_cursor_allows_phantom_but_nav_uses_display() {
+        // clamp_cursor uses line_count() (allows phantom line for insert mode),
+        // but navigation call sites use display_line_count() to prevent cursor
+        // from reaching the invisible phantom line during normal movement.
+        let mut buf = crate::buffer::Buffer::new();
+        buf.insert_text_at(0, "a\nb\n");
+        assert_eq!(buf.line_count(), 3); // includes phantom
+        assert_eq!(buf.display_line_count(), 2); // excludes phantom
+
+        // clamp_cursor allows phantom line (needed for insert mode after Enter at EOF)
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 2; // phantom line
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 2); // allowed — insert mode needs this
+
+        // But navigation should use display_line_count for bounds
+        let nav_max = buf.display_line_count().saturating_sub(1);
+        assert_eq!(nav_max, 1);
     }
 }

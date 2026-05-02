@@ -1,4 +1,6 @@
 pub mod buffer;
+pub mod buffer_mode;
+pub mod buffer_view;
 pub mod clipboard;
 pub mod command_palette;
 pub mod commands;
@@ -6,24 +8,31 @@ pub mod conversation;
 pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
+pub mod diff;
+pub mod display_region;
 pub mod editor;
 pub mod event_record;
 pub mod file_browser;
 pub mod file_picker;
+pub mod file_tree;
 pub mod git_status;
 pub mod grapheme;
+pub mod heading;
 pub mod help_view;
 pub mod hooks;
 pub mod input;
 pub mod kb_seed;
 pub mod keymap;
+pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;
 pub mod messages;
 pub mod options;
 pub mod project;
+pub mod render_common;
 pub mod search;
 pub mod session;
+pub mod swap;
 pub mod syntax;
 pub mod theme;
 pub mod visual_buffer;
@@ -31,7 +40,9 @@ pub mod window;
 pub mod word;
 pub mod wrap;
 
-pub use buffer::{Buffer, BufferKind};
+pub use buffer::{Buffer, BufferKind, BufferLocalOptions};
+pub use buffer_mode::BufferMode;
+pub use buffer_view::BufferView;
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};
 pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
@@ -41,8 +52,9 @@ pub use debug::{
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    CompletionItem, Diagnostic, DiagnosticSeverity, DiagnosticStore, EditRecord, Editor, InputLock,
-    LspLocation, LspRange, LspServerStatus,
+    CodeActionItem, CodeActionMenu, CompletionItem, Diagnostic, DiagnosticSeverity,
+    DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup,
+    InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
@@ -58,7 +70,13 @@ pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
-pub use syntax::{language_for_path, HighlightSpan, Language, SyntaxMap};
+pub mod redraw;
+pub use syntax::{
+    compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
+    detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,
+    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupFlavor,
+    SyntaxMap, SyntaxSpanMap,
+};
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,
     ThemeResolver, ThemeStyle,
@@ -85,8 +103,6 @@ pub enum Mode {
     FilePicker,
     FileBrowser,
     CommandPalette,
-    /// Git status "porcelain" UI (Phase 6 M5).
-    GitStatus,
     /// Terminal emulator — keys go directly to PTY. Exit with Ctrl-\ Ctrl-n.
     ShellInsert,
 }

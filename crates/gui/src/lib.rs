@@ -33,10 +33,13 @@ mod canvas;
 mod conversation_render;
 mod cursor;
 mod debug_render;
+mod file_tree_render;
 mod gutter;
 mod input;
+mod layout;
 mod messages_render;
 mod popup_render;
+mod scrollbar;
 mod shell_render;
 mod splash_render;
 mod status_render;
@@ -47,7 +50,7 @@ use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
-use mae_core::{BufferKind, Editor, HighlightSpan};
+use mae_core::{BufferKind, Editor, SyntaxSpanMap};
 use mae_renderer::Renderer;
 use mae_shell::ShellTerminal;
 use tracing::{debug, info, trace_span};
@@ -76,6 +79,11 @@ pub struct GuiRenderer {
     icon_font_family: Option<String>,
     /// Configured font size (None = 14.0).
     font_size: Option<f32>,
+    /// Cached FrameLayout from the last render of the focused window.
+    /// Used by the mouse handler for pixel-precise click positioning.
+    last_focused_layout: Option<layout::FrameLayout>,
+    /// Window title (read from editor config at construction).
+    window_title: String,
 }
 
 impl GuiRenderer {
@@ -94,7 +102,14 @@ impl GuiRenderer {
             font_family: None,
             icon_font_family: None,
             font_size: None,
+            last_focused_layout: None,
+            window_title: "MAE — Modern AI Editor".to_string(),
         }
+    }
+
+    /// Set the window title before window initialization.
+    pub fn set_window_title(&mut self, title: String) {
+        self.window_title = title;
     }
 
     /// Set the font family and size before window initialization.
@@ -112,7 +127,7 @@ impl GuiRenderer {
     /// Initialize the window and Skia canvas. Called from the event loop.
     pub fn init_window(&mut self, event_loop: &ActiveEventLoop) -> io::Result<()> {
         let attrs = Window::default_attributes()
-            .with_title("MAE — Modern AI Editor")
+            .with_title(&self.window_title)
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0));
 
         let window = event_loop
@@ -135,12 +150,9 @@ impl GuiRenderer {
         self.cell_width = cw;
         self.cell_height = ch;
         self.cols = (size.width as f32 / cw) as u16;
-        let raw_rows = (size.height as f32 / ch) as u16;
-        self.rows = if (raw_rows as f32 * ch).ceil() > size.height as f32 {
-            raw_rows.saturating_sub(1)
-        } else {
-            raw_rows
-        };
+        // Use floor to ensure rows * cell_height <= window height.
+        // This prevents the bottom text row from overlapping the window border.
+        self.rows = (size.height as f32 / ch).floor() as u16;
 
         info!(
             cols = self.cols,
@@ -163,12 +175,7 @@ impl GuiRenderer {
             self.cell_width = cw;
             self.cell_height = ch;
             self.cols = (width as f32 / cw) as u16;
-            let raw_rows = (height as f32 / ch) as u16;
-            self.rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
-                raw_rows.saturating_sub(1)
-            } else {
-                raw_rows
-            };
+            self.rows = (height as f32 / ch).floor() as u16;
         }
     }
 
@@ -195,6 +202,13 @@ impl GuiRenderer {
         self.font_size.unwrap_or(14.0)
     }
 
+    /// Access the cached FrameLayout from the last render.
+    /// Used by the mouse handler for pixel-precise click positioning
+    /// on scaled/folded lines.
+    pub fn last_focused_layout(&self) -> Option<&layout::FrameLayout> {
+        self.last_focused_layout.as_ref()
+    }
+
     /// Apply a new font size at runtime — recreates font objects, recalculates
     /// cell metrics and column/row counts. This is the lisp-machine contract:
     /// `(set-option! "font-size" "20")` must take effect immediately.
@@ -208,12 +222,7 @@ impl GuiRenderer {
             if let Some(window) = &self.window {
                 let ws = window.inner_size();
                 self.cols = (ws.width as f32 / cw) as u16;
-                let raw_rows = (ws.height as f32 / ch) as u16;
-                self.rows = if (raw_rows as f32 * ch).ceil() > ws.height as f32 {
-                    raw_rows.saturating_sub(1)
-                } else {
-                    raw_rows
-                };
+                self.rows = (ws.height as f32 / ch).floor() as u16;
             }
         }
     }
@@ -249,28 +258,31 @@ impl Renderer for GuiRenderer {
         // Begin frame.
         canvas.begin_frame(&editor.theme);
 
-        // Pre-compute syntax-highlight spans for every visible text buffer.
-        // Uses stale spans during typing; deferred reparse happens in the event loop.
-        let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
+        // Clip rendering to actual pixel height — prevents descender overflow
+        // while avoiding rounding artifacts that cut off the status bar after
+        // font size changes.
+        let clip_height = canvas.pixel_size().1 as f32;
+        canvas.set_clip_height(clip_height);
 
-        // Pre-compute screen line counts for conversation buffers.
-        // Must happen while we have &mut Editor, before the immutable rebind.
-        {
-            let inner_width = (cols).saturating_sub(2); // border eats 1 col each side
-            for buf in &mut editor.buffers {
-                if buf.kind == BufferKind::Conversation {
-                    if let Some(ref mut conv) = buf.conversation {
-                        conv.ensure_screen_counts(inner_width);
-                    }
-                }
-            }
-        }
+        // Pre-compute syntax-highlight spans for every visible text buffer.
+        // CursorOnly fast path: reuse cached spans from the previous frame,
+        // skipping the most expensive per-frame operation (syntax span lookup
+        // + tree walk). This is the Emacs `try_cursor_movement` pattern.
+        let syntax_spans = if editor.redraw_level == mae_core::redraw::RedrawLevel::CursorOnly {
+            mae_core::syntax::cached_visible_syntax_spans(editor)
+        } else {
+            mae_core::syntax::compute_visible_syntax_spans(editor)
+        };
+
         let editor: &Editor = editor;
 
         // Layout: window area = rows-2, status bar = 1, command line = 1.
         let status_row = rows.saturating_sub(2);
         let cmd_row = rows.saturating_sub(1);
         let window_height = rows.saturating_sub(2);
+
+        // Track focused layout across render branches for mouse click caching.
+        let mut focused_frame_layout: Option<layout::FrameLayout> = None;
 
         // Check for fullscreen overlays first.
         if editor.file_picker.is_some() {
@@ -318,12 +330,15 @@ impl Renderer for GuiRenderer {
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
             popup_render::render_command_palette(canvas, editor, cols, rows);
-        } else if !editor.which_key_prefix.is_empty() {
+        } else if !editor.which_key_prefix.is_empty() || editor.buffer_keys_popup {
             debug!("render: which_key popup");
-            let entries = if let Some(km) = editor.keymaps.get("normal") {
-                km.which_key_entries(&editor.which_key_prefix, &editor.commands)
+            let (entries, title_override) = if editor.buffer_keys_popup {
+                let kind = editor.active_buffer().kind;
+                use mae_core::buffer_mode::BufferMode;
+                let title = kind.mode_name().to_string();
+                (editor.buffer_keys_entries(), Some(title))
             } else {
-                vec![]
+                (editor.which_key_entries_for_current_keymap(), None)
             };
 
             let entry_cols = (cols / 25).max(1);
@@ -348,6 +363,7 @@ impl Renderer for GuiRenderer {
                 popup_height,
                 cols,
                 &entries,
+                title_override.as_deref(),
             );
         } else if splash_render::should_show_splash(editor) {
             debug!("render: splash screen");
@@ -356,7 +372,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            let pixel_y_map = render_window_area(
+            focused_frame_layout = render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -370,9 +386,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
 
             // Cursor (not for shell buffers — they render their own).
-            if editor.mode != mae_core::Mode::ShellInsert
-                && editor.mode != mae_core::Mode::ConversationInput
-            {
+            if editor.mode != mae_core::Mode::ShellInsert {
                 render_gui_cursor(
                     canvas,
                     editor,
@@ -381,7 +395,7 @@ impl Renderer for GuiRenderer {
                     status_row,
                     cmd_row,
                     &syntax_spans,
-                    pixel_y_map.as_ref(),
+                    focused_frame_layout.as_ref(),
                 );
             }
 
@@ -394,12 +408,49 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    &syntax_spans,
+                    focused_frame_layout.as_ref(),
+                );
+            }
+
+            // Hover popup.
+            if editor.hover_popup.is_some() {
+                popup_render::render_hover_popup(
+                    canvas,
+                    editor,
+                    0,
+                    cols,
+                    window_height,
+                    focused_frame_layout.as_ref(),
+                );
+            }
+
+            // Code action popup.
+            if editor.code_action_menu.is_some() {
+                popup_render::render_code_action_popup(
+                    canvas,
+                    editor,
+                    0,
+                    cols,
+                    window_height,
+                    focused_frame_layout.as_ref(),
                 );
             }
         }
 
+        // Cache focused layout for mouse click positioning.
+        self.last_focused_layout = focused_frame_layout;
+
         canvas.end_frame();
+
+        // Log slow frames for debugging.
+        let frame_elapsed = frame_start.elapsed();
+        if frame_elapsed.as_millis() > 16 {
+            debug!(
+                "slow frame: {:.1}ms (budget 16.7ms)",
+                frame_elapsed.as_secs_f64() * 1000.0
+            );
+        }
+
         self.last_frame_start = Some(frame_start);
         Ok(())
     }
@@ -429,14 +480,40 @@ impl Renderer for GuiRenderer {
 fn render_window_area(
     canvas: &mut canvas::SkiaCanvas,
     editor: &Editor,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    syntax_spans: &SyntaxSpanMap,
     shells: &HashMap<usize, ShellTerminal>,
     area_row: usize,
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) -> Option<buffer_render::PixelYMap> {
-    let mut focused_pixel_y_map: Option<buffer_render::PixelYMap> = None;
+) -> Option<layout::FrameLayout> {
+    // Pre-compute scaled glyph advances for heading scales.
+    // Font engines grid-fit advances at each font size, so `cell_width * scale`
+    // is incorrect. We measure once and pass into layout/render.
+    let (cw, _ch) = canvas.cell_size();
+    let h1 = editor.heading_scale_h1;
+    let h2 = editor.heading_scale_h2;
+    let h3 = editor.heading_scale_h3;
+    let advance_h3 = canvas.scaled_cell_width(h3);
+    let advance_h2 = canvas.scaled_cell_width(h2);
+    let advance_h1 = canvas.scaled_cell_width(h1);
+    let key_h1 = (h1 * 100.0).round() as u32;
+    let key_h2 = (h2 * 100.0).round() as u32;
+    let key_h3 = (h3 * 100.0).round() as u32;
+    let glyph_advance_fn = |scale: f32| -> f32 {
+        let key = (scale * 100.0).round() as u32;
+        if key == key_h1 {
+            advance_h1
+        } else if key == key_h2 {
+            advance_h2
+        } else if key == key_h3 {
+            advance_h3
+        } else {
+            cw * scale // fallback for unexpected scales
+        }
+    };
+
+    let mut focused_layout: Option<layout::FrameLayout> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -457,70 +534,10 @@ fn render_window_area(
             let is_focused = *win_id == focused_id;
 
             match buf.kind {
-                BufferKind::Conversation => {
-                    conversation_render::render_conversation_window(
-                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
-                    );
-                }
                 BufferKind::Messages => {
                     messages_render::render_messages_window(
-                        canvas, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
-                }
-                BufferKind::Help => {
-                    // Help buffers: convert link spans to highlight spans.
-                    let help_spans: Vec<HighlightSpan> = buf
-                        .help_view
-                        .as_ref()
-                        .map(|view| {
-                            view.rendered_links
-                                .iter()
-                                .enumerate()
-                                .map(|(i, link)| {
-                                    let is_focused_link = view.focused_link == Some(i);
-                                    HighlightSpan {
-                                        byte_start: link.byte_start,
-                                        byte_end: link.byte_end,
-                                        theme_key: if is_focused_link {
-                                            "ui.selection"
-                                        } else {
-                                            "markup.link"
-                                        },
-                                    }
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    // Render with border.
-                    let border_fg = if is_focused {
-                        theme::ts_fg(editor, "ui.window.border.active")
-                    } else {
-                        theme::ts_fg(editor, "ui.window.border")
-                    };
-                    let modified = if buf.modified { " [+]" } else { "" };
-                    let title = format!(" {}{} ", buf.name, modified);
-                    draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
-
-                    let inner_row = r_row + 1;
-                    let inner_col = r_col + 1;
-                    let inner_width = r_width.saturating_sub(2);
-                    let inner_height = r_height.saturating_sub(2);
-                    let py_map = buffer_render::render_buffer_content(
-                        canvas,
-                        editor,
-                        buf,
-                        win,
-                        is_focused,
-                        inner_row,
-                        inner_col,
-                        inner_width,
-                        inner_height,
-                        Some(&help_spans),
-                    );
-                    if is_focused {
-                        focused_pixel_y_map = Some(py_map);
-                    }
                 }
                 BufferKind::Debug => {
                     debug_render::render_debug_window(
@@ -537,40 +554,97 @@ fn render_window_area(
                 }
                 BufferKind::Visual => {
                     // Phase 1 Visual Debugger rendering
-                    if let Some(ref vb) = buf.visual {
+                    if let Some(vb) = buf.visual() {
                         render_visual_buffer(canvas, vb, r_row, r_col, r_width, r_height);
                     }
                 }
+                BufferKind::FileTree => {
+                    file_tree_render::render_file_tree_window(
+                        canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
+                    );
+                }
                 _ => {
-                    // Text (and Preview) buffers: border + syntax-highlighted content.
+                    // Standard text pipeline: shared span selection for Conversation,
+                    // Help, GitStatus, *AI-Diff*; syntax spans for Text/Preview/Dashboard.
+                    // Text buffers with a markup flavor get inline markup spans merged.
+                    let owned_spans: Option<Vec<mae_core::HighlightSpan>>;
+                    let spans = if let Some(shared) =
+                        mae_core::render_common::spans::highlight_spans_for_buffer(buf)
+                    {
+                        owned_spans = Some(shared);
+                        owned_spans.as_deref()
+                    } else {
+                        let flavor = editor.effective_markup_flavor(win.buffer_idx);
+                        if flavor != mae_core::MarkupFlavor::None {
+                            let mut enriched = syntax_spans
+                                .get(&win.buffer_idx)
+                                .map(|v| v.as_ref().clone())
+                                .unwrap_or_default();
+                            mae_core::render_common::spans::enrich_spans_with_markup(
+                                &mut enriched,
+                                buf,
+                                flavor,
+                            );
+                            owned_spans = Some(enriched);
+                            owned_spans.as_deref()
+                        } else {
+                            owned_spans = None;
+                            let _ = &owned_spans;
+                            syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice())
+                        }
+                    };
+
                     let border_fg = if is_focused {
                         theme::ts_fg(editor, "ui.window.border.active")
                     } else {
                         theme::ts_fg(editor, "ui.window.border")
                     };
-                    let modified = if buf.modified { " [+]" } else { "" };
-                    let title = format!(" {}{} ", buf.name, modified);
+                    // Conversation buffers show streaming indicator in title.
+                    let title = if buf.kind == BufferKind::Conversation {
+                        let streaming_indicator = if let Some(conv) = buf.conversation() {
+                            if conv.streaming {
+                                if let Some(start) = conv.streaming_start {
+                                    format!(" [waiting... {}s] ", start.elapsed().as_secs())
+                                } else {
+                                    " [waiting...] ".to_string()
+                                }
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        format!(" {}{} ", buf.name, streaming_indicator)
+                    } else {
+                        let modified = if buf.modified { " [+]" } else { "" };
+                        format!(" {}{} ", buf.name, modified)
+                    };
                     draw_window_border(canvas, r_row, r_col, r_width, r_height, border_fg, &title);
 
                     let inner_row = r_row + 1;
                     let inner_col = r_col + 1;
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
-                    let spans = syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice());
-                    let py_map = buffer_render::render_buffer_content(
-                        canvas,
+                    let (_, cell_height) = canvas.cell_size();
+                    let fl = layout::compute_layout(
                         editor,
                         buf,
                         win,
-                        is_focused,
                         inner_row,
                         inner_col,
                         inner_width,
                         inner_height,
+                        cell_height,
+                        cw,
                         spans,
+                        Some(&glyph_advance_fn),
                     );
+                    buffer_render::render_buffer_content(
+                        canvas, editor, buf, win, is_focused, &fl, spans,
+                    );
+                    scrollbar::render_scrollbar(canvas, editor, &fl);
                     if is_focused {
-                        focused_pixel_y_map = Some(py_map);
+                        focused_layout = Some(fl);
                     }
                 }
             }
@@ -594,7 +668,7 @@ fn render_window_area(
         }
     }
 
-    focused_pixel_y_map
+    focused_layout
 }
 
 fn render_visual_buffer(
@@ -725,8 +799,8 @@ fn render_gui_cursor(
     window_height: usize,
     _status_row: usize,
     cmd_row: usize,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
-    pixel_y_map: Option<&buffer_render::PixelYMap>,
+    syntax_spans: &SyntaxSpanMap,
+    frame_layout: Option<&layout::FrameLayout>,
 ) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
@@ -747,7 +821,10 @@ fn render_gui_cursor(
         let inner_width = (win_rect.width as usize).saturating_sub(2);
         let inner_height = (win_rect.height as usize).saturating_sub(2);
 
-        let gutter_w = if editor.show_line_numbers {
+        // Some buffer kinds render without a gutter — cursor gutter offset must be 0.
+        let gutter_w = if !mae_core::BufferMode::has_gutter(&focused_buf.kind) {
+            0
+        } else if editor.show_line_numbers {
             gutter::gutter_width(focused_buf.display_line_count())
         } else {
             2
@@ -757,6 +834,7 @@ fn render_gui_cursor(
 
         let (_, ch) = canvas.cell_size();
 
+        let (cw, _) = canvas.cell_size();
         if editor.mode == mae_core::Mode::Command {
             // Command line cursor — always cell-based (no scaling).
             let cursor_col = editor.command_line
@@ -764,33 +842,29 @@ fn render_gui_cursor(
                 .chars()
                 .count();
             let pixel_y = cmd_row as f32 * ch;
-            cursor::render_cursor(canvas, editor, pixel_y, 1 + cursor_col, 1.0);
+            let pixel_x = (1 + cursor_col) as f32 * cw;
+            cursor::render_cursor(canvas, editor, pixel_y, pixel_x, 1.0);
         } else if editor.mode == mae_core::Mode::Search {
             let col = 1 + editor.search_input.len();
             let pixel_y = cmd_row as f32 * ch;
-            cursor::render_cursor(canvas, editor, pixel_y, col, 1.0);
+            let pixel_x = col as f32 * cw;
+            cursor::render_cursor(canvas, editor, pixel_y, pixel_x, 1.0);
         } else if let Some(pos) = cursor::compute_cursor_position(
             editor,
+            frame_layout,
             inner,
             gutter_w,
             syntax_spans
                 .get(&focused_win.buffer_idx)
                 .map(|v| v.as_slice()),
         ) {
-            // Use pixel Y map for exact positioning on variable-height lines.
-            let abs_row = inner_row + pos.row;
-            let cursor_pixel_y = if let Some(map) = pixel_y_map {
-                map.pixel_y_for_row(abs_row)
+            let cursor_pixel_y = pos.pixel_y.unwrap_or((inner_row + pos.row) as f32 * ch);
+            let cursor_pixel_x = if let Some(px) = pos.pixel_x {
+                px
             } else {
-                abs_row as f32 * ch
+                (inner_col + pos.col) as f32 * cw
             };
-            cursor::render_cursor(
-                canvas,
-                editor,
-                cursor_pixel_y,
-                inner_col + pos.col,
-                pos.scale,
-            );
+            cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
     }
 }
@@ -858,12 +932,7 @@ mod tests {
         for height in [600u32, 720, 768, 800, 900, 1080, 1440] {
             for ch_tenth in [140, 160, 185, 200, 225] {
                 let ch = ch_tenth as f32 / 10.0;
-                let raw_rows = (height as f32 / ch) as u16;
-                let rows = if (raw_rows as f32 * ch).ceil() > height as f32 {
-                    raw_rows.saturating_sub(1)
-                } else {
-                    raw_rows
-                };
+                let rows = (height as f32 / ch).floor() as u16;
                 assert!(
                     (rows as f32 * ch).ceil() <= height as f32,
                     "rows={} * ch={} = {} exceeds height={}",
@@ -873,6 +942,29 @@ mod tests {
                     height
                 );
             }
+        }
+    }
+
+    /// Regression: specific heights that caused border overlap with the old
+    /// ceil-based guard. floor() is correct for all fractional remainders.
+    #[test]
+    fn floor_row_calc_no_overlap() {
+        // Cell height 18.5, window height 741 → 741/18.5 = 40.054...
+        // floor = 40, 40*18.5 = 740 < 741 ✓
+        // Old code: raw_rows = 40, ceil(40*18.5) = 740 <= 741 → 40, OK
+        // But: 742/18.5 = 40.108, raw=40, ceil(740)=740 <= 742 → 40 ✓
+        // Edge case: 740/18.5 = 40.0 exactly → floor=40, 40*18.5=740 ✓
+        let ch = 18.5f32;
+        for h in [740u32, 741, 742, 743, 750, 755, 757] {
+            let rows = (h as f32 / ch).floor() as u16;
+            let used = rows as f32 * ch;
+            assert!(
+                used <= h as f32,
+                "h={} rows={} used={} overflows",
+                h,
+                rows,
+                used
+            );
         }
     }
 }

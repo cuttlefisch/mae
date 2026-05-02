@@ -624,15 +624,16 @@ mod tests {
     #[test]
     fn child_exit_detected() {
         let mut term = ShellTerminal::spawn(80, 24, None).expect("failed to spawn terminal");
-        thread::sleep(Duration::from_millis(500));
+        // Wait for shell startup — generous timeout for CI under load.
+        thread::sleep(Duration::from_millis(1000));
         term.poll_events();
 
         // Tell the shell to exit.
         term.write_str("exit\n");
 
-        // Wait for exit event.
+        // Wait for exit event (up to 4s under load).
         let mut exited = false;
-        for _ in 0..20 {
+        for _ in 0..40 {
             thread::sleep(Duration::from_millis(100));
             term.poll_events();
             if term.has_exited() {

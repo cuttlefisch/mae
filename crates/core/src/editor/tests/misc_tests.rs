@@ -342,6 +342,612 @@ fn save_and_restore_preserves_original_buffers() {
     assert_eq!(editor.buffers[1].name, "existing.rs");
 }
 
+#[test]
+fn save_and_restore_preserves_conversation_pair() {
+    use crate::editor::ConversationPair;
+
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI*".into();
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".into();
+    editor.buffers.push(input_buf);
+
+    // Simulate a conversation pair
+    editor.conversation_pair = Some(ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: 100,
+        input_window_id: 101,
+    });
+
+    editor.save_state();
+
+    // Mutate: clear the pair and add a test buffer
+    editor.conversation_pair = None;
+    let mut test_buf = Buffer::new();
+    test_buf.name = "test.txt".into();
+    editor.buffers.push(test_buf);
+
+    editor.restore_state().unwrap();
+
+    // Conversation pair should be restored with correct (possibly remapped) indices
+    let pair = editor
+        .conversation_pair
+        .as_ref()
+        .expect("pair should be restored");
+    assert_eq!(editor.buffers[pair.output_buffer_idx].name, "*AI*");
+    assert_eq!(editor.buffers[pair.input_buffer_idx].name, "*ai-input*");
+    assert_eq!(pair.output_window_id, 100);
+    assert_eq!(pair.input_window_id, 101);
+}
+
+#[test]
+fn self_test_active_flag_defaults_false() {
+    let editor = Editor::new();
+    assert!(!editor.self_test_active);
+}
+
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Buffer-local options (per-buffer word_wrap, line_numbers, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effective_word_wrap_uses_buffer_local() {
+    let mut ed = Editor::new();
+    // Global default: off
+    assert!(!ed.word_wrap);
+    assert!(!ed.effective_word_wrap());
+
+    // Create conversation buffer — has word_wrap=true locally
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+    assert!(ed.effective_word_wrap());
+
+    // Switch back to text buffer — no local override, uses global
+    ed.switch_to_buffer(0);
+    assert!(!ed.effective_word_wrap());
+
+    // Set global to true
+    ed.word_wrap = true;
+    assert!(ed.effective_word_wrap());
+}
+
+#[test]
+fn setlocal_word_wrap_command() {
+    let mut ed = Editor::new();
+    assert!(!ed.word_wrap);
+    assert!(!ed.effective_word_wrap());
+
+    // :setlocal word_wrap true
+    let result = ed.set_local_option("word_wrap", "true");
+    assert!(result.is_ok());
+    assert!(ed.effective_word_wrap());
+
+    // Global is still false
+    assert!(!ed.word_wrap);
+
+    // Buffer-local is set
+    assert_eq!(ed.buffers[0].local_options.word_wrap, Some(true));
+}
+
+#[test]
+fn word_wrap_for_specific_buffer() {
+    let mut ed = Editor::new();
+    ed.word_wrap = false;
+
+    // Buffer 0 (text) has no override
+    assert!(!ed.word_wrap_for(0));
+
+    // Create conversation buffer with local override
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    assert!(ed.word_wrap_for(conv_idx));
+}
+
+// ---------------------------------------------------------------------------
+// Buffer-local options: break_indent, show_break, heading_scale
+// ---------------------------------------------------------------------------
+
+#[test]
+fn setlocal_break_indent() {
+    let mut ed = Editor::new();
+    assert!(ed.break_indent); // global default true
+    let result = ed.set_local_option("break_indent", "false");
+    assert!(result.is_ok());
+    assert!(!ed.break_indent_for(0));
+    assert!(ed.break_indent); // global unchanged
+}
+
+#[test]
+fn setlocal_heading_scale() {
+    let mut ed = Editor::new();
+    assert!(ed.heading_scale); // global default true
+    let result = ed.set_local_option("heading_scale", "false");
+    assert!(result.is_ok());
+    assert!(!ed.heading_scale_for(0));
+}
+
+#[test]
+fn setlocal_show_break() {
+    let mut ed = Editor::new();
+    let result = ed.set_local_option("show_break", ">>> ");
+    assert!(result.is_ok());
+    assert_eq!(ed.show_break_for(0), ">>> ");
+    assert_eq!(ed.show_break, "↪ "); // global unchanged
+}
+
+// ---------------------------------------------------------------------------
+// open-link-at-cursor: URL and file path detection under cursor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn open_link_at_cursor_no_link() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "just plain text here");
+    ed.dispatch_builtin("open-link-at-cursor");
+    assert!(ed.status_msg.contains("No link"));
+}
+
+#[test]
+fn open_link_at_cursor_detects_url() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "visit https://example.com for info");
+    // Move cursor to the URL
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_col = 10; // within "https://example.com"
+    ed.dispatch_builtin("open-link-at-cursor");
+    // URL opens externally, status shows "Opening ..."
+    assert!(ed.status_msg.contains("Opening"));
+}
+
+#[test]
+fn handle_link_click_navigates_to_line() {
+    let mut ed = Editor::new();
+    // Create a temp file
+    let dir = std::env::temp_dir().join("mae_test_link_click");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("test.txt");
+    std::fs::write(&file, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+    // Simulate clicking a file:line link
+    let target = format!("{}:3:1", file.display());
+    ed.handle_link_click(&target);
+
+    // Should have opened the file and navigated to line 3 (row 2, 0-indexed)
+    let win = ed.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gx_keybinding_exists() {
+    let ed = Editor::new();
+    let keymap = ed.keymaps.get("normal").unwrap();
+    let result = keymap.lookup(&crate::keymap::parse_key_seq("gx"));
+    assert!(matches!(
+        result,
+        crate::LookupResult::Exact("open-link-at-cursor")
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// link_descriptive / render_markup options
+// ---------------------------------------------------------------------------
+
+#[test]
+fn link_descriptive_default_true() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("link_descriptive").unwrap();
+    assert_eq!(val, "true");
+    assert_eq!(def.name, "link_descriptive");
+}
+
+#[test]
+fn render_markup_default_true() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("render_markup").unwrap();
+    assert_eq!(val, "true");
+    assert_eq!(def.name, "render_markup");
+}
+
+#[test]
+fn setlocal_link_descriptive() {
+    let mut ed = Editor::new();
+    assert!(ed.link_descriptive); // global default
+    let result = ed.set_local_option("link_descriptive", "false");
+    assert!(result.is_ok());
+    assert!(!ed.link_descriptive_for(0));
+    assert!(ed.link_descriptive); // global unchanged
+}
+
+#[test]
+fn setlocal_render_markup() {
+    let mut ed = Editor::new();
+    assert!(ed.render_markup);
+    let result = ed.set_local_option("render_markup", "false");
+    assert!(result.is_ok());
+    assert!(!ed.render_markup_for(0));
+    assert!(ed.render_markup); // global unchanged
+}
+
+// ---------------------------------------------------------------------------
+// MarkupFlavor resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effective_markup_flavor_md_file() {
+    use crate::syntax::{Language, MarkupFlavor};
+    let mut ed = Editor::new();
+    ed.buffers[0].set_file_path(std::path::PathBuf::from("test.md"));
+    ed.syntax.set_language(0, Language::Markdown);
+    assert_eq!(ed.effective_markup_flavor(0), MarkupFlavor::Markdown);
+}
+
+#[test]
+fn effective_markup_flavor_render_markup_off() {
+    use crate::syntax::{Language, MarkupFlavor};
+    let mut ed = Editor::new();
+    ed.buffers[0].set_file_path(std::path::PathBuf::from("test.md"));
+    ed.syntax.set_language(0, Language::Markdown);
+    ed.render_markup = false;
+    assert_eq!(ed.effective_markup_flavor(0), MarkupFlavor::None);
+}
+
+#[test]
+fn effective_markup_flavor_help_buffer() {
+    use crate::syntax::MarkupFlavor;
+    let mut ed = Editor::new();
+    ed.buffers[0].kind = crate::buffer::BufferKind::Help;
+    assert_eq!(ed.effective_markup_flavor(0), MarkupFlavor::Markdown);
+}
+
+#[test]
+fn effective_markup_flavor_plain_text() {
+    use crate::syntax::{Language, MarkupFlavor};
+    let mut ed = Editor::new();
+    ed.buffers[0].set_file_path(std::path::PathBuf::from("test.rs"));
+    ed.syntax.set_language(0, Language::Rust);
+    assert_eq!(ed.effective_markup_flavor(0), MarkupFlavor::None);
+}
+
+// ---------------------------------------------------------------------------
+// Display regions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn display_regions_recomputed_on_edit() {
+    let mut ed = Editor::new();
+    let idx = ed.active_buffer_idx();
+    // Set a file path so it picks an extension
+    ed.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
+    ed.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
+    ed.buffers[idx].recompute_display_regions(true);
+    assert_eq!(ed.buffers[idx].display_regions.len(), 1);
+    assert_eq!(
+        ed.buffers[idx].display_regions[0].replacement.as_deref(),
+        Some("docs")
+    );
+
+    // Edit the buffer — regions should be stale
+    let gen_before = ed.buffers[idx].display_regions_gen;
+    ed.buffers[idx].insert_text_at(0, "x");
+    assert_ne!(ed.buffers[idx].generation, gen_before);
+
+    // Recompute
+    ed.buffers[idx].recompute_display_regions(true);
+    assert_eq!(ed.buffers[idx].display_regions.len(), 1);
+    // The region byte offsets should have shifted by 1
+    assert_eq!(ed.buffers[idx].display_regions[0].byte_start, 5);
+}
+
+#[test]
+fn cursor_moves_through_revealed_link_region() {
+    // With org-appear, cursor moves through raw chars in a revealed region
+    // (no snapping). The display_reveal_cursor suppresses concealment.
+    let mut ed = Editor::new();
+    let idx = ed.active_buffer_idx();
+    ed.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
+    ed.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
+    ed.buffers[idx].recompute_display_regions(true);
+    assert!(!ed.buffers[idx].display_regions.is_empty());
+
+    // Place cursor at col 5 (inside the link region [docs](url))
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 5;
+
+    // Move right should advance by 1 char (no snapping with org-appear)
+    ed.dispatch_builtin("move-right");
+    let col = ed.window_mgr.focused_window().cursor_col;
+    assert_eq!(
+        col, 6,
+        "cursor should move normally through revealed region"
+    );
+}
+
+// -- Redraw level tests -------------------------------------------------------
+
+#[test]
+fn mark_cursor_moved_sets_cursor_only() {
+    let mut editor = Editor::new();
+    editor.clear_redraw();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::None);
+    editor.mark_cursor_moved();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::CursorOnly);
+}
+
+#[test]
+fn mark_lines_dirty_merges_ranges() {
+    let mut editor = Editor::new();
+    editor.clear_redraw();
+    editor.mark_lines_dirty(5, 10);
+    assert_eq!(editor.dirty_line_range, Some((5, 10)));
+    editor.mark_lines_dirty(2, 7);
+    assert_eq!(editor.dirty_line_range, Some((2, 10)));
+    assert_eq!(
+        editor.redraw_level,
+        crate::redraw::RedrawLevel::PartialLines
+    );
+}
+
+#[test]
+fn clear_redraw_resets() {
+    let mut editor = Editor::new();
+    editor.mark_full_redraw();
+    editor.mark_lines_dirty(0, 5);
+    editor.clear_redraw();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::None);
+    assert_eq!(editor.dirty_line_range, None);
+}
+
+#[test]
+fn mark_scrolled_subsumes_cursor_only() {
+    let mut editor = Editor::new();
+    editor.clear_redraw();
+    editor.mark_cursor_moved();
+    editor.mark_scrolled();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::Scroll);
+}
+
+// -- Parameterized hook fires test -------------------------------------------
+
+#[test]
+fn fire_parameterized_hook() {
+    let mut editor = Editor::new();
+    editor.hooks.add("buffer-open:rust", "rust-hook-fn");
+    editor.fire_hook("buffer-open:rust");
+    assert_eq!(editor.pending_hook_evals.len(), 1);
+    assert_eq!(editor.pending_hook_evals[0].0, "buffer-open:rust");
+    assert_eq!(editor.pending_hook_evals[0].1, "rust-hook-fn");
+}
+
+// ---------------------------------------------------------------------------
+// Checkbox toggle tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn toggle_unchecked_to_checked() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "- [ ] item one\n- [ ] item two\n");
+    editor.toggle_checkbox_at_cursor();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.contains("[x]"),
+        "expected [x] after toggle, got: {}",
+        line
+    );
+}
+
+#[test]
+fn toggle_checked_to_unchecked() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "- [x] done item\n");
+    editor.toggle_checkbox_at_cursor();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.contains("[ ]"),
+        "expected [ ] after toggle, got: {}",
+        line
+    );
+}
+
+#[test]
+fn toggle_on_non_checkbox_noop() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "Just a regular line\n");
+    editor.toggle_checkbox_at_cursor();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert_eq!(line, "Just a regular line\n");
+}
+
+#[test]
+fn progress_cookie_fraction_updates() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "* Tasks [0/2]\n- [ ] first\n- [x] second\n");
+    // Cursor on line 1 (first checkbox), toggle it
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    editor.toggle_checkbox_at_cursor();
+    let heading: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        heading.contains("[2/2]"),
+        "expected [2/2] after toggling first item, got: {}",
+        heading
+    );
+}
+
+#[test]
+fn progress_cookie_percentage_updates() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "* Tasks [0%]\n- [ ] first\n- [ ] second\n");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    editor.toggle_checkbox_at_cursor();
+    let heading: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        heading.contains("[50%]"),
+        "expected [50%] after toggling one of two, got: {}",
+        heading
+    );
+}
+
+#[test]
+fn markdown_checkbox_toggle() {
+    let mut editor = Editor::new();
+    let buf = &mut editor.buffers[0];
+    buf.insert_text_at(0, "- [ ] md item\n");
+    editor.toggle_checkbox_at_cursor();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.contains("[x]"),
+        "markdown checkbox toggle should work, got: {}",
+        line
+    );
+}
+
+#[test]
+fn enter_in_org_keymap_maps_to_smart_enter() {
+    let ed = Editor::new();
+    let keymap = ed.keymaps.get("org").unwrap();
+    let result = keymap.lookup(&[crate::keymap::KeyPress::special(crate::keymap::Key::Enter)]);
+    assert!(
+        matches!(result, crate::LookupResult::Exact("smart-enter")),
+        "Enter in org keymap should map to smart-enter, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn enter_in_markdown_keymap_maps_to_smart_enter() {
+    let ed = Editor::new();
+    let keymap = ed.keymaps.get("markdown").unwrap();
+    let result = keymap.lookup(&[crate::keymap::KeyPress::special(crate::keymap::Key::Enter)]);
+    assert!(
+        matches!(result, crate::LookupResult::Exact("smart-enter")),
+        "Enter in markdown keymap should map to smart-enter, got: {:?}",
+        result
+    );
+}
+
+// --- TODO cycling tests ---
+
+#[test]
+fn todo_cycle_toggles_todo_done() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* TODO Buy milk\n");
+    editor.org_todo_cycle();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.starts_with("* DONE Buy milk"),
+        "TODO should become DONE, got: {line}"
+    );
+    editor.org_todo_cycle();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.starts_with("* TODO Buy milk"),
+        "DONE should become TODO, got: {line}"
+    );
+}
+
+#[test]
+fn todo_cycle_never_removes_keyword() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* DONE task\n");
+    editor.org_todo_cycle();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        line.contains("TODO") || line.contains("DONE"),
+        "keyword should never be removed, got: {line}"
+    );
+}
+
+#[test]
+fn todo_cycle_undo_is_single_step() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* TODO task\n");
+    let original: String = editor.buffers[0].rope().to_string();
+    editor.org_todo_cycle();
+    // A single undo should restore the original
+    editor.dispatch_builtin("undo");
+    let after_undo: String = editor.buffers[0].rope().to_string();
+    assert_eq!(original, after_undo, "single undo should restore original");
+}
+
+#[test]
+fn todo_cycle_works_on_markdown_headings() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "## My heading\n");
+    editor.org_todo_cycle();
+    let line: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(line.starts_with("## TODO My heading"), "got: {line}");
+}
+
+#[test]
+fn checkbox_toggle_undo_is_single_step() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "- [ ] item\n");
+    let original: String = editor.buffers[0].rope().to_string();
+    editor.toggle_checkbox_at_cursor();
+    let checked: String = editor.buffers[0].rope().to_string();
+    assert!(checked.contains("[x]"), "should be checked");
+    editor.dispatch_builtin("undo");
+    let after_undo: String = editor.buffers[0].rope().to_string();
+    assert_eq!(original, after_undo, "single undo should restore original");
+}
+
+#[test]
+fn set_font_size_updates_default() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.gui_font_size_default, 14.0);
+    editor.set_option("font_size", "18").unwrap();
+    assert_eq!(editor.gui_font_size, 18.0);
+    assert_eq!(
+        editor.gui_font_size_default, 18.0,
+        "font_size_default should track set_option"
+    );
+}
+
+// --- New configurable option tests ---
+
+#[test]
+fn set_scroll_speed_clamped() {
+    let mut editor = Editor::new();
+    editor.set_option("scroll_speed", "0").unwrap();
+    assert_eq!(editor.scroll_speed, 1); // clamped to min
+    editor.set_option("scroll_speed", "100").unwrap();
+    assert_eq!(editor.scroll_speed, 50); // clamped to max
+    editor.set_option("scroll_speed", "5").unwrap();
+    assert_eq!(editor.scroll_speed, 5);
+}
+
+#[test]
+fn set_heading_scale_clamped() {
+    let mut editor = Editor::new();
+    editor.set_option("heading_scale_h1", "0.1").unwrap();
+    assert_eq!(editor.heading_scale_h1, 0.5); // clamped
+    editor.set_option("heading_scale_h1", "5.0").unwrap();
+    assert_eq!(editor.heading_scale_h1, 3.0); // clamped
+    editor.set_option("heading_scale_h1", "2.0").unwrap();
+    assert_eq!(editor.heading_scale_h1, 2.0);
+}
+
+#[test]
+fn get_new_options() {
+    let editor = Editor::new();
+    assert_eq!(editor.get_option("scroll_speed").unwrap().0, "3");
+    assert_eq!(editor.get_option("completion_max_items").unwrap().0, "10");
+    assert_eq!(
+        editor.get_option("window_title").unwrap().0,
+        "MAE \u{2014} Modern AI Editor"
+    );
+    assert_eq!(editor.get_option("heading_scale_h1").unwrap().0, "1.5");
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

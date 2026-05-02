@@ -1,0 +1,2031 @@
+{
+  "crates": {
+    "mae": {
+      "path": "crates/mae/src/main.rs",
+      "dependencies": [
+        "mae-ai",
+        "mae-core",
+        "mae-dap",
+        "mae-gui",
+        "mae-lsp",
+        "mae-mcp",
+        "mae-renderer",
+        "mae-scheme",
+        "mae-shell"
+      ],
+      "public_items": []
+    },
+    "mae-ai": {
+      "path": "crates/ai/src/lib.rs",
+      "dependencies": [
+        "mae-core"
+      ],
+      "public_items": [
+        {
+          "name": "claude",
+          "kind": "mod"
+        },
+        {
+          "name": "context_limits",
+          "kind": "mod"
+        },
+        {
+          "name": "executor",
+          "kind": "mod"
+        },
+        {
+          "name": "gemini",
+          "kind": "mod"
+        },
+        {
+          "name": "openai",
+          "kind": "mod"
+        },
+        {
+          "name": "pricing",
+          "kind": "mod"
+        },
+        {
+          "name": "provider",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
+          "kind": "mod"
+        },
+        {
+          "name": "token_estimate",
+          "kind": "mod"
+        },
+        {
+          "name": "tools",
+          "kind": "mod"
+        },
+        {
+          "name": "types",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-core": {
+      "path": "crates/core/src/lib.rs",
+      "dependencies": [
+        "mae-kb"
+      ],
+      "public_items": [
+        {
+          "name": "buffer",
+          "kind": "mod"
+        },
+        {
+          "name": "buffer_mode",
+          "kind": "mod"
+        },
+        {
+          "name": "buffer_view",
+          "kind": "mod"
+        },
+        {
+          "name": "clipboard",
+          "kind": "mod"
+        },
+        {
+          "name": "command_palette",
+          "kind": "mod"
+        },
+        {
+          "name": "commands",
+          "kind": "mod"
+        },
+        {
+          "name": "conversation",
+          "kind": "mod"
+        },
+        {
+          "name": "dap_intent",
+          "kind": "mod"
+        },
+        {
+          "name": "debug",
+          "kind": "mod"
+        },
+        {
+          "name": "debug_view",
+          "kind": "mod"
+        },
+        {
+          "name": "diff",
+          "kind": "mod"
+        },
+        {
+          "name": "display_region",
+          "kind": "mod"
+        },
+        {
+          "name": "editor",
+          "kind": "mod"
+        },
+        {
+          "name": "event_record",
+          "kind": "mod"
+        },
+        {
+          "name": "file_browser",
+          "kind": "mod"
+        },
+        {
+          "name": "file_picker",
+          "kind": "mod"
+        },
+        {
+          "name": "file_tree",
+          "kind": "mod"
+        },
+        {
+          "name": "git_status",
+          "kind": "mod"
+        },
+        {
+          "name": "grapheme",
+          "kind": "mod"
+        },
+        {
+          "name": "heading",
+          "kind": "mod"
+        },
+        {
+          "name": "help_view",
+          "kind": "mod"
+        },
+        {
+          "name": "hooks",
+          "kind": "mod"
+        },
+        {
+          "name": "input",
+          "kind": "mod"
+        },
+        {
+          "name": "kb_seed",
+          "kind": "mod"
+        },
+        {
+          "name": "keymap",
+          "kind": "mod"
+        },
+        {
+          "name": "link_detect",
+          "kind": "mod"
+        },
+        {
+          "name": "lock_stats",
+          "kind": "mod"
+        },
+        {
+          "name": "lsp_intent",
+          "kind": "mod"
+        },
+        {
+          "name": "messages",
+          "kind": "mod"
+        },
+        {
+          "name": "options",
+          "kind": "mod"
+        },
+        {
+          "name": "project",
+          "kind": "mod"
+        },
+        {
+          "name": "render_common",
+          "kind": "mod"
+        },
+        {
+          "name": "search",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
+          "kind": "mod"
+        },
+        {
+          "name": "swap",
+          "kind": "mod"
+        },
+        {
+          "name": "syntax",
+          "kind": "mod"
+        },
+        {
+          "name": "theme",
+          "kind": "mod"
+        },
+        {
+          "name": "visual_buffer",
+          "kind": "mod"
+        },
+        {
+          "name": "window",
+          "kind": "mod"
+        },
+        {
+          "name": "word",
+          "kind": "mod"
+        },
+        {
+          "name": "wrap",
+          "kind": "mod"
+        },
+        {
+          "name": "VisualType",
+          "kind": "enum"
+        },
+        {
+          "name": "Mode",
+          "kind": "enum"
+        }
+      ]
+    },
+    "mae-dap": {
+      "path": "crates/dap/src/lib.rs",
+      "dependencies": [
+        "mae-core"
+      ],
+      "public_items": [
+        {
+          "name": "client",
+          "kind": "mod"
+        },
+        {
+          "name": "manager",
+          "kind": "mod"
+        },
+        {
+          "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "transport",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-gui": {
+      "path": "crates/gui/src/lib.rs",
+      "dependencies": [
+        "mae-core",
+        "mae-renderer",
+        "mae-shell"
+      ],
+      "public_items": [
+        {
+          "name": "text",
+          "kind": "mod"
+        },
+        {
+          "name": "theme",
+          "kind": "mod"
+        },
+        {
+          "name": "GuiRenderer",
+          "kind": "struct"
+        }
+      ]
+    },
+    "mae-kb": {
+      "path": "crates/kb/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "org",
+          "kind": "mod"
+        },
+        {
+          "name": "persist",
+          "kind": "mod"
+        },
+        {
+          "name": "watch",
+          "kind": "mod"
+        },
+        {
+          "name": "NodeKind",
+          "kind": "enum"
+        },
+        {
+          "name": "Node",
+          "kind": "struct"
+        },
+        {
+          "name": "parse_links",
+          "kind": "fn"
+        },
+        {
+          "name": "KnowledgeBase",
+          "kind": "struct"
+        }
+      ]
+    },
+    "mae-lsp": {
+      "path": "crates/lsp/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "client",
+          "kind": "mod"
+        },
+        {
+          "name": "manager",
+          "kind": "mod"
+        },
+        {
+          "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "transport",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-mcp": {
+      "path": "crates/mcp/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "McpToolRequest",
+          "kind": "struct"
+        },
+        {
+          "name": "McpToolResult",
+          "kind": "struct"
+        },
+        {
+          "name": "McpServer",
+          "kind": "struct"
+        }
+      ]
+    },
+    "mae-renderer": {
+      "path": "crates/renderer/src/lib.rs",
+      "dependencies": [
+        "mae-core",
+        "mae-shell"
+      ],
+      "public_items": [
+        {
+          "name": "splash_render",
+          "kind": "mod"
+        },
+        {
+          "name": "Renderer",
+          "kind": "trait"
+        },
+        {
+          "name": "TerminalRenderer",
+          "kind": "struct"
+        }
+      ]
+    },
+    "mae-scheme": {
+      "path": "crates/scheme/src/lib.rs",
+      "dependencies": [
+        "mae-core"
+      ],
+      "public_items": [
+        {
+          "name": "runtime",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-shell": {
+      "path": "crates/shell/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "path",
+          "kind": "mod"
+        },
+        {
+          "name": "grid_types",
+          "kind": "mod"
+        }
+      ]
+    }
+  },
+  "scheme_primitives": [
+    {
+      "name": "define-key",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "define-keymap",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "define-command",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-status",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-theme",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-insert",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "cursor-goto",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "open-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "run-command",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "message",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "add-hook!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "remove-hook!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-option!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "shell-send-input",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "recent-files-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "recent-projects-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "visual-buffer-add-rect!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "visual-buffer-clear!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "visual-buffer-add-line!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "visual-buffer-add-circle!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "visual-buffer-add-text!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-line",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "shell-cwd",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "shell-read-output",
+      "source": "crates/scheme/src/runtime.rs"
+    }
+  ],
+  "scheme_globals": [],
+  "commands": [
+    {
+      "name": "move-up",
+      "doc": "Move cursor up one line"
+    },
+    {
+      "name": "move-down",
+      "doc": "Move cursor down one line"
+    },
+    {
+      "name": "move-left",
+      "doc": "Move cursor left one character"
+    },
+    {
+      "name": "move-right",
+      "doc": "Move cursor right one character"
+    },
+    {
+      "name": "move-to-line-start",
+      "doc": "Move cursor to start of line"
+    },
+    {
+      "name": "move-to-line-end",
+      "doc": "Move cursor to end of line"
+    },
+    {
+      "name": "move-display-down",
+      "doc": "Move cursor down one display line (gj)"
+    },
+    {
+      "name": "move-display-up",
+      "doc": "Move cursor up one display line (gk)"
+    },
+    {
+      "name": "move-display-line-start",
+      "doc": "Move to start of display line (g0)"
+    },
+    {
+      "name": "move-display-line-end",
+      "doc": "Move to end of display line (g$)"
+    },
+    {
+      "name": "move-to-first-line",
+      "doc": "Move cursor to first line"
+    },
+    {
+      "name": "move-to-last-line",
+      "doc": "Move cursor to last line"
+    },
+    {
+      "name": "move-word-forward",
+      "doc": "Move to start of next word (w)"
+    },
+    {
+      "name": "move-word-backward",
+      "doc": "Move to start of previous word (b)"
+    },
+    {
+      "name": "move-word-end",
+      "doc": "Move to end of word (e)"
+    },
+    {
+      "name": "move-big-word-forward",
+      "doc": "Move to start of next WORD (W)"
+    },
+    {
+      "name": "move-big-word-backward",
+      "doc": "Move to start of previous WORD (B)"
+    },
+    {
+      "name": "move-big-word-end",
+      "doc": "Move to end of WORD (E)"
+    },
+    {
+      "name": "move-word-end-backward",
+      "doc": "Move to end of previous word (ge)"
+    },
+    {
+      "name": "move-big-word-end-backward",
+      "doc": "Move to end of previous WORD (gE)"
+    },
+    {
+      "name": "move-to-first-non-blank",
+      "doc": "Move to first non-blank char of line (^)"
+    },
+    {
+      "name": "move-line-next-non-blank",
+      "doc": "Move to first non-blank of next line (+)"
+    },
+    {
+      "name": "move-line-prev-non-blank",
+      "doc": "Move to first non-blank of previous line (-)"
+    },
+    {
+      "name": "move-matching-bracket",
+      "doc": "Jump to matching bracket (%)"
+    },
+    {
+      "name": "move-paragraph-forward",
+      "doc": "Move to next paragraph (})"
+    },
+    {
+      "name": "move-paragraph-backward",
+      "doc": "Move to previous paragraph ({)"
+    },
+    {
+      "name": "find-char-forward-await",
+      "doc": "Find char forward on line (f)"
+    },
+    {
+      "name": "find-char-backward-await",
+      "doc": "Find char backward on line (F)"
+    },
+    {
+      "name": "till-char-forward-await",
+      "doc": "Till char forward on line (t)"
+    },
+    {
+      "name": "till-char-backward-await",
+      "doc": "Till char backward on line (T)"
+    },
+    {
+      "name": "scroll-half-up",
+      "doc": "Scroll half page up (C-u)"
+    },
+    {
+      "name": "scroll-half-down",
+      "doc": "Scroll half page down (C-d)"
+    },
+    {
+      "name": "scroll-page-up",
+      "doc": "Scroll full page up (C-b)"
+    },
+    {
+      "name": "scroll-page-down",
+      "doc": "Scroll full page down (C-f)"
+    },
+    {
+      "name": "scroll-center",
+      "doc": "Center cursor line on screen (zz)"
+    },
+    {
+      "name": "scroll-top",
+      "doc": "Scroll cursor line to top (zt)"
+    },
+    {
+      "name": "scroll-bottom",
+      "doc": "Scroll cursor line to bottom (zb)"
+    },
+    {
+      "name": "scroll-down-line",
+      "doc": "Scroll one line down (C-e)"
+    },
+    {
+      "name": "scroll-up-line",
+      "doc": "Scroll one line up (C-y)"
+    },
+    {
+      "name": "move-screen-top",
+      "doc": "Move cursor to top visible line (H)"
+    },
+    {
+      "name": "move-screen-middle",
+      "doc": "Move cursor to middle visible line (M)"
+    },
+    {
+      "name": "move-screen-bottom",
+      "doc": "Move cursor to bottom visible line (L)"
+    },
+    {
+      "name": "delete-char-forward",
+      "doc": "Delete character under cursor"
+    },
+    {
+      "name": "delete-char-backward",
+      "doc": "Delete character before cursor"
+    },
+    {
+      "name": "delete-line",
+      "doc": "Delete current line"
+    },
+    {
+      "name": "delete-word-forward",
+      "doc": "Delete to next word start (dw)"
+    },
+    {
+      "name": "delete-to-line-end",
+      "doc": "Delete to end of line (d$)"
+    },
+    {
+      "name": "delete-to-line-start",
+      "doc": "Delete to start of line (d0)"
+    },
+    {
+      "name": "open-line-below",
+      "doc": "Open new line below and enter insert mode"
+    },
+    {
+      "name": "open-line-above",
+      "doc": "Open new line above and enter insert mode"
+    },
+    {
+      "name": "change-line",
+      "doc": "Change entire line (cc)"
+    },
+    {
+      "name": "change-word-forward",
+      "doc": "Change to next word (cw)"
+    },
+    {
+      "name": "change-to-line-end",
+      "doc": "Change to end of line (C/c$)"
+    },
+    {
+      "name": "change-to-line-start",
+      "doc": "Change to start of line (c0)"
+    },
+    {
+      "name": "replace-char-await",
+      "doc": "Replace char under cursor (r)"
+    },
+    {
+      "name": "substitute-char",
+      "doc": "Substitute char under cursor (s)"
+    },
+    {
+      "name": "substitute-line",
+      "doc": "Substitute entire line (S)"
+    },
+    {
+      "name": "reinsert-at-last-position",
+      "doc": "Insert at last edit position"
+    },
+    {
+      "name": "jump-backward",
+      "doc": "Navigate backward through the jump list (Ctrl-o)"
+    },
+    {
+      "name": "jump-forward",
+      "doc": "Navigate forward through the jump list (Ctrl-i)"
+    },
+    {
+      "name": "change-backward",
+      "doc": "Navigate backward through the change list (g;)"
+    },
+    {
+      "name": "change-forward",
+      "doc": "Navigate forward through the change list (g,)"
+    },
+    {
+      "name": "show-changes-buffer",
+      "doc": "Show change list"
+    },
+    {
+      "name": "goto-file-under-cursor",
+      "doc": "Open the filename under the cursor (gf)"
+    },
+    {
+      "name": "set-mark-await",
+      "doc": "Set mark at next-typed letter (m)"
+    },
+    {
+      "name": "jump-mark-await",
+      "doc": "Jump to mark at next-typed letter (')"
+    },
+    {
+      "name": "start-recording-await",
+      "doc": "Start recording macro to next-typed register (q)"
+    },
+    {
+      "name": "replay-macro-await",
+      "doc": "Replay macro from next-typed register (@)"
+    },
+    {
+      "name": "replay-last-macro",
+      "doc": "Replay the last-used macro (@@)"
+    },
+    {
+      "name": "join-lines",
+      "doc": "Join current line with next line (J)"
+    },
+    {
+      "name": "indent-line",
+      "doc": "Indent current line by 4 spaces (>>)"
+    },
+    {
+      "name": "dedent-line",
+      "doc": "Dedent current line by up to 4 spaces (<<)"
+    },
+    {
+      "name": "toggle-case",
+      "doc": "Toggle case of char under cursor (~)"
+    },
+    {
+      "name": "uppercase-line",
+      "doc": "Uppercase current line (gUU)"
+    },
+    {
+      "name": "lowercase-line",
+      "doc": "Lowercase current line (guu)"
+    },
+    {
+      "name": "alternate-file",
+      "doc": "Switch to alternate (previous) buffer (C-^)"
+    },
+    {
+      "name": "shell-command",
+      "doc": "Run a shell command (:!cmd)"
+    },
+    {
+      "name": "dot-repeat",
+      "doc": "Repeat last edit (.)"
+    },
+    {
+      "name": "yank-line",
+      "doc": "Yank current line (yy)"
+    },
+    {
+      "name": "yank-word-forward",
+      "doc": "Yank to next word start (yw)"
+    },
+    {
+      "name": "yank-to-line-end",
+      "doc": "Yank to end of line (y$)"
+    },
+    {
+      "name": "yank-to-line-start",
+      "doc": "Yank to start of line (y0)"
+    },
+    {
+      "name": "paste-after",
+      "doc": "Paste after cursor (p)"
+    },
+    {
+      "name": "paste-before",
+      "doc": "Paste before cursor (P)"
+    },
+    {
+      "name": "operator-delete",
+      "doc": "Enter operator-pending mode for delete (d + motion)"
+    },
+    {
+      "name": "operator-change",
+      "doc": "Enter operator-pending mode for change (c + motion)"
+    },
+    {
+      "name": "operator-yank",
+      "doc": "Enter operator-pending mode for yank (y + motion)"
+    },
+    {
+      "name": "operator-surround",
+      "doc": "Surround motion range with delimiter (ys + motion + char)"
+    },
+    {
+      "name": "undo",
+      "doc": "Undo last edit"
+    },
+    {
+      "name": "redo",
+      "doc": "Redo last undone edit"
+    },
+    {
+      "name": "enter-insert-mode",
+      "doc": "Enter insert mode"
+    },
+    {
+      "name": "enter-insert-mode-after",
+      "doc": "Enter insert mode after cursor"
+    },
+    {
+      "name": "enter-insert-mode-eol",
+      "doc": "Enter insert mode at end of line"
+    },
+    {
+      "name": "enter-normal-mode",
+      "doc": "Return to normal mode"
+    },
+    {
+      "name": "enter-command-mode",
+      "doc": "Enter command-line mode"
+    },
+    {
+      "name": "save",
+      "doc": "Save current buffer"
+    },
+    {
+      "name": "quit",
+      "doc": "Quit editor"
+    },
+    {
+      "name": "force-quit",
+      "doc": "Quit without saving"
+    },
+    {
+      "name": "save-and-quit",
+      "doc": "Save and quit"
+    },
+    {
+      "name": "save-all-and-quit",
+      "doc": "Save all buffers and quit (SPC q S)"
+    },
+    {
+      "name": "copy-this-file",
+      "doc": "Copy current file to new path (SPC f C)"
+    },
+    {
+      "name": "file-info",
+      "doc": "Show file info in status bar (Ctrl-G)"
+    },
+    {
+      "name": "split-vertical",
+      "doc": "Split window vertically (left/right)"
+    },
+    {
+      "name": "split-horizontal",
+      "doc": "Split window horizontally (top/bottom)"
+    },
+    {
+      "name": "close-window",
+      "doc": "Close current window"
+    },
+    {
+      "name": "focus-left",
+      "doc": "Focus window to the left"
+    },
+    {
+      "name": "focus-right",
+      "doc": "Focus window to the right"
+    },
+    {
+      "name": "focus-up",
+      "doc": "Focus window above"
+    },
+    {
+      "name": "focus-down",
+      "doc": "Focus window below"
+    },
+    {
+      "name": "window-grow",
+      "doc": "Increase window size (SPC w +)"
+    },
+    {
+      "name": "window-shrink",
+      "doc": "Decrease window size (SPC w -)"
+    },
+    {
+      "name": "window-balance",
+      "doc": "Balance all window sizes (SPC w =)"
+    },
+    {
+      "name": "window-maximize",
+      "doc": "Maximize current window (SPC w m)"
+    },
+    {
+      "name": "window-move-left",
+      "doc": "Move window left (SPC w H)"
+    },
+    {
+      "name": "window-move-right",
+      "doc": "Move window right (SPC w L)"
+    },
+    {
+      "name": "window-move-up",
+      "doc": "Move window up (SPC w K)"
+    },
+    {
+      "name": "window-move-down",
+      "doc": "Move window down (SPC w J)"
+    },
+    {
+      "name": "focus-next-window",
+      "doc": "Cycle focus to next window (SPC w w)"
+    },
+    {
+      "name": "view-messages",
+      "doc": "Show *Messages* log buffer"
+    },
+    {
+      "name": "dashboard",
+      "doc": "Show the startup dashboard"
+    },
+    {
+      "name": "toggle-scratch-buffer",
+      "doc": "Toggle the scratch buffer (SPC x)"
+    },
+    {
+      "name": "command-palette",
+      "doc": "Search and run any command"
+    },
+    {
+      "name": "kill-buffer",
+      "doc": "Close current buffer"
+    },
+    {
+      "name": "next-buffer",
+      "doc": "Cycle to next buffer"
+    },
+    {
+      "name": "prev-buffer",
+      "doc": "Cycle to previous buffer"
+    },
+    {
+      "name": "find-file",
+      "doc": "Open a file"
+    },
+    {
+      "name": "file-browser",
+      "doc": "Open directory browser"
+    },
+    {
+      "name": "file-tree-toggle",
+      "doc": "Toggle file tree sidebar (SPC f t)"
+    },
+    {
+      "name": "file-tree-up",
+      "doc": "Move file tree selection up"
+    },
+    {
+      "name": "file-tree-down",
+      "doc": "Move file tree selection down"
+    },
+    {
+      "name": "file-tree-open",
+      "doc": "Open selected file from tree"
+    },
+    {
+      "name": "file-tree-expand",
+      "doc": "Expand/collapse directory in tree"
+    },
+    {
+      "name": "file-tree-refresh",
+      "doc": "Refresh file tree"
+    },
+    {
+      "name": "file-tree-first",
+      "doc": "Move to first entry in file tree (gg)"
+    },
+    {
+      "name": "file-tree-last",
+      "doc": "Move to last entry in file tree (G)"
+    },
+    {
+      "name": "file-tree-close-parent",
+      "doc": "Collapse parent directory in file tree (x)"
+    },
+    {
+      "name": "file-tree-cd",
+      "doc": "Change file tree root to selected directory (C)"
+    },
+    {
+      "name": "file-tree-parent",
+      "doc": "Move file tree root up one directory (u)"
+    },
+    {
+      "name": "file-tree-delete",
+      "doc": "Delete selected file/dir in tree (d, confirm y/n)"
+    },
+    {
+      "name": "file-tree-rename",
+      "doc": "Rename selected file/dir in tree (r)"
+    },
+    {
+      "name": "file-tree-create",
+      "doc": "Create new file/dir in tree (a, trailing / = dir)"
+    },
+    {
+      "name": "file-tree-open-vsplit",
+      "doc": "Open file from tree in vertical split (s)"
+    },
+    {
+      "name": "file-tree-open-hsplit",
+      "doc": "Open file from tree in horizontal split (i)"
+    },
+    {
+      "name": "file-tree-scroll-down",
+      "doc": "Scroll file tree down one line (C-e)"
+    },
+    {
+      "name": "file-tree-scroll-up",
+      "doc": "Scroll file tree up one line (C-y)"
+    },
+    {
+      "name": "file-tree-half-page-down",
+      "doc": "Scroll file tree half page down (C-d)"
+    },
+    {
+      "name": "file-tree-half-page-up",
+      "doc": "Scroll file tree half page up (C-u)"
+    },
+    {
+      "name": "file-tree-global-cycle",
+      "doc": "Cycle file tree fold state: close all / expand all / default (S-Tab)"
+    },
+    {
+      "name": "delete-this-file",
+      "doc": "Delete current buffer's file (SPC f D, confirm y/n)"
+    },
+    {
+      "name": "recent-files",
+      "doc": "Open recent file"
+    },
+    {
+      "name": "switch-buffer",
+      "doc": "Switch to another buffer"
+    },
+    {
+      "name": "new-buffer",
+      "doc": "Create a new empty scratch buffer"
+    },
+    {
+      "name": "force-kill-buffer",
+      "doc": "Close current buffer without saving"
+    },
+    {
+      "name": "ai-prompt",
+      "doc": "Open AI conversation and prompt"
+    },
+    {
+      "name": "ai-cancel",
+      "doc": "Cancel current AI operation"
+    },
+    {
+      "name": "ai-accept",
+      "doc": "Accept proposed AI changes"
+    },
+    {
+      "name": "ai-reject",
+      "doc": "Reject proposed AI changes"
+    },
+    {
+      "name": "ai-set-mode",
+      "doc": "Switch the AI operating mode (standard, plan, auto-accept)"
+    },
+    {
+      "name": "ai-set-profile",
+      "doc": "Switch the active AI prompt profile (pair-programmer, explorer, planner, reviewer)"
+    },
+    {
+      "name": "describe-key",
+      "doc": "Show what a key does"
+    },
+    {
+      "name": "describe-command",
+      "doc": "Show command documentation"
+    },
+    {
+      "name": "show-registers",
+      "doc": "Show named registers"
+    },
+    {
+      "name": "prompt-register",
+      "doc": "Select a register"
+    },
+    {
+      "name": "paste-from-yank",
+      "doc": "Paste from yank register (\\"
+    },
+    {
+      "name": "delete-surround-await",
+      "doc": "Delete surrounding delimiter (ds<char>)"
+    },
+    {
+      "name": "change-surround-await",
+      "doc": "Change surrounding delimiter (cs<from><to>)"
+    },
+    {
+      "name": "surround-line-await",
+      "doc": "Surround current line with char (yss<char>)"
+    },
+    {
+      "name": "surround-visual-await",
+      "doc": "Surround visual selection with char (S<char>)"
+    },
+    {
+      "name": "set-theme",
+      "doc": "Set editor color theme"
+    },
+    {
+      "name": "cycle-theme",
+      "doc": "Cycle to next color theme"
+    },
+    {
+      "name": "set-splash-art",
+      "doc": "Choose splash screen art style"
+    },
+    {
+      "name": "eval-line",
+      "doc": "Evaluate current line as Scheme (SPC e l)"
+    },
+    {
+      "name": "eval-region",
+      "doc": "Evaluate visual selection as Scheme (SPC e r)"
+    },
+    {
+      "name": "eval-buffer",
+      "doc": "Evaluate entire buffer as Scheme (SPC e b)"
+    },
+    {
+      "name": "open-scheme-repl",
+      "doc": "Open *Scheme* REPL buffer (SPC e o)"
+    },
+    {
+      "name": "repeat-find",
+      "doc": "Repeat last f/F/t/T in same direction (;)"
+    },
+    {
+      "name": "repeat-find-reverse",
+      "doc": "Repeat last f/F/t/T in opposite direction (,)"
+    },
+    {
+      "name": "enter-visual-char",
+      "doc": "Enter charwise visual mode (v)"
+    },
+    {
+      "name": "enter-visual-line",
+      "doc": "Enter linewise visual mode (V)"
+    },
+    {
+      "name": "visual-delete",
+      "doc": "Delete visual selection (d)"
+    },
+    {
+      "name": "visual-yank",
+      "doc": "Yank visual selection (y)"
+    },
+    {
+      "name": "visual-change",
+      "doc": "Change visual selection (c)"
+    },
+    {
+      "name": "visual-indent",
+      "doc": "Indent visual selection by 4 spaces (>)"
+    },
+    {
+      "name": "visual-dedent",
+      "doc": "Dedent visual selection by up to 4 spaces (<)"
+    },
+    {
+      "name": "visual-join",
+      "doc": "Join lines in visual selection (J)"
+    },
+    {
+      "name": "visual-paste",
+      "doc": "Replace visual selection with register contents (p/P)"
+    },
+    {
+      "name": "visual-swap-ends",
+      "doc": "Swap cursor and anchor in visual mode (o)"
+    },
+    {
+      "name": "visual-uppercase",
+      "doc": "Uppercase visual selection (U)"
+    },
+    {
+      "name": "visual-lowercase",
+      "doc": "Lowercase visual selection (u)"
+    },
+    {
+      "name": "reselect-visual",
+      "doc": "Reselect last visual selection (gv)"
+    },
+    {
+      "name": "enter-visual-block",
+      "doc": "Enter blockwise visual mode (C-v)"
+    },
+    {
+      "name": "block-visual-insert",
+      "doc": "Insert at start of each line in block selection (I)"
+    },
+    {
+      "name": "block-visual-append",
+      "doc": "Append at end of each line in block selection (A)"
+    },
+    {
+      "name": "search-forward-start",
+      "doc": "Search forward (/)"
+    },
+    {
+      "name": "search-backward-start",
+      "doc": "Search backward (?)"
+    },
+    {
+      "name": "search-next",
+      "doc": "Jump to next match (n)"
+    },
+    {
+      "name": "search-prev",
+      "doc": "Jump to previous match (N)"
+    },
+    {
+      "name": "search-word-under-cursor",
+      "doc": "Search word under cursor (*)"
+    },
+    {
+      "name": "search-word-under-cursor-backward",
+      "doc": "Search word under cursor backward (#)"
+    },
+    {
+      "name": "clear-search-highlight",
+      "doc": "Clear search highlights (:noh)"
+    },
+    {
+      "name": "visual-select-next-match",
+      "doc": "Visually select next search match (gn)"
+    },
+    {
+      "name": "visual-select-prev-match",
+      "doc": "Visually select previous search match (gN)"
+    },
+    {
+      "name": "delete-next-match",
+      "doc": "Delete next search match (dgn)"
+    },
+    {
+      "name": "delete-prev-match",
+      "doc": "Delete previous search match (dgN)"
+    },
+    {
+      "name": "change-next-match",
+      "doc": "Change next search match (cgn)"
+    },
+    {
+      "name": "change-prev-match",
+      "doc": "Change previous search match (cgN)"
+    },
+    {
+      "name": "yank-next-match",
+      "doc": "Yank next search match (ygn)"
+    },
+    {
+      "name": "yank-prev-match",
+      "doc": "Yank previous search match (ygN)"
+    },
+    {
+      "name": "delete-inner-object",
+      "doc": "Delete inner text object (di + char)"
+    },
+    {
+      "name": "delete-around-object",
+      "doc": "Delete around text object (da + char)"
+    },
+    {
+      "name": "change-inner-object",
+      "doc": "Change inner text object (ci + char)"
+    },
+    {
+      "name": "change-around-object",
+      "doc": "Change around text object (ca + char)"
+    },
+    {
+      "name": "yank-inner-object",
+      "doc": "Yank inner text object (yi + char)"
+    },
+    {
+      "name": "yank-around-object",
+      "doc": "Yank around text object (ya + char)"
+    },
+    {
+      "name": "visual-inner-object",
+      "doc": "Select inner text object in visual mode (i + char)"
+    },
+    {
+      "name": "visual-around-object",
+      "doc": "Select around text object in visual mode (a + char)"
+    },
+    {
+      "name": "debug-self",
+      "doc": "Open self-debug view (Rust + Scheme state)"
+    },
+    {
+      "name": "debug-start",
+      "doc": "Start DAP debug session"
+    },
+    {
+      "name": "debug-stop",
+      "doc": "Stop current debug session"
+    },
+    {
+      "name": "debug-continue",
+      "doc": "Continue execution"
+    },
+    {
+      "name": "debug-step-over",
+      "doc": "Step over (next line)"
+    },
+    {
+      "name": "debug-step-into",
+      "doc": "Step into function"
+    },
+    {
+      "name": "debug-step-out",
+      "doc": "Step out of function"
+    },
+    {
+      "name": "debug-toggle-breakpoint",
+      "doc": "Toggle breakpoint on current line"
+    },
+    {
+      "name": "debug-inspect",
+      "doc": "Inspect variable or evaluate expression"
+    },
+    {
+      "name": "debug-panel",
+      "doc": "Toggle debug panel showing threads, stack, and variables (SPC d p)"
+    },
+    {
+      "name": "debug-panel-select",
+      "doc": "Select/expand item in debug panel"
+    },
+    {
+      "name": "close-debug-panel",
+      "doc": "Close the debug panel"
+    },
+    {
+      "name": "debug-toggle-output",
+      "doc": "Toggle debug output pane"
+    },
+    {
+      "name": "debug-move-down",
+      "doc": "Move cursor down in debug panel"
+    },
+    {
+      "name": "debug-move-up",
+      "doc": "Move cursor up in debug panel"
+    },
+    {
+      "name": "dap-refresh",
+      "doc": "Refresh DAP state and debug panel"
+    },
+    {
+      "name": "debug-attach",
+      "doc": "Attach debugger to a running process (:debug-attach <adapter> <pid>)"
+    },
+    {
+      "name": "debug-eval",
+      "doc": "Evaluate expression in debug context (:debug-eval <expression>)"
+    },
+    {
+      "name": "lsp-goto-definition",
+      "doc": "Jump to definition of symbol under cursor (gd)"
+    },
+    {
+      "name": "lsp-find-references",
+      "doc": "Find references to symbol under cursor (gr)"
+    },
+    {
+      "name": "lsp-hover",
+      "doc": "Show hover information for symbol under cursor (K)"
+    },
+    {
+      "name": "lsp-next-diagnostic",
+      "doc": "Jump to next diagnostic in buffer (]d)"
+    },
+    {
+      "name": "lsp-prev-diagnostic",
+      "doc": "Jump to previous diagnostic in buffer ([d)"
+    },
+    {
+      "name": "lsp-show-diagnostics",
+      "doc": "Show all diagnostics in a list buffer"
+    },
+    {
+      "name": "lsp-complete",
+      "doc": "Trigger LSP completion at cursor (insert mode)"
+    },
+    {
+      "name": "lsp-accept-completion",
+      "doc": "Accept the selected completion item (Tab)"
+    },
+    {
+      "name": "lsp-dismiss-completion",
+      "doc": "Dismiss completion popup"
+    },
+    {
+      "name": "lsp-complete-next",
+      "doc": "Select next completion item (Ctrl-n)"
+    },
+    {
+      "name": "lsp-complete-prev",
+      "doc": "Select previous completion item (Ctrl-p)"
+    },
+    {
+      "name": "lsp-code-action",
+      "doc": "Run LSP code action at cursor (SPC c a)"
+    },
+    {
+      "name": "lsp-rename",
+      "doc": "Rename symbol under cursor via LSP (SPC c R)"
+    },
+    {
+      "name": "lsp-format",
+      "doc": "Format buffer via LSP (SPC c f)"
+    },
+    {
+      "name": "toggle-fold",
+      "doc": "Toggle fold at cursor (za)"
+    },
+    {
+      "name": "close-all-folds",
+      "doc": "Close all folds (zM)"
+    },
+    {
+      "name": "open-all-folds",
+      "doc": "Open all folds (zR)"
+    },
+    {
+      "name": "org-cycle",
+      "doc": "Cycle org heading visibility (Tab)"
+    },
+    {
+      "name": "org-global-cycle",
+      "doc": "Cycle all org headings (S-Tab)"
+    },
+    {
+      "name": "org-todo-next",
+      "doc": "Cycle org TODO state forward"
+    },
+    {
+      "name": "org-todo-prev",
+      "doc": "Cycle org TODO state backward"
+    },
+    {
+      "name": "org-open-link",
+      "doc": "Open org link under cursor"
+    },
+    {
+      "name": "open-link-at-cursor",
+      "doc": "Open URL or file path under cursor (gx)"
+    },
+    {
+      "name": "org-promote",
+      "doc": "Promote org heading (M-Left)"
+    },
+    {
+      "name": "org-demote",
+      "doc": "Demote org heading (M-Right)"
+    },
+    {
+      "name": "org-move-subtree-up",
+      "doc": "Move org subtree up (M-Up)"
+    },
+    {
+      "name": "org-move-subtree-down",
+      "doc": "Move org subtree down (M-Down)"
+    },
+    {
+      "name": "org-insert-heading",
+      "doc": "Insert org heading after subtree (M-Enter)"
+    },
+    {
+      "name": "org-narrow-subtree",
+      "doc": "Narrow to org subtree"
+    },
+    {
+      "name": "org-widen",
+      "doc": "Widen from org narrow"
+    },
+    {
+      "name": "md-cycle",
+      "doc": "Cycle markdown heading visibility (Tab)"
+    },
+    {
+      "name": "md-global-cycle",
+      "doc": "Cycle all markdown headings (S-Tab)"
+    },
+    {
+      "name": "md-promote",
+      "doc": "Promote markdown heading (M-Left)"
+    },
+    {
+      "name": "md-demote",
+      "doc": "Demote markdown heading (M-Right)"
+    },
+    {
+      "name": "md-move-subtree-up",
+      "doc": "Move markdown subtree up (M-Up)"
+    },
+    {
+      "name": "md-move-subtree-down",
+      "doc": "Move markdown subtree down (M-Down)"
+    },
+    {
+      "name": "md-insert-heading",
+      "doc": "Insert markdown heading after subtree (M-Enter)"
+    },
+    {
+      "name": "md-narrow-subtree",
+      "doc": "Narrow to markdown subtree"
+    },
+    {
+      "name": "md-widen",
+      "doc": "Widen from markdown narrow"
+    },
+    {
+      "name": "narrow-to-subtree",
+      "doc": "Narrow buffer to current subtree"
+    },
+    {
+      "name": "widen",
+      "doc": "Widen buffer from narrowed view"
+    },
+    {
+      "name": "syntax-select-node",
+      "doc": "Select the tree-sitter node at the cursor (SPC s s)"
+    },
+    {
+      "name": "syntax-expand-selection",
+      "doc": "Expand Visual selection to the parent syntax node (SPC s e)"
+    },
+    {
+      "name": "syntax-contract-selection",
+      "doc": "Contract Visual selection to the previous syntax node (SPC s c)"
+    },
+    {
+      "name": "project-find-file",
+      "doc": "Find file in project (SPC p f)"
+    },
+    {
+      "name": "project-search",
+      "doc": "Search in project (SPC p s)"
+    },
+    {
+      "name": "project-browse",
+      "doc": "Browse project directory (SPC p d)"
+    },
+    {
+      "name": "project-recent-files",
+      "doc": "Recent files in project (SPC p r)"
+    },
+    {
+      "name": "project-switch",
+      "doc": "Switch to a recent project (SPC p p)"
+    },
+    {
+      "name": "search-buffer",
+      "doc": "Search in current buffer (SPC s s)"
+    },
+    {
+      "name": "yank-file-path",
+      "doc": "Copy buffer file path to clipboard (SPC f y)"
+    },
+    {
+      "name": "rename-file",
+      "doc": "Rename current file (SPC f R)"
+    },
+    {
+      "name": "save-as",
+      "doc": "Save buffer to new path (SPC f S)"
+    },
+    {
+      "name": "edit-config",
+      "doc": "Open init.scm config for editing (SPC f c)"
+    },
+    {
+      "name": "edit-settings",
+      "doc": "Open config.toml settings (SPC f C)"
+    },
+    {
+      "name": "setup-wizard",
+      "doc": "Show how to re-run the first-run setup wizard"
+    },
+    {
+      "name": "toggle-fps",
+      "doc": "Toggle FPS overlay in status bar (SPC t F)"
+    },
+    {
+      "name": "debug-mode",
+      "doc": "Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D)"
+    },
+    {
+      "name": "reload-config",
+      "doc": "Reload config.toml and init.scm"
+    },
+    {
+      "name": "describe-option",
+      "doc": "Show documentation for an editor option (SPC h o)"
+    },
+    {
+      "name": "set-save",
+      "doc": "Set an option and persist to config.toml (:set-save <key> [value])"
+    },
+    {
+      "name": "kill-other-buffers",
+      "doc": "Close all buffers except current (SPC b o)"
+    },
+    {
+      "name": "save-all-buffers",
+      "doc": "Save all modified buffers (SPC b S)"
+    },
+    {
+      "name": "revert-buffer",
+      "doc": "Reload buffer from disk (SPC b r)"
+    },
+    {
+      "name": "toggle-line-numbers",
+      "doc": "Toggle line number display (SPC t l)"
+    },
+    {
+      "name": "toggle-relative-line-numbers",
+      "doc": "Toggle relative line numbers (SPC t r)"
+    },
+    {
+      "name": "toggle-word-wrap",
+      "doc": "Toggle word wrap (SPC t w)"
+    },
+    {
+      "name": "toggle-scrollbar",
+      "doc": "Toggle scrollbar visibility (SPC t s)"
+    },
+    {
+      "name": "git-status",
+      "doc": "Show git status in scratch buffer (SPC g s)"
+    },
+    {
+      "name": "git-blame",
+      "doc": "Show git blame for current file (SPC g b)"
+    },
+    {
+      "name": "git-diff",
+      "doc": "Show git diff in scratch buffer (SPC g d)"
+    },
+    {
+      "name": "git-log",
+      "doc": "Show git log in scratch buffer (SPC g l)"
+    },
+    {
+      "name": "git-stage",
+      "doc": "Stage file under cursor in git status"
+    },
+    {
+      "name": "git-unstage",
+      "doc": "Unstage file under cursor in git status"
+    },
+    {
+      "name": "git-stage-all",
+      "doc": "Stage all changed files"
+    },
+    {
+      "name": "git-unstage-all",
+      "doc": "Unstage all staged files"
+    },
+    {
+      "name": "git-commit",
+      "doc": "Commit staged changes (SPC g c)"
+    },
+    {
+      "name": "git-amend",
+      "doc": "Amend previous commit (c a in git status)"
+    },
+    {
+      "name": "git-toggle-section",
+      "doc": "Toggle inline diff for file at cursor (Tab in git status)"
+    },
+    {
+      "name": "git-toggle-fold",
+      "doc": "Multi-level fold/unfold: section, file diff, or hunk (Tab in git status)"
+    },
+    {
+      "name": "git-discard",
+      "doc": "Discard changes at cursor — hunk-aware (x in git status)"
+    },
+    {
+      "name": "git-status-toggle",
+      "doc": "Toggle git status detail for file"
+    },
+    {
+      "name": "git-status-open",
+      "doc": "Open file from git status buffer"
+    },
+    {
+      "name": "git-next-hunk",
+      "doc": "Jump to next diff hunk (n in git status)"
+    },
+    {
+      "name": "git-prev-hunk",
+      "doc": "Jump to previous diff hunk (p in git status)"
+    },
+    {
+      "name": "git-push",
+      "doc": "Push to remote (P p in git status)"
+    },
+    {
+      "name": "git-pull",
+      "doc": "Pull from remote (F p in git status)"
+    },
+    {
+      "name": "git-fetch",
+      "doc": "Fetch from all remotes (f f in git status)"
+    },
+    {
+      "name": "git-branch-switch",
+      "doc": "Switch branch via palette (b b in git status)"
+    },
+    {
+      "name": "git-branch-create",
+      "doc": "Create new branch (b n in git status)"
+    },
+    {
+      "name": "git-branch-delete",
+      "doc": "Delete a branch (b d in git status)"
+    },
+    {
+      "name": "git-stash-push",
+      "doc": "Stash working tree (z z in git status)"
+    },
+    {
+      "name": "git-stash-pop",
+      "doc": "Pop stash at cursor (z p in git status)"
+    },
+    {
+      "name": "git-stash-apply",
+      "doc": "Apply stash at cursor (z a in git status)"
+    },
+    {
+      "name": "git-stash-drop",
+      "doc": "Drop stash at cursor (z d in git status)"
+    },
+    {
+      "name": "show-buffer-keys",
+      "doc": "Show all keybindings for the current buffer (?)"
+    },
+    {
+      "name": "kb-find",
+      "doc": "Search KB nodes (SPC n f)"
+    },
+    {
+      "name": "help",
+      "doc": "Open the *Help* buffer at the knowledge-base index"
+    },
+    {
+      "name": "help-follow-link",
+      "doc": "Follow the focused link in the *Help* buffer"
+    },
+    {
+      "name": "help-back",
+      "doc": "Navigate back in help history (C-o)"
+    },
+    {
+      "name": "help-forward",
+      "doc": "Navigate forward in help history (C-i)"
+    },
+    {
+      "name": "help-next-link",
+      "doc": "Focus the next link in the current help page"
+    },
+    {
+      "name": "help-prev-link",
+      "doc": "Focus the previous link in the current help page"
+    },
+    {
+      "name": "help-close",
+      "doc": "Close help buffer"
+    },
+    {
+      "name": "help-search",
+      "doc": "Search help topics"
+    },
+    {
+      "name": "help-reopen",
+      "doc": "Reopen the last-closed help buffer"
+    },
+    {
+      "name": "terminal",
+      "doc": "Open a terminal emulator buffer (:terminal)"
+    },
+    {
+      "name": "terminal-reset",
+      "doc": "Reset/clear the current terminal emulator"
+    },
+    {
+      "name": "terminal-close",
+      "doc": "Close the current terminal and its shell process"
+    },
+    {
+      "name": "shell-normal-mode",
+      "doc": "Exit ShellInsert mode and return to Normal mode"
+    },
+    {
+      "name": "send-to-shell",
+      "doc": "Send current line to a terminal buffer (SPC e s)"
+    },
+    {
+      "name": "send-region-to-shell",
+      "doc": "Send visual selection to a terminal buffer (SPC e S)"
+    },
+    {
+      "name": "shell-scroll-page-up",
+      "doc": "Scroll shell terminal up one page"
+    },
+    {
+      "name": "shell-scroll-page-down",
+      "doc": "Scroll shell terminal down one page"
+    },
+    {
+      "name": "shell-scroll-to-bottom",
+      "doc": "Scroll shell terminal to latest output"
+    },
+    {
+      "name": "nohlsearch",
+      "doc": "Clear search highlights (alias for clear-search-highlight)"
+    },
+    {
+      "name": "kb-save",
+      "doc": "Save knowledge base to SQLite file (:kb-save <path>)"
+    },
+    {
+      "name": "kb-load",
+      "doc": "Load knowledge base from SQLite file (:kb-load <path>)"
+    },
+    {
+      "name": "kb-ingest",
+      "doc": "Ingest org files from directory into knowledge base (:kb-ingest <dir>)"
+    },
+    {
+      "name": "kb-rebuild",
+      "doc": "Rebuild the knowledge base with current keybindings and hooks"
+    },
+    {
+      "name": "ai-save",
+      "doc": "Save AI conversation to JSON file (:ai-save <path>)"
+    },
+    {
+      "name": "ai-load",
+      "doc": "Load AI conversation from JSON file (:ai-load <path>)"
+    },
+    {
+      "name": "agent-list",
+      "doc": "List all AI agents MAE can bootstrap for MCP tool discovery"
+    },
+    {
+      "name": "agent-setup",
+      "doc": "Bootstrap an AI agent: write .mcp.json and approval settings (:agent-setup <name>)"
+    },
+    {
+      "name": "self-test",
+      "doc": "Run AI-driven self-test to validate editor tools and integrations (:self-test [categories])"
+    },
+    {
+      "name": "increase-font-size",
+      "doc": "Increase GUI font size by 1pt"
+    },
+    {
+      "name": "decrease-font-size",
+      "doc": "Decrease GUI font size by 1pt"
+    },
+    {
+      "name": "reset-font-size",
+      "doc": "Reset GUI font size to configured default"
+    },
+    {
+      "name": "debug-path",
+      "doc": "Show current PATH environment variable"
+    },
+    {
+      "name": "open-ai-agent",
+      "doc": "Open AI agent in a shell terminal"
+    },
+    {
+      "name": "tutor",
+      "doc": "Open interactive MAE tutorial"
+    },
+    {
+      "name": "session-save",
+      "doc": "Save current session (open buffers + cursors) to .mae/session.json"
+    },
+    {
+      "name": "session-load",
+      "doc": "Restore session from .mae/session.json"
+    },
+    {
+      "name": "add-project",
+      "doc": "Add a project directory and switch to it"
+    },
+    {
+      "name": "remove-project",
+      "doc": "Remove a project from the recent list"
+    },
+    {
+      "name": "record-start",
+      "doc": "Start event recording for debugging"
+    },
+    {
+      "name": "record-stop",
+      "doc": "Stop event recording"
+    },
+    {
+      "name": "record-save",
+      "doc": "Save recorded events to JSON file (:record-save <path>)"
+    },
+    {
+      "name": "move-down",
+      "doc": "Move cursor down"
+    },
+    {
+      "name": "move-down",
+      "doc": "Move down"
+    },
+    {
+      "name": "zzz",
+      "doc": "Last"
+    },
+    {
+      "name": "aaa",
+      "doc": "First"
+    },
+    {
+      "name": "mmm",
+      "doc": "Middle"
+    }
+  ]
+}

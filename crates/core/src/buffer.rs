@@ -1,10 +1,13 @@
 use ropey::Rope;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::buffer_view::BufferView;
 use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
+use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
 use crate::help_view::HelpView;
 use crate::visual_buffer::VisualBuffer;
@@ -36,6 +39,10 @@ pub enum BufferKind {
     GitStatus,
     /// Visual scene-graph buffer (Phase 1 Visual Debugger).
     Visual,
+    /// File tree sidebar — project-level directory browser.
+    FileTree,
+    /// AI-generated unified diff view (read-only).
+    Diff,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -65,6 +72,54 @@ pub enum EditAction {
     Group(Vec<EditAction>),
 }
 
+/// Per-buffer option overrides (Emacs buffer-local variables / Vim setlocal).
+///
+/// Each field is `Option<T>`: `None` means "use the global Editor default",
+/// `Some(v)` means this buffer overrides the global value. Access via
+/// `Editor::effective_word_wrap()` and friends, never read `editor.word_wrap`
+/// directly when a per-buffer check is needed.
+#[derive(Debug, Clone, Default)]
+pub struct BufferLocalOptions {
+    pub word_wrap: Option<bool>,
+    pub line_numbers: Option<bool>,
+    pub relative_line_numbers: Option<bool>,
+    pub break_indent: Option<bool>,
+    pub show_break: Option<String>,
+    pub heading_scale: Option<bool>,
+    pub link_descriptive: Option<bool>,
+    pub render_markup: Option<bool>,
+}
+
+impl BufferLocalOptions {
+    /// Merge defaults into this set, only filling in fields that are currently None.
+    pub fn apply_defaults(&mut self, defaults: &BufferLocalOptions) {
+        if self.word_wrap.is_none() {
+            self.word_wrap = defaults.word_wrap;
+        }
+        if self.line_numbers.is_none() {
+            self.line_numbers = defaults.line_numbers;
+        }
+        if self.relative_line_numbers.is_none() {
+            self.relative_line_numbers = defaults.relative_line_numbers;
+        }
+        if self.break_indent.is_none() {
+            self.break_indent = defaults.break_indent;
+        }
+        if self.show_break.is_none() {
+            self.show_break = defaults.show_break.clone();
+        }
+        if self.heading_scale.is_none() {
+            self.heading_scale = defaults.heading_scale;
+        }
+        if self.link_descriptive.is_none() {
+            self.link_descriptive = defaults.link_descriptive;
+        }
+        if self.render_markup.is_none() {
+            self.render_markup = defaults.render_markup;
+        }
+    }
+}
+
 /// Rope-backed text buffer with undo history.
 ///
 /// Emacs lesson: point (cursor) is per-window, not per-buffer. Two windows can
@@ -80,15 +135,8 @@ pub struct Buffer {
     pub kind: BufferKind,
     /// Read-only buffers reject all edit operations. Set for Help, Messages.
     pub read_only: bool,
-    pub conversation: Option<Conversation>,
-    /// Help-buffer navigation state. Present iff `kind == BufferKind::Help`.
-    pub help_view: Option<HelpView>,
-    /// Debug panel view state. Present iff `kind == BufferKind::Debug`.
-    pub debug_view: Option<DebugView>,
-    /// Git status view state. Present iff `kind == BufferKind::GitStatus`.
-    pub git_status: Option<GitStatusView>,
-    /// Visual scene-graph state. Present iff `kind == BufferKind::Visual`.
-    pub visual: Option<VisualBuffer>,
+    /// Mode-specific state. Replaces 6 scattered Option<T> fields.
+    pub view: BufferView,
     undo_stack: Vec<EditAction>,
     redo_stack: Vec<EditAction>,
     /// When non-None, edits accumulate here instead of the undo stack directly.
@@ -117,6 +165,33 @@ pub struct Buffer {
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
     pub saved_mode: Option<crate::Mode>,
+    /// Narrowed view: when set, only lines in `[start, end)` are visible.
+    /// Rendering and cursor movement are clamped to this range.
+    pub narrowed_range: Option<(usize, usize)>,
+    /// Line indices modified since the last save. Used by gutter rendering
+    /// to show change markers. Cleared on `save()`.
+    pub changed_lines: HashSet<usize>,
+    /// Per-line git diff status (vs HEAD). Populated on file open/save.
+    pub git_diff_lines: HashMap<usize, crate::render_common::gutter::GitLineStatus>,
+    /// Detected link spans in the buffer content. Populated lazily by
+    /// the renderer for conversation and shell buffers.
+    pub link_spans: Vec<crate::link_detect::LinkSpan>,
+    /// Global fold cycle state: 0 = SHOW ALL, 1 = OVERVIEW, 2 = CONTENTS.
+    /// Cycled by Shift-TAB in org/markdown buffers (Doom Emacs pattern).
+    pub global_fold_state: u8,
+    /// Per-buffer option overrides (Emacs buffer-local / Vim setlocal).
+    pub local_options: BufferLocalOptions,
+    /// Display regions: byte ranges with display overrides (link concealment, etc.).
+    /// Rebuilt lazily when `display_regions_gen != generation`.
+    pub display_regions: Vec<crate::display_region::DisplayRegion>,
+    /// Generation at which `display_regions` were last computed.
+    pub display_regions_gen: u64,
+    /// Cursor byte offset for org-appear reveal. When the cursor is inside a
+    /// display region, that region is suppressed so raw text is visible.
+    /// Set per-frame from the focused window's cursor position. `None` = no reveal.
+    pub display_reveal_cursor: Option<usize>,
+    /// Swap file state for crash recovery (Emacs-style autosave).
+    pub swap: crate::swap::SwapState,
 }
 
 impl Default for Buffer {
@@ -134,11 +209,7 @@ impl Buffer {
             name: String::from("[scratch]"),
             kind: BufferKind::Text,
             read_only: false,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
+            view: BufferView::None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_group_acc: None,
@@ -148,163 +219,129 @@ impl Buffer {
             folded_ranges: Vec::new(),
             generation: 0,
             saved_mode: None,
+            narrowed_range: None,
+            changed_lines: HashSet::new(),
+            git_diff_lines: HashMap::new(),
+            link_spans: Vec::new(),
+            global_fold_state: 0,
+            local_options: BufferLocalOptions::default(),
+            display_regions: Vec::new(),
+            display_regions_gen: u64::MAX, // force initial compute
+            display_reveal_cursor: None,
+            swap: crate::swap::SwapState::default(),
         }
+    }
+
+    /// Recompute display regions for link concealment.
+    /// Called when buffer generation changes or `link_descriptive` toggles.
+    pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
+        self.display_regions.clear();
+        self.display_regions_gen = self.generation;
+
+        if !link_descriptive {
+            return;
+        }
+
+        // Only text buffers have link concealment.
+        if self.kind != BufferKind::Text {
+            return;
+        }
+
+        let ext = self
+            .file_path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str());
+
+        let source: String = self.rope.chars().collect();
+        self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
     }
 
     /// Create a dashboard buffer (startup splash screen).
     pub fn new_dashboard() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("[dashboard]"),
             kind: BufferKind::Dashboard,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         }
     }
 
     /// Create a conversation buffer (AI interaction pane).
+    /// Word-wrap is enabled by default — prose reads better wrapped.
     pub fn new_conversation(name: impl Into<String>) -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: name.into(),
             kind: BufferKind::Conversation,
-            read_only: false,
-            conversation: Some(Conversation::new()),
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            view: BufferView::Conversation(Box::default()),
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
+            ..Self::new()
         }
     }
 
     /// Create a messages buffer (live view of the in-editor log).
+    /// Word-wrap is enabled by default — log messages are prose.
     pub fn new_messages() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Messages*"),
             kind: BufferKind::Messages,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
+            ..Self::new()
         }
     }
 
     /// Create a help buffer viewing a KB node.
+    /// Word-wrap is enabled by default — help text is prose.
     pub fn new_help(start_node_id: impl Into<String>) -> Self {
-        let start = start_node_id.into();
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Help*"),
             kind: BufferKind::Help,
             read_only: true,
-            conversation: None,
-            help_view: Some(HelpView::new(start)),
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            view: BufferView::Help(Box::new(HelpView::new(start_node_id.into()))),
+            local_options: BufferLocalOptions {
+                word_wrap: Some(true),
+                ..Default::default()
+            },
+            ..Self::new()
         }
     }
 
     /// Create a shell (terminal emulator) buffer.
     pub fn new_shell(name: impl Into<String>) -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: name.into(),
             kind: BufferKind::Shell,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
+        }
+    }
+
+    /// Create a file tree sidebar buffer.
+    pub fn new_file_tree(root: &std::path::Path) -> Self {
+        Buffer {
+            name: String::from(" File Tree "),
+            kind: BufferKind::FileTree,
+            read_only: true,
+            view: BufferView::FileTree(Box::new(FileTree::open(root))),
+            ..Self::new()
         }
     }
 
     /// Create a debug panel buffer.
     pub fn new_debug() -> Self {
         Buffer {
-            rope: Rope::new(),
-            file_path: None,
-            modified: false,
             name: String::from("*Debug*"),
             kind: BufferKind::Debug,
             read_only: true,
-            conversation: None,
-            help_view: None,
-            debug_view: Some(DebugView::new()),
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
-            file_mtime: None,
-            project_root: None,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            view: BufferView::Debug(Box::default()),
+            ..Self::new()
         }
     }
 
@@ -320,23 +357,9 @@ impl Buffer {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string()),
             file_path: Some(path.to_path_buf()),
-            modified: false,
-            kind: BufferKind::Text,
-            read_only: false,
-            conversation: None,
-            help_view: None,
-            debug_view: None,
-            git_status: None,
-            visual: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            undo_group_acc: None,
             file_mtime: mtime,
             project_root,
-            agent_shell: false,
-            folded_ranges: Vec::new(),
-            generation: 0,
-            saved_mode: None,
+            ..Self::new()
         })
     }
 
@@ -354,6 +377,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
+            // changed_lines persist across saves — cleared on revert/reload.
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
         } else {
@@ -371,6 +395,14 @@ impl Buffer {
 
     pub fn file_path(&self) -> Option<&Path> {
         self.file_path.as_deref()
+    }
+
+    /// Replace the entire rope content (used by `:recover` from swap file).
+    pub fn replace_rope(&mut self, rope: Rope) {
+        self.rope = rope;
+        self.generation += 1;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Check whether the backing file has been modified externally since we
@@ -403,6 +435,7 @@ impl Buffer {
         let content = fs::read_to_string(&path)?;
         self.rope = Rope::from_str(&content);
         self.modified = false;
+        self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -447,18 +480,87 @@ impl Buffer {
 
     // --- Metrics ---
 
+    /// Total rope line count, including the phantom empty line that ropey
+    /// adds after a trailing `\n`.
+    ///
+    /// Use for: **clamp_cursor** (insert mode needs the phantom line after
+    /// pressing Enter at EOF), rope char/byte index lookups, and search
+    /// iteration over all rope lines.
+    ///
+    /// Do NOT use for: navigation bounds (jump-to, marks, jumplist, go-to-line),
+    /// scroll bounds, layout iteration, movement limits, gutter width, or
+    /// "go to last line" — use `display_line_count()` instead.
     pub fn line_count(&self) -> usize {
         self.rope.len_lines()
     }
 
     /// Line count excluding the phantom empty line that ropey adds after
-    /// a trailing newline. Use for display (line numbers, gutter width).
+    /// a trailing `\n`.
+    ///
+    /// Use for: **cursor clamping and display** — scroll bounds, viewport
+    /// limits, layout iteration, gutter width (line numbering), movement
+    /// bounds (`move_down`, `G`, `goto-line`), mouse click clamping, cursor
+    /// clamping, and any context where the user shouldn't land on or see the
+    /// phantom line.
+    ///
+    /// Do NOT use for: rope char/byte index lookups that need the phantom
+    /// line, or search iteration over all rope lines.
     pub fn display_line_count(&self) -> usize {
         let n = self.rope.len_lines();
         if n > 1 && self.rope.len_chars() > 0 && self.rope.char(self.rope.len_chars() - 1) == '\n' {
             n - 1
         } else {
             n
+        }
+    }
+
+    /// Given a line, find the next visible line going forward (skipping folds).
+    /// Returns `line + 1` if the next line is visible, or jumps past fold ends.
+    pub fn next_visible_line(&self, line: usize) -> usize {
+        let mut next = line + 1;
+        // If next lands inside a fold, skip to the fold end.
+        for (start, end) in &self.folded_ranges {
+            if next > *start && next < *end {
+                next = *end;
+            }
+        }
+        next
+    }
+
+    /// Given a line, find the previous visible line going backward (skipping folds).
+    /// Returns `line - 1` if visible, or jumps before fold starts.
+    pub fn prev_visible_line(&self, line: usize) -> usize {
+        if line == 0 {
+            return 0;
+        }
+        let mut prev = line - 1;
+        // If prev lands inside a fold, skip to the fold start.
+        for (start, end) in &self.folded_ranges {
+            if prev > *start && prev < *end {
+                prev = *start;
+            }
+        }
+        prev
+    }
+
+    /// Narrow the buffer view to a range of lines `[start, end)`.
+    pub fn narrow_to(&mut self, start: usize, end: usize) {
+        let clamped_end = end.min(self.line_count());
+        if start < clamped_end {
+            self.narrowed_range = Some((start, clamped_end));
+        }
+    }
+
+    /// Remove narrowing, restoring the full buffer view.
+    pub fn widen(&mut self) {
+        self.narrowed_range = None;
+    }
+
+    /// Check if a line is visible (not hidden by narrowing).
+    pub fn is_line_visible(&self, line: usize) -> bool {
+        match self.narrowed_range {
+            Some((start, end)) => line >= start && line < end,
+            None => true,
         }
     }
 
@@ -474,6 +576,50 @@ impl Buffer {
         } else {
             len
         }
+    }
+
+    /// Check if a line is inside a folded range (hidden).
+    pub fn is_line_folded(&self, line: usize) -> bool {
+        self.folded_ranges
+            .iter()
+            .any(|(start, end)| line > *start && line < *end)
+    }
+
+    /// Toggle fold at a given line. If the line is the start of a fold range,
+    /// unfold it. If the line is inside a foldable range, fold it.
+    pub fn toggle_fold_at(&mut self, line: usize, fold_ranges: &[(usize, usize)]) {
+        // If this line starts an existing fold, remove it.
+        if let Some(idx) = self.folded_ranges.iter().position(|(s, _)| *s == line) {
+            self.folded_ranges.remove(idx);
+            return;
+        }
+        // Find the innermost foldable range containing this line.
+        let mut best: Option<(usize, usize)> = None;
+        for &(start, end) in fold_ranges {
+            if line >= start && line <= end && best.is_none_or(|(bs, be)| (end - start) < (be - bs))
+            {
+                best = Some((start, end));
+            }
+        }
+        if let Some((start, end)) = best {
+            // If already folded at this start, unfold.
+            if let Some(idx) = self.folded_ranges.iter().position(|(s, _)| *s == start) {
+                self.folded_ranges.remove(idx);
+            } else {
+                self.folded_ranges.push((start, end));
+            }
+        }
+    }
+
+    /// Fold all given ranges (zM).
+    pub fn fold_all(&mut self, fold_ranges: &[(usize, usize)]) {
+        self.folded_ranges.clear();
+        self.folded_ranges.extend_from_slice(fold_ranges);
+    }
+
+    /// Unfold all ranges (zR).
+    pub fn unfold_all(&mut self) {
+        self.folded_ranges.clear();
     }
 
     /// Char offset in the rope for a given (row, col) position.
@@ -539,9 +685,11 @@ impl Buffer {
         self.rope.insert_char(pos, ch);
         self.push_undo(EditAction::InsertChar { pos, ch });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         if ch == '\n' {
             win.cursor_row += 1;
             win.cursor_col = 0;
+            self.changed_lines.insert(win.cursor_row);
         } else {
             win.cursor_col += 1;
         }
@@ -575,6 +723,7 @@ impl Buffer {
         } else {
             win.cursor_col -= 1;
         }
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
     }
@@ -591,6 +740,7 @@ impl Buffer {
         self.rope.remove(pos..pos + 1);
         self.push_undo(EditAction::DeleteChar { pos, ch });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
         win.clamp_cursor(self);
@@ -618,6 +768,7 @@ impl Buffer {
             text: text.clone(),
         });
         self.redo_stack.clear();
+        self.changed_lines.insert(win.cursor_row);
         self.modified = true;
         self.bump_generation();
         win.clamp_cursor(self);
@@ -724,7 +875,14 @@ impl Buffer {
             return;
         }
         let offset = char_offset.min(self.rope.len_chars());
+        let start_line = self.rope.char_to_line(offset);
         self.rope.insert(offset, text);
+        let end_line = self
+            .rope
+            .char_to_line((offset + text.len()).min(self.rope.len_chars()));
+        for line in start_line..=end_line {
+            self.changed_lines.insert(line);
+        }
         self.push_undo(EditAction::InsertRange {
             pos: offset,
             text: text.to_string(),
@@ -744,8 +902,10 @@ impl Buffer {
         if start >= end {
             return;
         }
+        let del_line = self.rope.char_to_line(start);
         let text: String = self.rope.slice(start..end).into();
         self.rope.remove(start..end);
+        self.changed_lines.insert(del_line);
         self.push_undo(EditAction::DeleteRange { pos: start, text });
         self.redo_stack.clear();
         self.modified = true;
@@ -883,10 +1043,60 @@ impl Buffer {
     /// Rebuild the buffer's rope from the flattened conversation text.
     /// This allows standard motions and visual mode to work on the AI history.
     pub fn sync_conversation_rope(&mut self) {
-        if let Some(ref conv) = self.conversation {
+        if let Some(conv) = self.view.conversation() {
             let flat = conv.flat_text();
             self.rope = Rope::from_str(&flat);
         }
+    }
+
+    // --- BufferView accessor convenience methods ---
+
+    pub fn conversation(&self) -> Option<&Conversation> {
+        self.view.conversation()
+    }
+
+    pub fn conversation_mut(&mut self) -> Option<&mut Conversation> {
+        self.view.conversation_mut()
+    }
+
+    pub fn help_view(&self) -> Option<&HelpView> {
+        self.view.help_view()
+    }
+
+    pub fn help_view_mut(&mut self) -> Option<&mut HelpView> {
+        self.view.help_view_mut()
+    }
+
+    pub fn debug_view(&self) -> Option<&DebugView> {
+        self.view.debug_view()
+    }
+
+    pub fn debug_view_mut(&mut self) -> Option<&mut DebugView> {
+        self.view.debug_view_mut()
+    }
+
+    pub fn git_status_view(&self) -> Option<&GitStatusView> {
+        self.view.git_status()
+    }
+
+    pub fn git_status_view_mut(&mut self) -> Option<&mut GitStatusView> {
+        self.view.git_status_mut()
+    }
+
+    pub fn visual(&self) -> Option<&VisualBuffer> {
+        self.view.visual()
+    }
+
+    pub fn visual_mut(&mut self) -> Option<&mut VisualBuffer> {
+        self.view.visual_mut()
+    }
+
+    pub fn file_tree(&self) -> Option<&FileTree> {
+        self.view.file_tree()
+    }
+
+    pub fn file_tree_mut(&mut self) -> Option<&mut FileTree> {
+        self.view.file_tree_mut()
     }
 }
 
@@ -1021,6 +1231,34 @@ mod tests {
         buf.delete_char_forward(&mut win);
         assert_eq!(buf.text(), "b");
         assert_eq!(win.cursor_col, 0);
+    }
+
+    // --- Change markers for deletions ---
+
+    #[test]
+    fn delete_char_forward_marks_line_changed() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "abc");
+        buf.changed_lines.clear();
+        win.cursor_col = 1;
+        buf.delete_char_forward(&mut win);
+        assert!(
+            buf.changed_lines.contains(&0),
+            "delete_char_forward should mark line as changed"
+        );
+    }
+
+    #[test]
+    fn delete_char_backward_marks_line_changed() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "abc");
+        buf.changed_lines.clear();
+        win.cursor_col = 2;
+        buf.delete_char_backward(&mut win);
+        assert!(
+            buf.changed_lines.contains(&0),
+            "delete_char_backward should mark line as changed"
+        );
     }
 
     // --- Delete line ---
@@ -1161,6 +1399,31 @@ mod tests {
         win.clamp_cursor(&buf);
         assert_eq!(win.cursor_row, 0);
         assert_eq!(win.cursor_col, 0);
+    }
+
+    #[test]
+    fn clamp_cursor_allows_trailing_newline_position() {
+        // Inserting '\n' at end of text should leave cursor on the new empty line.
+        // Regression: clamp_cursor used display_line_count() which excluded the
+        // trailing phantom line, clamping cursor back to row 0.
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello");
+        assert_eq!(win.cursor_row, 0);
+        buf.insert_char(&mut win, '\n');
+        assert_eq!(win.cursor_row, 1);
+        assert_eq!(win.cursor_col, 0);
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 1); // must NOT clamp back to 0
+        assert_eq!(win.cursor_col, 0);
+    }
+
+    #[test]
+    fn clamp_cursor_still_clamps_past_end() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello");
+        win.cursor_row = 5;
+        win.clamp_cursor(&buf);
+        assert_eq!(win.cursor_row, 0); // only 1 line
     }
 
     // --- Scrolling ---
@@ -1372,15 +1635,32 @@ mod tests {
     fn default_kind_is_text() {
         let buf = Buffer::new();
         assert_eq!(buf.kind, BufferKind::Text);
-        assert!(buf.conversation.is_none());
+        assert!(buf.conversation().is_none());
     }
 
     #[test]
     fn conversation_buffer_creation() {
         let buf = Buffer::new_conversation("[conversation]");
         assert_eq!(buf.kind, BufferKind::Conversation);
-        assert!(buf.conversation.is_some());
+        assert!(buf.conversation().is_some());
         assert_eq!(buf.name, "[conversation]");
+    }
+
+    #[test]
+    fn buffer_local_word_wrap_defaults() {
+        // Conversation, Help, Messages buffers default to word_wrap=true.
+        let conv = Buffer::new_conversation("conv");
+        assert_eq!(conv.local_options.word_wrap, Some(true));
+
+        let help = Buffer::new_help("test");
+        assert_eq!(help.local_options.word_wrap, Some(true));
+
+        let msgs = Buffer::new_messages();
+        assert_eq!(msgs.local_options.word_wrap, Some(true));
+
+        // Normal text buffers have no override (use global default).
+        let text = Buffer::new();
+        assert_eq!(text.local_options.word_wrap, None);
     }
 
     // --- delete_word_backward (C-w) ---
@@ -1585,7 +1865,7 @@ mod tests {
 
         let buf = Buffer::from_file(&path).unwrap();
         assert_eq!(buf.kind, BufferKind::Text);
-        assert!(buf.conversation.is_none());
+        assert!(buf.conversation().is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1628,5 +1908,117 @@ mod tests {
 
         let buf = Buffer::from_file(&file).unwrap();
         assert_eq!(buf.project_root, Some(dir.path().to_path_buf()));
+    }
+
+    // --- Change markers ---
+
+    #[test]
+    fn buffer_tracks_changed_lines_on_insert() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello\n");
+        assert!(buf.changed_lines.contains(&0));
+    }
+
+    #[test]
+    fn buffer_tracks_changed_lines_on_delete() {
+        let (mut buf, mut win) = new_buf_win();
+        insert_str(&mut buf, &mut win, "hello world");
+        buf.changed_lines.clear();
+        buf.delete_range(0, 5);
+        assert!(buf.changed_lines.contains(&0));
+    }
+
+    #[test]
+    fn buffer_changed_lines_persist_across_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("change_test.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut buf = Buffer::from_file(&path).unwrap();
+        let mut win = Window::new(0, 0);
+        buf.insert_char(&mut win, '!');
+        assert!(!buf.changed_lines.is_empty());
+        buf.save().unwrap();
+        // changed_lines persist across saves — cleared on revert/reload
+        assert!(!buf.changed_lines.is_empty());
+    }
+
+    #[test]
+    fn buffer_changed_lines_clear_on_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reload_test.txt");
+        std::fs::write(&path, "original").unwrap();
+        let mut buf = Buffer::from_file(&path).unwrap();
+        let mut win = Window::new(0, 0);
+        buf.insert_char(&mut win, '!');
+        assert!(!buf.changed_lines.is_empty());
+        buf.reload_from_disk().unwrap();
+        assert!(buf.changed_lines.is_empty());
+    }
+
+    #[test]
+    fn is_line_folded_basic() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "line0\nline1\nline2\nline3\nline4\n");
+        buf.folded_ranges.push((1, 4));
+        assert!(!buf.is_line_folded(0));
+        assert!(!buf.is_line_folded(1)); // fold start is visible
+        assert!(buf.is_line_folded(2));
+        assert!(buf.is_line_folded(3));
+        assert!(!buf.is_line_folded(4)); // fold end is visible
+    }
+
+    #[test]
+    fn toggle_fold_at_creates_and_removes() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn main() {\n    x\n    y\n}\n");
+        let ranges = vec![(0, 3)];
+        buf.toggle_fold_at(0, &ranges);
+        assert_eq!(buf.folded_ranges, vec![(0, 3)]);
+        buf.toggle_fold_at(0, &ranges);
+        assert!(buf.folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn fold_all_and_unfold_all() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn a() {\n}\nfn b() {\n}\n");
+        let ranges = vec![(0, 1), (2, 3)];
+        buf.fold_all(&ranges);
+        assert_eq!(buf.folded_ranges.len(), 2);
+        buf.unfold_all();
+        assert!(buf.folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn toggle_fold_innermost_range() {
+        let mut buf = Buffer::new();
+        buf.insert_text_at(0, "fn a() {\n  if x {\n    y\n  }\n}\n");
+        // Outer: (0, 4), inner: (1, 3)
+        let ranges = vec![(0, 4), (1, 3)];
+        buf.toggle_fold_at(2, &ranges);
+        // Should fold innermost range (1, 3) since cursor line 2 is in both
+        assert_eq!(buf.folded_ranges, vec![(1, 3)]);
+    }
+
+    #[test]
+    fn apply_defaults_fills_none_preserves_some() {
+        let mut opts = BufferLocalOptions {
+            heading_scale: Some(false),
+            ..Default::default()
+        };
+        let defaults = BufferLocalOptions {
+            heading_scale: Some(true),
+            render_markup: Some(true),
+            link_descriptive: Some(true),
+            ..Default::default()
+        };
+        opts.apply_defaults(&defaults);
+        // Existing Some(false) is preserved, not overwritten
+        assert_eq!(opts.heading_scale, Some(false));
+        // None fields filled from defaults
+        assert_eq!(opts.render_markup, Some(true));
+        assert_eq!(opts.link_descriptive, Some(true));
+        // Fields None in both stay None
+        assert_eq!(opts.word_wrap, None);
     }
 }

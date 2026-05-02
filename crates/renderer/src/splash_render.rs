@@ -1,91 +1,28 @@
 //! Splash screen — shown when the scratch buffer is empty and focused.
 //! Inspired by Doom Emacs's dashboard: ASCII art logo + quick-action hints.
+//!
+//! Shared constants and data live in `mae_core::render_common::splash`.
+//! This module handles ratatui-specific rendering.
 
+use mae_core::render_common::splash::{should_show_splash, ALL_ARTS, MAE_LOGO, QUICK_ACTIONS};
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::theme_convert::ts;
 
-// ---------------------------------------------------------------------------
-// ASCII art variants
-//
-// Design constraints:
-//   - ~40-60 chars wide (centered in 80+ col terminals)
-//   - ~12-18 lines tall above the MAE logo
-//   - Only printable ASCII (no Unicode — must render in any terminal)
-//
-// Additional art can be added by defining a new const and adding an
-// entry to ALL_ARTS. User selects via :set-splash-art or SPC SPC.
-// ---------------------------------------------------------------------------
+// Re-export for external use.
+pub use mae_core::render_common::splash::splash_action_count;
 
-/// Bat — wings spread wide. Inspired by Vivian Aldridge's classic design.
-const ART_BAT: &str = r#"
-               _-.                       .-_
-            _..-'(                       )`-.._
-         ./'. '||\.       (\_/)       .//||` .'\.
-      ./'.|'.'||||\\|..    )o o(    ..|//||||`.'|.'\.
-   ./'..|'.|| |||||\'''''  `"'  ''''''/ ||||| ||.'|..'\.
- ./'.||'.|||| ||||||||||||.     .|||||||||||| |||||.'||.'\.
-/'|||'.|||||| ||||||||||||{     }|||||||||||| ||||||.'|||\`\
- '.||| ||||||| |||||||||||{     }||||||||||| |||||||.'|||.'
-'.||| |||||||| |/' `\`\||``     ``||/'' `\| ||||||||| |||.'
-|/' \./'    `\./        \!|\   /|!/        \./' `   `\./ `\|
-V    V        V          }' `V' `{          V        V    V
-`    `        `              V              '        '    '
-"#;
-
-struct SplashArt {
-    name: &'static str,
-    art: &'static str,
-    /// Line indices (within the art) that should use the accent color.
-    accent_lines: &'static [usize],
+pub(crate) fn render_splash_if_needed(frame: &mut Frame, area: Rect, editor: &Editor) -> bool {
+    if !should_show_splash(editor) {
+        return false;
+    }
+    render_splash(frame, area, editor);
+    true
 }
 
-const ALL_ARTS: &[SplashArt] = &[SplashArt {
-    name: "bat",
-    art: ART_BAT,
-    accent_lines: &[],
-}];
-
-/// MAE logo appended to all art variants.
-const MAE_LOGO: &str = r#"
-     __  __    _     _____
-    |  \/  |  / \   | ____|
-    | |\/| | / _ \  |  _|
-    | |  | |/ ___ \ | |___
-    |_|  |_/_/   \_\|_____|
-"#;
-
-/// Quick-action hints shown below the ASCII art.
-/// Each entry maps to a command that can be dispatched when selected.
-pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
-    ("SPC f f", "Find file", "find-file"),
-    ("SPC f d", "File browser", "file-browser"),
-    ("SPC f c", "Edit config", "edit-config"),
-    ("SPC SPC", "Commands", "command-palette"),
-    ("SPC :", "Command line", "command-mode"),
-    ("SPC a a", "AI agent", "open-ai-agent"),
-    ("SPC a p", "AI prompt", "ai-prompt"),
-    ("SPC h h", "Help", "help"),
-    ("SPC h t", "Tutorial", "tutor"),
-    ("SPC t s", "Set theme", "theme-picker"),
-    ("SPC q q", "Quit", "quit"),
-];
-
-/// Number of selectable splash actions.
-pub fn splash_action_count() -> usize {
-    QUICK_ACTIONS.len()
-}
-
-/// Returns true if the splash should be displayed: the active buffer is
-/// a Dashboard buffer.
-pub(crate) fn should_show_splash(editor: &Editor) -> bool {
-    editor.active_buffer().kind == mae_core::BufferKind::Dashboard
-}
-
-/// Render the splash screen centered in the given area.
-pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
+fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
     let splash = ALL_ARTS
         .iter()
@@ -113,11 +50,11 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         lines.push(Line::styled(line.to_string(), style));
     }
 
-    // Helper: center a block of text (all lines padded to same width) within art_width.
+    // Helper: center a block of text within art_width.
     let center_block_pad =
         |block_width: usize| -> usize { art_width.saturating_sub(block_width) / 2 };
 
-    // MAE logo — treat as a fixed-width block, then center the block.
+    // MAE logo.
     let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
     let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     let logo_pad = center_block_pad(logo_width);
@@ -132,7 +69,7 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         lines.push(Line::styled(padded, logo_style));
     }
 
-    // Subtitle — single line, center within art_width.
+    // Subtitle.
     let subtitle = "Modern AI Editor — ai-native lisp machine";
     let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
     lines.push(Line::styled(
@@ -147,7 +84,7 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     ));
     lines.push(Line::raw(""));
 
-    // Quick actions — format all to the same fixed width, then center the block.
+    // Quick actions.
     let qa_width = QUICK_ACTIONS
         .iter()
         .map(|(k, d, _)| format!("{:<10}{}", k, d).len())
@@ -212,7 +149,7 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         lines.push(Line::raw(""));
     }
 
-    // Dismiss hint — single line, center within art_width.
+    // Dismiss hint.
     let dismiss = "j/k to navigate, Enter to select, any other key to dismiss";
     let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
     lines.push(Line::styled(
@@ -220,13 +157,11 @@ pub(crate) fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
         subtitle_style,
     ));
 
-    // Vertical + horizontal centering of the whole block.
+    // Vertical + horizontal centering.
     let total_height = lines.len() as u16;
     let top_pad = area.height.saturating_sub(total_height) / 2;
-
     let max_width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
     let left_pad = area.width.saturating_sub(max_width) / 2;
-
     let centered_area = Rect {
         x: area.x + left_pad,
         y: area.y + top_pad,

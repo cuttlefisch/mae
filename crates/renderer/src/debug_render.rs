@@ -1,18 +1,18 @@
 //! Debug panel renderer — styles the `*Debug*` buffer lines based on
 //! `DebugView::line_map` items.
 //!
-//! The buffer rope is already populated with text by `debug_populate_buffer`.
-//! This renderer applies semantic styling: section headers are bold, active
-//! threads/frames are highlighted, variable names are colored, and the
-//! cursor line gets a selection background.
+//! Shared logic (title, style resolution, scroll offset) lives in
+//! `mae_core::render_common::debug`. This module handles ratatui-specific rendering.
 
-use mae_core::{DebugLineItem, Editor};
+use mae_core::render_common::debug::{
+    debug_line_style, debug_scroll_offset, debug_style_theme_key, debug_title, DebugLineStyle,
+};
+use mae_core::Editor;
 use ratatui::prelude::*;
 
 use crate::theme_convert::ts;
 
-/// Render a debug panel window. Reads the buffer's rope and styles each
-/// line according to the `line_map` semantic items.
+/// Render a debug panel window.
 pub(crate) fn render_debug_window(
     frame: &mut Frame,
     area: Rect,
@@ -21,20 +21,7 @@ pub(crate) fn render_debug_window(
     focused: bool,
     editor: &Editor,
 ) {
-    // Border
-    let title = match &editor.debug_state {
-        Some(state) => match &state.target {
-            mae_core::debug::DebugTarget::Dap {
-                adapter_name,
-                program,
-            } => {
-                let short = program.rsplit('/').next().unwrap_or(program);
-                format!(" *Debug* [{}: {}] ", adapter_name, short)
-            }
-            mae_core::debug::DebugTarget::SelfDebug => " *Debug* [self] ".to_string(),
-        },
-        None => " *Debug* ".to_string(),
-    };
+    let title = debug_title(editor);
 
     let border_style = if focused {
         ts(editor, "ui.statusline")
@@ -52,37 +39,24 @@ pub(crate) fn render_debug_window(
         return;
     }
 
-    let view = match buf.debug_view.as_ref() {
+    let view = match buf.debug_view() {
         Some(v) => v,
         None => return,
     };
 
-    // Collect rope lines.
     let rope = buf.rope();
     let total_lines = rope.len_lines();
     if total_lines == 0 {
         return;
     }
 
-    // Compute scroll offset to keep cursor visible.
     let cursor_idx = view.cursor_index;
     let visible_height = inner.height as usize;
-    let scroll_offset = if cursor_idx >= visible_height {
-        cursor_idx - visible_height + 1
-    } else {
-        0
-    };
+    let scroll_offset = debug_scroll_offset(cursor_idx, visible_height);
 
-    let default_style = ts(editor, "ui.text");
-    let section_style = ts(editor, "ui.text").bold();
-    let active_thread_style = ts(editor, "markup.heading").bold();
-    let thread_style = ts(editor, "ui.text");
-    let active_frame_style = ts(editor, "markup.heading");
-    let frame_style = ts(editor, "ui.text");
-    let var_name_style = ts(editor, "variable");
-
+    let active_thread_id = editor.debug_state.as_ref().map(|s| s.active_thread_id);
+    let selected_frame_id = view.selected_frame_id;
     let cursor_style = ts(editor, "ui.selection");
-    let output_style = ts(editor, "comment");
 
     for row in 0..visible_height {
         let line_idx = scroll_offset + row;
@@ -101,35 +75,14 @@ pub(crate) fn render_debug_window(
             s.trim_end_matches('\n').to_string()
         };
 
-        // Determine style based on line_map.
         let item = view.line_map.get(line_idx);
         let is_cursor_line = focused && line_idx == cursor_idx;
-
-        let line_style = match item {
-            Some(DebugLineItem::SectionHeader(_)) => section_style,
-            Some(DebugLineItem::Thread(tid)) => {
-                if let Some(state) = &editor.debug_state {
-                    if *tid == state.active_thread_id {
-                        active_thread_style
-                    } else {
-                        thread_style
-                    }
-                } else {
-                    thread_style
-                }
-            }
-            Some(DebugLineItem::Frame(fid)) => {
-                let is_selected = view.selected_frame_id == Some(*fid);
-                if is_selected {
-                    active_frame_style
-                } else {
-                    frame_style
-                }
-            }
-            Some(DebugLineItem::Variable { .. }) => var_name_style,
-            Some(DebugLineItem::OutputLine(_)) => output_style,
-            Some(DebugLineItem::Blank) | None => default_style,
-        };
+        let style_cat = debug_line_style(item, active_thread_id, selected_frame_id);
+        let theme_key = debug_style_theme_key(style_cat);
+        let mut line_style = ts(editor, theme_key);
+        if style_cat == DebugLineStyle::SectionHeader || style_cat == DebugLineStyle::ActiveThread {
+            line_style = line_style.bold();
+        }
 
         let final_style = if is_cursor_line {
             line_style.patch(cursor_style)
@@ -137,12 +90,10 @@ pub(crate) fn render_debug_window(
             line_style
         };
 
-        // Truncate to fit width.
         let display_width = inner.width as usize;
         let truncated: String = line_text.chars().take(display_width).collect();
         let span = Span::styled(truncated, final_style);
 
-        // Pad with background if cursor line.
         if is_cursor_line {
             let pad_len = display_width.saturating_sub(line_text.chars().count());
             let padded = Line::from(vec![span, Span::styled(" ".repeat(pad_len), final_style)]);

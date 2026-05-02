@@ -2,16 +2,16 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C641%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-2%2C252%20passing-brightgreen.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
-[![Lines of Code](https://img.shields.io/badge/lines-~82k-informational.svg)](#)
+[![Lines of Code](https://img.shields.io/badge/lines-~107k-informational.svg)](#)
 
 > [!CAUTION]
 > **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
 
 An editor where the human and the AI are peer actors calling the same
 Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 1,673 tests. GPL-3.0-or-later.
+runtime. 2,252 tests. GPL-3.0-or-later.
 
 ## Why MAE Exists
 
@@ -58,7 +58,7 @@ mode", no simulated keystrokes, no shadow API:
          │  buffer.insert/delete()   │
          │  lsp/dap/kb/shell ops     │
          │                           │
-         │  280+ commands · same     │
+         │  380+ commands · same     │
          │  functions for all actors │
          └─────────────┬─────────────┘
                        ▼
@@ -121,11 +121,11 @@ just syntax, but types, references, and diagnostics.
 
 ### Runtime Redefinability (Scheme)
 
-Embedded R7RS Scheme (Steel) — redefine any function while running. 12 hook
-points (`app-start`, `app-exit`, `before-save`, `after-save`, `buffer-open`,
-`buffer-close`, `mode-change`, `focus-in`, `focus-out`, etc.) for event-driven
-config. `(set-option! ...)` for programmatic configuration. `init.scm` is a real
-program, not a settings file.
+Embedded R7RS Scheme (Steel) — redefine any function while running. ~40 Scheme
+functions for buffer editing, window management, option/command/keymap
+introspection, and file I/O. 17 hook points for event-driven config.
+`require-feature`/`provide-feature` package system with `load-path` search.
+`init.scm` is a real program, not a settings file.
 
 ### Tree-sitter Syntax Highlighting
 
@@ -142,7 +142,7 @@ included for GNOME, sway, and other freedesktop environments.
 
 ## Vim-Level Editing
 
-Full vi modal editing with 280+ commands:
+Full vi modal editing with 380+ commands:
 
 | Category | Features |
 |----------|----------|
@@ -160,6 +160,12 @@ Full vi modal editing with 280+ commands:
 | Visual | `v` (charwise), `V` (linewise) + all operators |
 | Scroll | Ctrl-U/D/F/B, zz/zt/zb, H/M/L |
 | Leader | 14-group `SPC` leader system (Doom Emacs style) with which-key popup |
+| Code folding | `za` toggle, `zM` close all, `zR` open all (tree-sitter fold ranges) |
+| File tree | `SPC f t` sidebar with icons, expand/collapse, git markers |
+| Git status | `SPC g s` Magit-style: stage/unstage/discard at hunk level, branch/stash/push/pull |
+| Swap files | Crash recovery via non-destructive swap files, `:recover` / `:recover-session` |
+| Autosave | Interval-based with idle debounce, configurable via `:set autosave_interval` |
+| Display overlays | Link concealment (md/org), inline bold/italic/code/strikethrough |
 
 ## Stack
 

@@ -7,6 +7,7 @@ pub struct KeyPress {
     pub key: Key,
     pub ctrl: bool,
     pub alt: bool,
+    pub shift: bool,
 }
 
 /// Abstract key code — no dependency on crossterm.
@@ -36,6 +37,7 @@ impl KeyPress {
             key: Key::Char(ch),
             ctrl: false,
             alt: false,
+            shift: false,
         }
     }
 
@@ -44,6 +46,7 @@ impl KeyPress {
             key: Key::Char(ch),
             ctrl: true,
             alt: false,
+            shift: false,
         }
     }
 
@@ -52,6 +55,7 @@ impl KeyPress {
             key,
             ctrl: false,
             alt: false,
+            shift: false,
         }
     }
 }
@@ -82,6 +86,8 @@ pub struct WhichKeyEntry {
 /// efficient multi-key sequence handling (dd, gg, C-c C-v, etc.)
 pub struct Keymap {
     pub name: String,
+    /// If set, keys not found in this keymap fall back to the parent.
+    pub parent: Option<String>,
     bindings: HashMap<Vec<KeyPress>, String>,
     /// All proper prefixes of bound key sequences, for multi-key detection.
     prefixes: HashSet<Vec<KeyPress>>,
@@ -93,6 +99,18 @@ impl Keymap {
     pub fn new(name: impl Into<String>) -> Self {
         Keymap {
             name: name.into(),
+            parent: None,
+            bindings: HashMap::new(),
+            prefixes: HashSet::new(),
+            group_names: HashMap::new(),
+        }
+    }
+
+    /// Create a keymap with a named parent for fallback lookup.
+    pub fn with_parent(name: impl Into<String>, parent: impl Into<String>) -> Self {
+        Keymap {
+            name: name.into(),
+            parent: Some(parent.into()),
             bindings: HashMap::new(),
             prefixes: HashSet::new(),
             group_names: HashMap::new(),
@@ -180,7 +198,7 @@ impl Keymap {
             if is_leaf {
                 let label = commands
                     .get(cmd_name)
-                    .map(|c| c.doc.clone())
+                    .map(|c| c.which_key_label().to_string())
                     .unwrap_or_else(|| cmd_name.clone());
                 seen.insert(
                     sort_key,
@@ -230,11 +248,22 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
     while chars.peek().is_some() {
         // Handle <Token> bracketed syntax (e.g. <F1>, <Esc>, <C-x>)
         if chars.peek() == Some(&'<') {
-            chars.next(); // consume '<'
-            let token: String = chars.by_ref().take_while(|&c| c != '>').collect();
-            if let Some(kp) = parse_macro_token(&token) {
-                result.push(kp);
+            // Peek ahead for a closing '>' to distinguish bracket tokens from bare '<'.
+            let rest: String = chars.clone().collect();
+            if let Some(close_pos) = rest[1..].find('>') {
+                let token = &rest[1..1 + close_pos];
+                if let Some(kp) = parse_macro_token(token) {
+                    // Consume '<', token chars, and '>'.
+                    for _ in 0..close_pos + 2 {
+                        chars.next();
+                    }
+                    result.push(kp);
+                    continue;
+                }
             }
+            // No closing '>' or unrecognized token — treat '<' as a literal char.
+            chars.next();
+            result.push(KeyPress::char('<'));
             continue;
         }
 
@@ -256,6 +285,7 @@ pub fn parse_key_seq(s: &str) -> Vec<KeyPress> {
                     key: Key::Char(ch),
                     ctrl: false,
                     alt: true,
+                    shift: false,
                 });
             }
             continue;
@@ -317,6 +347,11 @@ pub fn serialize_keypress(kp: &KeyPress) -> String {
         (Key::PageDown, false, false) => "<PageDown>".to_string(),
         (Key::Delete, false, false) => "<Del>".to_string(),
         (Key::F(n), false, false) => format!("<F{}>", n),
+        // Alt + special keys
+        (Key::Left, false, true) => "<M-Left>".to_string(),
+        (Key::Right, false, true) => "<M-Right>".to_string(),
+        (Key::Up, false, true) => "<M-Up>".to_string(),
+        (Key::Down, false, true) => "<M-Down>".to_string(),
         // Special keys with modifiers (rare; emit as best-effort)
         (Key::Escape, true, _) => "<C-Esc>".to_string(),
         _ => String::new(),
@@ -363,6 +398,7 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
             key: Key::Char(ch),
             ctrl: true,
             alt: true,
+            shift: false,
         });
     }
     if let Some(rest) = lower.strip_prefix("c-") {
@@ -371,14 +407,25 @@ fn parse_macro_token(token: &str) -> Option<KeyPress> {
             key: Key::Char(ch),
             ctrl: true,
             alt: false,
+            shift: false,
         });
     }
     if let Some(rest) = lower.strip_prefix("m-") {
+        // M-{special key}: M-Left, M-Right, M-Up, M-Down, etc.
+        if let Some((key, _)) = match_named_key(rest) {
+            return Some(KeyPress {
+                key,
+                ctrl: false,
+                alt: true,
+                shift: false,
+            });
+        }
         let ch = rest.chars().next()?;
         return Some(KeyPress {
             key: Key::Char(ch),
             ctrl: false,
             alt: true,
+            shift: false,
         });
     }
 
@@ -764,6 +811,7 @@ mod tests {
             key: Key::Char('x'),
             ctrl: false,
             alt: true,
+            shift: false,
         };
         assert_eq!(serialize_keypress(&kp), "<M-x>");
     }
@@ -901,10 +949,81 @@ mod tests {
     }
 
     #[test]
+    fn parse_m_arrow_keys() {
+        let keys = deserialize_macro("<M-Left>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Left);
+        assert!(keys[0].alt);
+        assert!(!keys[0].ctrl);
+
+        let keys = deserialize_macro("<M-Right>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Right);
+        assert!(keys[0].alt);
+
+        let keys = deserialize_macro("<M-Up>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Up);
+        assert!(keys[0].alt);
+
+        let keys = deserialize_macro("<M-Down>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, Key::Down);
+        assert!(keys[0].alt);
+    }
+
+    #[test]
+    fn serialize_m_arrow_roundtrip() {
+        let kp = KeyPress {
+            key: Key::Left,
+            ctrl: false,
+            alt: true,
+            shift: false,
+        };
+        assert_eq!(serialize_keypress(&kp), "<M-Left>");
+        let back = deserialize_macro("<M-Left>");
+        assert_eq!(back[0], kp);
+    }
+
+    #[test]
     fn parse_key_seq_spaced_bracket_in_shell_keymap() {
         // This is how define-key from Scheme passes "<F1>"
         let keys = parse_key_seq_spaced("<F1>");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].key, Key::F(1));
+    }
+
+    // --- Bare `<` and `>` parsing ---
+
+    #[test]
+    fn parse_key_seq_angle_brackets() {
+        // `<<` should produce two bare '<' chars, not trigger bracket syntax.
+        let keys = parse_key_seq("<<");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('<'));
+        assert_eq!(keys[1], KeyPress::char('<'));
+
+        // `>>` should produce two bare '>' chars.
+        let keys = parse_key_seq(">>");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('>'));
+        assert_eq!(keys[1], KeyPress::char('>'));
+    }
+
+    #[test]
+    fn parse_key_seq_bare_lt_then_token() {
+        // `<` followed by a valid bracket token: `<<CR>` should be [Char('<'), Enter].
+        let keys = parse_key_seq("<<CR>");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], KeyPress::char('<'));
+        assert_eq!(keys[1].key, Key::Enter);
+    }
+
+    #[test]
+    fn parse_key_seq_lt_bracket_token() {
+        // `<lt>` is the escape for literal '<'
+        let keys = parse_key_seq("<lt>");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], KeyPress::char('<'));
     }
 }

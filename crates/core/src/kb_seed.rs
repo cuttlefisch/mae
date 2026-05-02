@@ -15,20 +15,164 @@
 //! regenerating the KB on every startup keeps help docs and commands in
 //! lockstep with the code that ships.
 
+use std::collections::HashMap;
+
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
 use crate::commands::CommandRegistry;
+use crate::hooks::HookRegistry;
+use crate::keymap::{serialize_macro, Keymap};
 use crate::options::OptionRegistry;
 
 /// Build the initial KB: hand-authored concept/index nodes + generated
-/// `cmd:*` nodes derived from the command registry.
-pub fn seed_kb(registry: &CommandRegistry) -> KnowledgeBase {
+/// `cmd:*` nodes derived from the command registry, enriched with
+/// keybinding and hook information.
+pub fn seed_kb(
+    registry: &CommandRegistry,
+    keymaps: &HashMap<String, Keymap>,
+    hooks: &HookRegistry,
+) -> KnowledgeBase {
     let mut kb = KnowledgeBase::new();
     install_static_nodes(&mut kb);
     install_tutor_nodes(&mut kb);
-    install_command_nodes(&mut kb, registry);
+    let keybinding_map = collect_keybindings(keymaps);
+    install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
+    install_category_nodes(&mut kb, registry, &keybinding_map);
     install_option_nodes(&mut kb);
     kb
+}
+
+/// Convenience for tests: seed with empty keymaps and hooks.
+pub fn seed_kb_default(registry: &CommandRegistry) -> KnowledgeBase {
+    seed_kb(registry, &HashMap::new(), &HookRegistry::new())
+}
+
+/// Build a reverse index: command_name → [(mode_name, key_display_string)].
+pub fn collect_keybindings(
+    keymaps: &HashMap<String, Keymap>,
+) -> HashMap<String, Vec<(String, String)>> {
+    let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (mode_name, keymap) in keymaps {
+        for (keys, command) in keymap.bindings() {
+            let display = serialize_macro(keys);
+            map.entry(command.clone())
+                .or_default()
+                .push((mode_name.clone(), display));
+        }
+    }
+    // Sort each command's bindings by mode name for consistency
+    for bindings in map.values_mut() {
+        bindings.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    }
+    map
+}
+
+/// Single-command variant: return bindings for one command.
+pub fn collect_keybindings_for(
+    keymaps: &HashMap<String, Keymap>,
+    cmd_name: &str,
+) -> Vec<(String, String)> {
+    let mut result = Vec::new();
+    for (mode_name, keymap) in keymaps {
+        for (keys, command) in keymap.bindings() {
+            if command == cmd_name {
+                let display = serialize_macro(keys);
+                result.push((mode_name.clone(), display));
+            }
+        }
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    result
+}
+
+/// Infer a category from a command name based on prefix conventions.
+pub fn infer_category(name: &str) -> &'static str {
+    if name.starts_with("move-")
+        || name.starts_with("scroll-")
+        || name.starts_with("goto-")
+        || name.starts_with("jump-")
+        || name == "center-cursor-vertically"
+    {
+        "movement"
+    } else if name.starts_with("delete-")
+        || name.starts_with("change-")
+        || name.starts_with("insert-")
+        || name.starts_with("yank")
+        || name.starts_with("paste")
+        || name.starts_with("indent")
+        || name == "undo"
+        || name == "redo"
+        || name == "join-lines"
+        || name == "open-line-below"
+        || name == "open-line-above"
+        || name == "replace-char"
+        || name == "dot-repeat"
+    {
+        "editing"
+    } else if name.starts_with("git-") {
+        "git"
+    } else if name.starts_with("lsp-") {
+        "lsp"
+    } else if name.starts_with("debug-") || name.starts_with("dap-") {
+        "debug"
+    } else if name.starts_with("window-")
+        || name.starts_with("split-")
+        || name.starts_with("focus-")
+    {
+        "window"
+    } else if name.starts_with("file-tree-") {
+        "file-tree"
+    } else if name.starts_with("visual-")
+        || name.starts_with("enter-visual")
+        || name.starts_with("block-visual")
+    {
+        "visual"
+    } else if name.starts_with("ai-") || name.starts_with("open-ai") {
+        "ai"
+    } else if name.starts_with("help")
+        || name.starts_with("describe-")
+        || name.starts_with("kb-")
+        || name == "tutor"
+    {
+        "help"
+    } else if name.starts_with("org-")
+        || name.starts_with("md-")
+        || name.starts_with("insert-heading")
+    {
+        "org"
+    } else if name.starts_with("toggle-") {
+        "toggle"
+    } else if name.starts_with("enter-") {
+        "mode"
+    } else if name.starts_with("search") || name.starts_with("find-") || name == "nohlsearch" {
+        "search"
+    } else if name.starts_with("save")
+        || name.starts_with("open-file")
+        || name.starts_with("close-buffer")
+        || name.starts_with("kill-buffer")
+        || name == "quit"
+        || name == "force-quit"
+        || name.starts_with("next-buffer")
+        || name.starts_with("prev-buffer")
+        || name == "new-buffer"
+    {
+        "file"
+    } else if name.starts_with("shell")
+        || name.starts_with("terminal")
+        || name.starts_with("send-to-shell")
+        || name.starts_with("send-region")
+    {
+        "shell"
+    } else if name.starts_with("macro-")
+        || name.starts_with("record-")
+        || name.starts_with("play-macro")
+    {
+        "macro"
+    } else if name.starts_with("register-") {
+        "register"
+    } else {
+        "general"
+    }
 }
 
 /// Install the hand-authored index + concept + key nodes.
@@ -222,6 +366,7 @@ A [[concept:buffer|buffer]] is the unit of editable content in MAE.\n\n\
 ### Leader shortcuts\n\
   `SPC f f` — find file (fuzzy picker)\n\
   `SPC f d` — file browser\n\
+  `SPC f t` — file tree sidebar\n\
   `SPC b b` — switch buffer (palette)\n\
   `SPC b d` — close buffer\n\n\
 **Prev:** [[lesson:editing|Lesson 3]]  |  \
@@ -254,6 +399,10 @@ Key tools:\n\
 - `editor_save_state` / `editor_restore_state` — deterministic session state capture.\n\
 - `web_fetch` — fetch raw content from URLs.\n\
 - `introspect` — inspect threads, performance stats, lock contention.\n\n\
+### Diff Display\n\
+When the AI proposes changes via `propose_changes`, a `*AI-Diff*` buffer shows \
+a [[concept:diff-display|syntax-highlighted unified diff]]. Use `:ai-accept` to apply \
+or `:ai-reject` to discard.\n\n\
 ### Self-Diagnosis\n\
 The AI can introspect the editor's health. You can ask it to \"introspect\" \
 to see thread states, performance stats, and lock contention.\n\n\
@@ -280,19 +429,55 @@ Your `init.scm` is loaded at startup. Use `SPC f c` to edit it.\n\n\
 
 const LESSON_LSP: &str = "\
 ## Lesson 7: LSP\n\n\
-MAE has first-class LSP (Language Server Protocol) support.\n\n\
-### Navigation\n\
-  `gd` — [[cmd:lsp-goto-definition|go to definition]]\n\
-  `gr` — find references\n\
-  `K` — hover documentation\n\n\
-### Diagnostics\n\
-  `SPC l d` — show diagnostics\n\
-  Errors and warnings appear in the gutter.\n\n\
-### Code actions\n\
-  `SPC c a` — code action\n\
-  `SPC c R` — rename symbol\n\
-  `SPC c f` — format\n\n\
+MAE has first-class LSP (Language Server Protocol) support.\n\
 LSP starts automatically when you open a supported file type.\n\n\
+### Navigation\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `gd` | [[cmd:lsp-goto-definition]] | Go to definition |\n\
+| `gr` | [[cmd:lsp-find-references]] | Find all references |\n\
+| `K` | [[cmd:lsp-hover]] | Show hover documentation |\n\n\
+### Hover Popup\n\
+When `K` shows a hover popup:\n\
+- Press `K` again to scroll down\n\
+- Any other key dismisses the popup\n\
+- `:set nolsp_hover_popup` falls back to status bar display\n\n\
+### Diagnostics\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `]d` | [[cmd:lsp-next-diagnostic]] | Jump to next diagnostic |\n\
+| `[d` | [[cmd:lsp-prev-diagnostic]] | Jump to previous diagnostic |\n\
+| `SPC c x` | [[cmd:lsp-show-diagnostics]] | List all diagnostics |\n\
+| `SPC t d` | [[cmd:toggle-lsp-diagnostics-inline]] | Toggle inline underlines |\n\n\
+Diagnostics appear as wavy underlines with end-of-line virtual text.\n\
+Gutter markers show severity: `E` error, `W` warning, `I` info, `H` hint.\n\n\
+### Completion (Insert Mode)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| (auto) | [[cmd:lsp-complete]] | Triggered on typing |\n\
+| `Tab` | [[cmd:lsp-accept-completion]] | Accept selected item |\n\
+| `C-n` | [[cmd:lsp-complete-next]] | Next item |\n\
+| `C-p` | [[cmd:lsp-complete-prev]] | Previous item |\n\n\
+### Code Actions & Refactoring\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC c a` | [[cmd:lsp-code-action]] | Show code actions at cursor |\n\
+| `j`/`k` | next/prev | Navigate the action menu |\n\
+| `Enter` | [[cmd:lsp-code-action-select]] | Apply selected action |\n\
+| `Esc` | dismiss | Close action menu |\n\
+| `SPC c R` | [[cmd:lsp-rename]] | Rename symbol |\n\
+| `SPC c f` | [[cmd:lsp-format]] | Format buffer |\n\n\
+### Status & Configuration\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `SPC c s` | [[cmd:lsp-status]] | Show LSP server status |\n\n\
+Configure servers in `~/.config/mae/config.toml`:\n\
+```toml\n\
+[lsp.rust]\n\
+command = \"rust-analyzer\"\n\n\
+[lsp.python]\n\
+command = \"pylsp\"\n\
+```\n\n\
 **Prev:** [[lesson:scheme|Lesson 6]]  |  \
 **Next:** [[lesson:terminal|Lesson 8: Terminal]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n";
@@ -514,65 +699,410 @@ const CONCEPT_GIT_STATUS: &str = "\
 The **Git Status** buffer (`*git-status*`) is a high-fidelity \"porcelain\" UI \
 inspired by Emacs Magit. It allows you to manage your repository state \
 without leaving the editor.\n\n\
+## Multi-Level Fold\n\
+Press `TAB` on a section header, file entry, or hunk header to fold/unfold \
+that level independently. Collapse indicators (`▸`/`▾`) show fold state.\n\n\
 ## Keybindings\n\
 | Key | Action | Command |\n\
 |-----|--------|---------|\n\
-| `s` | Stage file/hunk | [[cmd:git-stage]] |\n\
-| `u` | Unstage file/hunk | [[cmd:git-unstage]] |\n\
+| `s` | Stage (context-aware) | [[cmd:git-stage]] |\n\
+| `u` | Unstage (context-aware) | [[cmd:git-unstage]] |\n\
+| `x` | Discard (context-aware) | [[cmd:git-discard]] |\n\
 | `S` | Stage ALL | [[cmd:git-stage-all]] |\n\
 | `U` | Unstage ALL | [[cmd:git-unstage-all]] |\n\
 | `c c` | Commit | [[cmd:git-commit]] |\n\
+| `c a` | Amend | [[cmd:git-amend]] |\n\
 | `l l` | Log view | [[cmd:git-log]] |\n\
 | `g r` | Refresh | [[cmd:git-status]] |\n\
-| `TAB` | Toggle visibility | [[cmd:git-status-toggle]] |\n\
+| `TAB` | Toggle fold (section/file/hunk) | [[cmd:git-toggle-fold]] |\n\
+| `n` / `p` | Next/prev hunk | [[cmd:git-next-hunk]] / [[cmd:git-prev-hunk]] |\n\
+| `P p` | Push | [[cmd:git-push]] |\n\
+| `F p` | Pull | [[cmd:git-pull]] |\n\
+| `f f` | Fetch | [[cmd:git-fetch]] |\n\
+| `b b` | Switch branch | [[cmd:git-branch-switch]] |\n\
+| `b n` | Create branch | [[cmd:git-branch-create]] |\n\
+| `b d` | Delete branch | [[cmd:git-branch-delete]] |\n\
+| `z z` | Stash push | [[cmd:git-stash-push]] |\n\
+| `z p` | Stash pop | [[cmd:git-stash-pop]] |\n\
+| `z a` | Stash apply | [[cmd:git-stash-apply]] |\n\
+| `z d` | Stash drop | [[cmd:git-stash-drop]] |\n\
 | `Enter` | Open file | [[cmd:git-status-open]] |\n\
 | `q` | Exit | [[cmd:enter-normal-mode]] |\n\n\
+## Context-Aware Dispatch\n\
+`s`/`u`/`x` operate based on cursor position:\n\
+- **On a diff hunk/line**: stage/unstage/discard that hunk.\n\
+- **On a file entry**: stage/unstage/discard the whole file.\n\
+- **On a section header**: stage/unstage all files in that section.\n\n\
+## Inline Diff\n\
+Press `TAB` on a file entry to expand/collapse its inline diff. Each hunk \
+can be further folded independently.\n\n\
 ## Workflow\n\
 1. Open status via `SPC g s`.\n\
-2. Navigate with `j`/`k`.\n\
-3. Stage files with `s`.\n\
+2. Navigate with `j`/`k`, jump hunks with `n`/`p`.\n\
+3. Stage files/hunks with `s`.\n\
 4. Commit with `c c` (opens a commit message buffer).\n\n\
-See also: [[concept:project]], [[concept:terminal]]\n";
+See also: [[concept:project]], [[concept:terminal]], [[concept:buffer-mode]]\n";
 
 const CONCEPT_ORG_MODE: &str = "\
 **Org-mode** in MAE provides structural editing and task management \
-capabilities for `.org` files.\n\n\
+capabilities for `.org` files, inspired by Doom Emacs evil-org.\n\n\
 ## Core Features\n\n\
-### 1. Structural Folding\n\
-Press `TAB` on a heading to cycle its visibility:\n\
-**Folded** (heading only) -> **Children** (subheadings) -> **Subtree** (everything).\n\n\
-### 2. Task Management\n\
+### 1. Three-State Heading Cycle (TAB)\n\
+Press `TAB` on a heading to cycle its visibility through three states:\n\
+**Subtree** (everything visible) -> **Folded** (heading only) -> \
+**Children** (body + child headings visible, child bodies folded) -> **Subtree**.\n\
+Leaf headings (no children) toggle between **Subtree** and **Folded**.\n\n\
+### 2. Fold All / Unfold All\n\
+- `zM` (`close-all-folds`): Fold all headings in the buffer.\n\
+- `zR` (`open-all-folds`): Unfold all headings.\n\
+- `za`: Toggle fold at cursor (tree-sitter or heading).\n\n\
+### 3. Structural Editing\n\
+- `M-h` / `M-Left`: **Promote** heading (remove one `*` prefix).\n\
+- `M-l` / `M-Right`: **Demote** heading (add one `*` prefix).\n\
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.\n\
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.\n\
+Moving a subtree automatically clears any folds in the affected range.\n\n\
+### 4. Narrow / Widen\n\
+- `SPC m s n` (`org-narrow-subtree`): Narrow buffer to current heading's subtree. \
+Only lines in that subtree are visible; cursor is clamped to the range. \
+Status bar shows `[Narrowed]`.\n\
+- `SPC m s w` (`org-widen`): Restore full buffer visibility.\n\n\
+### 5. Heading Font Scaling\n\
+Org headings render at scaled font sizes for visual hierarchy:\n\
+`*` = 1.5x, `**` = 1.3x, `***` = 1.15x.\n\
+Disable with `:set heading_scale false`.\n\n\
+### 6. Insert Heading (M-Enter)\n\
+- On a heading line: Insert a new heading at the **same level** after the current subtree.\n\
+- Not on a heading: Insert a level-1 heading below the current line.\n\
+- Automatically enters insert mode with cursor after the heading prefix.\n\n\
+### 7. Task Management\n\
 - `S-Left` / `S-Right`: Cycle TODO states (`TODO` -> `DONE` -> `None`).\n\
 - `S-Up` / `S-Down`: Cycle priorities (`[#A]` -> `[#B]` -> `[#C]`).\n\n\
-### 3. Links\n\
+### 8. Links\n\
 Press `Enter` on a `[[link]]` to follow it. Internal links jump to headings; \
 external links open in your browser.\n\n\
-### 4. Rich Rendering\n\
+### 9. Rich Rendering\n\
 - `*bold*` text is rendered in bold.\n\
 - `/italic/` text is rendered in italics.\n\
 - **Emphasis Markers**: Use `:set org_hide_emphasis_markers true` to hide \
 the surrounding `*` and `/` characters.\n\n\
-See also: [[concept:knowledge-base]], [[concept:options]]\n";
+See also: [[concept:markdown]], [[concept:knowledge-base]], [[concept:options]]\n";
+
+const CONCEPT_MARKDOWN: &str = "\
+**Markdown** in MAE provides structural editing for `.md` files, \
+with the same UX as [[concept:org-mode|org-mode]] adapted for `#` headings.\n\n\
+## Core Features\n\n\
+### 1. Three-State Heading Cycle (TAB)\n\
+Press `TAB` on a heading to cycle its visibility:\n\
+**Subtree** (everything visible) -> **Folded** (heading only) -> \
+**Children** (body + child headings visible, child bodies folded) -> **Subtree**.\n\
+Leaf headings (no children) toggle between **Subtree** and **Folded**.\n\n\
+### 2. Fold All / Unfold All\n\
+- `zM` (`close-all-folds`): Fold all headings in the buffer.\n\
+- `zR` (`open-all-folds`): Unfold all headings.\n\n\
+### 3. Structural Editing\n\
+- `M-h` / `M-Left`: **Promote** heading (remove one `#` prefix).\n\
+- `M-l` / `M-Right`: **Demote** heading (add one `#` prefix).\n\
+- `M-k` / `M-Up`: **Move subtree up** past previous sibling.\n\
+- `M-j` / `M-Down`: **Move subtree down** past next sibling.\n\n\
+### 4. Narrow / Widen\n\
+- `SPC m s n` (`md-narrow-subtree`): Narrow buffer to current heading's subtree.\n\
+- `SPC m s w` (`md-widen`): Restore full buffer visibility.\n\n\
+### 5. Insert Heading (M-Enter)\n\
+- On a heading line: Insert a new heading at the **same level** after the current subtree.\n\
+- Not on a heading: Insert a level-1 heading below the current line.\n\
+- Automatically enters insert mode with cursor after the heading prefix.\n\n\
+### 6. Heading Font Scaling\n\
+Markdown headings render at scaled font sizes:\n\
+`#` = 1.5x, `##` = 1.3x, `###` = 1.15x.\n\
+Disable with `:set heading_scale false`.\n\n\
+### 7. Markdown Keymap\n\
+The `markdown` keymap activates automatically for `.md` files and falls back \
+to the `normal` keymap for unbound keys. All structural editing keys mirror \
+the org-mode keymap.\n\n\
+See also: [[concept:org-mode]], [[concept:options]]\n";
+
+const CONCEPT_EX_COMMANDS: &str = "\
+**Ex-command grammar** for write/quit compound commands.\n\n\
+MAE parses `:w`, `:q`, `:x` commands using a token grammar rather than \
+hardcoded match arms. This means all valid vim compound forms work \
+automatically.\n\n\
+## Grammar\n\n\
+**Verbs:** `w` (write), `q` (quit), `x` (write-if-modified + quit)\n\
+**Modifiers:** `a` (all — applies to preceding verb), `!` (force, must be terminal)\n\n\
+## Valid Combinations\n\n\
+| Command | Effect |\n\
+|---------|--------|\n\
+| `:w`    | Write current buffer |\n\
+| `:wa`   | Write all buffers |\n\
+| `:q`    | Quit (check modified) |\n\
+| `:q!`   | Quit (force, discard changes) |\n\
+| `:qa`   | Quit all |\n\
+| `:qa!`  | Force quit all |\n\
+| `:wq`   | Write + quit |\n\
+| `:wq!`  | Write + force quit |\n\
+| `:wqa`  | Write all + quit all |\n\
+| `:wqa!` | Write all + force quit all |\n\
+| `:x`    | Write-if-modified + quit |\n\
+| `:xa`   | Write-if-modified all + quit all |\n\
+| `:xa!`  | Write-if-modified all + force quit all |\n\n\
+## Implementation\n\
+The tokenizer lives in `crates/core/src/editor/ex_parse.rs`. \
+`parse_write_quit()` returns `Option<Vec<ExWriteQuit>>` — None for non-matching \
+commands, Some for valid compound commands.\n\n\
+See also: [[concept:command]], [[concept:options]]\n";
+
+const CONCEPT_SET_SYNTAX: &str = "\
+**`:set` option syntax** — vim-style option configuration.\n\n\
+## Syntax Forms\n\n\
+| Syntax | Effect |\n\
+|--------|--------|\n\
+| `:set option` | Enable (bool) or query (non-bool) |\n\
+| `:set nooption` | Disable bool option |\n\
+| `:set option!` | Toggle bool option |\n\
+| `:set option?` | Query current value |\n\
+| `:set option value` | Assign value |\n\
+| `:set option \"value with spaces\"` | Quoted value |\n\n\
+## Tab Completion\n\n\
+- `:set <Tab>` completes option names\n\
+- `:set option <Tab>` completes values:\n\
+  - Bool options: `true`, `false`\n\
+  - Enum options: cycles through valid values\n\
+  - Theme options: lists bundled themes\n\n\
+## Implementation\n\
+The parser lives in `crates/core/src/editor/ex_parse.rs` (`parse_set_args()`). \
+Value completion is in `crates/core/src/editor/file_ops.rs` (`complete_set_value()`).\n\n\
+See also: [[concept:options]], [[concept:command]]\n";
+
+const CONCEPT_SCROLLBAR: &str = "\
+**Vertical scrollbar** for the GUI rendering backend.\n\n\
+## Configuration\n\
+- `:set scrollbar true` (default: enabled)\n\
+- `:set scrollbar false` to disable\n\n\
+## Layout\n\
+The scrollbar occupies 1 column at the right edge of the text area. \
+Space is allocated in `FrameLayout::compute_layout()` *before* wrap/layout \
+computation, so text wrapping respects the reduced width.\n\n\
+## Rendering\n\
+- **Track**: full content-area height, theme color `ui.scrollbar.track`\n\
+- **Thumb**: proportional to viewport/total ratio, theme color `ui.scrollbar.thumb`\n\
+- Minimum thumb height: 1 cell\n\n\
+## Mouse Interaction\n\
+Click in the scrollbar column to jump to that scroll position.\n\n\
+## Nyan Mode\n\
+`:set nyan_mode true` enables a rainbow progress bar in the status line, \
+showing scroll position as a filled bar with a cat marker.\n\n\
+See also: [[concept:gui]], [[concept:options]]\n";
+
+const CONCEPT_AUTOSAVE: &str = "\
+**Autosave** periodically saves all modified file-backed buffers in the background.\n\n\
+## Configuration\n\
+- `:set autosave_interval 300` — save every 5 minutes (0 = disabled)\n\
+- `config.toml`: `autosave_interval = 300` under `[editor]`\n\
+- Scheme: `(set-option! \"autosave-interval\" \"300\")`\n\n\
+## Idle Debounce\n\
+Autosave waits at least **5 seconds** after the last edit before saving. \
+This prevents saving mid-typing. The timer resets with each keystroke.\n\n\
+## Behavior\n\
+- Only file-backed buffers (not scratch, conversation, or shell) are saved.\n\
+- Status bar shows \"Autosaved N buffer(s)\" on each save.\n\
+- Errors are reported but don't interrupt editing.\n\n\
+See also: [[concept:options]], [[cmd:save]]\n";
+
+const CONCEPT_FILE_TREE: &str = "\
+**File Tree** is a sidebar showing the project directory structure with file-type icons.\n\n\
+## Keybindings\n\
+| Key | Action |\n\
+|---|---|\n\
+| `SPC f t` | Toggle file tree sidebar |\n\
+| `j` / `k` | Navigate entries |\n\
+| `Enter` | Open file / toggle directory |\n\
+| `o` | Toggle expand/collapse directory |\n\
+| `R` | Refresh tree from disk |\n\
+| `q` | Close file tree |\n\n\
+## Project Root\n\
+The tree roots at the detected project root (`.git`, `Cargo.toml`, etc.). \
+Falls back to the current working directory.\n\n\
+## Icons\n\
+File type icons are Unicode emoji by default (no font dependency):\n\
+- Directories: open/closed folder\n\
+- `.rs` → crab, `.py` → snake, `.js` → lightning, `.toml`/`.json` → gear\n\n\
+## Filtering\n\
+Build artifacts and VCS directories (`target/`, `node_modules/`, `.git/`) \
+are hidden automatically.\n\n\
+See also: [[cmd:find-file]], [[concept:buffer]], [[concept:project]]\n";
+
+const CONCEPT_DIFF_DISPLAY: &str = "\
+**Diff Display** renders unified diffs with syntax-highlighted lines.\n\n\
+## Flow\n\
+1. AI calls `propose_changes` tool with edits\n\
+2. MAE computes a unified diff (LCS-based) between old and new content\n\
+3. The diff is displayed in the `*AI-Diff*` buffer\n\
+4. Lines are colored by type:\n\
+   - `+` lines → `diff.added` (green)\n\
+   - `-` lines → `diff.removed` (red)\n\
+   - `@@` headers → `diff.hunk` (magenta)\n\
+   - `---`/`+++` headers → `diff.header` (cyan, bold)\n\n\
+## Commands\n\
+- `:ai-accept` — apply the proposed changes\n\
+- `:ai-reject` — discard the proposed changes\n\n\
+## Theme Keys\n\
+All 8 bundled themes include `diff.added`, `diff.removed`, `diff.hunk`, \
+and `diff.header` style definitions.\n\n\
+See also: [[concept:ai-as-peer]], [[concept:options]]\n";
+
+const CONCEPT_BUFFER_MODE: &str = "\
+The **BufferMode** trait (`buffer_mode.rs`) is the contract every buffer kind implements. \
+It replaces scattered `match buf.kind` blocks with polymorphic dispatch.\n\n\
+## Methods\n\
+| Method | Purpose |\n\
+|--------|---------|\n\
+| `mode_name()` | Display name for the status bar |\n\
+| `keymap_name()` | Overlay keymap name (e.g. `git-status`, `help`) |\n\
+| `read_only()` | Whether inserts are blocked |\n\
+| `default_word_wrap()` | Whether word-wrap defaults to on |\n\
+| `has_gutter()` | Whether line numbers render |\n\
+| `status_hint()` | One-line discoverability text on mode entry |\n\
+| `mode_theme_key()` | Status-bar mode indicator color |\n\
+| `insert_mode()` | Which insert mode to enter (Insert vs ShellInsert) |\n\n\
+`BufferKind` implements `BufferMode`. New buffer types add trait arms, not scattered matches.\n\n\
+See also: [[concept:buffer]], [[concept:mode]], [[concept:keymap-inheritance]]\n";
+
+const CONCEPT_BUFFER_VIEW: &str = "\
+The **BufferView** enum (`buffer_view.rs`) stores mode-specific state on `Buffer`. \
+Variants: `Conversation`, `Help`, `Debug`, `GitStatus`, `Visual`, `FileTree`, `None`.\n\n\
+Accessor methods: `buf.conversation()`, `buf.help_view()`, `buf.git_status_view()`, etc. \
+Each returns `Option<&T>` (or `Option<&mut T>` for the `_mut` variant).\n\n\
+This replaced 6 `Option<T>` fields that were always mutually exclusive.\n\n\
+See also: [[concept:buffer]], [[concept:buffer-mode]]\n";
+
+const CONCEPT_KEYMAP_INHERITANCE: &str = "\
+**Keymap inheritance** lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) \
+inherit bindings from a parent keymap.\n\n\
+## Mechanism\n\
+- `Keymap` has a `parent: Option<String>` field.\n\
+- Key lookup: overlay keymap -> parent -> fallback.\n\
+- `which_key_entries_for_current_keymap()` merges overlay + parent entries for the which-key popup.\n\n\
+## Scheme API\n\
+`(define-keymap \"name\" \"parent\")` creates a keymap with inheritance.\n\n\
+## Current Overlay Keymaps\n\
+| Keymap | Parent | Buffer Kind |\n\
+|--------|--------|-------------|\n\
+| `git-status` | `normal` | GitStatus |\n\
+| `help` | `normal` | Help |\n\
+| `debug` | `normal` | Debug |\n\
+| `file-tree` | `normal` | FileTree |\n\n\
+See also: [[concept:mode]], [[concept:buffer-mode]]\n";
+
+const CONCEPT_CONCEAL: &str = "\
+**Link & Markup Rendering** controls how inline markup is displayed — \
+showing styled labels instead of raw syntax.\n\n\
+## Options\n\
+| Option | Default | Description |\n\
+|--------|---------|-------------|\n\
+| `link_descriptive` | `true` | Strip `[label](url)` markup, show styled label only |\n\
+| `render_markup` | `true` | Render `**bold**`, `` `code` ``, `*bold*`, `/italic/`, `=code=`, `~verbatim~` with styling |\n\n\
+## Configuration\n\
+- `:set link_descriptive false` — show raw `[label](url)` text\n\
+- `:set render_markup false` — disable inline styling in conversation buffers\n\
+- `:setlocal nolink_descriptive` — per-buffer override\n\
+- `config.toml`: `link_descriptive = true` under `[editor]`\n\
+- Scheme: `(set-option! \"link-descriptive\" \"true\")`\n\n\
+## Scope\n\
+- **Conversation buffers:** markdown links are stripped to labels; org and markdown \
+inline markup (bold, italic, code) get styling spans\n\
+- **Help buffers:** both markdown and org inline markup are styled\n\
+- Links are clickable via `gx` (`open-link-at-cursor`)\n\n\
+## Safety\n\
+Inline markup spans intentionally exclude `markup.heading` — heading spans \
+would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform \
+line heights in conversation buffers.\n\n\
+See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]\n";
 
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
-fn install_command_nodes(kb: &mut KnowledgeBase, registry: &CommandRegistry) {
+fn install_command_nodes(
+    kb: &mut KnowledgeBase,
+    registry: &CommandRegistry,
+    keybinding_map: &HashMap<String, Vec<(String, String)>>,
+    hooks: &HookRegistry,
+) {
     for cmd in registry.list_commands() {
         let source_line = match &cmd.source {
             crate::commands::CommandSource::Builtin => "**Source:** built-in (Rust)".to_string(),
             crate::commands::CommandSource::Scheme(fn_name) => {
                 format!("**Source:** Scheme (`{}`)", fn_name)
             }
+            crate::commands::CommandSource::Autoload { feature } => {
+                format!("**Source:** autoload (feature `{}`)", feature)
+            }
         };
+        let category = infer_category(&cmd.name);
+
+        let keybindings_section = match keybinding_map.get(&cmd.name) {
+            Some(bindings) if !bindings.is_empty() => {
+                let mut lines = String::from("\n\n**Keybindings:**\n");
+                for (mode, key) in bindings {
+                    lines.push_str(&format!("  {}: `{}`\n", mode, key));
+                }
+                lines
+            }
+            _ => String::new(),
+        };
+
+        let hook_names = hooks.hooks_containing(&cmd.name);
+        let hooks_section = if hook_names.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n**Hooks:** {}", hook_names.join(", "))
+        };
+
         let body = format!(
-            "{doc}\n\n{source_line}\n\nSee also: [[index]], [[concept:command]], [[concept:ai-as-peer]]",
+            "{doc}\n\n**Category:** {category}\n{source_line}{keybindings}{hooks}\n\nSee also: [[index]], [[concept:command]], [[category:{category}]]",
             doc = cmd.doc,
+            category = category,
             source_line = source_line,
+            keybindings = keybindings_section,
+            hooks = hooks_section,
         );
         let id = format!("cmd:{}", cmd.name);
         let title = format!("Command: {}", cmd.name);
         kb.insert(Node::new(id, title, NodeKind::Command, body));
+    }
+}
+
+/// Install one `category:<name>` index node per distinct category.
+fn install_category_nodes(
+    kb: &mut KnowledgeBase,
+    registry: &CommandRegistry,
+    keybinding_map: &HashMap<String, Vec<(String, String)>>,
+) {
+    let mut categories: HashMap<&str, Vec<&str>> = HashMap::new();
+    for cmd in registry.list_commands() {
+        let cat = infer_category(&cmd.name);
+        categories.entry(cat).or_default().push(&cmd.name);
+    }
+    for (cat, mut commands) in categories {
+        commands.sort();
+        let mut body = format!("Commands in the **{}** category:\n\n", cat);
+        for name in &commands {
+            let binding_hint = match keybinding_map.get(*name) {
+                Some(bindings) if !bindings.is_empty() => {
+                    let keys: Vec<String> = bindings
+                        .iter()
+                        .map(|(m, k)| format!("{}: `{}`", m, k))
+                        .collect();
+                    format!(" ({})", keys.join(", "))
+                }
+                _ => String::new(),
+            };
+            body.push_str(&format!("- [[cmd:{}]]{}\n", name, binding_hint));
+        }
+        body.push_str("\nSee also: [[index]], [[concept:command]]");
+        let id = format!("category:{}", cat);
+        let title = format!("Category: {}", cat);
+        kb.insert(Node::new(id, title, NodeKind::Concept, body).with_tags(["category"]));
     }
 }
 
@@ -784,6 +1314,104 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_ORG_MODE,
         )
         .with_tags(["org", "editing"]),
+        Node::new(
+            "concept:markdown",
+            "Concept: Markdown",
+            NodeKind::Concept,
+            CONCEPT_MARKDOWN,
+        )
+        .with_tags(["markdown", "editing"]),
+        Node::new(
+            "concept:ex-commands",
+            "Concept: Ex-Command Grammar",
+            NodeKind::Concept,
+            CONCEPT_EX_COMMANDS,
+        )
+        .with_tags(["commands", "vim"]),
+        Node::new(
+            "concept:set-syntax",
+            "Concept: :set Option Syntax",
+            NodeKind::Concept,
+            CONCEPT_SET_SYNTAX,
+        )
+        .with_tags(["options", "configuration", "vim"]),
+        Node::new(
+            "concept:scrollbar",
+            "Concept: Scrollbar",
+            NodeKind::Concept,
+            CONCEPT_SCROLLBAR,
+        )
+        .with_tags(["gui", "rendering"]),
+        Node::new(
+            "concept:autosave",
+            "Concept: Autosave",
+            NodeKind::Concept,
+            CONCEPT_AUTOSAVE,
+        )
+        .with_tags(["files", "configuration"]),
+        Node::new(
+            "concept:file-tree",
+            "Concept: File Tree",
+            NodeKind::Concept,
+            CONCEPT_FILE_TREE,
+        )
+        .with_tags(["files", "navigation", "gui"]),
+        Node::new(
+            "concept:diff-display",
+            "Concept: Diff Display",
+            NodeKind::Concept,
+            CONCEPT_DIFF_DISPLAY,
+        )
+        .with_tags(["ai", "diff", "rendering"]),
+        Node::new(
+            "concept:conceal",
+            "Concept: Conceal (Link & Markup Rendering)",
+            NodeKind::Concept,
+            CONCEPT_CONCEAL,
+        )
+        .with_tags(["rendering", "configuration", "conversation"]),
+        Node::new(
+            "concept:buffer-mode",
+            "Concept: BufferMode Trait",
+            NodeKind::Concept,
+            CONCEPT_BUFFER_MODE,
+        )
+        .with_tags(["data-model", "core", "extensibility"]),
+        Node::new(
+            "concept:buffer-view",
+            "Concept: BufferView Enum",
+            NodeKind::Concept,
+            CONCEPT_BUFFER_VIEW,
+        )
+        .with_tags(["data-model", "core"]),
+        Node::new(
+            "concept:keymap-inheritance",
+            "Concept: Keymap Inheritance",
+            NodeKind::Concept,
+            CONCEPT_KEYMAP_INHERITANCE,
+        )
+        .with_tags(["data-model", "modal-editing", "extensibility"]),
+        Node::new(
+            "concept:package-system",
+            "Concept: Package System",
+            NodeKind::Concept,
+            CONCEPT_PACKAGE_SYSTEM,
+        )
+        .with_tags(["extensibility", "scheme", "packages"]),
+        Node::new(
+            "concept:option-registry",
+            "Concept: Option Registry",
+            NodeKind::Concept,
+            CONCEPT_OPTION_REGISTRY,
+        )
+        .with_tags(["configuration", "core", "options"]),
+        Node::new(
+            "concept:scheme-api",
+            "Concept: Scheme API",
+            NodeKind::Concept,
+            CONCEPT_SCHEME_API,
+        )
+        .with_tags(["extensibility", "scheme", "api"]),
     ]
 }
 
@@ -809,13 +1437,28 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:introspect|Introspect]] — AI diagnostic snapshot (threads/perf/locks/buffers)
 - [[concept:gui|GUI Backend]] — dual rendering (terminal + GUI), mouse, font config
 - [[concept:git-status|Git Status]] — Magit-lite porcelain UI
-- [[concept:org-mode|Org-mode]] — Interactivity, folding, and task management
+- [[concept:org-mode|Org-mode]] — Structural editing, folding, narrowing, and task management\n\
+- [[concept:markdown|Markdown]] — Structural editing parity with org-mode for `#` headings\n\
+- [[concept:ex-commands|Ex-Command Grammar]] — Tokenizer for w/q/x compound commands\n\
+- [[concept:set-syntax|:set Syntax]] — Vim-style option configuration (no-prefix, toggle, query)\n\
+- [[concept:autosave|Autosave]] — interval-based background save with idle debounce\n\
+- [[concept:file-tree|File Tree]] — project sidebar with icons and directory expansion\n\
+- [[concept:diff-display|Diff Display]] — syntax-highlighted unified diffs for AI changes\n\
+- [[concept:scrollbar|Scrollbar]] — Vertical scrollbar and nyan mode\n\
+- [[concept:conceal|Link & Markup Rendering]] — Descriptive links and inline styling\n\
+- [[concept:buffer-mode|BufferMode Trait]] — the contract every buffer kind implements\n\
+- [[concept:buffer-view|BufferView Enum]] — mode-specific state on Buffer\n\
+- [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback\n\
+- [[concept:package-system|Package System]] — require/provide for Scheme extensions\n\
+- [[concept:option-registry|Option Registry]] — single source of truth for editor settings\n\
+- [[concept:scheme-api|Scheme API]] — 40+ functions for buffer/window/command/keymap access
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
 - [[key:leader-keys|SPC leader bindings]] (14 groups, Doom Emacs style)
 - [[concept:project|Project management]]
 - Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
+- Browse by category: `category:movement`, `category:editing`, `category:git`, etc.
 
 ## Tutorial
 - [[tutor:index|MAE Tutorial]] — interactive lessons covering all essentials
@@ -1045,10 +1688,32 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 ### Org-mode\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
-| `TAB` | [[cmd:org-cycle]] | Cycle folding |\n\
+| `TAB` | [[cmd:org-cycle]] | Three-state fold cycle |\n\
+| `M-h` / `M-Left` | [[cmd:org-promote]] | Promote heading |\n\
+| `M-l` / `M-Right` | [[cmd:org-demote]] | Demote heading |\n\
+| `M-k` / `M-Up` | [[cmd:org-move-subtree-up]] | Move subtree up |\n\
+| `M-j` / `M-Down` | [[cmd:org-move-subtree-down]] | Move subtree down |\n\
 | `S-Left` | [[cmd:org-todo-prev]] | Prev TODO state |\n\
 | `S-Right` | [[cmd:org-todo-next]] | Next TODO state |\n\
 | `Enter` | [[cmd:org-open-link]] | Follow link |\n\n\
+### SPC m — +mode (org)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s n` | [[cmd:org-narrow-subtree]] | Narrow to subtree |\n\
+| `s w` | [[cmd:org-widen]] | Widen (restore full buffer) |\n\n\
+### Markdown\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `TAB` | [[cmd:md-cycle]] | Three-state fold cycle |\n\
+| `M-h` / `M-Left` | [[cmd:md-promote]] | Promote heading |\n\
+| `M-l` / `M-Right` | [[cmd:md-demote]] | Demote heading |\n\
+| `M-k` / `M-Up` | [[cmd:md-move-subtree-up]] | Move subtree up |\n\
+| `M-j` / `M-Down` | [[cmd:md-move-subtree-down]] | Move subtree down |\n\n\
+### SPC m — +mode (markdown)\n\
+| Key | Command | Description |\n\
+|-----|---------|-------------|\n\
+| `s n` | [[cmd:md-narrow-subtree]] | Narrow to subtree |\n\
+| `s w` | [[cmd:md-widen]] | Widen (restore full buffer) |\n\n\
 ### SPC h — +help\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
@@ -1353,6 +2018,62 @@ backend uses ratatui/crossterm. The binary selects the backend at startup based 
 - **GUI:** `winit::pump_app_events()` + tokio `select!` with dirty-flag gating.\n\n\
 See also: [[concept:terminal]], [[concept:mode]], [[index]]\n";
 
+const CONCEPT_PACKAGE_SYSTEM: &str = "\
+The **package system** enables Scheme-based extensions via `require`/`provide`.\n\n\
+## Loading\n\
+- `(require \"feature\")` — searches `load-path` for `feature.scm` and evaluates it.\n\
+- `(provide \"feature\")` — marks the current file as providing a feature.\n\
+- `(featurep \"feature\")` — returns `#t` if the feature is loaded.\n\n\
+## Load path\n\
+Default: `~/.config/mae/packages/`, `~/.config/mae/lisp/`.\n\
+- `(load-path)` — returns current search path as a list.\n\
+- `(add-to-load-path! \"/path/to/dir\")` — prepends to search path.\n\n\
+## Autoload\n\
+`CommandSource::Autoload { feature }` enables deferred loading: when a command is first \
+dispatched, `(require feature)` is triggered, then the command re-dispatches.\n\n\
+See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
+
+const CONCEPT_OPTION_REGISTRY: &str = "\
+The **option registry** (`options.rs`) is the single source of truth for all editor settings.\n\n\
+Each `OptionDef` has: name, aliases, kind, default, config_key, doc, valid_values.\n\
+Kinds: `Bool`, `String`, `Float`, `Int`, `Theme`.\n\n\
+## Flow\n\
+1. `:set foo bar` → `Editor::set_option(\"foo\", \"bar\")`\n\
+2. Validates kind + range → sets field on `Editor`\n\
+3. `get_option(name)` reads back the current value\n\n\
+## Scheme\n\
+- `(set-option! \"name\" \"value\")` — from Scheme\n\
+- `(get-option \"name\")` — returns current value as string\n\
+- `*option-list*` — all options as `(name kind default doc)` tuples\n\n\
+## Range clamping\n\
+Options with numeric types are clamped to valid ranges in `set_option()` to prevent \
+rendering corruption (e.g. heading_scale ≤0 → infinite loop).\n\n\
+See also: [[concept:command]], [[concept:hooks]], [[index]]\n";
+
+const CONCEPT_SCHEME_API: &str = "\
+MAE exposes ~40 Scheme functions to extension code. They fall into categories:\n\n\
+## Buffer editing\n\
+`buffer-insert`, `buffer-delete-range`, `buffer-replace-range`, `buffer-undo`, `buffer-redo`\n\n\
+## Buffer read\n\
+`*buffer-name*`, `*buffer-text*`, `*buffer-char-count*`, `buffer-text-range`, \
+`*buffer-list*`, `get-buffer-by-name`\n\n\
+## Cursor / navigation\n\
+`cursor-goto`, `*cursor-row*`, `*cursor-col*`, `open-file`, `switch-to-buffer`\n\n\
+## Windows\n\
+`*window-count*`, `*window-list*`\n\n\
+## Options / commands\n\
+`set-option!`, `set-local-option!`, `get-option`, `*option-list*`, \
+`define-command`, `run-command`, `command-exists?`, `*command-list*`\n\n\
+## Keymaps\n\
+`define-key`, `define-keymap`, `undefine-key!`, `*keymap-list*`, `keymap-bindings`\n\n\
+## File I/O\n\
+`read-file`, `file-exists?`, `list-directory`\n\n\
+## Architecture\n\
+Write-side: `SharedState` (Arc<Mutex>) accumulates `pending_*` fields during eval.\n\
+Read-side: `inject_editor_state()` snapshots editor state as globals before eval.\n\
+Apply: `apply_to_editor()` drains pending changes after eval.\n\n\
+See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1360,7 +2081,7 @@ mod tests {
     #[test]
     fn seed_produces_index_and_commands() {
         let reg = CommandRegistry::with_builtins();
-        let kb = seed_kb(&reg);
+        let kb = seed_kb_default(&reg);
         assert!(kb.contains("index"));
         // Every registered command becomes a node.
         for cmd in reg.list_commands() {
@@ -1371,7 +2092,7 @@ mod tests {
 
     #[test]
     fn seed_includes_core_concepts() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         for required in [
             "concept:buffer",
             "concept:window",
@@ -1399,7 +2120,7 @@ mod tests {
 
     #[test]
     fn index_links_to_concepts() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("index");
         assert!(links.contains(&"concept:buffer".to_string()));
         assert!(links.contains(&"concept:ai-as-peer".to_string()));
@@ -1409,7 +2130,7 @@ mod tests {
 
     #[test]
     fn seed_includes_tutor_lessons() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         assert!(kb.contains("tutor:index"), "missing tutor:index");
         for i in [
             "lesson:navigation",
@@ -1435,7 +2156,7 @@ mod tests {
 
     #[test]
     fn command_node_body_has_source_and_backlinks() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let node = kb.get("cmd:undo").expect("cmd:undo should exist");
         assert!(node.body.contains("built-in"));
         assert!(node.links().contains(&"index".to_string()));
@@ -1443,7 +2164,7 @@ mod tests {
 
     #[test]
     fn concept_ai_as_peer_links_to_tools() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("concept:ai-as-peer");
         // A command referenced in the narrative should appear as a link
         // (the cmd:* targets exist because we generated them).
@@ -1453,10 +2174,191 @@ mod tests {
 
     #[test]
     fn lesson_ai_has_expected_links() {
-        let kb = seed_kb(&CommandRegistry::with_builtins());
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
         let links = kb.links_from("lesson:ai");
         assert!(links.contains(&"cmd:ai-prompt".to_string()));
         assert!(links.contains(&"cmd:open-ai-agent".to_string()));
         assert!(links.contains(&"cmd:ai-cancel".to_string()));
+    }
+
+    #[test]
+    fn infer_category_known_prefixes() {
+        assert_eq!(infer_category("move-left"), "movement");
+        assert_eq!(infer_category("scroll-down"), "movement");
+        assert_eq!(infer_category("delete-line"), "editing");
+        assert_eq!(infer_category("undo"), "editing");
+        assert_eq!(infer_category("git-status"), "git");
+        assert_eq!(infer_category("lsp-hover"), "lsp");
+        assert_eq!(infer_category("debug-start"), "debug");
+        assert_eq!(infer_category("window-grow"), "window");
+        assert_eq!(infer_category("file-tree-toggle"), "file-tree");
+        assert_eq!(infer_category("ai-prompt"), "ai");
+        assert_eq!(infer_category("help"), "help");
+        assert_eq!(infer_category("toggle-fold"), "toggle");
+        assert_eq!(infer_category("unknown-thing"), "general");
+    }
+
+    #[test]
+    fn collect_keybindings_reverse_index() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        normal.bind(parse_key_seq("Left"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+
+        let map = collect_keybindings(&keymaps);
+        let bindings = map.get("move-left").unwrap();
+        assert!(bindings.len() >= 2);
+        assert!(bindings.iter().any(|(m, k)| m == "normal" && k == "h"));
+    }
+
+    #[test]
+    fn collect_keybindings_for_single_command() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        normal.bind(parse_key_seq("j"), "move-down");
+        keymaps.insert("normal".to_string(), normal);
+
+        let bindings = collect_keybindings_for(&keymaps, "move-left");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0], ("normal".to_string(), "h".to_string()));
+    }
+
+    #[test]
+    fn seed_kb_with_keymaps_has_categories() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let reg = CommandRegistry::with_builtins();
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&reg, &keymaps, &hooks);
+
+        // Category nodes should exist
+        assert!(
+            kb.contains("category:movement"),
+            "should have movement category"
+        );
+        assert!(
+            kb.contains("category:editing"),
+            "should have editing category"
+        );
+
+        // Command nodes should have category info
+        let node = kb.get("cmd:move-left").unwrap();
+        assert!(node.body.contains("**Category:** movement"));
+    }
+
+    #[test]
+    fn enriched_cmd_node_has_keybindings() {
+        use crate::keymap::{parse_key_seq, Keymap};
+        let reg = CommandRegistry::with_builtins();
+        let mut keymaps = HashMap::new();
+        let mut normal = Keymap::new("normal");
+        normal.bind(parse_key_seq("h"), "move-left");
+        keymaps.insert("normal".to_string(), normal);
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&reg, &keymaps, &hooks);
+
+        let node = kb.get("cmd:move-left").unwrap();
+        assert!(
+            node.body.contains("**Keybindings:**"),
+            "should have keybinding section"
+        );
+        assert!(
+            node.body.contains("normal: `h`"),
+            "should show normal mode h binding"
+        );
+    }
+
+    // --- KB Health Tests ---
+
+    #[test]
+    fn kb_health_all_cmd_nodes_have_category() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for cmd in reg.list_commands() {
+            let id = format!("cmd:{}", cmd.name);
+            let node = kb.get(&id).unwrap_or_else(|| panic!("missing {}", id));
+            assert!(
+                node.body.contains("**Category:**"),
+                "{} missing category",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn kb_health_all_category_index_nodes_exist() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        let mut categories = std::collections::HashSet::new();
+        for cmd in reg.list_commands() {
+            categories.insert(infer_category(&cmd.name));
+        }
+        for cat in categories {
+            let id = format!("category:{}", cat);
+            assert!(kb.contains(&id), "missing category node: {}", id);
+        }
+    }
+
+    #[test]
+    fn kb_health_all_category_links_resolve() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for id in kb.list_ids(None) {
+            if id.starts_with("category:") {
+                let links = kb.links_from(&id);
+                for link in &links {
+                    assert!(kb.contains(link), "broken link {} -> {}", id, link);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kb_health_no_orphaned_cmd_nodes() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        for cmd in reg.list_commands() {
+            let id = format!("cmd:{}", cmd.name);
+            let cat = infer_category(&cmd.name);
+            let cat_id = format!("category:{}", cat);
+            let links = kb.links_from(&cat_id);
+            assert!(
+                links.contains(&id),
+                "cmd {} not linked from category {}",
+                id,
+                cat_id
+            );
+        }
+    }
+
+    #[test]
+    fn kb_health_coverage_summary() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+        let all_ids = kb.list_ids(None);
+        let cmd_count = all_ids.iter().filter(|id| id.starts_with("cmd:")).count();
+        let concept_count = all_ids
+            .iter()
+            .filter(|id| id.starts_with("concept:"))
+            .count();
+        let category_count = all_ids
+            .iter()
+            .filter(|id| id.starts_with("category:"))
+            .count();
+        assert!(all_ids.len() >= 100, "total nodes: {} < 100", all_ids.len());
+        assert!(cmd_count >= 50, "cmd nodes: {} < 50", cmd_count);
+        assert!(concept_count >= 10, "concept nodes: {} < 10", concept_count);
+        assert!(
+            category_count >= 5,
+            "category nodes: {} < 5",
+            category_count
+        );
     }
 }

@@ -26,6 +26,11 @@ pub const HOOK_NAMES: &[&str] = &[
     "app-exit",
     "focus-in",
     "focus-out",
+    "option-change",
+    "before-revert",
+    "after-revert",
+    "window-split",
+    "window-close",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.
@@ -88,9 +93,28 @@ impl HookRegistry {
             .collect()
     }
 
+    /// Return names of all hooks that contain the given function name.
+    pub fn hooks_containing(&self, fn_name: &str) -> Vec<&str> {
+        self.hooks
+            .iter()
+            .filter(|(_, fns)| fns.iter().any(|f| f == fn_name))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     /// Check if a hook name is valid.
+    /// Supports parameterized hooks: `buffer-open:rust` is valid because
+    /// `buffer-open` is a valid base hook name.
     pub fn is_valid(name: &str) -> bool {
-        HOOK_NAMES.contains(&name)
+        if HOOK_NAMES.contains(&name) {
+            return true;
+        }
+        // Check for parameterized form: "base-hook:param"
+        if let Some(base) = name.split(':').next() {
+            HOOK_NAMES.contains(&base)
+        } else {
+            false
+        }
     }
 }
 
@@ -160,10 +184,43 @@ mod tests {
     }
 
     #[test]
+    fn hooks_containing_finds_matches() {
+        let mut reg = HookRegistry::new();
+        reg.add("before-save", "my-fn");
+        reg.add("after-save", "my-fn");
+        reg.add("buffer-open", "other-fn");
+        let mut result = reg.hooks_containing("my-fn");
+        result.sort();
+        assert_eq!(result, vec!["after-save", "before-save"]);
+        assert!(reg.hooks_containing("nonexistent").is_empty());
+    }
+
+    #[test]
     fn all_hook_names_valid() {
         for name in HOOK_NAMES {
             assert!(HookRegistry::is_valid(name));
         }
         assert!(!HookRegistry::is_valid("bogus"));
+    }
+
+    #[test]
+    fn parameterized_hook_valid() {
+        assert!(HookRegistry::is_valid("buffer-open:rust"));
+        assert!(HookRegistry::is_valid("buffer-open:python"));
+        assert!(HookRegistry::is_valid("before-save:rust"));
+    }
+
+    #[test]
+    fn parameterized_hook_invalid_base() {
+        assert!(!HookRegistry::is_valid("nonexistent:rust"));
+    }
+
+    #[test]
+    fn parameterized_hook_add_and_get() {
+        let mut reg = HookRegistry::new();
+        assert!(reg.add("buffer-open:rust", "my-rust-fn"));
+        assert_eq!(reg.get("buffer-open:rust"), &["my-rust-fn"]);
+        // Base hook is separate
+        assert!(reg.get("buffer-open").is_empty());
     }
 }

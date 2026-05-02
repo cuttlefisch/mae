@@ -13,10 +13,11 @@ members = [
     "crates/mcp",
     "test_fixtures",
 ]
+exclude = ["tools/code-map"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 

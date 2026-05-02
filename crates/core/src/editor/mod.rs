@@ -5,6 +5,7 @@ mod debug_panel_ops;
 mod diagnostics;
 mod dispatch;
 mod edit_ops;
+pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
 mod help_ops;
@@ -27,7 +28,7 @@ mod visual;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
-pub use lsp_ops::{LspLocation, LspRange};
+pub use lsp_ops::{DocumentHighlightRange, HighlightKind, LspLocation, LspRange};
 pub use marks::Mark;
 
 #[cfg(test)]
@@ -43,15 +44,26 @@ use crate::debug::DebugState;
 use crate::file_picker::FilePicker;
 use crate::hooks::HookRegistry;
 use crate::kb_seed::seed_kb;
-use crate::keymap::{KeyPress, Keymap};
+use crate::keymap::{KeyPress, Keymap, WhichKeyEntry};
 use crate::lsp_intent::LspIntent;
 use crate::messages::MessageLog;
 use crate::options::{parse_option_bool, OptionKind, OptionRegistry};
 use crate::search::SearchState;
 use crate::syntax::Language;
 use crate::theme::{default_theme, Theme};
-use crate::window::{Rect, WindowManager};
+use crate::window::{Rect, WindowId, WindowManager};
 use crate::Mode;
+
+/// Links the output `*AI*` buffer and input `*ai-input*` buffer in a
+/// split-view pair. The output pane is read-only (conversation history);
+/// the input pane is a normal Text buffer with full vi editing.
+#[derive(Debug, Clone)]
+pub struct ConversationPair {
+    pub output_buffer_idx: usize,
+    pub input_buffer_idx: usize,
+    pub output_window_id: WindowId,
+    pub input_window_id: WindowId,
+}
 
 /// LSP server connection status, tracked per language_id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +72,17 @@ pub enum LspServerStatus {
     Connected,
     Failed,
     Exited,
+}
+
+/// Rich LSP server info — status plus discovery metadata.
+#[derive(Debug, Clone)]
+pub struct LspServerInfo {
+    /// Current connection status.
+    pub status: LspServerStatus,
+    /// The command used to start this server (e.g. "rust-analyzer").
+    pub command: String,
+    /// Whether the binary was found on PATH at startup.
+    pub binary_found: bool,
 }
 
 /// A single item in the LSP completion popup.
@@ -73,6 +96,37 @@ pub struct CompletionItem {
     pub detail: Option<String>,
     /// Single-char sigil for the kind (f=function, v=variable, t=type, …).
     pub kind_sigil: char,
+}
+
+/// Floating popup showing LSP hover info near the cursor.
+#[derive(Debug, Clone)]
+pub struct HoverPopup {
+    /// Raw markdown from LSP.
+    pub contents: String,
+    /// Buffer row where K was pressed.
+    pub anchor_row: usize,
+    /// Buffer col where K was pressed.
+    pub anchor_col: usize,
+    /// Scroll offset for long content.
+    pub scroll_offset: usize,
+}
+
+/// A single item in the LSP code action popup menu.
+#[derive(Debug, Clone)]
+pub struct CodeActionItem {
+    /// Display title of the code action.
+    pub title: String,
+    /// The kind of the code action (e.g. "quickfix", "refactor").
+    pub kind: Option<String>,
+    /// JSON-serialized WorkspaceEdit to apply when selected.
+    pub edit_json: Option<String>,
+}
+
+/// Code action popup menu shown after `SPC c a`.
+#[derive(Debug, Clone)]
+pub struct CodeActionMenu {
+    pub items: Vec<CodeActionItem>,
+    pub selected: usize,
 }
 
 /// Record of a repeatable edit for dot-repeat (`.`).
@@ -115,6 +169,8 @@ pub struct EditorStateSnapshot {
     pub next_window_id: crate::window::WindowId,
     /// Editor mode at snapshot time.
     pub mode: Mode,
+    /// Conversation pair (AI split layout) at snapshot time.
+    pub conversation_pair: Option<ConversationPair>,
 }
 
 /// Top-level editor state.
@@ -125,6 +181,13 @@ pub struct EditorStateSnapshot {
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub window_mgr: WindowManager,
+    /// Saved layout state for window maximize/restore toggle.
+    pub saved_maximize_layout: Option<(
+        std::collections::HashMap<crate::window::WindowId, crate::window::Window>,
+        crate::window::LayoutNode,
+        crate::window::WindowId,
+        crate::window::WindowId,
+    )>,
     pub mode: Mode,
     pub running: bool,
     pub status_msg: String,
@@ -149,6 +212,8 @@ pub struct Editor {
     /// keymap, and the resulting command's help page is opened instead
     /// of dispatched. Cleared on resolution or Escape.
     pub awaiting_key_description: bool,
+    /// Transient flag for double-Esc detection in the *AI* output buffer.
+    pub conv_esc_pending: bool,
     /// Active named register selected by `"x` prefix. Consumed by the
     /// next yank/delete/paste operation. Uppercase = append mode,
     /// `_` = black-hole (discard), `+`/`*` = system clipboard.
@@ -225,6 +290,10 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// Signal for the binary to send `workspace/didChangeWorkspaceFolders`
+    /// when a project root is first detected after LSP has already started
+    /// (e.g. launched from app launcher with `cwd = $HOME`).
+    pub pending_lsp_root_change: Option<String>,
     /// Queue of pending DAP requests for the binary to drain each event-loop tick.
     /// Same pattern as `pending_lsp_requests`: core cannot call async DAP code
     /// directly; commands push intents here and `main.rs` forwards them to
@@ -274,8 +343,8 @@ pub struct Editor {
     /// LSP diagnostics keyed by file URI. Replaced wholesale on each
     /// `publishDiagnostics` notification (the LSP contract).
     pub diagnostics: DiagnosticStore,
-    /// LSP server connection status, keyed by language_id.
-    pub lsp_servers: HashMap<String, LspServerStatus>,
+    /// LSP server info (status + discovery metadata), keyed by language_id.
+    pub lsp_servers: HashMap<String, LspServerInfo>,
     /// Per-buffer tree-sitter state (parsed trees + cached highlight spans).
     /// Buffers without a detected language simply have no entry.
     pub syntax: crate::syntax::SyntaxMap,
@@ -407,6 +476,17 @@ pub struct Editor {
     /// instead of the human-focused active buffer. This allows the AI to
     /// edit files while the human watches the *AI* conversation.
     pub ai_target_buffer_idx: Option<usize>,
+    /// Linked output+input buffer pair for the split-view conversation UI.
+    /// `None` until the user opens the conversation buffer.
+    pub conversation_pair: Option<ConversationPair>,
+    /// Window ID of the file tree sidebar, if open. Used to track and close it.
+    pub file_tree_window_id: Option<crate::window::WindowId>,
+    /// Pending file deletion: (path, close_buffer_after_delete).
+    /// Set by `file-tree-delete` or `delete-this-file`, consumed by `y`/`n` key handler.
+    pub pending_file_delete: Option<(std::path::PathBuf, bool)>,
+    /// Pending file tree action (rename/create). The command-line submit
+    /// path checks this after the user types a new name.
+    pub file_tree_action: Option<crate::file_tree::FileTreeAction>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
     pub show_fps: bool,
@@ -450,10 +530,64 @@ pub struct Editor {
     pub restore_session: bool,
     /// Insert-mode C-d behavior: "dedent" (vim) or "delete-forward" (Emacs).
     pub insert_ctrl_d: String,
+    /// Toggle: scale heading font size in org/markdown buffers. Default true.
+    pub heading_scale: bool,
     /// Case-insensitive search (vim ignorecase).
     pub ignorecase: bool,
     /// When ignorecase is on and pattern contains uppercase, search case-sensitively.
     pub smartcase: bool,
+    /// Minimum lines of context above/below cursor (vim scrolloff). Default 5.
+    pub scrolloff: usize,
+    pub scrollbar: bool,
+    pub nyan_mode: bool,
+    /// Mouse scroll speed multiplier. Default 3.
+    pub scroll_speed: usize,
+    /// Max items in LSP completion popup. Default 10.
+    pub completion_max_items: usize,
+    /// Max lines in LSP hover popup. Default 15.
+    pub hover_max_lines: usize,
+    /// Popup width as percentage of screen. Default 70.
+    pub popup_width_pct: usize,
+    /// Popup height as percentage of screen. Default 60.
+    pub popup_height_pct: usize,
+    /// GUI scrollbar width in pixels. Default 6.0.
+    pub scrollbar_width: f32,
+    /// File picker max recursion depth. Default 12.
+    pub file_picker_max_depth: usize,
+    /// File picker max candidates. Default 50000.
+    pub file_picker_max_candidates: usize,
+    /// GUI window title. Default "MAE — Modern AI Editor".
+    pub window_title: String,
+    /// Heading scale for h1 (0.5–3.0). Default 1.5.
+    pub heading_scale_h1: f32,
+    /// Heading scale for h2 (0.5–3.0). Default 1.3.
+    pub heading_scale_h2: f32,
+    /// Heading scale for h3 (0.5–3.0). Default 1.15.
+    pub heading_scale_h3: f32,
+    /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
+    pub link_descriptive: bool,
+    /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
+    pub render_markup: bool,
+    /// Show hover info in a floating popup (true) or status bar (false). Default true.
+    pub lsp_hover_popup: bool,
+    /// Active hover popup (shown via K when lsp_hover_popup=true).
+    pub hover_popup: Option<HoverPopup>,
+    /// Show inline diagnostic underlines on error/warning ranges. Default true.
+    pub lsp_diagnostics_inline: bool,
+    /// Show diagnostic messages as virtual text at end of line. Default true.
+    pub lsp_diagnostics_virtual_text: bool,
+    /// Enable LSP auto-completion popup in insert mode. Default true.
+    pub lsp_completion: bool,
+    /// Active code action menu (shown via SPC c a).
+    pub code_action_menu: Option<CodeActionMenu>,
+    /// Symbol occurrence highlights from `textDocument/documentHighlight`.
+    /// Cleared on every cursor move; repopulated after idle timeout.
+    pub highlight_ranges: Vec<DocumentHighlightRange>,
+    /// Generation counter — incremented on cursor move to invalidate stale highlights.
+    pub highlight_generation: u64,
+    /// Last cursor position when a documentHighlight request was sent.
+    /// Used to avoid duplicate requests when the cursor hasn't moved.
+    pub highlight_last_pos: Option<(usize, usize)>,
     /// Pending block-visual insert: (min_row, max_row, min_col) saved when `I`
     /// is pressed in block visual mode. On insert-mode exit, the typed text is
     /// replicated to all rows in the range.
@@ -472,6 +606,28 @@ pub struct Editor {
     /// State stack for save/restore (push/pop) during temporary operations
     /// like self-test. AI tools call `editor_save_state` / `editor_restore_state`.
     pub state_stack: Vec<EditorStateSnapshot>,
+    /// True while a self-test session is running. Set when `self_test_suite`
+    /// is called (auto `save_state`), cleared on `SessionComplete` (auto `restore_state`).
+    pub self_test_active: bool,
+    /// Last time autosave fired. Compared against `autosave_interval` option.
+    pub last_autosave: std::time::Instant,
+    /// Autosave interval in seconds (0 = disabled). Parsed from option registry.
+    pub autosave_interval: u64,
+    /// Enable swap file writing for crash recovery (default true).
+    pub swap_file: bool,
+    /// Custom swap directory (empty = XDG default).
+    pub swap_directory: String,
+    /// When `true`, the renderer shows a which-key popup with all bindings
+    /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
+    /// cleared on the next keypress.
+    pub buffer_keys_popup: bool,
+    /// Tiered redraw level — how much work the renderer needs to do this frame.
+    /// Set by event handlers, cleared after render.
+    pub redraw_level: crate::redraw::RedrawLevel,
+    /// Dirty line range (start_line, end_line inclusive) for PartialLines redraws.
+    pub dirty_line_range: Option<(usize, usize)>,
+    /// Double-click detection: (timestamp, row, col) of last left-click.
+    pub last_click: Option<(std::time::Instant, usize, usize)>,
 }
 
 impl Default for Editor {
@@ -483,23 +639,27 @@ impl Default for Editor {
 impl Editor {
     pub fn new() -> Self {
         let commands = CommandRegistry::with_builtins();
-        let kb = seed_kb(&commands);
+        let keymaps = Self::default_keymaps();
+        let hooks = HookRegistry::new();
+        let kb = seed_kb(&commands, &keymaps, &hooks);
         Editor {
             buffers: vec![Buffer::new()],
             window_mgr: WindowManager::new(0),
+            saved_maximize_layout: None,
             mode: Mode::Normal,
             running: true,
             status_msg: String::new(),
             command_line: String::new(),
             commands,
-            keymaps: Self::default_keymaps(),
+            keymaps,
             which_key_prefix: Vec::new(),
-            message_log: MessageLog::new(1000),
+            message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             debug_state: None,
             registers: HashMap::new(),
             pending_char_command: None,
             awaiting_key_description: false,
+            conv_esc_pending: false,
             active_register: None,
             pending_register_prompt: false,
             pending_insert_register: false,
@@ -531,6 +691,7 @@ impl Editor {
             command_history_idx: None,
             command_cursor: 0,
             pending_lsp_requests: Vec::new(),
+            pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
             pending_agent_spawns: Vec::new(),
@@ -543,7 +704,7 @@ impl Editor {
             pending_shell_release: None,
             shell_viewports: HashMap::new(),
             shell_cwds: HashMap::new(),
-            hooks: HookRegistry::new(),
+            hooks,
             pending_hook_evals: Vec::new(),
             diagnostics: DiagnosticStore::default(),
             lsp_servers: HashMap::new(),
@@ -599,6 +760,10 @@ impl Editor {
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
+            conversation_pair: None,
+            file_tree_window_id: None,
+            pending_file_delete: None,
+            file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
             gui_font_size: 14.0,
@@ -617,204 +782,187 @@ impl Editor {
             clipboard: "unnamed".to_string(),
             restore_session: false,
             insert_ctrl_d: "dedent".to_string(),
+            heading_scale: true,
             ignorecase: false,
             smartcase: false,
+            scrolloff: 5,
+            scrollbar: true,
+            nyan_mode: false,
+            scroll_speed: 3,
+            completion_max_items: 10,
+            hover_max_lines: 15,
+            popup_width_pct: 70,
+            popup_height_pct: 60,
+            scrollbar_width: 6.0,
+            file_picker_max_depth: 12,
+            file_picker_max_candidates: 50000,
+            window_title: "MAE — Modern AI Editor".to_string(),
+            heading_scale_h1: 1.5,
+            heading_scale_h2: 1.3,
+            heading_scale_h3: 1.15,
+            link_descriptive: true,
+            render_markup: true,
+            lsp_hover_popup: true,
+            hover_popup: None,
+            lsp_diagnostics_inline: true,
+            lsp_diagnostics_virtual_text: true,
+            lsp_completion: true,
+            code_action_menu: None,
+            highlight_ranges: Vec::new(),
+            highlight_generation: 0,
+            highlight_last_pos: None,
             pending_block_insert: None,
             heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_recorder: crate::event_record::EventRecorder::new(),
             state_stack: Vec::new(),
+            self_test_active: false,
+            last_autosave: std::time::Instant::now(),
+            autosave_interval: 0,
+            swap_file: true,
+            swap_directory: String::new(),
+            buffer_keys_popup: false,
+            redraw_level: crate::redraw::RedrawLevel::Full,
+            dirty_line_range: None,
+            last_click: None,
         }
     }
 
     pub fn with_buffer(buf: Buffer) -> Self {
         let buf_file_path_snapshot = buf.file_path().map(|p| p.to_path_buf());
-        let commands = CommandRegistry::with_builtins();
-        let kb = seed_kb(&commands);
+        let syntax = {
+            let mut m = crate::syntax::SyntaxMap::new();
+            // If the buffer was opened with a file path, attach the
+            // matching language immediately so the first render shows
+            // syntax highlighting.
+            if let Some(path) = buf_file_path_snapshot {
+                if let Some(lang) = crate::syntax::language_for_path(&path) {
+                    m.set_language(0, lang);
+                }
+            }
+            m
+        };
         Editor {
             buffers: vec![buf],
-            window_mgr: WindowManager::new(0),
-            mode: Mode::Normal,
-            running: true,
-            status_msg: String::new(),
-            command_line: String::new(),
-            commands,
-            keymaps: Self::default_keymaps(),
-            which_key_prefix: Vec::new(),
-            message_log: MessageLog::new(1000),
-            theme: default_theme(),
-            debug_state: None,
-            registers: HashMap::new(),
-            pending_char_command: None,
-            awaiting_key_description: false,
-            active_register: None,
-            pending_register_prompt: false,
-            pending_insert_register: false,
-            insert_mode_oneshot_normal: false,
-            pending_surround_from: None,
-            search_state: SearchState::default(),
-            search_input: String::new(),
-            visual_anchor_row: 0,
-            visual_anchor_col: 0,
-            viewport_height: 24,
-            text_area_width: 80,
-            file_picker: None,
-            file_browser: None,
-            command_palette: None,
-            tab_completions: Vec::new(),
-            tab_completion_idx: 0,
-            last_edit: None,
-            insert_start_offset: None,
-            insert_initiated_by: None,
-            last_insert_pos: None,
-            jumps: Vec::new(),
-            jump_idx: 0,
-            changes: Vec::new(),
-            change_idx: 0,
-            count_prefix: None,
-            pending_char_count: 1,
-            alternate_buffer_idx: None,
-            command_history: Vec::new(),
-            command_history_idx: None,
-            pending_lsp_requests: Vec::new(),
-            pending_dap_intents: Vec::new(),
-            pending_shell_spawns: Vec::new(),
-            pending_agent_spawns: Vec::new(),
-            pending_shell_resets: Vec::new(),
-            pending_shell_closes: Vec::new(),
-            pending_shell_inputs: Vec::new(),
-            pending_shell_scroll: None,
-            pending_shell_click: None,
-            pending_shell_drag: None,
-            pending_shell_release: None,
-            shell_viewports: HashMap::new(),
-            shell_cwds: HashMap::new(),
-            hooks: HookRegistry::new(),
-            pending_hook_evals: Vec::new(),
-            diagnostics: DiagnosticStore::default(),
-            lsp_servers: HashMap::new(),
-            syntax: {
-                let mut m = crate::syntax::SyntaxMap::new();
-                // If the buffer was opened with a file path, attach the
-                // matching language immediately so the first render shows
-                // syntax highlighting.
-                if let Some(path) = buf_file_path_snapshot {
-                    if let Some(lang) = crate::syntax::language_for_path(&path) {
-                        m.set_language(0, lang);
-                    }
-                }
-                m
-            },
-            syntax_reparse_pending: std::collections::HashSet::new(),
-            last_edit_time: std::time::Instant::now(),
-            syntax_selection_stack: Vec::new(),
-            marks: HashMap::new(),
-            completion_items: Vec::new(),
-            completion_selected: 0,
-            command_cursor: 0,
-            macro_recording: false,
-            macro_register: None,
-            macro_log: Vec::new(),
-            last_macro_register: None,
-            macro_replay_depth: 0,
-            last_help_state: None,
             splash_art: None,
-            pending_operator: None,
-            operator_start: None,
-            operator_count: None,
-            last_motion_linewise: false,
-            pending_surround_range: None,
-            last_find_char: None,
-            last_visual: None,
-            pending_scheme_eval: Vec::new(),
-            kb,
-            ai_session_cost_usd: 0.0,
-            ai_session_tokens_in: 0,
-            ai_session_tokens_out: 0,
-            ai_cache_read_tokens: 0,
-            ai_cache_creation_tokens: 0,
-            ai_context_window: 0,
-            ai_context_used_tokens: 0,
-            bell_until: None,
-            project: None,
-            git_branch: None,
-            ai_permission_tier: "ReadOnly".to_string(),
-            recent_files: crate::project::RecentFiles::default(),
-            recent_projects: crate::project::RecentProjects::default(),
-            show_line_numbers: true,
-            relative_line_numbers: false,
-            word_wrap: false,
-            break_indent: true,
-            show_break: "↪ ".to_string(),
-            org_hide_emphasis_markers: false,
-            pending_agent_setup: None,
-            input_lock: InputLock::None,
-            ai_streaming: false,
-            ai_cancel_requested: false,
-            last_esc_time: None,
-            ai_mode: "standard".to_string(),
-            ai_profile: "pair-programmer".to_string(),
-            ai_current_round: 0,
-            ai_transaction_start_idx: None,
-            ai_target_buffer_idx: None,
-            show_fps: false,
-            renderer_name: "terminal".to_string(),
-            gui_font_size: 14.0,
-            gui_font_size_default: 14.0,
-            gui_font_family: String::new(),
-            gui_icon_font_family: String::new(),
-            ai_editor: "claude".to_string(),
-            ai_provider: String::new(),
-            ai_model: String::new(),
-            ai_api_key_command: String::new(),
-            ai_base_url: String::new(),
-            option_registry: OptionRegistry::new(),
-            splash_selection: 0,
-            debug_mode: false,
-            perf_stats: perf::PerfStats::default(),
-            clipboard: "unnamed".to_string(),
-            restore_session: false,
-            insert_ctrl_d: "dedent".to_string(),
-            ignorecase: false,
-            smartcase: false,
-            pending_block_insert: None,
-            heartbeat: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            watchdog_stall_count: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            watchdog_stall_recovery: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            event_recorder: crate::event_record::EventRecorder::new(),
-            state_stack: Vec::new(),
+            syntax,
+            ..Self::new()
         }
     }
 
-    /// Get the keymap for the current mode.
-    pub fn current_keymap(&self) -> Option<&Keymap> {
+    /// Returns the primary keymap name and optional fallback for the current mode.
+    /// Buffer-kind overlays (git-status, file-tree, help, debug) and language
+    /// overlays (org, markdown) sit on top of "normal" — if the overlay has no
+    /// match, the caller should retry with the fallback.
+    pub fn current_keymap_names(&self) -> Option<(&'static str, Option<&'static str>)> {
         let idx = self.active_buffer_idx();
         let kind = self.buffers[idx].kind;
         let lang = self.syntax.language_of(idx);
 
-        let name = match self.mode {
+        match self.mode {
             Mode::Normal => {
-                if kind == crate::buffer::BufferKind::GitStatus {
-                    "git-status"
+                // Buffer-kind overlay via BufferMode trait
+                use crate::buffer_mode::BufferMode;
+                if let Some(km_name) = kind.keymap_name() {
+                    Some((km_name, Some("normal")))
                 } else if lang == Some(Language::Org) {
-                    "org"
+                    // Language overlays stay hardcoded until Language::keymap_name() exists
+                    Some(("org", Some("normal")))
+                } else if lang == Some(Language::Markdown) {
+                    Some(("markdown", Some("normal")))
                 } else {
-                    "normal"
+                    Some(("normal", None))
                 }
             }
-            Mode::Insert => "insert",
-            Mode::Visual(_) => "visual",
+            Mode::Insert => Some(("insert", None)),
+            Mode::Visual(_) => Some(("visual", None)),
             Mode::Command
             | Mode::ConversationInput
             | Mode::Search
             | Mode::FilePicker
             | Mode::FileBrowser
-            | Mode::CommandPalette => "command",
-            Mode::GitStatus => "git-status",
-            Mode::ShellInsert => return None, // Keys handled by binary shell layer
-        };
+            | Mode::CommandPalette => Some(("command", None)),
+            Mode::ShellInsert => None,
+        }
+    }
+
+    /// Get the keymap for the current mode.
+    pub fn current_keymap(&self) -> Option<&Keymap> {
+        let (name, _) = self.current_keymap_names()?;
         self.keymaps.get(name)
+    }
+
+    /// Merge which-key entries from the overlay keymap and its parent.
+    fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
+        let Some((primary, fallback)) = self.current_keymap_names() else {
+            return vec![];
+        };
+        let mut entries = self
+            .keymaps
+            .get(primary)
+            .map(|km| km.which_key_entries(prefix, &self.commands))
+            .unwrap_or_default();
+        if let Some(fb_name) = fallback {
+            if let Some(fb_km) = self.keymaps.get(fb_name) {
+                let fb_entries = fb_km.which_key_entries(prefix, &self.commands);
+                let existing: std::collections::HashSet<String> =
+                    entries.iter().map(|e| format!("{:?}", e.key)).collect();
+                for entry in fb_entries {
+                    if !existing.contains(&format!("{:?}", entry.key)) {
+                        entries.push(entry);
+                    }
+                }
+            }
+        }
+        entries
+    }
+
+    /// Get which-key entries for the current keymap, merging overlay + parent.
+    pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
+        self.merged_which_key_entries(&self.which_key_prefix)
+    }
+
+    /// Get all top-level bindings for the current buffer's keymap + parent.
+    /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
+    pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
+        self.merged_which_key_entries(&[])
+    }
+
+    // -- Redraw level methods (Emacs tiered redisplay pattern) ----------------
+
+    /// Mark that only the cursor moved — reuse cached syntax spans.
+    pub fn mark_cursor_moved(&mut self) {
+        self.redraw_level = self
+            .redraw_level
+            .max(crate::redraw::RedrawLevel::CursorOnly);
+    }
+
+    /// Mark that the viewport scrolled.
+    pub fn mark_scrolled(&mut self) {
+        self.redraw_level = self.redraw_level.max(crate::redraw::RedrawLevel::Scroll);
+    }
+
+    /// Mark specific lines as dirty, merging with any existing dirty range.
+    pub fn mark_lines_dirty(&mut self, start: usize, end: usize) {
+        self.redraw_level = self
+            .redraw_level
+            .max(crate::redraw::RedrawLevel::PartialLines);
+        self.dirty_line_range = Some(match self.dirty_line_range {
+            Some((old_start, old_end)) => (old_start.min(start), old_end.max(end)),
+            None => (start, end),
+        });
+    }
+
+    /// Mark that a full redraw is needed (theme, resize, mode change, etc.).
+    pub fn mark_full_redraw(&mut self) {
+        self.redraw_level = crate::redraw::RedrawLevel::Full;
+    }
+
+    /// Reset redraw level after rendering. Called by the event loop after `render()`.
+    pub fn clear_redraw(&mut self) {
+        self.redraw_level = crate::redraw::RedrawLevel::None;
+        self.dirty_line_range = None;
     }
 
     /// Returns the active buffer's project root, falling back to the editor-wide project root.
@@ -824,6 +972,142 @@ impl Editor {
             return Some(root.as_path());
         }
         self.project.as_ref().map(|p| p.root.as_path())
+    }
+
+    // -- Per-buffer option accessors (Emacs buffer-local / Vim setlocal) ------
+    // Check the active buffer's local override first, then fall back to the
+    // global Editor default.  Use these instead of reading `self.word_wrap`
+    // etc. directly when the result should be buffer-sensitive.
+
+    /// Effective word-wrap for a specific buffer index.
+    pub fn word_wrap_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .word_wrap
+            .unwrap_or(self.word_wrap)
+    }
+
+    /// Effective word-wrap for the currently focused buffer.
+    pub fn effective_word_wrap(&self) -> bool {
+        self.word_wrap_for(self.active_buffer_idx())
+    }
+
+    /// Effective show_line_numbers for a specific buffer index.
+    pub fn line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .line_numbers
+            .unwrap_or(self.show_line_numbers)
+    }
+
+    /// Effective relative_line_numbers for a specific buffer index.
+    pub fn relative_line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .relative_line_numbers
+            .unwrap_or(self.relative_line_numbers)
+    }
+
+    /// Effective break_indent for a specific buffer index.
+    pub fn break_indent_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .break_indent
+            .unwrap_or(self.break_indent)
+    }
+
+    /// Effective show_break for a specific buffer index.
+    pub fn show_break_for(&self, buf_idx: usize) -> &str {
+        self.buffers[buf_idx]
+            .local_options
+            .show_break
+            .as_deref()
+            .unwrap_or(&self.show_break)
+    }
+
+    /// Effective heading_scale for a specific buffer index.
+    pub fn heading_scale_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .heading_scale
+            .unwrap_or(self.heading_scale)
+    }
+
+    /// Effective link_descriptive for a specific buffer index.
+    pub fn link_descriptive_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .link_descriptive
+            .unwrap_or(self.link_descriptive)
+    }
+
+    /// Effective render_markup for a specific buffer index.
+    pub fn render_markup_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .render_markup
+            .unwrap_or(self.render_markup)
+    }
+
+    /// Resolve the effective markup flavor for a buffer, respecting the
+    /// priority chain: BufferMode → Language → None, gated by render_markup.
+    pub fn effective_markup_flavor(&self, buf_idx: usize) -> crate::syntax::MarkupFlavor {
+        use crate::buffer_mode::BufferMode;
+        if !self.render_markup_for(buf_idx) {
+            return crate::syntax::MarkupFlavor::None;
+        }
+        let buf = &self.buffers[buf_idx];
+        if let Some(flavor) = buf.kind.markup_flavor() {
+            return flavor;
+        }
+        if let Some(lang) = self.syntax.language_of(buf_idx) {
+            return lang.markup_flavor();
+        }
+        crate::syntax::MarkupFlavor::None
+    }
+
+    /// Set a buffer-local option on the active buffer (:setlocal).
+    pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let def_name = self
+            .option_registry
+            .find(name)
+            .map(|d| d.name)
+            .ok_or_else(|| format!("Unknown option: {}", name))?;
+        let idx = self.active_buffer_idx();
+        let opts = &mut self.buffers[idx].local_options;
+        match def_name {
+            "word_wrap" => {
+                opts.word_wrap = Some(crate::options::parse_option_bool(value)?);
+            }
+            "line_numbers" => {
+                opts.line_numbers = Some(crate::options::parse_option_bool(value)?);
+            }
+            "relative_line_numbers" => {
+                opts.relative_line_numbers = Some(crate::options::parse_option_bool(value)?);
+            }
+            "break_indent" => {
+                opts.break_indent = Some(crate::options::parse_option_bool(value)?);
+            }
+            "show_break" => {
+                opts.show_break = Some(value.to_string());
+            }
+            "heading_scale" => {
+                opts.heading_scale = Some(crate::options::parse_option_bool(value)?);
+            }
+            "link_descriptive" => {
+                opts.link_descriptive = Some(crate::options::parse_option_bool(value)?);
+            }
+            "render_markup" => {
+                opts.render_markup = Some(crate::options::parse_option_bool(value)?);
+            }
+            _ => {
+                return Err(format!(
+                    "Option '{}' does not support buffer-local override",
+                    def_name
+                ))
+            }
+        }
+        Ok(format!("{} = {} (buffer-local)", def_name, value))
     }
 
     /// Get the current value and definition of an option by name or alias.
@@ -854,8 +1138,33 @@ impl Editor {
             "ai_profile" => self.ai_profile.clone(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
+            "heading_scale" => self.heading_scale.to_string(),
             "ignorecase" => self.ignorecase.to_string(),
             "smartcase" => self.smartcase.to_string(),
+            "autosave_interval" => self.autosave_interval.to_string(),
+            "swap_file" => self.swap_file.to_string(),
+            "swap_directory" => self.swap_directory.clone(),
+            "scrolloff" => self.scrolloff.to_string(),
+            "scrollbar" => self.scrollbar.to_string(),
+            "nyan_mode" => self.nyan_mode.to_string(),
+            "link_descriptive" => self.link_descriptive.to_string(),
+            "render_markup" => self.render_markup.to_string(),
+            "lsp_hover_popup" => self.lsp_hover_popup.to_string(),
+            "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
+            "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
+            "lsp_completion" => self.lsp_completion.to_string(),
+            "scroll_speed" => self.scroll_speed.to_string(),
+            "completion_max_items" => self.completion_max_items.to_string(),
+            "hover_max_lines" => self.hover_max_lines.to_string(),
+            "popup_width_pct" => self.popup_width_pct.to_string(),
+            "popup_height_pct" => self.popup_height_pct.to_string(),
+            "scrollbar_width" => self.scrollbar_width.to_string(),
+            "file_picker_max_depth" => self.file_picker_max_depth.to_string(),
+            "file_picker_max_candidates" => self.file_picker_max_candidates.to_string(),
+            "window_title" => self.window_title.clone(),
+            "heading_scale_h1" => self.heading_scale_h1.to_string(),
+            "heading_scale_h2" => self.heading_scale_h2.to_string(),
+            "heading_scale_h3" => self.heading_scale_h3.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -898,6 +1207,7 @@ impl Editor {
                     return Err("Font size must be between 6 and 72".into());
                 }
                 self.gui_font_size = size;
+                self.gui_font_size_default = size;
             }
             "font_family" => {
                 self.gui_font_family = value.to_string();
@@ -980,17 +1290,133 @@ impl Editor {
                 }
                 self.insert_ctrl_d = value.to_string();
             }
+            "heading_scale" => {
+                self.heading_scale = parse_option_bool(value)?;
+            }
             "ignorecase" => {
                 self.ignorecase = parse_option_bool(value)?;
             }
             "smartcase" => {
                 self.smartcase = parse_option_bool(value)?;
             }
+            "autosave_interval" => {
+                let secs: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.autosave_interval = secs;
+            }
+            "swap_file" => {
+                self.swap_file = parse_option_bool(value)?;
+            }
+            "swap_directory" => {
+                self.swap_directory = value.to_string();
+            }
+            "scrolloff" => {
+                let n: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.scrolloff = n;
+            }
+            "scrollbar" => {
+                self.scrollbar = parse_option_bool(value)?;
+            }
+            "nyan_mode" => {
+                self.nyan_mode = parse_option_bool(value)?;
+            }
+            "link_descriptive" => {
+                self.link_descriptive = parse_option_bool(value)?;
+            }
+            "render_markup" => {
+                self.render_markup = parse_option_bool(value)?;
+            }
+            "lsp_hover_popup" => {
+                self.lsp_hover_popup = parse_option_bool(value)?;
+            }
+            "lsp_diagnostics_inline" => {
+                self.lsp_diagnostics_inline = parse_option_bool(value)?;
+            }
+            "lsp_diagnostics_virtual_text" => {
+                self.lsp_diagnostics_virtual_text = parse_option_bool(value)?;
+            }
+            "lsp_completion" => {
+                self.lsp_completion = parse_option_bool(value)?;
+            }
+            "scroll_speed" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.scroll_speed = v.clamp(1, 50);
+            }
+            "completion_max_items" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.completion_max_items = v.clamp(1, 50);
+            }
+            "hover_max_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.hover_max_lines = v.clamp(1, 50);
+            }
+            "popup_width_pct" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.popup_width_pct = v.clamp(10, 100);
+            }
+            "popup_height_pct" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.popup_height_pct = v.clamp(10, 100);
+            }
+            "scrollbar_width" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.scrollbar_width = v.clamp(1.0, 20.0);
+            }
+            "file_picker_max_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.file_picker_max_depth = v.clamp(1, 100);
+            }
+            "file_picker_max_candidates" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.file_picker_max_candidates = v.clamp(100, 500000);
+            }
+            "window_title" => {
+                self.window_title = value.to_string();
+            }
+            "heading_scale_h1" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h1 = v.clamp(0.5, 3.0);
+            }
+            "heading_scale_h2" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h2 = v.clamp(0.5, 3.0);
+            }
+            "heading_scale_h3" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h3 = v.clamp(0.5, 3.0);
+            }
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self
             .get_option(def_name)
             .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;
+        // Fire parameterized option-change hook (e.g. "option-change:font_size")
+        self.fire_hook(&format!("option-change:{}", def_name));
         Ok(format!("{} = {}", def_name, current))
     }
 
@@ -1051,6 +1477,12 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid bool: '{}'", value))?;
                 toml::Value::Boolean(b)
+            }
+            OptionKind::Int => {
+                let i: i64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                toml::Value::Integer(i)
             }
             OptionKind::Float => {
                 let f: f64 = value
@@ -1131,7 +1563,7 @@ impl Editor {
 
         // Clamp visual anchor to focused buffer bounds.
         let idx = self.active_buffer_idx();
-        let line_count = self.buffers[idx].line_count();
+        let line_count = self.buffers[idx].display_line_count();
         if line_count == 0 {
             self.visual_anchor_row = 0;
             self.visual_anchor_col = 0;
@@ -1224,6 +1656,7 @@ impl Editor {
             focused_id,
             next_window_id: next_id,
             mode: self.mode,
+            conversation_pair: self.conversation_pair.clone(),
         });
         self.state_stack.len()
     }
@@ -1278,7 +1711,32 @@ impl Editor {
         // 4. Restore mode
         self.mode = snapshot.mode;
 
-        // 5. Focus the originally focused buffer
+        // 5. Restore conversation pair with remapped buffer indices.
+        if let Some(mut pair) = snapshot.conversation_pair {
+            let out_name = snapshot
+                .buffer_names
+                .get(pair.output_buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            let in_name = snapshot
+                .buffer_names
+                .get(pair.input_buffer_idx)
+                .cloned()
+                .unwrap_or_default();
+            let out_ok = self.buffers.iter().position(|b| b.name == out_name);
+            let in_ok = self.buffers.iter().position(|b| b.name == in_name);
+            if let (Some(out_idx), Some(in_idx)) = (out_ok, in_ok) {
+                pair.output_buffer_idx = out_idx;
+                pair.input_buffer_idx = in_idx;
+                self.conversation_pair = Some(pair);
+            } else {
+                self.conversation_pair = None;
+            }
+        } else {
+            self.conversation_pair = None;
+        }
+
+        // 6. Focus the originally focused buffer
         if let Some(idx) = self
             .buffers
             .iter()
@@ -1306,14 +1764,12 @@ impl Editor {
 
     /// First conversation attached to any buffer, if any.
     pub fn conversation(&self) -> Option<&crate::conversation::Conversation> {
-        self.buffers.iter().find_map(|b| b.conversation.as_ref())
+        self.buffers.iter().find_map(|b| b.conversation())
     }
 
     /// Mutable view of the first conversation attached to any buffer.
     pub fn conversation_mut(&mut self) -> Option<&mut crate::conversation::Conversation> {
-        self.buffers
-            .iter_mut()
-            .find_map(|b| b.conversation.as_mut())
+        self.buffers.iter_mut().find_map(|b| b.conversation_mut())
     }
 
     /// Set the editor mode and fire the `mode-change` hook.
@@ -1358,7 +1814,7 @@ impl Editor {
             .iter()
             .position(|b| b.kind == crate::buffer::BufferKind::Help)
         {
-            if let Some(view) = self.buffers[idx].help_view.as_mut() {
+            if let Some(view) = self.buffers[idx].help_view_mut() {
                 let v: &mut crate::help_view::HelpView = view;
                 v.navigate_to(node_id.to_string());
             }
@@ -1373,7 +1829,7 @@ impl Editor {
         self.buffers
             .iter_mut()
             .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view.as_mut())
+            .and_then(|b| b.help_view_mut())
     }
 
     /// Immutable view onto the help buffer's HelpView, if any help buffer exists.
@@ -1381,7 +1837,7 @@ impl Editor {
         self.buffers
             .iter()
             .find(|b| b.kind == crate::buffer::BufferKind::Help)
-            .and_then(|b| b.help_view.as_ref())
+            .and_then(|b| b.help_view())
     }
 
     /// Switch the focused window to the buffer at the given index.
@@ -1408,7 +1864,19 @@ impl Editor {
 
     /// Returns true if the buffer at `idx` is a Conversation buffer.
     pub fn is_conversation_buffer(&self, idx: usize) -> bool {
-        idx < self.buffers.len() && self.buffers[idx].kind == crate::BufferKind::Conversation
+        if idx >= self.buffers.len() {
+            return false;
+        }
+        if self.buffers[idx].kind == crate::BufferKind::Conversation {
+            return true;
+        }
+        // The *ai-input* buffer is also part of the conversation pair.
+        if let Some(ref pair) = self.conversation_pair {
+            if idx == pair.input_buffer_idx {
+                return true;
+            }
+        }
+        false
     }
 
     /// Switch to buffer `idx` but avoid stealing focus from a conversation window.
@@ -1458,8 +1926,23 @@ impl Editor {
             return true;
         }
 
-        // 3. Fallback: split the focused window if it's conversation,
-        // or just some window if we can't find a better spot.
+        // 3. Fallback: split a window. Prefer a non-conversation window to avoid
+        // splitting the tiny *ai-input* pane or the *AI* output pane.
+        let focused_is_conv = self.is_conversation_buffer(self.active_buffer_idx());
+        if focused_is_conv {
+            // Find any non-conversation window to focus before splitting.
+            let non_conv_win = self
+                .window_mgr
+                .iter_windows()
+                .find(|w| !self.is_conversation_buffer(w.buffer_idx))
+                .map(|w| w.id);
+            if let Some(id) = non_conv_win {
+                self.window_mgr.set_focused(id);
+            } else if let Some(ref pair) = self.conversation_pair {
+                // All windows are conversation — split from the output window (larger pane).
+                self.window_mgr.set_focused(pair.output_window_id);
+            }
+        }
         let area = self.default_area();
         match self
             .window_mgr
@@ -1527,14 +2010,8 @@ impl Editor {
             crate::BufferKind::Shell => {
                 self.set_mode(Mode::ShellInsert);
             }
-            crate::BufferKind::GitStatus => {
-                self.set_mode(Mode::GitStatus);
-            }
             _ => {
-                if matches!(
-                    self.mode,
-                    Mode::ShellInsert | Mode::ConversationInput | Mode::GitStatus
-                ) {
+                if matches!(self.mode, Mode::ShellInsert | Mode::ConversationInput) {
                     self.set_mode(Mode::Normal);
                 }
             }
@@ -1597,6 +2074,46 @@ impl Editor {
         self.count_prefix.take().unwrap_or(1)
     }
 
+    /// Single source of truth for how many visual cell-rows a buffer line occupies.
+    ///
+    /// Accounts for folds (0 rows), word wrap (>= 1 rows), and heading scale
+    /// (ceil of scale factor). All scroll paths — `ensure_scroll_wrapped`,
+    /// `scroll_up_line_wrapped`, mouse scroll bottom computation — must use this
+    /// instead of computing visual rows independently, to prevent the scroll guard
+    /// from fighting with scroll commands.
+    pub fn line_visual_rows(&self, buf_idx: usize, line: usize) -> usize {
+        let buf = &self.buffers[buf_idx];
+        // Folded lines are invisible.
+        if buf.is_line_folded(line) {
+            return 0;
+        }
+        let rope = buf.rope();
+        if line >= rope.len_lines() {
+            return 1;
+        }
+        let chars: Vec<char> = rope
+            .line(line)
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+
+        let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
+
+        if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
+            let text: String = chars.iter().collect();
+            let sb_w = self.show_break.chars().count();
+            crate::wrap::wrap_line_display_rows(
+                &text,
+                self.text_area_width,
+                self.break_indent,
+                sb_w,
+            )
+            .max(heading_rows)
+        } else {
+            heading_rows
+        }
+    }
+
     /// Calculate the actual inner height (text rows) for the focused window.
     /// This accounts for the window manager layout AND window borders.
     pub fn focused_window_viewport_height(&self, total_area: Rect) -> usize {
@@ -1626,6 +2143,21 @@ impl Editor {
     /// Left-click places the cursor, adjusting for gutter width and scroll offset.
     /// Middle-click pastes from the default register. Right-click is reserved for
     /// future context menu support.
+    /// Set cursor position directly from buffer (row, col) coordinates.
+    /// Used by the GUI mouse handler when FrameLayout-based pixel positioning
+    /// is available (bypasses scroll/gutter arithmetic).
+    pub fn set_cursor_position(&mut self, buf_row: usize, char_col: usize) {
+        let win = self.window_mgr.focused_window();
+        let buf = &self.buffers[win.buffer_idx];
+        let max_row = buf.display_line_count().saturating_sub(1);
+        let target_row = buf_row.min(max_row);
+        let line_len = buf.line_len(target_row);
+        let target_col = char_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = target_row;
+        win.cursor_col = target_col;
+    }
+
     pub fn handle_mouse_click(
         &mut self,
         row: usize,
@@ -1633,6 +2165,10 @@ impl Editor {
         button: crate::input::MouseButton,
     ) {
         use crate::input::MouseButton;
+
+        // Dismiss stale popups on any mouse click.
+        self.hover_popup = None;
+        self.code_action_menu = None;
 
         // Shell buffers: route to pending_shell_click for the binary to drain.
         // Subtract window border offset (1 row top, 1 col left).
@@ -1668,6 +2204,91 @@ impl Editor {
                 let buf_row = win.scroll_offset + row.saturating_sub(1);
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
+
+                // Double-click detection
+                let is_double_click = if let Some((prev_time, prev_row, prev_col)) = self.last_click
+                {
+                    prev_row == target_row
+                        && prev_col == text_col
+                        && prev_time.elapsed() < std::time::Duration::from_millis(400)
+                } else {
+                    false
+                };
+                self.last_click = Some((std::time::Instant::now(), target_row, text_col));
+
+                if is_double_click {
+                    // Double-click: attempt link following
+
+                    // Check display regions (concealed links in markup buffers).
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if !buf.display_regions.is_empty() {
+                        let line_byte_start =
+                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+                        let cursor_byte = line_byte_start + {
+                            let line_str: String = buf
+                                .rope()
+                                .line(target_row)
+                                .chars()
+                                .filter(|c| *c != '\n' && *c != '\r')
+                                .collect();
+                            line_str
+                                .char_indices()
+                                .nth(text_col)
+                                .map(|(b, _)| b)
+                                .unwrap_or(line_str.len())
+                        };
+                        if let Some(region) = buf
+                            .display_regions
+                            .iter()
+                            .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+                        {
+                            if let Some(ref target) = region.link_target {
+                                let target = target.clone();
+                                self.handle_link_click(&target);
+                                return;
+                            }
+                        }
+                    }
+
+                    // Check pre-populated link_spans
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if !buf.link_spans.is_empty() {
+                        let line_start_byte =
+                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+                        let click_byte = line_start_byte + text_col;
+                        if let Some(link) = buf
+                            .link_spans
+                            .iter()
+                            .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+                        {
+                            let target = link.target.clone();
+                            self.handle_link_click(&target);
+                            return;
+                        }
+                    }
+
+                    // On-the-fly link detection
+                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+                    if target_row < buf.rope().len_lines() {
+                        let line_text: String = buf.rope().line(target_row).chars().collect();
+                        let links = crate::link_detect::detect_links(&line_text);
+                        for link in &links {
+                            let link_char_start = line_text[..link.byte_start].chars().count();
+                            let link_char_end = line_text[..link.byte_end].chars().count();
+                            if text_col >= link_char_start && text_col < link_char_end {
+                                let target = link.target.clone();
+                                self.handle_link_click(&target);
+                                return;
+                            }
+                        }
+                    }
+
+                    // No link found — select word at cursor
+                    // (just position cursor for now, word selection is future work)
+                }
+
+                // Single-click: just position cursor
+                let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
                 let win = self.window_mgr.focused_window_mut();
@@ -1680,6 +2301,30 @@ impl Editor {
             MouseButton::Middle => {
                 // Middle-click paste from default register.
                 self.dispatch_builtin("paste-after");
+            }
+        }
+    }
+
+    /// Handle a link click: open file paths in the editor, URLs externally.
+    fn handle_link_click(&mut self, target: &str) {
+        if target.starts_with("http://") || target.starts_with("https://") {
+            // Open URL externally
+            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            self.set_status(format!("Opening {}", target));
+        } else {
+            // Parse :line:col suffix from file paths
+            let (path, line, col) = file_ops::parse_file_link(target);
+            self.open_file(path);
+            // Navigate to line:col if specified
+            if let Some(ln) = line {
+                let buf = &self.buffers[self.active_buffer_idx()];
+                let target_row = ln
+                    .saturating_sub(1)
+                    .min(buf.display_line_count().saturating_sub(1));
+                let target_col = col.unwrap_or(1).saturating_sub(1);
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = target_row;
+                win.cursor_col = target_col;
             }
         }
     }
@@ -1745,6 +2390,55 @@ impl Editor {
         }
     }
 
+    /// Handle horizontal mouse scroll (positive = right, negative = left).
+    ///
+    /// Adjusts col_offset directly. Only applies to normal file buffers.
+    /// Clamped so the rightmost character is still visible.
+    pub fn handle_mouse_scroll_horizontal(&mut self, delta: i16) {
+        let cols = delta.unsigned_abs() as usize;
+        if cols == 0 {
+            return;
+        }
+        let scroll_speed = self.scroll_speed;
+        let buf_idx = self.active_buffer_idx();
+        let kind = self.buffers[buf_idx].kind;
+        if kind != crate::BufferKind::Text {
+            return;
+        }
+
+        // Find the longest visible line to clamp horizontal scroll.
+        // Only scan the viewport region to avoid O(n) on large files.
+        let buf = &self.buffers[buf_idx];
+        let max_line_width = {
+            let rope = buf.rope();
+            let total = rope.len_lines();
+            let win = self.window_mgr.focused_window();
+            let start = win.scroll_offset;
+            let end = (start + self.viewport_height + 1).min(total);
+            let mut max_w = 0usize;
+            for i in start..end {
+                let line = rope.line(i);
+                let w = line.chars().filter(|c| *c != '\n' && *c != '\r').count();
+                if w > max_w {
+                    max_w = w;
+                }
+            }
+            max_w
+        };
+
+        let win = self.window_mgr.focused_window_mut();
+        if delta > 0 {
+            win.col_offset = win.col_offset.saturating_add(cols * scroll_speed);
+        } else {
+            win.col_offset = win.col_offset.saturating_sub(cols * scroll_speed);
+        }
+        // Clamp: don't scroll past the rightmost character.
+        let max_offset = max_line_width.saturating_sub(1);
+        if win.col_offset > max_offset {
+            win.col_offset = max_offset;
+        }
+    }
+
     /// Handle mouse scroll (positive = up, negative = down).
     ///
     /// Vim-style: scroll moves the viewport and clamps the cursor into the
@@ -1754,21 +2448,23 @@ impl Editor {
         if lines == 0 {
             return;
         }
-        let scroll_speed = 3;
+        let scroll_speed = self.scroll_speed;
         let buf_idx = self.active_buffer_idx();
         let kind = self.buffers[buf_idx].kind;
 
         match kind {
             crate::BufferKind::Conversation => {
-                if let Some(ref mut conv) = self.buffers[buf_idx].conversation {
-                    let amount = lines * scroll_speed;
-                    if delta > 0 {
-                        // Scroll wheel up = show older content = increase scroll
-                        conv.scroll_up(amount);
-                    } else {
-                        // Scroll wheel down = show newer content = decrease scroll
-                        conv.scroll_down(amount);
-                    }
+                // Conversation buffers use win.scroll_offset (rope line index)
+                // via the standard FrameLayout pipeline.
+                let total = self.buffers[buf_idx].display_line_count();
+                let vh = self.viewport_height;
+                let amount = lines * scroll_speed;
+                let win = self.window_mgr.focused_window_mut();
+                if delta > 0 {
+                    win.scroll_offset = win.scroll_offset.saturating_sub(amount);
+                } else {
+                    let max = total.saturating_sub(vh);
+                    win.scroll_offset = (win.scroll_offset + amount).min(max);
                 }
             }
             crate::BufferKind::Shell => {
@@ -1794,24 +2490,70 @@ impl Editor {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
                 let viewport_height = self.viewport_height;
 
-                let win = self.window_mgr.focused_window_mut();
-                if delta > 0 {
-                    win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
-                } else {
-                    let max_scroll = buf_line_count.saturating_sub(viewport_height);
-                    win.scroll_offset = (win.scroll_offset + lines * scroll_speed).min(max_scroll);
+                // Phase 1: Fold-aware scroll stepping (needs &mut win + &buf).
+                {
+                    let buf = &self.buffers[buf_idx];
+                    let win = self.window_mgr.focused_window_mut();
+                    let steps = lines * scroll_speed;
+                    if delta > 0 {
+                        for _ in 0..steps {
+                            let prev = buf.prev_visible_line(win.scroll_offset);
+                            if prev >= win.scroll_offset {
+                                break;
+                            }
+                            win.scroll_offset = prev;
+                        }
+                    } else {
+                        let max_scroll = buf_line_count.saturating_sub(viewport_height);
+                        for _ in 0..steps {
+                            if win.scroll_offset >= max_scroll {
+                                break;
+                            }
+                            let next = buf.next_visible_line(win.scroll_offset);
+                            if next <= win.scroll_offset {
+                                break;
+                            }
+                            win.scroll_offset = next.min(max_scroll);
+                        }
+                    }
                 }
 
-                // Clamp cursor into visible viewport.
-                if win.cursor_row < win.scroll_offset {
-                    win.cursor_row = win.scroll_offset;
+                // Phase 2: Compute bottom visible row using canonical line_visual_rows.
+                // (needs &self for line_visual_rows — no mutable borrow active)
+                let scroll_off = self.window_mgr.focused_window().scroll_offset;
+                let bottom = {
+                    let buf = &self.buffers[buf_idx];
+                    let max_row = buf_line_count.saturating_sub(1);
+                    let mut visual = 0;
+                    let mut last_fit = scroll_off;
+                    let mut line = scroll_off;
+                    while line <= max_row {
+                        let rows = self.line_visual_rows(buf_idx, line);
+                        if rows > 0 {
+                            if visual + rows > viewport_height {
+                                break;
+                            }
+                            visual += rows;
+                            last_fit = line;
+                        }
+                        line = buf.next_visible_line(line);
+                        if line <= last_fit {
+                            break;
+                        }
+                    }
+                    last_fit
+                };
+
+                // Phase 3: Clamp cursor (needs &mut win again).
+                let buf = &self.buffers[buf_idx];
+                let win = self.window_mgr.focused_window_mut();
+                if win.cursor_row < scroll_off {
+                    win.cursor_row = scroll_off;
                 }
-                let bottom = win.scroll_offset + viewport_height.saturating_sub(1);
-                let max_row = buf_line_count.saturating_sub(1);
-                if win.cursor_row > bottom.min(max_row) {
-                    win.cursor_row = bottom.min(max_row);
+                if win.cursor_row > bottom {
+                    win.cursor_row = bottom;
                 }
-                win.clamp_cursor(&self.buffers[buf_idx]);
+                win.clamp_cursor(buf);
             }
         }
     }

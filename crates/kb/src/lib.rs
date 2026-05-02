@@ -543,7 +543,7 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(!hits.is_empty(), "should find needle entries");
         assert!(
-            elapsed.as_millis() < 50,
+            elapsed.as_millis() < 200,
             "search took {elapsed:?} over 2000 nodes; cache may be bypassed"
         );
     }

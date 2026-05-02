@@ -25,6 +25,12 @@ show_break = "↪ "
 # Hide *bold* and /italic/ markers in Org-mode
 org_hide_emphasis_markers = false
 
+# Show link labels instead of raw markup (Emacs org-link-descriptive)
+link_descriptive = true
+
+# Apply inline bold/italic/code styling in conversation and help buffers
+render_markup = true
+
 # Show FPS/frame-timing overlay in the status bar
 show_fps = false
 
@@ -48,6 +54,9 @@ clipboard = "unnamed"
 
 # Automatically restore the previous session on startup (per-project)
 restore_session = false
+
+# Autosave interval in seconds (0 = disabled). Requires 5s idle after last edit.
+# autosave_interval = 300
 
 [ai]
 # AI provider: "claude", "openai", "gemini", "ollama", or "deepseek"

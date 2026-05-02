@@ -7,6 +7,148 @@ use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 use super::Editor;
 
 impl Editor {
+    /// Clean up swap files on clean exit: delete all swap files for open
+    /// buffers and remove the session index.
+    pub fn cleanup_swap_files(&mut self) {
+        let custom_dir = if self.swap_directory.is_empty() {
+            None
+        } else {
+            Some(std::path::Path::new(&self.swap_directory))
+        };
+        for buf in &mut self.buffers {
+            if buf.swap.written {
+                if let Some(fp) = buf.file_path().map(|p| p.to_path_buf()) {
+                    let _ = crate::swap::delete_swap(&fp, custom_dir);
+                    buf.swap = crate::swap::SwapState::default();
+                }
+            }
+        }
+        crate::swap::delete_session_index(custom_dir);
+    }
+
+    /// Save all modified file-backed buffers. Returns the count saved.
+    /// Errors are collected and returned as a Vec of "(name: error)" strings.
+    pub fn save_all_modified_buffers(&mut self) -> (usize, Vec<String>) {
+        let mut saved = 0;
+        let mut errors = Vec::new();
+        for i in 0..self.buffers.len() {
+            if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
+                match self.buffers[i].save() {
+                    Ok(()) => saved += 1,
+                    Err(e) => errors.push(format!("{}: {}", self.buffers[i].name, e)),
+                }
+            }
+        }
+        (saved, errors)
+    }
+
+    /// Check whether any buffer has unsaved modifications.
+    pub fn any_buffer_modified(&self) -> bool {
+        self.buffers.iter().any(|b| b.modified)
+    }
+
+    /// Try to autosave all modified file-backed buffers if the configured
+    /// interval has elapsed. Called from event loop idle ticks.
+    /// Returns the number of buffers saved (0 if nothing to do or disabled).
+    pub fn try_autosave(&mut self) -> usize {
+        if self.autosave_interval == 0 && !self.swap_file {
+            return 0;
+        }
+        let elapsed = self.last_autosave.elapsed().as_secs();
+        let interval = if self.autosave_interval > 0 {
+            self.autosave_interval
+        } else {
+            30 // Default swap interval when autosave disabled but swap enabled.
+        };
+        if elapsed < interval {
+            return 0;
+        }
+        // Don't save mid-typing: require 5s idle since last edit.
+        if self.last_edit_time.elapsed().as_secs() < 5 {
+            return 0;
+        }
+
+        // In-place autosave (destructive, only if autosave_interval > 0).
+        let mut saved = 0;
+        if self.autosave_interval > 0 {
+            let (s, errors) = self.save_all_modified_buffers();
+            saved = s;
+            if saved > 0 {
+                if errors.is_empty() {
+                    self.set_status(format!("Autosaved {} buffer(s)", saved));
+                } else {
+                    self.set_status(format!(
+                        "Autosaved {}, errors: {}",
+                        saved,
+                        errors.join(", ")
+                    ));
+                }
+            }
+        }
+
+        // Swap file writing (non-destructive crash recovery).
+        if self.swap_file {
+            self.write_swap_files();
+        }
+
+        self.last_autosave = std::time::Instant::now();
+        saved
+    }
+
+    /// Write swap files for all modified file-backed buffers.
+    fn write_swap_files(&mut self) {
+        let custom_dir = if self.swap_directory.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(&self.swap_directory))
+        };
+
+        for buf in &mut self.buffers {
+            // Only file-visiting text buffers get swap files (Emacs lesson #9).
+            if buf.kind != crate::BufferKind::Text {
+                continue;
+            }
+            let Some(file_path) = buf.file_path().map(|p| p.to_path_buf()) else {
+                continue;
+            };
+            if !buf.modified {
+                continue;
+            }
+
+            // Check modiff (Emacs lesson #1).
+            if !buf.swap.should_write(buf.generation) {
+                continue;
+            }
+
+            // Bulk-delete protection (Emacs lesson #3).
+            let rope_len = buf.rope().len_bytes();
+            if !buf.swap.bulk_delete_safe(rope_len) {
+                tracing::warn!(
+                    file = %file_path.display(),
+                    "swap: bulk delete detected ({}B → {}B), skipping",
+                    buf.swap.swap_last_len,
+                    rope_len
+                );
+                continue;
+            }
+
+            match crate::swap::write_swap(&file_path, buf.rope(), custom_dir.as_deref()) {
+                Ok(swap_path) => {
+                    buf.swap.record_success(buf.generation, rope_len);
+                    let _ = crate::swap::append_session_index(
+                        &file_path,
+                        &swap_path,
+                        custom_dir.as_deref(),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(file = %file_path.display(), error = %e, "swap write failed");
+                    buf.swap.record_failure();
+                }
+            }
+        }
+    }
+
     pub(crate) fn save_current_buffer(&mut self) {
         self.fire_hook("before-save");
         let idx = self.active_buffer_idx();
@@ -14,8 +156,21 @@ impl Editor {
             Ok(()) => {
                 let name = self.buffers[idx].name.clone();
                 self.set_status(format!("\"{}\" written", name));
+                // Delete swap file on successful save.
+                if self.buffers[idx].swap.written {
+                    if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                        let custom_dir = if self.swap_directory.is_empty() {
+                            None
+                        } else {
+                            Some(std::path::Path::new(&self.swap_directory))
+                        };
+                        let _ = crate::swap::delete_swap(&path, custom_dir);
+                        self.buffers[idx].swap = crate::swap::SwapState::default();
+                    }
+                }
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
+                self.refresh_git_diff(idx);
                 self.fire_hook("after-save");
             }
             Err(e) => {
@@ -75,7 +230,7 @@ impl Editor {
         self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
         // Also position cursor at the last line so yank etc. work from the bottom.
         let buf_idx = self.active_buffer_idx();
-        let last_line = self.buffers[buf_idx].line_count().saturating_sub(1);
+        let last_line = self.buffers[buf_idx].display_line_count().saturating_sub(1);
         self.window_mgr.focused_window_mut().cursor_row = last_line;
         self.window_mgr.focused_window_mut().cursor_col = 0;
         self.set_status(format!("{} log entries", total));
@@ -148,11 +303,83 @@ impl Editor {
         Ok(path)
     }
 
-    /// Open (or focus) the *AI* conversation buffer and enter ConversationInput mode.
+    /// Open (or focus) the *AI* conversation split view and enter ConversationInput mode.
+    ///
+    /// Creates a horizontal split: output `*AI*` buffer (top, ~85%) +
+    /// input `*ai-input*` buffer (bottom, ~15%). If the pair already exists
+    /// and both windows are valid, just focuses the input window.
     pub fn open_conversation_buffer(&mut self) {
-        let idx = self.ensure_conversation_buffer_idx();
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
+        // If pair exists and both windows/buffers are still valid, just focus input.
+        if let Some(ref pair) = self.conversation_pair {
+            let out_ok = pair.output_buffer_idx < self.buffers.len()
+                && self.window_mgr.window(pair.output_window_id).is_some();
+            let in_ok = pair.input_buffer_idx < self.buffers.len()
+                && self.window_mgr.window(pair.input_window_id).is_some();
+            if out_ok && in_ok {
+                // Restore buffer assignments in case they were changed.
+                if let Some(win) = self.window_mgr.window_mut(pair.input_window_id) {
+                    win.buffer_idx = pair.input_buffer_idx;
+                }
+                if let Some(win) = self.window_mgr.window_mut(pair.output_window_id) {
+                    win.buffer_idx = pair.output_buffer_idx;
+                }
+                self.window_mgr.set_focused(pair.input_window_id);
+                self.set_mode(crate::Mode::ConversationInput);
+                return;
+            }
+            // Stale pair — will recreate below.
+        }
+
+        // 1. Find or create the output conversation buffer.
+        let output_idx = self.ensure_conversation_buffer_idx();
+
+        // 2. Create the input buffer (normal Text, not file-backed).
+        let input_buf = {
+            let mut b = Buffer::new();
+            b.name = "*ai-input*".to_string();
+            b.read_only = false;
+            b
+        };
+        self.buffers.push(input_buf);
+        let input_idx = self.buffers.len() - 1;
+
+        // 3. Set focused window to the output buffer.
+        self.window_mgr.focused_window_mut().buffer_idx = output_idx;
+        let output_window_id = self.window_mgr.focused_id();
+
+        // 4. Horizontal split: output (top, 85%) + input (bottom, 15%).
+        let area = self.default_area();
+        let input_window_id = match self.window_mgr.split_with_ratio(
+            crate::window::SplitDirection::Horizontal,
+            input_idx,
+            area,
+            0.85,
+        ) {
+            Ok(id) => id,
+            Err(_) => {
+                // Fallback: if split fails (tiny terminal), just use the output window.
+                self.window_mgr.focused_window_mut().buffer_idx = output_idx;
+                self.set_mode(crate::Mode::ConversationInput);
+                return;
+            }
+        };
+
+        // 5. Focus the input (bottom) window.
+        self.window_mgr.set_focused(input_window_id);
+
+        // 6. Enter ConversationInput mode.
         self.set_mode(crate::Mode::ConversationInput);
+
+        // 7. Sync the output buffer's rope from conversation entries.
+        self.sync_conversation_buffer_rope();
+
+        // 8. Record the pair.
+        self.conversation_pair = Some(super::ConversationPair {
+            output_buffer_idx: output_idx,
+            input_buffer_idx: input_idx,
+            output_window_id,
+            input_window_id,
+        });
     }
 
     /// Persist the AI conversation to a JSON file (`:ai-save <path>`).
@@ -180,8 +407,7 @@ impl Editor {
         // Conversation buffers always carry a Conversation (invariant of
         // `Buffer::new_conversation`), so unwrap here is sound.
         let conv = self.buffers[idx]
-            .conversation
-            .as_mut()
+            .conversation_mut()
             .expect("conversation buffer missing its Conversation");
         conv.load_json(&contents)?;
         Ok(conv.entries.len())
@@ -722,17 +948,54 @@ impl Editor {
                 .map(|n| n.to_string())
                 .collect(),
             "set" => {
-                let mut matches: Vec<String> = self
-                    .option_registry
-                    .all_names()
-                    .into_iter()
-                    .filter(|n| n.starts_with(prefix))
-                    .collect();
-                matches.sort();
-                matches
+                // Two-part completion: `:set optname val<Tab>` completes values.
+                if let Some(space_pos) = prefix.find(' ') {
+                    let opt_name = &prefix[..space_pos];
+                    let val_prefix = &prefix[space_pos + 1..];
+                    self.complete_set_value(opt_name, val_prefix)
+                } else {
+                    let mut matches: Vec<String> = self
+                        .option_registry
+                        .all_names()
+                        .into_iter()
+                        .filter(|n| n.starts_with(prefix))
+                        .collect();
+                    matches.sort();
+                    matches
+                }
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Complete values for a `:set optname val<Tab>` command.
+    fn complete_set_value(&self, opt_name: &str, val_prefix: &str) -> Vec<String> {
+        let Some(def) = self.option_registry.find(opt_name) else {
+            return Vec::new();
+        };
+        if def.kind == crate::options::OptionKind::Bool {
+            return ["true", "false"]
+                .iter()
+                .filter(|v| v.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        if def.kind == crate::options::OptionKind::Theme {
+            return bundled_theme_names()
+                .into_iter()
+                .filter(|n| n.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        if !def.valid_values.is_empty() {
+            return def
+                .valid_values
+                .iter()
+                .filter(|v| v.starts_with(val_prefix))
+                .map(|v| format!("{} {}", opt_name, v))
+                .collect();
+        }
+        Vec::new()
     }
 
     #[cfg(test)]
@@ -793,7 +1056,9 @@ impl Editor {
         match Buffer::from_file(path) {
             Ok(buf) => {
                 let name = buf.name.clone();
-                let detected_lang = buf.file_path().and_then(crate::syntax::language_for_path);
+                let detected_lang = buf
+                    .file_path()
+                    .and_then(|p| crate::syntax::language_for_buffer(p, &buf.text()));
 
                 // Track recent files
                 if let Some(canonical) = buf.file_path().and_then(|p| p.canonicalize().ok()) {
@@ -808,8 +1073,15 @@ impl Editor {
                             .map(|p| p.root != root)
                             .unwrap_or(true);
                         if should_switch {
-                            self.project = Some(crate::project::Project::from_root(root));
+                            let had_project = self.project.is_some();
+                            self.project = Some(crate::project::Project::from_root(root.clone()));
                             self.refresh_git_branch();
+                            // Signal LSP to update root when project is first detected.
+                            if !had_project {
+                                let root_path = root.display().to_string();
+                                self.pending_lsp_root_change =
+                                    Some(format!("file://{}", root_path));
+                            }
                         }
                     }
                     // Ingest project as KB node
@@ -833,11 +1105,45 @@ impl Editor {
 
                 if let Some(lang) = detected_lang {
                     self.syntax.set_language(new_idx, lang);
+                    self.buffers[new_idx]
+                        .local_options
+                        .apply_defaults(&lang.default_local_options());
                 }
-                self.set_status(format!("\"{}\" opened", name));
+                // Check for existing swap file (Emacs lesson #7: no auto-recovery).
+                if let Some(ref fp) = self.buffers[new_idx].file_path().map(|p| p.to_path_buf()) {
+                    let custom_dir = if self.swap_directory.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&self.swap_directory))
+                    };
+                    if crate::swap::swap_exists(fp, custom_dir) {
+                        let swap_path = crate::swap::swap_path_for(fp, custom_dir);
+                        if let Ok((header, _)) = crate::swap::read_swap(&swap_path) {
+                            if crate::swap::is_pid_alive(header.pid) {
+                                self.set_status(format!(
+                                    "Warning: {} is being edited by PID {}",
+                                    name, header.pid
+                                ));
+                            } else {
+                                self.set_status(format!(
+                                    "Swap file found for {}. Use :recover to restore or :delete-swap to discard",
+                                    name
+                                ));
+                            }
+                        }
+                    } else {
+                        self.set_status(format!("\"{}\" opened", name));
+                    }
+                } else {
+                    self.set_status(format!("\"{}\" opened", name));
+                }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
+                self.refresh_git_diff(new_idx);
                 self.fire_hook("buffer-open");
+                if let Some(lang) = detected_lang {
+                    self.fire_hook(&format!("buffer-open:{}", lang.id()));
+                }
                 Some(new_idx)
             }
             Err(e) => {
@@ -900,6 +1206,27 @@ impl Editor {
             None => self.set_status(format!("gf: file not found: {}", raw)),
         }
     }
+}
+
+/// Parse a file path link that may include `:line:col` suffix.
+/// Returns `(path, optional_line, optional_col)`.
+pub fn parse_file_link(target: &str) -> (&str, Option<usize>, Option<usize>) {
+    // Try to split on : to extract line:col
+    let parts: Vec<&str> = target.rsplitn(3, ':').collect();
+    match parts.len() {
+        3 => {
+            if let (Ok(col), Ok(line)) = (parts[0].parse::<usize>(), parts[1].parse::<usize>()) {
+                return (parts[2], Some(line), Some(col));
+            }
+        }
+        2 => {
+            if let Ok(line) = parts[0].parse::<usize>() {
+                return (parts[1], Some(line), None);
+            }
+        }
+        _ => {}
+    }
+    (target, None, None)
 }
 
 /// Extract the filename/path-like run containing `pos`. Used by `gf`

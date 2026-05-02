@@ -116,6 +116,7 @@ impl Editor {
         let offset = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
         self.insert_start_offset = Some(offset);
         self.insert_initiated_by = Some(command.to_string());
+        self.buffers[idx].begin_undo_group();
         self.set_mode(Mode::Insert);
     }
 

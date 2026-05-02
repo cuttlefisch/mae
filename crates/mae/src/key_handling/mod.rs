@@ -39,6 +39,9 @@ pub fn keypress_to_crossterm(kp: &KeyPress) -> KeyEvent {
     if kp.alt {
         modifiers |= KeyModifiers::ALT;
     }
+    if kp.shift {
+        modifiers |= KeyModifiers::SHIFT;
+    }
 
     KeyEvent {
         code,
@@ -97,10 +100,12 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
         _ => return None,
     };
 
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     Some(KeyPress {
         key: mae_key,
         ctrl,
         alt,
+        shift,
     })
 }
 
@@ -113,9 +118,8 @@ use crate::ai_event_handler::PendingInteractiveEvent;
 
 mod command;
 mod command_palette;
-mod conversation;
+pub(crate) mod conversation;
 mod file_picker;
-mod git_status;
 mod insert;
 mod normal;
 mod search;
@@ -152,12 +156,12 @@ pub fn handle_key(
     // Toggle collapse in conversation buffers (Normal mode)
     if editor.mode == Mode::Normal {
         let idx = editor.active_buffer_idx();
-        if editor.buffers[idx].conversation.is_some()
+        if editor.buffers[idx].conversation().is_some()
             && (key.code == KeyCode::Enter || key.code == KeyCode::Tab)
         {
             let win = editor.window_mgr.focused_window();
             let row = win.cursor_row;
-            if let Some(ref mut conv) = editor.buffers[idx].conversation {
+            if let Some(conv) = editor.buffers[idx].conversation_mut() {
                 let lines = conv.rendered_lines();
                 if let Some(line) = lines.get(row) {
                     if let Some(entry_idx) = line.entry_index {
@@ -186,21 +190,21 @@ pub fn handle_key(
         debug!(key_code = ?key.code, splash_selection = editor.splash_selection, "splash intercept");
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let count = mae_renderer::splash_render::splash_action_count();
+                let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
                     editor.splash_selection = (editor.splash_selection + 1) % count;
                 }
                 return;
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let count = mae_renderer::splash_render::splash_action_count();
+                let count = mae_core::render_common::splash::splash_action_count();
                 if count > 0 {
                     editor.splash_selection = (editor.splash_selection + count - 1) % count;
                 }
                 return;
             }
             KeyCode::Enter => {
-                let actions = mae_renderer::splash_render::QUICK_ACTIONS;
+                let actions = mae_core::render_common::splash::QUICK_ACTIONS;
                 if let Some(&(_, _, cmd)) = actions.get(editor.splash_selection) {
                     // Dismiss splash by inserting a space then clearing it,
                     // so the splash condition no longer holds.
@@ -236,6 +240,18 @@ pub fn handle_key(
         }
     }
 
+    // --- Normal-mode Enter-to-submit on conversation input buffer ---
+    // handle_normal_mode doesn't have ai_tx, so we intercept here.
+    if editor.mode == Mode::Normal && key.code == KeyCode::Enter {
+        if let Some(ref pair) = editor.conversation_pair.clone() {
+            if editor.active_buffer_idx() == pair.input_buffer_idx {
+                editor.set_mode(Mode::ConversationInput);
+                conversation::submit_conversation_prompt(editor, ai_tx, pending_interactive_event);
+                return;
+            }
+        }
+    }
+
     match editor.mode {
         Mode::Normal => normal::handle_normal_mode(editor, scheme, key, pending_keys),
         Mode::Insert => insert::handle_insert_mode(editor, scheme, key, pending_keys),
@@ -263,7 +279,7 @@ pub fn handle_key(
         Mode::FilePicker => file_picker::handle_file_picker_mode(editor, key),
         Mode::FileBrowser => file_picker::handle_file_browser_mode(editor, key),
         Mode::CommandPalette => command_palette::handle_command_palette_mode(editor, scheme, key),
-        Mode::GitStatus => git_status::handle_git_status_mode(editor, key),
+        // GitStatus buffers use Mode::Normal + buffer-kind overlay keymap
         Mode::ShellInsert => {} // Handled externally by main.rs (needs ShellTerminal access)
     }
 
@@ -295,6 +311,17 @@ pub fn handle_key(
     // Hook points fire in core (save, open, close) and push (hook_name, fn_name)
     // entries. We eval each function here where the SchemeRuntime is available.
     drain_hook_evals(editor, scheme);
+
+    // --- Suppress gutter change indicators on *ai-input* buffer ---
+    // The input buffer is ephemeral — gutter markers and [+] modified flag are meaningless.
+    // This runs after ALL modes (Normal, ConversationInput, Visual, etc.) to catch every path.
+    if let Some(ref pair) = editor.conversation_pair {
+        if pair.input_buffer_idx < editor.buffers.len() {
+            let buf = &mut editor.buffers[pair.input_buffer_idx];
+            buf.changed_lines.clear();
+            buf.modified = false;
+        }
+    }
 }
 
 /// Evaluate all pending hook functions queued by `fire_hook`.
@@ -347,6 +374,38 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 Err(e) => {
                     error!(command = name, scheme_fn = %fn_name, error = %e, "scheme command failed");
                     editor.set_status(format!("Scheme error: {}", e));
+                }
+            }
+        }
+        Some(CommandSource::Autoload { feature }) => {
+            debug!(command = name, feature = %feature, "autoloading feature for command");
+            match scheme.require_feature(&feature) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    // After loading, the command should now be a Scheme command.
+                    // Re-dispatch.
+                    let new_source = editor.commands.get(name).map(|c| c.source.clone());
+                    if let Some(CommandSource::Scheme(fn_name)) = new_source {
+                        scheme.inject_editor_state(editor);
+                        match scheme.call_function(&fn_name) {
+                            Ok(result) => {
+                                scheme.apply_to_editor(editor);
+                                if !result.is_empty() {
+                                    editor.set_status(result);
+                                }
+                            }
+                            Err(e) => {
+                                error!(command = name, error = %e, "autoloaded command failed");
+                                editor.set_status(format!("Scheme error: {}", e));
+                            }
+                        }
+                    } else {
+                        editor.dispatch_builtin(name);
+                    }
+                }
+                Err(e) => {
+                    error!(command = name, feature = %feature, error = %e, "autoload require failed");
+                    editor.set_status(format!("Autoload error: {}", e));
                 }
             }
         }

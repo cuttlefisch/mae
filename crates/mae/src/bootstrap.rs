@@ -579,65 +579,104 @@ pub fn find_conversation_buffer_mut(editor: &mut Editor) -> Option<&mut mae_core
     editor.conversation_mut()
 }
 
-/// Spawn the LSP coordinator task and return (event_rx, command_tx).
+/// Spawn the LSP coordinator task and return (event_rx, command_tx, server_info).
 ///
-/// Configures a small set of well-known language servers. Servers are only
-/// *launched* lazily on the first `DidOpen` for their language — if the
-/// configured binary isn't installed, opening a file of that language will
-/// produce a `ServerStartFailed` event but won't block startup.
+/// Configures language servers using a three-level priority chain:
+///   1. Environment variables (MAE_LSP_RUST, MAE_LSP_PYTHON, etc.)
+///   2. config.toml `[lsp]` section
+///   3. Hardcoded defaults for common languages
 ///
-/// Override via environment variables:
-///   MAE_LSP_RUST=rust-analyzer
-///   MAE_LSP_PYTHON=pylsp
-///   MAE_LSP_TYPESCRIPT="typescript-language-server --stdio"
+/// Servers are only *launched* lazily on the first `DidOpen` for their
+/// language — if the configured binary isn't installed, opening a file of
+/// that language will produce a `ServerStartFailed` event but won't block
+/// startup.
+///
+/// Returns `(event_rx, command_tx, lsp_server_info)` where `lsp_server_info`
+/// contains the resolved command and binary-found status for each language.
 pub fn setup_lsp(
     root_uri: Option<String>,
+    config: &crate::config::Config,
 ) -> (
     tokio::sync::mpsc::Receiver<LspTaskEvent>,
     tokio::sync::mpsc::Sender<LspCommand>,
+    HashMap<String, mae_core::LspServerInfo>,
 ) {
-    let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
+    // Hardcoded defaults.
+    let defaults: &[(&str, &str, &str, &[&str])] = &[
+        ("rust", "MAE_LSP_RUST", "rust-analyzer", &[]),
+        ("python", "MAE_LSP_PYTHON", "pylsp", &[]),
+        (
+            "typescript",
+            "MAE_LSP_TYPESCRIPT",
+            "typescript-language-server",
+            &["--stdio"],
+        ),
+        (
+            "javascript",
+            "MAE_LSP_TYPESCRIPT",
+            "typescript-language-server",
+            &["--stdio"],
+        ),
+        ("go", "MAE_LSP_GO", "gopls", &[]),
+    ];
 
-    insert_if_set(
-        &mut configs,
-        "rust",
-        "MAE_LSP_RUST",
-        "rust-analyzer",
-        &[],
-        root_uri.clone(),
-    );
-    insert_if_set(
-        &mut configs,
-        "python",
-        "MAE_LSP_PYTHON",
-        "pylsp",
-        &[],
-        root_uri.clone(),
-    );
-    insert_if_set(
-        &mut configs,
-        "typescript",
-        "MAE_LSP_TYPESCRIPT",
-        "typescript-language-server",
-        &["--stdio"],
-        root_uri.clone(),
-    );
-    insert_if_set(
-        &mut configs,
-        "javascript",
-        "MAE_LSP_TYPESCRIPT",
-        "typescript-language-server",
-        &["--stdio"],
-        root_uri.clone(),
-    );
-    insert_if_set(
-        &mut configs,
-        "go",
-        "MAE_LSP_GO",
-        "gopls",
-        &[],
-        root_uri.clone(),
-    );
+    let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
+    let mut server_info: HashMap<String, mae_core::LspServerInfo> = HashMap::new();
+
+    // Phase 1: Populate from defaults, overridden by config.toml, overridden by env vars.
+    for &(lang, env_var, default_cmd, default_args) in defaults {
+        let (command, args) = resolve_lsp_config(lang, env_var, default_cmd, default_args, config);
+        let binary_found = find_binary(&command);
+        server_info.insert(
+            lang.to_string(),
+            mae_core::LspServerInfo {
+                status: mae_core::LspServerStatus::Starting,
+                command: command.clone(),
+                binary_found,
+            },
+        );
+        configs.insert(
+            lang.to_string(),
+            LspServerConfig {
+                command,
+                args,
+                root_uri: root_uri.clone(),
+            },
+        );
+    }
+
+    // Phase 2: Add any extra languages from config.toml not in the defaults.
+    for (lang, lsp_cfg) in &config.lsp.servers {
+        if configs.contains_key(lang) {
+            continue; // Already handled above.
+        }
+        // Still check env var override (MAE_LSP_<LANG>).
+        let env_var = format!("MAE_LSP_{}", lang.to_uppercase());
+        let (command, args) = resolve_lsp_config(
+            lang,
+            &env_var,
+            &lsp_cfg.command,
+            &lsp_cfg.args_as_strs(),
+            config,
+        );
+        let binary_found = find_binary(&command);
+        server_info.insert(
+            lang.to_string(),
+            mae_core::LspServerInfo {
+                status: mae_core::LspServerStatus::Starting,
+                command: command.clone(),
+                binary_found,
+            },
+        );
+        configs.insert(
+            lang.to_string(),
+            LspServerConfig {
+                command,
+                args,
+                root_uri: root_uri.clone(),
+            },
+        );
+    }
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<LspCommand>(64);
     let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<LspTaskEvent>(64);
@@ -645,44 +684,44 @@ pub fn setup_lsp(
     info!(languages = configs.len(), "starting LSP task");
     tokio::spawn(run_lsp_task(configs, cmd_rx, evt_tx));
 
-    (evt_rx, cmd_tx)
+    (evt_rx, cmd_tx, server_info)
 }
 
-/// Populate `configs[language_id]` using an override env var or a default
-/// command, allowing users to point at a custom binary (or a wrapper with
-/// additional flags) without rebuilding.
-fn insert_if_set(
-    configs: &mut HashMap<String, LspServerConfig>,
-    language_id: &str,
+/// Resolve LSP command/args using priority: env var > config.toml > default.
+fn resolve_lsp_config(
+    lang: &str,
     env_var: &str,
     default_cmd: &str,
     default_args: &[&str],
-    root_uri: Option<String>,
-) {
-    let (command, args) = match std::env::var(env_var) {
-        Ok(v) => {
-            let mut parts = v.split_whitespace();
-            let Some(cmd) = parts.next() else {
-                return; // empty value disables the server
-            };
-            (
-                cmd.to_string(),
-                parts.map(|s| s.to_string()).collect::<Vec<_>>(),
-            )
+    config: &crate::config::Config,
+) -> (String, Vec<String>) {
+    // Priority 1: Environment variable.
+    if let Ok(v) = std::env::var(env_var) {
+        let mut parts = v.split_whitespace();
+        if let Some(cmd) = parts.next() {
+            return (cmd.to_string(), parts.map(|s| s.to_string()).collect());
         }
-        Err(_) => (
-            default_cmd.to_string(),
-            default_args.iter().map(|s| s.to_string()).collect(),
-        ),
-    };
-    configs.insert(
-        language_id.to_string(),
-        LspServerConfig {
-            command,
-            args,
-            root_uri,
-        },
-    );
+    }
+    // Priority 2: config.toml [lsp.<lang>].
+    if let Some(cfg) = config.lsp.servers.get(lang) {
+        return (cfg.command.clone(), cfg.args.clone());
+    }
+    // Priority 3: Hardcoded default.
+    (
+        default_cmd.to_string(),
+        default_args.iter().map(|s| s.to_string()).collect(),
+    )
+}
+
+/// Check if a binary is available on PATH.
+fn find_binary(command: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Spawn the DAP coordinator task and return (event_rx, command_tx).

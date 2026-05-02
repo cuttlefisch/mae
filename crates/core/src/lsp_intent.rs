@@ -84,6 +84,14 @@ pub enum LspIntent {
     WorkspaceSymbol { language_id: String, query: String },
     /// Request `textDocument/documentSymbol`.
     DocumentSymbols { uri: String, language_id: String },
+    /// Request `textDocument/documentHighlight`.
+    DocumentHighlight {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+        generation: u64,
+    },
 }
 
 /// Convert a filesystem path to a `file://` URI, matching `mae-lsp`'s

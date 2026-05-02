@@ -31,6 +31,9 @@ jobs:
       - name: Build static binary
         run: cargo build --release --target x86_64-unknown-linux-musl --package mae
 
+      - name: Generate code map
+        run: make code-map
+
       - name: Prepare artifact
         run: |
           mkdir -p dist

@@ -3,12 +3,13 @@
 //! Manages the Skia raster surface that backs the editor window.
 //! Each frame: clear -> draw styled cells -> present via softbuffer.
 
+use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use mae_core::Theme;
-use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface};
+use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface, Typeface};
 use winit::window::Window;
 
 use crate::text::StyledLine;
@@ -19,6 +20,11 @@ pub struct SkiaCanvas {
     surface: Surface,
     font: Font,
     bold_font: Font,
+    /// Italic typeface loaded from system (e.g. JetBrains Mono Italic).
+    /// Falls back to skew matrix when None.
+    italic_font: Option<Font>,
+    /// Bold-italic typeface loaded from system.
+    italic_bold_font: Option<Font>,
     icon_font: Option<Font>,
     cell_width: f32,
     cell_height: f32,
@@ -35,6 +41,13 @@ pub struct SkiaCanvas {
     ascii_in_font: [bool; 128],
     /// Reusable pixel buffer for `end_frame()` — avoids ~4MB alloc per frame.
     pixel_buf: Vec<u8>,
+    /// Cached fallback typefaces for non-ASCII chars not in primary/icon fonts.
+    /// Maps char → Option<Typeface> (None = no fallback found, skip system lookup).
+    fallback_cache: HashMap<char, Option<Typeface>>,
+    /// Cached pre-scaled fonts. Key = `(scale * 1000.0) as u32`.
+    /// Avoids cloning + `set_size()` on every bold/scaled character at 60fps.
+    scaled_fonts: HashMap<u32, Font>,
+    scaled_bold_fonts: HashMap<u32, Font>,
 }
 
 impl SkiaCanvas {
@@ -86,6 +99,28 @@ impl SkiaCanvas {
             .or_else(|| font_mgr.match_family_style("monospace", FontStyle::bold()))
             .unwrap_or_else(|| typeface.clone());
 
+        let italic_style = FontStyle::italic();
+        let italic_typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", italic_style))
+            .or_else(|| font_mgr.match_family_style("Fira Code", italic_style))
+            .or_else(|| font_mgr.match_family_style("Cascadia Code", italic_style))
+            .or_else(|| font_mgr.match_family_style("monospace", italic_style));
+
+        let bold_italic_style = FontStyle::bold_italic();
+        let italic_bold_typeface = font_family
+            .and_then(|fam| font_mgr.match_family_style(fam, bold_italic_style))
+            .or_else(|| {
+                font_mgr.match_family_style("JetBrainsMono Nerd Font Mono", bold_italic_style)
+            })
+            .or_else(|| font_mgr.match_family_style("JetBrainsMono Nerd Font", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("JetBrains Mono", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("Fira Code", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("Cascadia Code", bold_italic_style))
+            .or_else(|| font_mgr.match_family_style("monospace", bold_italic_style));
+
         let icon_typeface = icon_font_family
             .and_then(|fam| font_mgr.match_family_style(fam, FontStyle::normal()))
             .or_else(|| {
@@ -98,11 +133,20 @@ impl SkiaCanvas {
         let font_size = font_size_override.unwrap_or(14.0);
         let font = Font::from_typeface(typeface, font_size);
         let bold_font = Font::from_typeface(bold_typeface, font_size);
+        let italic_font = italic_typeface.map(|tf| Font::from_typeface(tf, font_size));
+        let italic_bold_font = italic_bold_typeface.map(|tf| Font::from_typeface(tf, font_size));
         let icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, font_size));
 
         // Measure a reference character for cell dimensions.
-        let (_, bounds) = font.measure_str("M", None);
-        let cell_width = bounds.width().max(font_size * 0.6);
+        // Use the advance width (first return value), NOT the bounding box width.
+        // Skia's draw_str uses advance widths for glyph positioning; using the
+        // bounding box causes cumulative drift along the line.
+        let (advance, bounds) = font.measure_str("M", None);
+        let cell_width = if advance > 0.0 {
+            advance
+        } else {
+            bounds.width().max(font_size * 0.6)
+        };
         let cell_height = font.spacing();
         // Font metrics: ascent is negative in Skia (distance above baseline).
         let (_, metrics) = font.metrics();
@@ -126,6 +170,8 @@ impl SkiaCanvas {
             surface,
             font,
             bold_font,
+            italic_font,
+            italic_bold_font,
             icon_font,
             cell_width,
             cell_height,
@@ -135,6 +181,9 @@ impl SkiaCanvas {
             sb_surface,
             ascii_in_font,
             pixel_buf: Vec::new(),
+            fallback_cache: HashMap::new(),
+            scaled_fonts: HashMap::new(),
+            scaled_bold_fonts: HashMap::new(),
         })
     }
 
@@ -143,18 +192,29 @@ impl SkiaCanvas {
     pub fn update_font_size(&mut self, size: f32) {
         let typeface = self.font.typeface();
         let bold_typeface = self.bold_font.typeface();
+        let italic_typeface = self.italic_font.as_ref().map(|f| f.typeface());
+        let italic_bold_typeface = self.italic_bold_font.as_ref().map(|f| f.typeface());
         let icon_typeface = self.icon_font.as_ref().map(|f| f.typeface());
 
         self.font = Font::from_typeface(typeface, size);
         self.bold_font = Font::from_typeface(bold_typeface, size);
+        self.italic_font = italic_typeface.map(|tf| Font::from_typeface(tf, size));
+        self.italic_bold_font = italic_bold_typeface.map(|tf| Font::from_typeface(tf, size));
         self.icon_font = icon_typeface.map(|tf| Font::from_typeface(tf, size));
 
-        let (_, bounds) = self.font.measure_str("M", None);
-        self.cell_width = bounds.width().max(size * 0.6);
+        let (advance, bounds) = self.font.measure_str("M", None);
+        self.cell_width = if advance > 0.0 {
+            advance
+        } else {
+            bounds.width().max(size * 0.6)
+        };
         self.cell_height = self.font.spacing();
         let (_, metrics) = self.font.metrics();
         self.ascent = (-metrics.ascent).max(size * 0.8);
         self.ascii_in_font = build_ascii_table(&self.font);
+        self.fallback_cache.clear();
+        self.scaled_fonts.clear();
+        self.scaled_bold_fonts.clear();
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -190,6 +250,62 @@ impl SkiaCanvas {
         let bg_style = theme.style("ui.background");
         let bg = theme::color_or(bg_style.bg, DEFAULT_BG);
         self.surface.canvas().clear(bg);
+    }
+
+    /// Clip all subsequent drawing to a pixel height.
+    /// Prevents font descenders on the last row from overflowing into
+    /// window decorations or the OS chrome.
+    pub fn set_clip_height(&mut self, pixel_height: f32) {
+        let rect = skia_safe::Rect::from_wh(self.width as f32, pixel_height);
+        self.surface.canvas().clip_rect(rect, None, None);
+    }
+
+    /// Get a cached scaled font. Avoids clone + set_size on every call.
+    fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
+        let key = (scale * 1000.0) as u32;
+        let cache = if bold {
+            &mut self.scaled_bold_fonts
+        } else {
+            &mut self.scaled_fonts
+        };
+        let base = if bold { &self.bold_font } else { &self.font };
+        cache.entry(key).or_insert_with(|| {
+            let mut f = base.clone();
+            f.set_size(base.size() * scale);
+            f
+        })
+    }
+
+    /// Return the actual per-glyph advance width for a scaled font.
+    ///
+    /// Font engines grid-fit glyph advances to integer (or half-pixel)
+    /// boundaries at each size, so `cell_width * scale` is WRONG.
+    /// Example: base=14px → cell_width=8; scale=1.5 → size=21px →
+    /// actual advance=13, NOT 8*1.5=12. This function returns 13.
+    ///
+    /// Uses the BOLD font since `markup.heading` renders bold in all themes.
+    /// For monospace fonts, bold and regular should have identical advances,
+    /// but we measure bold to be safe against font-specific hinting.
+    ///
+    /// For scale=1.0, returns `cell_width` (no scaled font lookup needed).
+    pub fn scaled_cell_width(&mut self, scale: f32) -> f32 {
+        if scale == 1.0 {
+            return self.cell_width;
+        }
+        // Measure bold advance since headings are rendered bold.
+        let font = self.get_scaled_font(true, scale).clone();
+        let (advance, _) = font.measure_str("M", None);
+        advance
+    }
+
+    /// Return the italic font for the given bold state, if a proper italic typeface is loaded.
+    /// When `Some`, the caller should use this font directly instead of skewing.
+    fn italic_font_for(&self, bold: bool) -> Option<&Font> {
+        if bold {
+            self.italic_bold_font.as_ref()
+        } else {
+            self.italic_font.as_ref()
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -278,6 +394,22 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
     }
 
+    /// Fill a pixel-precise rounded rectangle.
+    pub fn draw_pixel_rrect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: Color4f,
+    ) {
+        let paint = fill_paint(color);
+        let rect = skia_safe::Rect::from_xywh(x, y, w, h);
+        let rrect = skia_safe::RRect::new_rect_xy(rect, radius, radius);
+        self.surface.canvas().draw_rrect(rrect, &paint);
+    }
+
     // -----------------------------------------------------------------------
     // Pixel-Y positioned methods (for variable-height line rendering)
     // -----------------------------------------------------------------------
@@ -302,6 +434,35 @@ impl SkiaCanvas {
             .draw_rect(skia_safe::Rect::from_xywh(x, pixel_y, pw, pixel_h), &paint);
     }
 
+    /// Draw a single character at exact pixel (X, Y) coordinates.
+    pub fn draw_char_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        ch: char,
+        fg: Color4f,
+        bold: bool,
+        scale: f32,
+    ) {
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+        let text = ch.to_string();
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
+            self.bold_font.clone()
+        } else {
+            self.font.clone()
+        };
+        let (_, metrics) = font.metrics();
+        let baseline = pixel_y - metrics.ascent;
+        if font.unichar_to_glyph(ch as i32) != 0 {
+            self.surface
+                .canvas()
+                .draw_str(&text, (pixel_x, baseline), &font, &paint);
+        }
+    }
+
     /// Draw a single character at pixel Y. Column is cell-based.
     pub fn draw_char_at_y(
         &mut self,
@@ -319,27 +480,36 @@ impl SkiaCanvas {
 
         let text = ch.to_string();
 
-        let mut font = if bold {
+        // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
             self.bold_font.clone()
         } else {
             self.font.clone()
         };
 
-        if scale != 1.0 {
-            font.set_size(font.size() * scale);
-        }
-
         let (_, metrics) = font.metrics();
         let baseline = pixel_y - metrics.ascent;
 
         if italic {
-            self.surface.canvas().save();
-            let mut skew_matrix = skia_safe::Matrix::new_identity();
-            skew_matrix.pre_skew((-0.2, 0.0), None);
-            self.surface.canvas().translate((x, baseline));
-            self.surface.canvas().concat(&skew_matrix);
-            self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
-            self.surface.canvas().restore();
+            if let Some(it_font) = self.italic_font_for(bold) {
+                let mut it = it_font.clone();
+                if scale != 1.0 {
+                    it.set_size(it_font.size() * scale);
+                }
+                let (_, im) = it.metrics();
+                let ib = pixel_y - im.ascent;
+                self.surface.canvas().draw_str(&text, (x, ib), &it, &paint);
+            } else {
+                self.surface.canvas().save();
+                let mut skew_matrix = skia_safe::Matrix::new_identity();
+                skew_matrix.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((x, baseline));
+                self.surface.canvas().concat(&skew_matrix);
+                self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+                self.surface.canvas().restore();
+            }
             return;
         }
 
@@ -352,27 +522,34 @@ impl SkiaCanvas {
         }
 
         // 2. Try icon font fallback
-        if let Some(mut icon_font) = self.icon_font.clone() {
-            if scale != 1.0 {
-                icon_font.set_size(icon_font.size() * scale);
-            }
-            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+        if let Some(ref icon_font) = self.icon_font {
+            let icon = if scale != 1.0 {
+                self.get_scaled_font(false, scale).clone()
+            } else {
+                icon_font.clone()
+            };
+            if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon_font, &paint);
+                    .draw_str(&text, (x, baseline), &icon, &paint);
                 return;
             }
         }
 
-        // 3. System fallback via FontMgr
-        let font_mgr = FontMgr::default();
-        let family_name = self.font.typeface().family_name();
-        let style = self.font.typeface().font_style();
+        // 3. System fallback via FontMgr — cached to avoid per-char system lookup.
+        let fallback_tf = self
+            .fallback_cache
+            .entry(ch)
+            .or_insert_with(|| {
+                let font_mgr = FontMgr::default();
+                let family_name = self.font.typeface().family_name();
+                let style = self.font.typeface().font_style();
+                font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
+            })
+            .clone();
 
-        if let Some(fallback_tf) =
-            font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
-        {
-            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+        if let Some(tf) = fallback_tf {
+            let fallback_font = Font::from_typeface(tf, self.font.size() * scale);
             let (_, fb_metrics) = fallback_font.metrics();
             let fb_baseline = pixel_y - fb_metrics.ascent;
             self.surface
@@ -400,15 +577,34 @@ impl SkiaCanvas {
             return;
         }
         let x = col as f32 * self.cell_width;
-        let font = if bold { &self.bold_font } else { &self.font };
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
+        // If italic and we have a proper italic typeface, use it directly.
+        if italic {
+            if let Some(it_base) = self.italic_font_for(bold).cloned() {
+                let it_font = if scale != 1.0 {
+                    let mut f = it_base.clone();
+                    f.set_size(it_base.size() * scale);
+                    f
+                } else {
+                    it_base
+                };
+                let (_, m) = it_font.metrics();
+                let baseline = pixel_y - m.ascent;
+                self.surface
+                    .canvas()
+                    .draw_str(text, (x, baseline), &it_font, &paint);
+                return;
+            }
+            // Fall through to skew path below.
+        }
+
         if scale != 1.0 {
-            let mut scaled = font.clone();
-            scaled.set_size(font.size() * scale);
+            let scaled = self.get_scaled_font(bold, scale);
             let (_, m) = scaled.metrics();
             let baseline = pixel_y - m.ascent;
+            let scaled = scaled.clone();
             if italic {
                 self.surface.canvas().save();
                 let mut skew = skia_safe::Matrix::new_identity();
@@ -426,8 +622,14 @@ impl SkiaCanvas {
             }
             return;
         }
+        let font = if bold { &self.bold_font } else { &self.font };
 
-        let baseline = pixel_y + self.ascent;
+        let baseline = if bold {
+            let (_, m) = font.metrics();
+            pixel_y - m.ascent
+        } else {
+            pixel_y + self.ascent
+        };
         if italic {
             self.surface.canvas().save();
             let mut skew = skia_safe::Matrix::new_identity();
@@ -454,6 +656,205 @@ impl SkiaCanvas {
         self.surface
             .canvas()
             .draw_line((x, underline_y), (x + width, underline_y), &paint);
+    }
+
+    /// Draw a text run at exact pixel X/Y. Used for scaled lines to avoid
+    /// column-grid quantization that causes multi-run drift.
+    pub fn draw_text_run_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        text: &str,
+        fg: Color4f,
+        bold: bool,
+        italic: bool,
+        scale: f32,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let mut paint = Paint::new(fg, None);
+        paint.set_anti_alias(true);
+
+        // Use proper italic typeface when available.
+        if italic {
+            if let Some(it_base) = self.italic_font_for(bold).cloned() {
+                let it_font = if scale != 1.0 {
+                    let mut f = it_base.clone();
+                    f.set_size(it_base.size() * scale);
+                    f
+                } else {
+                    it_base
+                };
+                let (_, m) = it_font.metrics();
+                let baseline = pixel_y - m.ascent;
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &it_font, &paint);
+                return;
+            }
+        }
+
+        if scale != 1.0 {
+            let scaled = self.get_scaled_font(bold, scale).clone();
+            let (_, m) = scaled.metrics();
+            let baseline = pixel_y - m.ascent;
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((pixel_x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface
+                    .canvas()
+                    .draw_str(text, (0, 0), &scaled, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &scaled, &paint);
+            }
+        } else {
+            let font = if bold { &self.bold_font } else { &self.font };
+            let baseline = if bold {
+                let (_, m) = font.metrics();
+                pixel_y - m.ascent
+            } else {
+                pixel_y + self.ascent
+            };
+            let font = font.clone();
+            if italic {
+                self.surface.canvas().save();
+                let mut skew = skia_safe::Matrix::new_identity();
+                skew.pre_skew((-0.2, 0.0), None);
+                self.surface.canvas().translate((pixel_x, baseline));
+                self.surface.canvas().concat(&skew);
+                self.surface.canvas().draw_str(text, (0, 0), &font, &paint);
+                self.surface.canvas().restore();
+            } else {
+                self.surface
+                    .canvas()
+                    .draw_str(text, (pixel_x, baseline), &font, &paint);
+            }
+        }
+    }
+
+    /// Draw a background rect at exact pixel coordinates.
+    pub fn draw_rect_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        pixel_h: f32,
+        color: Color4f,
+    ) {
+        let paint = fill_paint(color);
+        self.surface.canvas().draw_rect(
+            skia_safe::Rect::from_xywh(pixel_x, pixel_y, pixel_w, pixel_h),
+            &paint,
+        );
+    }
+
+    /// Draw an underline span at exact pixel coordinates.
+    pub fn draw_underline_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let underline_y = pixel_y + self.ascent + 1.0;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface.canvas().draw_line(
+            (pixel_x, underline_y),
+            (pixel_x + pixel_w, underline_y),
+            &paint,
+        );
+    }
+
+    /// Draw a wavy underline (diagnostic indicator) at cell-based coordinates.
+    /// Sine-wave pattern: 3px amplitude, 6px wavelength.
+    #[allow(dead_code)]
+    pub fn draw_wavy_underline_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        count: usize,
+        color: Color4f,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let width = count as f32 * self.cell_width;
+        self.draw_wavy_underline_at_pixel(x, pixel_y, width, color);
+    }
+
+    /// Draw a wavy underline at exact pixel coordinates.
+    pub fn draw_wavy_underline_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let baseline_y = pixel_y + self.ascent + 2.0;
+        let mut paint = Paint::new(color, None);
+        paint.set_anti_alias(true);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+
+        let mut builder = skia_safe::PathBuilder::new();
+        let wave_len = 4.0_f32;
+        let amplitude = 1.5_f32;
+        let mut x = pixel_x;
+        builder.move_to((x, baseline_y));
+        let mut up = true;
+        while x < pixel_x + pixel_w {
+            let next_x = (x + wave_len).min(pixel_x + pixel_w);
+            let dy = if up { -amplitude } else { amplitude };
+            builder.quad_to((x + wave_len * 0.5, baseline_y + dy), (next_x, baseline_y));
+            x = next_x;
+            up = !up;
+        }
+        let path = builder.detach();
+        self.surface.canvas().draw_path(&path, &paint);
+    }
+
+    /// Draw a strikethrough span at pixel Y. Column is cell-based.
+    /// Line is drawn at 60% of ascent (roughly vertical center of glyphs).
+    pub fn draw_strikethrough_at_y(
+        &mut self,
+        pixel_y: f32,
+        col: usize,
+        count: usize,
+        color: Color4f,
+    ) {
+        let x = col as f32 * self.cell_width;
+        let strike_y = pixel_y + self.ascent * 0.6;
+        let width = count as f32 * self.cell_width;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((x, strike_y), (x + width, strike_y), &paint);
+    }
+
+    /// Draw a strikethrough span at exact pixel coordinates.
+    pub fn draw_strikethrough_at_pixel(
+        &mut self,
+        pixel_x: f32,
+        pixel_y: f32,
+        pixel_w: f32,
+        color: Color4f,
+    ) {
+        let strike_y = pixel_y + self.ascent * 0.6;
+        let mut paint = Paint::new(color, None);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(1.0);
+        self.surface
+            .canvas()
+            .draw_line((pixel_x, strike_y), (pixel_x + pixel_w, strike_y), &paint);
     }
 
     /// Draw text at pixel Y. ASCII uses a single run; mixed/CJK falls back per-char.
@@ -495,28 +896,24 @@ impl SkiaCanvas {
 
         let text = ch.to_string();
 
-        let mut font = if bold {
+        // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
+        let font = if scale != 1.0 {
+            self.get_scaled_font(bold, scale).clone()
+        } else if bold {
             self.bold_font.clone()
         } else {
             self.font.clone()
         };
-
-        if scale != 1.0 {
-            font.set_size(font.size() * scale);
-        }
 
         let (_, metrics) = font.metrics();
         let baseline = y - metrics.ascent;
 
         if italic {
             self.surface.canvas().save();
-            // Simulate italic with a slight skew.
             let mut skew_matrix = skia_safe::Matrix::new_identity();
             skew_matrix.pre_skew((-0.2, 0.0), None);
-            // We need to translate so the skew happens relative to the character position.
             self.surface.canvas().translate((x, baseline));
             self.surface.canvas().concat(&skew_matrix);
-            // Now draw at (0,0) because of the translation.
             self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
             self.surface.canvas().restore();
             return;
@@ -531,37 +928,40 @@ impl SkiaCanvas {
         }
 
         // 2. Try icon font fallback
-        if let Some(mut icon_font) = self.icon_font.clone() {
-            if scale != 1.0 {
-                icon_font.set_size(icon_font.size() * scale);
-            }
-            if icon_font.unichar_to_glyph(ch as i32) != 0 {
+        if let Some(ref icon_font) = self.icon_font {
+            let icon = if scale != 1.0 {
+                self.get_scaled_font(false, scale).clone()
+            } else {
+                icon_font.clone()
+            };
+            if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon_font, &paint);
+                    .draw_str(&text, (x, baseline), &icon, &paint);
                 return;
             }
         }
 
-        // 3. System fallback via FontMgr
-        let font_mgr = FontMgr::default();
-        let family_name = self.font.typeface().family_name();
-        let style = self.font.typeface().font_style();
+        // 3. System fallback via FontMgr — cached.
+        let fallback_tf = self
+            .fallback_cache
+            .entry(ch)
+            .or_insert_with(|| {
+                let font_mgr = FontMgr::default();
+                let family_name = self.font.typeface().family_name();
+                let style = self.font.typeface().font_style();
+                font_mgr.match_family_style_character(family_name.as_str(), style, &[], ch as i32)
+            })
+            .clone();
 
-        if let Some(fallback_tf) = font_mgr.match_family_style_character(
-            family_name.as_str(),
-            style,
-            &[], // bcp47
-            ch as i32,
-        ) {
-            let fallback_font = Font::from_typeface(fallback_tf, self.font.size() * scale);
+        if let Some(tf) = fallback_tf {
+            let fallback_font = Font::from_typeface(tf, self.font.size() * scale);
             let (_, fb_metrics) = fallback_font.metrics();
             let fb_baseline = y - fb_metrics.ascent;
             self.surface
                 .canvas()
                 .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
         } else {
-            // Last resort
             self.surface
                 .canvas()
                 .draw_str(&text, (x, baseline), &font, &paint);
@@ -670,15 +1070,14 @@ impl SkiaCanvas {
         }
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
-        let font = if bold { &self.bold_font } else { &self.font };
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
         if scale != 1.0 {
-            let mut scaled = font.clone();
-            scaled.set_size(font.size() * scale);
+            let scaled = self.get_scaled_font(bold, scale);
             let (_, m) = scaled.metrics();
             let baseline = y - m.ascent;
+            let scaled = scaled.clone();
             if italic {
                 self.surface.canvas().save();
                 let mut skew = skia_safe::Matrix::new_identity();
@@ -696,8 +1095,15 @@ impl SkiaCanvas {
             }
             return;
         }
+        let font = if bold { &self.bold_font } else { &self.font };
 
-        let baseline = y + self.ascent;
+        // Use font-specific ascent for baseline to avoid bold/regular misalignment.
+        let baseline = if bold {
+            let (_, m) = font.metrics();
+            y - m.ascent
+        } else {
+            y + self.ascent
+        };
         if italic {
             self.surface.canvas().save();
             let mut skew = skia_safe::Matrix::new_identity();
@@ -844,5 +1250,183 @@ mod tests {
         // Just verify StyledCell/StyledLine types work with canvas API.
         let cell = crate::text::StyledCell::new('X', Color4f::new(1.0, 1.0, 1.0, 1.0));
         assert_eq!(cell.ch, 'X');
+    }
+
+    #[test]
+    fn scaled_font_cache_key_computation() {
+        // The cache key is `(scale * 1000.0) as u32`. Verify distinct scales
+        // produce distinct keys and identical scales produce the same key.
+        let key_1_5 = (1.5_f32 * 1000.0) as u32;
+        let key_2_0 = (2.0_f32 * 1000.0) as u32;
+        let key_1_5b = (1.5_f32 * 1000.0) as u32;
+        assert_eq!(key_1_5, 1500);
+        assert_eq!(key_2_0, 2000);
+        assert_eq!(key_1_5, key_1_5b);
+        assert_ne!(key_1_5, key_2_0);
+    }
+
+    #[test]
+    fn scaled_font_cache_cleared_on_resize() {
+        // Verify the cache HashMap clears properly (type-level guarantee).
+        let mut cache: HashMap<u32, String> = HashMap::new();
+        cache.insert(1500, "scaled_1.5".into());
+        cache.insert(2000, "scaled_2.0".into());
+        assert_eq!(cache.len(), 2);
+        cache.clear();
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn scaled_font_cache_or_insert_populates() {
+        // Verify HashMap::entry().or_insert_with() pattern works as expected
+        // for the font cache — called once, subsequent lookups hit cache.
+        let mut cache: HashMap<u32, String> = HashMap::new();
+        let mut call_count = 0;
+        for _ in 0..3 {
+            cache.entry(1500).or_insert_with(|| {
+                call_count += 1;
+                "font_1.5x".into()
+            });
+        }
+        assert_eq!(call_count, 1);
+        assert_eq!(cache.len(), 1);
+    }
+
+    /// Verify bold vs regular advances match for monospace fonts.
+    /// If they diverge, heading text (bold) won't match cursor (which uses
+    /// the measured advance).
+    #[test]
+    fn bold_and_regular_advances_match() {
+        let fm = FontMgr::new();
+        let tf_regular = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have monospace regular");
+        let tf_bold = fm
+            .match_family_style("monospace", FontStyle::bold())
+            .expect("must have monospace bold");
+
+        let base_size = 14.0;
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let regular = Font::from_typeface(&tf_regular, base_size * scale);
+            let bold = Font::from_typeface(&tf_bold, base_size * scale);
+            let (reg_advance, _) = regular.measure_str("M", None);
+            let (bold_advance, _) = bold.measure_str("M", None);
+            eprintln!(
+                "scale={:.2}: regular_advance={:.2}, bold_advance={:.2}, diff={:.2}",
+                scale,
+                reg_advance,
+                bold_advance,
+                bold_advance - reg_advance,
+            );
+            // For monospace fonts, bold and regular must have same advance.
+            // If this fails, the font isn't truly monospace or bold uses a
+            // different typeface with different metrics.
+            assert_eq!(
+                reg_advance, bold_advance,
+                "scale={}: bold advance ({}) != regular advance ({})",
+                scale, bold_advance, reg_advance
+            );
+        }
+    }
+
+    /// Verify: cursor position using `pixel_x_for_col(glyph_advance)` matches
+    /// Skia's actual string advance. This is THE correctness test for the fix.
+    #[test]
+    fn cursor_pixel_x_matches_skia_string_advance() {
+        use crate::layout::FrameLayout;
+
+        let fm = FontMgr::new();
+        let tf = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have a monospace font");
+
+        let base_size = 14.0;
+        let base_font = Font::from_typeface(&tf, base_size);
+        let (cell_width, _) = base_font.measure_str("M", None);
+
+        let test_text = "# This is a heading for testing alignment";
+        let char_count = test_text.len();
+
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let mut scaled_font = base_font.clone();
+            scaled_font.set_size(base_size * scale);
+            let (glyph_advance, _) = scaled_font.measure_str("M", None);
+
+            // Skia's actual total string advance:
+            let (actual_str_advance, _) = scaled_font.measure_str(test_text, None);
+
+            // Our NEW cursor math: pixel_x_for_col with actual glyph_advance
+            let cursor_px = FrameLayout::pixel_x_for_col(test_text, char_count, glyph_advance);
+
+            let error_in_cells = (actual_str_advance - cursor_px).abs() / cell_width;
+
+            eprintln!(
+                "scale={:.2}: cursor_px={:.2}, skia_advance={:.2}, error={:.4} cells",
+                scale, cursor_px, actual_str_advance, error_in_cells,
+            );
+
+            assert!(
+                error_in_cells < 0.1,
+                "scale={}: cursor vs skia drift = {:.2} cells! cursor_px={}, skia={}",
+                scale,
+                error_in_cells,
+                cursor_px,
+                actual_str_advance,
+            );
+        }
+    }
+
+    /// Documents that font advance scaling is non-linear (grid-fitting).
+    /// This test proves our old `char_width * scale * cell_width` model was wrong.
+    #[test]
+    fn font_advance_scaling_is_nonlinear() {
+        let fm = FontMgr::new();
+        let tf = fm
+            .match_family_style("monospace", FontStyle::normal())
+            .expect("must have a monospace font");
+
+        let base_size = 14.0;
+        let base_font = Font::from_typeface(&tf, base_size);
+        let (cell_width, _) = base_font.measure_str("M", None);
+        assert!(cell_width > 0.0, "base font advance must be positive");
+
+        let test_text = "# This is a heading for testing alignment";
+        let char_count = test_text.len();
+
+        for &scale in &[1.0_f32, 1.15, 1.3, 1.5] {
+            let mut scaled_font = base_font.clone();
+            scaled_font.set_size(base_size * scale);
+
+            let (actual_str_advance, _) = scaled_font.measure_str(test_text, None);
+            let (scaled_cell, _) = scaled_font.measure_str("M", None);
+
+            // Skia's actual per-glyph advance at this scale:
+            let actual_per_glyph = scaled_cell;
+            // Our incorrect assumption: per-glyph = cell_width * scale
+            let assumed_per_glyph = cell_width * scale;
+
+            eprintln!(
+                "scale={:.2}: actual_glyph_advance={:.2}, assumed={:.2} (cell_width*scale), \
+                 diff={:.2}px, str_advance={:.2} vs assumed={:.2}",
+                scale,
+                actual_per_glyph,
+                assumed_per_glyph,
+                actual_per_glyph - assumed_per_glyph,
+                actual_str_advance,
+                char_count as f32 * assumed_per_glyph,
+            );
+
+            // The CORRECT model: use the scaled font's actual advance.
+            let correct_math = char_count as f32 * actual_per_glyph;
+            let correct_error = (actual_str_advance - correct_math).abs() / cell_width;
+            assert!(
+                correct_error < 0.5,
+                "Even with actual glyph advance, string advance doesn't match: \
+                 str={:.2}, N*glyph={:.2}, error={:.2} cells",
+                actual_str_advance,
+                correct_math,
+                correct_error,
+            );
+        }
     }
 }

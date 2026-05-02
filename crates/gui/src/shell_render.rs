@@ -368,44 +368,36 @@ fn convert_color(
 /// dracula: "pink"/"cyan", catppuccin: "mauve"/"teal"). We try the
 /// canonical ANSI name first, then common aliases.
 fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Option<Color4f> {
-    let candidates: &[&str] = match named {
-        NamedColor::Black | NamedColor::DimBlack => &["black", "bg0", "base", "crust"],
-        NamedColor::Red | NamedColor::DimRed => &["red", "maroon"],
-        NamedColor::Green | NamedColor::DimGreen => &["green"],
-        NamedColor::Yellow | NamedColor::DimYellow => &["yellow", "peach", "orange"],
-        NamedColor::Blue | NamedColor::DimBlue => &["blue", "sapphire"],
-        NamedColor::Magenta | NamedColor::DimMagenta => &["magenta", "purple", "pink", "mauve"],
-        NamedColor::Cyan | NamedColor::DimCyan => &["cyan", "aqua", "teal", "sky"],
-        NamedColor::White | NamedColor::DimWhite => &["white", "fg0", "fg1", "text", "fg"],
-        NamedColor::BrightBlack => &["bright_black", "bg3", "overlay0", "comment"],
-        NamedColor::BrightRed => &["bright_red", "red"],
-        NamedColor::BrightGreen => &["bright_green", "green"],
-        NamedColor::BrightYellow => &["bright_yellow", "yellow"],
-        NamedColor::BrightBlue => &["bright_blue", "blue", "lavender"],
-        NamedColor::BrightMagenta => {
-            &["bright_magenta", "bright_purple", "purple", "pink", "mauve"]
-        }
-        NamedColor::BrightCyan => &["bright_cyan", "bright_aqua", "aqua", "teal", "sky"],
-        NamedColor::BrightWhite => &["bright_white", "fg0", "text", "fg"],
-        NamedColor::Foreground | NamedColor::BrightForeground => {
-            &["fg", "fg1", "fg0", "text", "foreground"]
-        }
-        NamedColor::DimForeground => &["fg", "fg2", "fg3", "subtext0"],
-        NamedColor::Background => &["bg", "bg0", "base", "base03", "background"],
+    use mae_core::render_common::shell::{self, AnsiName};
+
+    let ansi = match named {
+        NamedColor::Black | NamedColor::DimBlack => AnsiName::Black,
+        NamedColor::Red | NamedColor::DimRed => AnsiName::Red,
+        NamedColor::Green | NamedColor::DimGreen => AnsiName::Green,
+        NamedColor::Yellow | NamedColor::DimYellow => AnsiName::Yellow,
+        NamedColor::Blue | NamedColor::DimBlue => AnsiName::Blue,
+        NamedColor::Magenta | NamedColor::DimMagenta => AnsiName::Magenta,
+        NamedColor::Cyan | NamedColor::DimCyan => AnsiName::Cyan,
+        NamedColor::White | NamedColor::DimWhite => AnsiName::White,
+        NamedColor::BrightBlack => AnsiName::BrightBlack,
+        NamedColor::BrightRed => AnsiName::BrightRed,
+        NamedColor::BrightGreen => AnsiName::BrightGreen,
+        NamedColor::BrightYellow => AnsiName::BrightYellow,
+        NamedColor::BrightBlue => AnsiName::BrightBlue,
+        NamedColor::BrightMagenta => AnsiName::BrightMagenta,
+        NamedColor::BrightCyan => AnsiName::BrightCyan,
+        NamedColor::BrightWhite => AnsiName::BrightWhite,
+        NamedColor::Foreground | NamedColor::BrightForeground => AnsiName::Foreground,
+        NamedColor::DimForeground => AnsiName::DimForeground,
+        NamedColor::Background => AnsiName::Background,
         _ => return None,
     };
-    for key in candidates {
+    for key in shell::palette_candidates(ansi) {
         if let Some(c) = theme.palette.get(*key) {
             return Some(theme::theme_color_to_skia(c));
         }
     }
-    // For Background and Black, fall back to the theme's ui.background style.
-    // Terminal programs use ANSI "black" as the background color, so it should
-    // match the editor background rather than xterm's hardcoded #000000.
-    if matches!(
-        named,
-        NamedColor::Background | NamedColor::Black | NamedColor::DimBlack
-    ) {
+    if shell::should_fallback_to_ui_background(ansi) {
         if let Some(bg) = theme.style("ui.background").bg {
             return Some(theme::theme_color_to_skia(&bg));
         }

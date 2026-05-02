@@ -1,6 +1,7 @@
-//! Popup overlays: file picker, file browser, command palette, LSP completion.
+//! Popup overlays: file picker, file browser, command palette, LSP completion,
+//! hover popup, code action menu.
 
-use mae_core::{Editor, PalettePurpose};
+use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -30,11 +31,11 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
     let cursor_screen_row = win.cursor_row.saturating_sub(scroll_row) as u16;
     let cursor_screen_col = win.cursor_col as u16;
 
-    const MAX_ITEMS: usize = 10;
-    let visible_count = items.len().min(MAX_ITEMS) as u16;
+    let max_items = editor.completion_max_items;
+    let visible_count = items.len().min(max_items) as u16;
     let popup_width = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|i| {
             let detail_len = i.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
             i.label.len() + detail_len + 4
@@ -42,7 +43,7 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
         .max()
         .unwrap_or(20)
         .min(50) as u16;
-    let popup_height = visible_count + 2;
+    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
 
     let popup_top = if cursor_screen_row + 1 + popup_height < editor_area.height {
         editor_area.y + cursor_screen_row + 1
@@ -78,7 +79,7 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
 
     let lines: Vec<Line> = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .enumerate()
         .map(|(i, item)| {
             let style = if i == editor.completion_selected {
@@ -301,18 +302,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
     let match_count = palette.filtered.len();
     let total = palette.entries.len();
 
-    let title = match palette.purpose {
-        PalettePurpose::Execute => format!(" Commands ({}/{}) ", match_count, total),
-        PalettePurpose::Describe => format!(" Describe Command ({}/{}) ", match_count, total),
-        PalettePurpose::SetTheme => format!(" Themes ({}/{}) ", match_count, total),
-        PalettePurpose::HelpSearch => format!(" Help Topics ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchBuffer => format!(" Buffers ({}/{}) ", match_count, total),
-        PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
-        PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
-        PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
-        PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
-    };
+    let title = format!(" {} ({}/{}) ", palette.purpose.label(), match_count, total);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -345,9 +335,22 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         0
     };
 
-    // Adaptive name column: fit visible entries, but cap at 40% of inner
-    // width so docs always get the majority of space.
-    let max_name_width = (inner.width as usize * 2 / 5).max(12);
+    // For path-heavy palettes (recent files, projects), use full width since
+    // there's no doc column. Otherwise cap name at 40% to leave room for docs.
+    let full_width_name = matches!(
+        palette.purpose,
+        mae_core::command_palette::PalettePurpose::RecentFile
+            | mae_core::command_palette::PalettePurpose::SwitchProject
+            | mae_core::command_palette::PalettePurpose::SwitchBuffer
+            | mae_core::command_palette::PalettePurpose::SetTheme
+            | mae_core::command_palette::PalettePurpose::SetSplashArt
+            | mae_core::command_palette::PalettePurpose::GitBranch
+    );
+    let max_name_width = if full_width_name {
+        (inner.width as usize).saturating_sub(2)
+    } else {
+        (inner.width as usize * 2 / 5).max(12)
+    };
     let name_col = palette
         .filtered
         .iter()
@@ -379,24 +382,37 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         };
 
         let name_display = if entry.name.len() > name_col {
-            format!("{:<w$}", &entry.name[..name_col], w = name_col)
+            if full_width_name {
+                // For paths, show the end (most distinctive part)
+                let skip = entry.name.len() - name_col + 1;
+                format!("…{}", &entry.name[skip..])
+            } else {
+                format!("{:<w$}", &entry.name[..name_col], w = name_col)
+            }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
         };
 
-        let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
-        let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
-            let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
-            s.push('…');
-            s
+        if full_width_name {
+            lines.push(Line::from(Span::styled(
+                format!(" {}", name_display),
+                row_style,
+            )));
         } else {
-            entry.doc.clone()
-        };
+            let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
+            let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
+                let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
+                s.push('…');
+                s
+            } else {
+                entry.doc.clone()
+            };
 
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {}  ", name_display), row_style),
-            Span::styled(doc_display, doc_row_style),
-        ]));
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {}  ", name_display), row_style),
+                Span::styled(doc_display, doc_row_style),
+            ]));
+        }
     }
 
     let paragraph = Paragraph::new(lines);
@@ -406,4 +422,162 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         inner.x + 2 + palette.query.len() as u16,
         inner.y,
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Hover popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let popup = match &editor.hover_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 76);
+    if lines.is_empty() {
+        return;
+    }
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    let max_visible = editor.hover_max_lines;
+    let visible_count = lines.len().min(max_visible) as u16;
+    let popup_width = lines
+        .iter()
+        .take(max_visible)
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(20)
+        .min(76) as u16
+        + 2;
+    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
+
+    // Position below cursor with a 1-line gap so the trigger line stays visible.
+    let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
+        editor_area.y + cursor_screen_row + 2
+    } else if cursor_screen_row > popup_height {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height + 1)
+    } else {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = (editor_area.x + win.cursor_col as u16)
+        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let text_style = ts(editor, "ui.popup.text");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Hover ")
+        .style(text_style);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let scroll = popup.scroll_offset;
+    let content_lines: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(max_visible)
+        .map(|l| Line::styled(l.as_str(), text_style))
+        .collect();
+
+    let para = Paragraph::new(content_lines);
+    frame.render_widget(para, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Code action popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let menu = match &editor.code_action_menu {
+        Some(m) => m,
+        None => return,
+    };
+    if menu.items.is_empty() {
+        return;
+    }
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    const MAX_ITEMS: usize = 12;
+    let visible_count = menu.items.len().min(MAX_ITEMS) as u16;
+    let popup_width = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|item| item.title.len() + 4)
+        .max()
+        .unwrap_or(20)
+        .min(60) as u16
+        + 2;
+    let popup_height = visible_count + 2;
+
+    let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
+        editor_area.y + cursor_screen_row + 1
+    } else {
+        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = (editor_area.x + win.cursor_col as u16)
+        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let normal_style = ts(editor, "ui.popup.text");
+    let selected_style = ts(editor, "ui.popup.key");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(" Code Actions ")
+        .style(normal_style);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let content_lines: Vec<Line> = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == menu.selected {
+                selected_style
+            } else {
+                normal_style
+            };
+            let icon = match item.kind.as_deref() {
+                Some(k) if k.contains("quickfix") => "* ",
+                Some(k) if k.contains("refactor") => "~ ",
+                Some(k) if k.contains("source") => "+ ",
+                _ => "- ",
+            };
+            Line::styled(format!("{}{}", icon, item.title), style)
+        })
+        .collect();
+
+    let para = Paragraph::new(content_lines);
+    frame.render_widget(para, inner);
 }

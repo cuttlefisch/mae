@@ -15,6 +15,20 @@ pub struct Command {
     pub source: CommandSource,
 }
 
+impl Command {
+    /// Compact label for which-key popups. Strips the trailing `(...)`
+    /// key hint since the key is already displayed in the popup entry itself.
+    /// Full `doc` is preserved for help buffers and `describe-command`.
+    pub fn which_key_label(&self) -> &str {
+        if self.doc.ends_with(')') {
+            if let Some(i) = self.doc.rfind(" (") {
+                return &self.doc[..i];
+            }
+        }
+        &self.doc
+    }
+}
+
 /// Where a command's implementation lives.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandSource {
@@ -22,6 +36,8 @@ pub enum CommandSource {
     Builtin,
     /// Implemented in Scheme — the runtime calls the named Scheme function.
     Scheme(String),
+    /// Lazily loaded from a Scheme feature — `require` is called on first use.
+    Autoload { feature: String },
 }
 
 /// Registry of all known commands.
@@ -73,6 +89,26 @@ impl CommandRegistry {
                 name,
                 doc: doc.into(),
                 source: CommandSource::Scheme(scheme_fn.into()),
+            },
+        );
+    }
+
+    /// Register a command that will `(require FEATURE)` on first invocation.
+    pub fn register_autoload(
+        &mut self,
+        name: impl Into<String>,
+        doc: impl Into<String>,
+        feature: impl Into<String>,
+    ) {
+        let name = name.into();
+        self.commands.insert(
+            name.clone(),
+            Command {
+                name,
+                doc: doc.into(),
+                source: CommandSource::Autoload {
+                    feature: feature.into(),
+                },
             },
         );
     }
@@ -314,6 +350,9 @@ impl CommandRegistry {
         reg.register_builtin("quit", "Quit editor");
         reg.register_builtin("force-quit", "Quit without saving");
         reg.register_builtin("save-and-quit", "Save and quit");
+        reg.register_builtin("save-all-and-quit", "Save all buffers and quit (SPC q S)");
+        reg.register_builtin("copy-this-file", "Copy current file to new path (SPC f C)");
+        reg.register_builtin("file-info", "Show file info in status bar (Ctrl-G)");
 
         // Window management
         reg.register_builtin("split-vertical", "Split window vertically (left/right)");
@@ -323,6 +362,15 @@ impl CommandRegistry {
         reg.register_builtin("focus-right", "Focus window to the right");
         reg.register_builtin("focus-up", "Focus window above");
         reg.register_builtin("focus-down", "Focus window below");
+        reg.register_builtin("window-grow", "Increase window size (SPC w +)");
+        reg.register_builtin("window-shrink", "Decrease window size (SPC w -)");
+        reg.register_builtin("window-balance", "Balance all window sizes (SPC w =)");
+        reg.register_builtin("window-maximize", "Maximize current window (SPC w m)");
+        reg.register_builtin("window-move-left", "Move window left (SPC w H)");
+        reg.register_builtin("window-move-right", "Move window right (SPC w L)");
+        reg.register_builtin("window-move-up", "Move window up (SPC w K)");
+        reg.register_builtin("window-move-down", "Move window down (SPC w J)");
+        reg.register_builtin("focus-next-window", "Cycle focus to next window (SPC w w)");
 
         // Diagnostics
         reg.register_builtin("view-messages", "Show *Messages* log buffer");
@@ -338,6 +386,64 @@ impl CommandRegistry {
         reg.register_builtin("prev-buffer", "Cycle to previous buffer");
         reg.register_builtin("find-file", "Open a file");
         reg.register_builtin("file-browser", "Open directory browser");
+        reg.register_builtin("file-tree-toggle", "Toggle file tree sidebar (SPC f t)");
+        reg.register_builtin("file-tree-up", "Move file tree selection up");
+        reg.register_builtin("file-tree-down", "Move file tree selection down");
+        reg.register_builtin("file-tree-open", "Open selected file from tree");
+        reg.register_builtin("file-tree-expand", "Expand/collapse directory in tree");
+        reg.register_builtin("file-tree-refresh", "Refresh file tree");
+        reg.register_builtin("file-tree-first", "Move to first entry in file tree (gg)");
+        reg.register_builtin("file-tree-last", "Move to last entry in file tree (G)");
+        reg.register_builtin(
+            "file-tree-close-parent",
+            "Collapse parent directory in file tree (x)",
+        );
+        reg.register_builtin(
+            "file-tree-cd",
+            "Change file tree root to selected directory (C)",
+        );
+        reg.register_builtin(
+            "file-tree-parent",
+            "Move file tree root up one directory (u)",
+        );
+        reg.register_builtin(
+            "file-tree-delete",
+            "Delete selected file/dir in tree (d, confirm y/n)",
+        );
+        reg.register_builtin("file-tree-rename", "Rename selected file/dir in tree (r)");
+        reg.register_builtin(
+            "file-tree-create",
+            "Create new file/dir in tree (a, trailing / = dir)",
+        );
+        reg.register_builtin(
+            "file-tree-open-vsplit",
+            "Open file from tree in vertical split (s)",
+        );
+        reg.register_builtin(
+            "file-tree-open-hsplit",
+            "Open file from tree in horizontal split (i)",
+        );
+        reg.register_builtin(
+            "file-tree-scroll-down",
+            "Scroll file tree down one line (C-e)",
+        );
+        reg.register_builtin("file-tree-scroll-up", "Scroll file tree up one line (C-y)");
+        reg.register_builtin(
+            "file-tree-half-page-down",
+            "Scroll file tree half page down (C-d)",
+        );
+        reg.register_builtin(
+            "file-tree-half-page-up",
+            "Scroll file tree half page up (C-u)",
+        );
+        reg.register_builtin(
+            "file-tree-global-cycle",
+            "Cycle file tree fold state: close all / expand all / default (S-Tab)",
+        );
+        reg.register_builtin(
+            "delete-this-file",
+            "Delete current buffer's file (SPC f D, confirm y/n)",
+        );
         reg.register_builtin("recent-files", "Open recent file");
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("new-buffer", "Create a new empty scratch buffer");
@@ -358,6 +464,7 @@ impl CommandRegistry {
         reg.register_builtin("describe-command", "Show command documentation");
         reg.register_builtin("show-registers", "Show named registers");
         reg.register_builtin("prompt-register", "Select a register");
+        reg.register_builtin("paste-from-yank", "Paste from yank register (\"0p)");
 
         // Surrounds (vim-surround ports)
         reg.register_builtin(
@@ -419,6 +526,15 @@ impl CommandRegistry {
         reg.register_builtin("visual-uppercase", "Uppercase visual selection (U)");
         reg.register_builtin("visual-lowercase", "Lowercase visual selection (u)");
         reg.register_builtin("reselect-visual", "Reselect last visual selection (gv)");
+        reg.register_builtin("enter-visual-block", "Enter blockwise visual mode (C-v)");
+        reg.register_builtin(
+            "block-visual-insert",
+            "Insert at start of each line in block selection (I)",
+        );
+        reg.register_builtin(
+            "block-visual-append",
+            "Append at end of each line in block selection (A)",
+        );
 
         // Search
         reg.register_builtin("search-forward-start", "Search forward (/)");
@@ -491,6 +607,12 @@ impl CommandRegistry {
             "debug-panel",
             "Toggle debug panel showing threads, stack, and variables (SPC d p)",
         );
+        reg.register_builtin("debug-panel-select", "Select/expand item in debug panel");
+        reg.register_builtin("close-debug-panel", "Close the debug panel");
+        reg.register_builtin("debug-toggle-output", "Toggle debug output pane");
+        reg.register_builtin("debug-move-down", "Move cursor down in debug panel");
+        reg.register_builtin("debug-move-up", "Move cursor up in debug panel");
+        reg.register_builtin("dap-refresh", "Refresh DAP state and debug panel");
         reg.register_builtin(
             "debug-attach",
             "Attach debugger to a running process (:debug-attach <adapter> <pid>)",
@@ -513,6 +635,9 @@ impl CommandRegistry {
             "lsp-hover",
             "Show hover information for symbol under cursor (K)",
         );
+        reg.register_builtin("dismiss-hover-popup", "Dismiss the LSP hover popup");
+        reg.register_builtin("hover-scroll-down", "Scroll the LSP hover popup down");
+        reg.register_builtin("hover-scroll-up", "Scroll the LSP hover popup up");
         reg.register_builtin(
             "lsp-next-diagnostic",
             "Jump to next diagnostic in buffer (]d)",
@@ -540,10 +665,70 @@ impl CommandRegistry {
             "Select previous completion item (Ctrl-p)",
         );
 
-        // LSP code actions (Phase 4a stubs)
+        // LSP code actions
         reg.register_builtin("lsp-code-action", "Run LSP code action at cursor (SPC c a)");
+        reg.register_builtin("lsp-code-action-next", "Select next code action");
+        reg.register_builtin("lsp-code-action-prev", "Select previous code action");
+        reg.register_builtin("lsp-code-action-select", "Apply selected code action");
+        reg.register_builtin("lsp-code-action-dismiss", "Dismiss code action menu");
         reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
         reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
+        reg.register_builtin("lsp-status", "Show LSP server status buffer (SPC c s)");
+        reg.register_builtin(
+            "toggle-lsp-diagnostics-inline",
+            "Toggle inline diagnostic underlines (SPC t d)",
+        );
+
+        // Folding
+        reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");
+        reg.register_builtin("close-all-folds", "Close all folds (zM)");
+        reg.register_builtin("open-all-folds", "Open all folds (zR)");
+
+        // Org-mode
+        reg.register_builtin("org-cycle", "Cycle org heading visibility (Tab)");
+        reg.register_builtin("org-global-cycle", "Cycle all org headings (S-Tab)");
+        reg.register_builtin("org-todo-next", "Cycle org TODO state forward");
+        reg.register_builtin("org-todo-prev", "Cycle org TODO state backward");
+        reg.register_builtin("org-open-link", "Open org link under cursor");
+        reg.register_builtin(
+            "smart-enter",
+            "Context-aware Enter: toggle checkbox, cycle TODO, or follow link",
+        );
+        reg.register_builtin(
+            "open-link-at-cursor",
+            "Open URL or file path under cursor (gx)",
+        );
+        reg.register_builtin("org-promote", "Promote org heading (M-Left)");
+        reg.register_builtin("org-demote", "Demote org heading (M-Right)");
+        reg.register_builtin("org-move-subtree-up", "Move org subtree up (M-Up)");
+        reg.register_builtin("org-move-subtree-down", "Move org subtree down (M-Down)");
+        reg.register_builtin(
+            "org-insert-heading",
+            "Insert org heading after subtree (M-Enter)",
+        );
+        reg.register_builtin("org-narrow-subtree", "Narrow to org subtree");
+        reg.register_builtin("org-widen", "Widen from org narrow");
+
+        // Markdown
+        reg.register_builtin("md-cycle", "Cycle markdown heading visibility (Tab)");
+        reg.register_builtin("md-global-cycle", "Cycle all markdown headings (S-Tab)");
+        reg.register_builtin("md-promote", "Promote markdown heading (M-Left)");
+        reg.register_builtin("md-demote", "Demote markdown heading (M-Right)");
+        reg.register_builtin("md-move-subtree-up", "Move markdown subtree up (M-Up)");
+        reg.register_builtin(
+            "md-move-subtree-down",
+            "Move markdown subtree down (M-Down)",
+        );
+        reg.register_builtin(
+            "md-insert-heading",
+            "Insert markdown heading after subtree (M-Enter)",
+        );
+        reg.register_builtin("md-narrow-subtree", "Narrow to markdown subtree");
+        reg.register_builtin("md-widen", "Widen from markdown narrow");
+
+        // Narrow/widen (generic)
+        reg.register_builtin("narrow-to-subtree", "Narrow buffer to current subtree");
+        reg.register_builtin("widen", "Widen buffer from narrowed view");
 
         // Tree-sitter structural editing (Phase 4b M3)
         reg.register_builtin(
@@ -615,12 +800,60 @@ impl CommandRegistry {
             "Toggle relative line numbers (SPC t r)",
         );
         reg.register_builtin("toggle-word-wrap", "Toggle word wrap (SPC t w)");
+        reg.register_builtin("toggle-scrollbar", "Toggle scrollbar visibility (SPC t s)");
 
         // Git commands (shell-out stubs)
         reg.register_builtin("git-status", "Show git status in scratch buffer (SPC g s)");
         reg.register_builtin("git-blame", "Show git blame for current file (SPC g b)");
         reg.register_builtin("git-diff", "Show git diff in scratch buffer (SPC g d)");
         reg.register_builtin("git-log", "Show git log in scratch buffer (SPC g l)");
+        reg.register_builtin("git-stage", "Stage file under cursor in git status");
+        reg.register_builtin("git-unstage", "Unstage file under cursor in git status");
+        reg.register_builtin("git-stage-all", "Stage all changed files");
+        reg.register_builtin("git-unstage-all", "Unstage all staged files");
+        reg.register_builtin("git-commit", "Commit staged changes (SPC g c)");
+        reg.register_builtin("git-amend", "Amend previous commit (c a in git status)");
+        reg.register_builtin(
+            "git-toggle-section",
+            "Toggle inline diff for file at cursor (Tab in git status)",
+        );
+        reg.register_builtin(
+            "git-toggle-fold",
+            "Multi-level fold/unfold: section, file diff, or hunk (Tab in git status)",
+        );
+        reg.register_builtin(
+            "git-discard",
+            "Discard changes at cursor — hunk-aware (x in git status)",
+        );
+        reg.register_builtin("git-status-toggle", "Toggle git status detail for file");
+        reg.register_builtin("git-status-open", "Open file from git status buffer");
+        reg.register_builtin("git-next-hunk", "Jump to next diff hunk (n in git status)");
+        reg.register_builtin(
+            "git-prev-hunk",
+            "Jump to previous diff hunk (p in git status)",
+        );
+        reg.register_builtin("git-push", "Push to remote (P p in git status)");
+        reg.register_builtin("git-pull", "Pull from remote (F p in git status)");
+        reg.register_builtin("git-fetch", "Fetch from all remotes (f f in git status)");
+        reg.register_builtin(
+            "git-branch-switch",
+            "Switch branch via palette (b b in git status)",
+        );
+        reg.register_builtin("git-branch-create", "Create new branch (b n in git status)");
+        reg.register_builtin("git-branch-delete", "Delete a branch (b d in git status)");
+        reg.register_builtin("git-stash-push", "Stash working tree (z z in git status)");
+        reg.register_builtin("git-stash-pop", "Pop stash at cursor (z p in git status)");
+        reg.register_builtin(
+            "git-stash-apply",
+            "Apply stash at cursor (z a in git status)",
+        );
+        reg.register_builtin("git-stash-drop", "Drop stash at cursor (z d in git status)");
+
+        // Buffer-local key discoverability
+        reg.register_builtin(
+            "show-buffer-keys",
+            "Show all keybindings for the current buffer (?)",
+        );
 
         // Notes/KB commands
         reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
@@ -696,6 +929,10 @@ impl CommandRegistry {
         reg.register_builtin(
             "kb-ingest",
             "Ingest org files from directory into knowledge base (:kb-ingest <dir>)",
+        );
+        reg.register_builtin(
+            "kb-rebuild",
+            "Rebuild the knowledge base with current keybindings and hooks",
         );
         reg.register_builtin(
             "ai-save",
@@ -860,6 +1097,49 @@ mod tests {
     }
 
     #[test]
+    fn with_builtins_has_window_management() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("window-grow"));
+        assert!(reg.contains("window-shrink"));
+        assert!(reg.contains("window-balance"));
+        assert!(reg.contains("window-maximize"));
+        assert!(reg.contains("window-move-left"));
+    }
+
+    #[test]
+    fn with_builtins_has_folding_org_md() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("toggle-fold"));
+        assert!(reg.contains("close-all-folds"));
+        assert!(reg.contains("open-all-folds"));
+        assert!(reg.contains("org-cycle"));
+        assert!(reg.contains("org-promote"));
+        assert!(reg.contains("org-insert-heading"));
+        assert!(reg.contains("md-cycle"));
+        assert!(reg.contains("md-promote"));
+        assert!(reg.contains("md-insert-heading"));
+        assert!(reg.contains("narrow-to-subtree"));
+        assert!(reg.contains("widen"));
+    }
+
+    #[test]
+    fn with_builtins_has_git_extended() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("git-stage"));
+        assert!(reg.contains("git-unstage"));
+        assert!(reg.contains("git-commit"));
+        assert!(reg.contains("git-status-toggle"));
+    }
+
+    #[test]
+    fn with_builtins_has_visual_block() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("enter-visual-block"));
+        assert!(reg.contains("block-visual-insert"));
+        assert!(reg.contains("block-visual-append"));
+    }
+
+    #[test]
     fn with_builtins_has_ex_command_parity() {
         let reg = CommandRegistry::with_builtins();
         assert!(reg.contains("nohlsearch"));
@@ -868,5 +1148,42 @@ mod tests {
         assert!(reg.contains("kb-ingest"));
         assert!(reg.contains("ai-save"));
         assert!(reg.contains("ai-load"));
+    }
+
+    #[test]
+    fn which_key_label_strips_trailing_parens() {
+        let cmd = Command {
+            name: "git-discard".into(),
+            doc: "Discard changes at cursor (x in git status)".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Discard changes at cursor");
+
+        let cmd2 = Command {
+            name: "git-status".into(),
+            doc: "Open git status (SPC g s)".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd2.which_key_label(), "Open git status");
+    }
+
+    #[test]
+    fn which_key_label_preserves_without_trailing_parens() {
+        let cmd = Command {
+            name: "save".into(),
+            doc: "Save current buffer".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Save current buffer");
+    }
+
+    #[test]
+    fn which_key_label_no_false_positive_mid_parens() {
+        let cmd = Command {
+            name: "test".into(),
+            doc: "Run tests (unit) and report".into(),
+            source: CommandSource::Builtin,
+        };
+        assert_eq!(cmd.which_key_label(), "Run tests (unit) and report");
     }
 }

@@ -1,13 +1,11 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
-use std::collections::HashMap;
-
-use mae_core::{Editor, HighlightSpan, PalettePurpose};
+use mae_core::Editor;
 use skia_safe::Color4f;
 use unicode_width::UnicodeWidthChar;
 
-use crate::buffer_render;
 use crate::canvas::{CellRect, SkiaCanvas};
+use crate::layout::FrameLayout;
 use crate::theme;
 
 /// Truncate `s` from the start, keeping the last `max_cols - 1` display columns
@@ -44,13 +42,23 @@ fn truncate_end(s: &str, max_cols: usize) -> String {
     s.to_string()
 }
 
-/// Centered popup rect (70% x 60% of the area, clamped).
-pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
-    let w = (area_width * 70 / 100).max(40).min(area_width);
-    let h = (area_height * 60 / 100).max(10).min(area_height);
+/// Centered popup rect using editor-configured percentages.
+pub fn centered_popup_rect_from(
+    area_width: usize,
+    area_height: usize,
+    width_pct: usize,
+    height_pct: usize,
+) -> CellRect {
+    let w = (area_width * width_pct / 100).max(40).min(area_width);
+    let h = (area_height * height_pct / 100).max(10).min(area_height);
     let x = (area_width.saturating_sub(w)) / 2;
     let y = (area_height.saturating_sub(h)) / 2;
     CellRect::new(y, x, w, h)
+}
+
+/// Centered popup rect (70% x 60% of the area, clamped).
+pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
+    centered_popup_rect_from(area_width, area_height, 70, 60)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +72,7 @@ pub fn render_completion_popup(
     _area_col: usize,
     area_width: usize,
     area_height: usize,
-    syntax_spans: &HashMap<usize, Vec<HighlightSpan>>,
+    frame_layout: Option<&FrameLayout>,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
@@ -72,21 +80,17 @@ pub fn render_completion_popup(
     }
 
     let win = editor.window_mgr.focused_window();
-    let buf = &editor.buffers[win.buffer_idx];
-    let heading_extra = buffer_render::heading_extra_rows(
-        buf,
-        syntax_spans.get(&win.buffer_idx).map(|v| v.as_slice()),
-        win.scroll_offset,
-        win.cursor_row,
-    );
-    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) + heading_extra;
+    // Use FrameLayout's fold/scale-aware display_row_of for cursor screen position.
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
     let cursor_screen_col = win.cursor_col;
 
-    const MAX_ITEMS: usize = 10;
-    let visible_count = items.len().min(MAX_ITEMS);
+    let max_items = editor.completion_max_items;
+    let visible_count = items.len().min(max_items);
     let popup_width = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|i| {
             let detail_len = i.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
             i.label.len() + detail_len + 4
@@ -94,7 +98,7 @@ pub fn render_completion_popup(
         .max()
         .unwrap_or(20)
         .min(50);
-    let popup_height = visible_count + 2; // border top+bottom
+    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
     let popup_top = if cursor_screen_row + 1 + popup_height < area_height {
         area_row + cursor_screen_row + 1
@@ -128,7 +132,7 @@ pub fn render_completion_popup(
     let inner_left = popup_left + 1;
     let inner_width = popup_width.saturating_sub(2);
 
-    for (i, item) in items.iter().take(MAX_ITEMS).enumerate() {
+    for (i, item) in items.iter().take(max_items).enumerate() {
         let is_selected = i == editor.completion_selected;
         let fg = if is_selected { selected_fg } else { normal_fg };
         let item_bg = if is_selected { selected_bg } else { normal_bg };
@@ -345,18 +349,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
     canvas.draw_rect_fill(popup.row, popup.col, popup.width, popup.height, bg);
     let match_count = palette.filtered.len();
     let total = palette.entries.len();
-    let title = match palette.purpose {
-        PalettePurpose::Execute => format!(" Commands ({}/{}) ", match_count, total),
-        PalettePurpose::Describe => format!(" Describe Command ({}/{}) ", match_count, total),
-        PalettePurpose::SetTheme => format!(" Themes ({}/{}) ", match_count, total),
-        PalettePurpose::HelpSearch => format!(" Help Topics ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchBuffer => format!(" Buffers ({}/{}) ", match_count, total),
-        PalettePurpose::SetSplashArt => format!(" Splash Art ({}/{}) ", match_count, total),
-        PalettePurpose::RecentFile => format!(" Recent Files ({}/{}) ", match_count, total),
-        PalettePurpose::SwitchProject => format!(" Projects ({}/{}) ", match_count, total),
-        PalettePurpose::AiMode => format!(" AI Operating Mode ({}/{}) ", match_count, total),
-        PalettePurpose::AiProfile => format!(" AI Prompt Profile ({}/{}) ", match_count, total),
-    };
+    let title = format!(" {} ({}/{}) ", palette.purpose.label(), match_count, total);
     draw_border_titled(
         canvas,
         popup.row,
@@ -382,7 +375,22 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         0
     };
 
-    let max_name_width = (inner.width * 2 / 5).max(12);
+    // For path-heavy palettes (recent files, projects), use full width since
+    // there's no doc column. Otherwise cap name at 40% to leave room for docs.
+    let full_width_name = matches!(
+        palette.purpose,
+        mae_core::command_palette::PalettePurpose::RecentFile
+            | mae_core::command_palette::PalettePurpose::SwitchProject
+            | mae_core::command_palette::PalettePurpose::SwitchBuffer
+            | mae_core::command_palette::PalettePurpose::SetTheme
+            | mae_core::command_palette::PalettePurpose::SetSplashArt
+            | mae_core::command_palette::PalettePurpose::GitBranch
+    );
+    let max_name_width = if full_width_name {
+        inner.width.saturating_sub(2)
+    } else {
+        (inner.width * 2 / 5).max(12)
+    };
     let name_col = palette
         .filtered
         .iter()
@@ -416,23 +424,30 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
         let name_display = if unicode_width::UnicodeWidthStr::width(entry.name.as_str()) > name_col
         {
-            truncate_end(&entry.name, name_col)
+            if full_width_name {
+                // For paths, show the end (most distinctive part)
+                truncate_start(&entry.name, name_col)
+            } else {
+                truncate_end(&entry.name, name_col)
+            }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
         };
 
-        let available_for_doc = inner.width.saturating_sub(name_col + 3);
-        let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
-            > available_for_doc
-            && available_for_doc > 1
-        {
-            truncate_end(&entry.doc, available_for_doc)
-        } else {
-            entry.doc.clone()
-        };
-
         canvas.draw_text_at(row, inner.col + 1, &name_display, fg);
-        canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
+
+        if !full_width_name {
+            let available_for_doc = inner.width.saturating_sub(name_col + 3);
+            let doc_display = if unicode_width::UnicodeWidthStr::width(entry.doc.as_str())
+                > available_for_doc
+                && available_for_doc > 1
+            {
+                truncate_end(&entry.doc, available_for_doc)
+            } else {
+                entry.doc.clone()
+            };
+            canvas.draw_text_at(row, inner.col + 1 + name_col + 2, &doc_display, dfg);
+        }
     }
 }
 
@@ -447,6 +462,7 @@ pub fn render_which_key_popup(
     height: usize,
     cols: usize,
     entries: &[mae_core::WhichKeyEntry],
+    title_override: Option<&str>,
 ) {
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let group_fg = theme::ts_fg(editor, "ui.popup.group");
@@ -455,28 +471,25 @@ pub fn render_which_key_popup(
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
-    let breadcrumb: String = editor
-        .which_key_prefix
-        .iter()
-        .map(format_keypress)
-        .collect::<Vec<_>>()
-        .join(" > ");
-    draw_border_titled(
-        canvas,
-        row_start,
-        0,
-        cols,
-        height,
-        border_fg,
-        &format!(" {} ", breadcrumb),
-    );
+    let title = if let Some(t) = title_override {
+        format!(" {} keys ", t)
+    } else {
+        let breadcrumb: String = editor
+            .which_key_prefix
+            .iter()
+            .map(format_keypress)
+            .collect::<Vec<_>>()
+            .join(" > ");
+        format!(" {} ", breadcrumb)
+    };
+    draw_border_titled(canvas, row_start, 0, cols, height, border_fg, &title);
 
     let inner_row = row_start + 1;
     let inner_col = 1_usize;
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    let col_width = 25_usize;
+    let col_width = 30_usize;
     let num_cols = (inner_width / col_width).max(1);
 
     let mut row = 0;
@@ -538,6 +551,187 @@ fn format_keypress(kp: &mae_core::KeyPress) -> String {
         _ => s.push('?'),
     }
     s
+}
+
+// ---------------------------------------------------------------------------
+// Hover popup
+// ---------------------------------------------------------------------------
+
+pub fn render_hover_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+) {
+    let popup = match &editor.hover_popup {
+        Some(p) => p,
+        None => return,
+    };
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 78);
+    if lines.is_empty() {
+        return;
+    }
+
+    let max_visible = editor.hover_max_lines;
+    let visible_count = lines.len().min(max_visible);
+    let popup_width = lines
+        .iter()
+        .take(visible_count)
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(20)
+        .min(78)
+        + 2; // border
+    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
+
+    // Position below cursor with a 1-line gap so the trigger line stays visible.
+    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
+        area_row + cursor_screen_row + 2
+    } else if cursor_screen_row > popup_height {
+        area_row + cursor_screen_row.saturating_sub(popup_height + 1)
+    } else {
+        area_row + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    // Use ui.popup bg → ui.popup.text bg → ui.background bg → DEFAULT_BG.
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " Hover ",
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    let scroll = popup.scroll_offset;
+    for (i, line) in lines.iter().skip(scroll).take(visible_count).enumerate() {
+        let display: String = line.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
+    }
+
+    // Scroll indicator (clear border chars beneath it first to avoid strikethrough artifact).
+    if lines.len() > max_visible {
+        let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
+        let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
+        canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);
+        canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Code action popup
+// ---------------------------------------------------------------------------
+
+pub fn render_code_action_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+) {
+    let menu = match &editor.code_action_menu {
+        Some(m) => m,
+        None => return,
+    };
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+
+    if menu.items.is_empty() {
+        return;
+    }
+
+    const MAX_ITEMS: usize = 12;
+    let visible_count = menu.items.len().min(MAX_ITEMS);
+    let popup_width = menu
+        .items
+        .iter()
+        .take(MAX_ITEMS)
+        .map(|item| {
+            let kind_w = item.kind.as_deref().map(|k| k.len() + 3).unwrap_or(2);
+            kind_w + item.title.len()
+        })
+        .max()
+        .unwrap_or(20)
+        .min(60)
+        + 4; // padding + border
+    let popup_height = visible_count + 2;
+
+    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
+        area_row + cursor_screen_row + 1
+    } else {
+        area_row + cursor_screen_row.saturating_sub(popup_height)
+    };
+    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let normal_fg = theme::ts_fg(editor, "ui.popup.text");
+    let normal_bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"));
+    let selected_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selected_bg = theme::ts_bg(editor, "ui.popup.key");
+
+    let bg = normal_bg.unwrap_or(theme::DEFAULT_BG);
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " Code Actions ",
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    for (i, item) in menu.items.iter().take(MAX_ITEMS).enumerate() {
+        let is_selected = i == menu.selected;
+        let fg = if is_selected { selected_fg } else { normal_fg };
+        let item_bg = if is_selected { selected_bg } else { normal_bg };
+
+        if let Some(bg) = item_bg {
+            canvas.draw_rect_fill(inner_top + i, inner_left, inner_width, 1, bg);
+        }
+
+        let icon = match item.kind.as_deref() {
+            Some(k) if k.contains("quickfix") => "💡",
+            Some(k) if k.contains("refactor") => "🔧",
+            Some(k) if k.contains("source") => "📦",
+            _ => "•",
+        };
+        let text = format!("{} {}", icon, item.title);
+        let display: String = text.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top + i, inner_left, &display, fg);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +818,7 @@ mod tests {
             key: mae_core::Key::Char(' '),
             ctrl: false,
             alt: false,
+            shift: false,
         };
         assert_eq!(format_keypress(&kp), "SPC");
     }
@@ -634,6 +829,7 @@ mod tests {
             key: mae_core::Key::Char('c'),
             ctrl: true,
             alt: false,
+            shift: false,
         };
         assert_eq!(format_keypress(&kp), "C-c");
     }

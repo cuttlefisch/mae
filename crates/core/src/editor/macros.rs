@@ -113,8 +113,7 @@ impl Editor {
             | Mode::ConversationInput
             | Mode::FilePicker
             | Mode::FileBrowser
-            | Mode::CommandPalette
-            | Mode::GitStatus => {
+            | Mode::CommandPalette => {
                 self.replay_via_keymap(kp, pending);
             }
             Mode::ShellInsert => {} // Keys go to PTY, not macro replay

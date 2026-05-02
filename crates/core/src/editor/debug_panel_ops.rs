@@ -104,7 +104,7 @@ impl Editor {
         self.buffers[buf_idx].replace_contents(&text);
         self.buffers[buf_idx].read_only = true;
 
-        if let Some(ref mut view) = self.buffers[buf_idx].debug_view {
+        if let Some(view) = self.buffers[buf_idx].debug_view_mut() {
             view.line_map = line_map;
             view.clamp_cursor();
         }
@@ -118,8 +118,7 @@ impl Editor {
         let mut line_map: Vec<DebugLineItem> = Vec::new();
 
         let show_output = self.buffers[buf_idx]
-            .debug_view
-            .as_ref()
+            .debug_view()
             .map(|v| v.show_output)
             .unwrap_or(false);
 
@@ -170,8 +169,7 @@ impl Editor {
         line_map.push(DebugLineItem::SectionHeader("Call Stack".into()));
 
         let selected_frame = self.buffers[buf_idx]
-            .debug_view
-            .as_ref()
+            .debug_view()
             .and_then(|v| v.selected_frame_id);
 
         for frame in &state.stack_frames {
@@ -215,16 +213,12 @@ impl Editor {
 
         // --- Scopes/Variables sections ---
         let expanded_vars = self.buffers[buf_idx]
-            .debug_view
-            .as_ref()
-            .map(|v| &v.expanded_vars)
-            .cloned()
+            .debug_view()
+            .map(|v| v.expanded_vars.clone())
             .unwrap_or_default();
         let child_vars = self.buffers[buf_idx]
-            .debug_view
-            .as_ref()
-            .map(|v| &v.child_variables)
-            .cloned()
+            .debug_view()
+            .map(|v| v.child_variables.clone())
             .unwrap_or_default();
 
         for scope in &state.scopes {
@@ -385,8 +379,7 @@ impl Editor {
         };
 
         let item = match self.buffers[debug_idx]
-            .debug_view
-            .as_ref()
+            .debug_view()
             .and_then(|v: &crate::debug_view::DebugView| v.cursor_item().cloned())
         {
             Some(item) => item,
@@ -402,7 +395,7 @@ impl Editor {
                 self.debug_populate_buffer(debug_idx);
             }
             DebugLineItem::Frame(fid) => {
-                if let Some(view) = self.buffers[debug_idx].debug_view.as_mut() {
+                if let Some(view) = self.buffers[debug_idx].debug_view_mut() {
                     view.selected_frame_id = Some(fid);
                 }
                 // Request scopes for this frame.
@@ -417,8 +410,7 @@ impl Editor {
                 ..
             } if variables_reference > 0 => {
                 let now_expanded = self.buffers[debug_idx]
-                    .debug_view
-                    .as_mut()
+                    .debug_view_mut()
                     .map(|v: &mut crate::debug_view::DebugView| {
                         v.toggle_expand(variables_reference)
                     })
@@ -427,8 +419,7 @@ impl Editor {
                 if now_expanded {
                     // Check if children are already cached.
                     let has_children = self.buffers[debug_idx]
-                        .debug_view
-                        .as_ref()
+                        .debug_view()
                         .map(|v: &crate::debug_view::DebugView| {
                             v.child_variables.contains_key(&variables_reference)
                         })
@@ -483,7 +474,7 @@ impl Editor {
             None => return,
         };
 
-        if let Some(view) = self.buffers[debug_idx].debug_view.as_mut() {
+        if let Some(view) = self.buffers[debug_idx].debug_view_mut() {
             view.show_output = !view.show_output;
             view.cursor_index = 0;
         }
@@ -512,7 +503,7 @@ impl Editor {
             .iter_mut()
             .find(|b| b.kind == BufferKind::Debug)
         {
-            if let Some(view) = buf.debug_view.as_mut() {
+            if let Some(view) = buf.debug_view_mut() {
                 view.child_variables.insert(variables_reference, children);
             }
         }
@@ -592,7 +583,7 @@ mod tests {
         let buf = debug_buf.unwrap();
         assert_eq!(buf.name, "*Debug*");
         assert!(buf.read_only);
-        assert!(buf.debug_view.is_some());
+        assert!(buf.debug_view().is_some());
     }
 
     #[test]
@@ -621,7 +612,7 @@ mod tests {
             .iter()
             .position(|b| b.kind == BufferKind::Debug)
             .unwrap();
-        let view = ed.buffers[idx].debug_view.as_ref().unwrap();
+        let view = ed.buffers[idx].debug_view().unwrap();
         // Should have section headers, threads, frames, variables, blanks.
         assert!(!view.line_map.is_empty());
         // Check specific items exist.
@@ -685,18 +676,13 @@ mod tests {
 
         // Move cursor to a frame line.
         let frame_line = ed.buffers[debug_idx]
-            .debug_view
-            .as_ref()
+            .debug_view()
             .unwrap()
             .line_map
             .iter()
             .position(|item| matches!(item, crate::debug_view::DebugLineItem::Frame(100)))
             .unwrap();
-        ed.buffers[debug_idx]
-            .debug_view
-            .as_mut()
-            .unwrap()
-            .cursor_index = frame_line;
+        ed.buffers[debug_idx].debug_view_mut().unwrap().cursor_index = frame_line;
 
         ed.debug_panel_select();
 
@@ -704,7 +690,7 @@ mod tests {
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
-            .and_then(|b| b.debug_view.as_ref());
+            .and_then(|b| b.debug_view());
         // Frame may have been selected (scopes request queued).
         assert!(ed.pending_dap_intents.iter().any(|i| matches!(
             i,
@@ -724,8 +710,7 @@ mod tests {
 
         // Find the expandable variable (editor, var_ref=50).
         let var_line = ed.buffers[debug_idx]
-            .debug_view
-            .as_ref()
+            .debug_view()
             .unwrap()
             .line_map
             .iter()
@@ -736,11 +721,7 @@ mod tests {
                 )
             })
             .unwrap();
-        ed.buffers[debug_idx]
-            .debug_view
-            .as_mut()
-            .unwrap()
-            .cursor_index = var_line;
+        ed.buffers[debug_idx].debug_view_mut().unwrap().cursor_index = var_line;
 
         ed.debug_panel_select();
 
@@ -749,7 +730,7 @@ mod tests {
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
-            .and_then(|b| b.debug_view.as_ref())
+            .and_then(|b| b.debug_view())
             .unwrap();
         assert!(view.is_expanded(50));
         assert!(ed.pending_dap_intents.iter().any(|i| matches!(
@@ -829,7 +810,7 @@ mod tests {
             .buffers
             .iter()
             .find(|b| b.kind == BufferKind::Debug)
-            .and_then(|b| b.debug_view.as_ref())
+            .and_then(|b| b.debug_view())
             .unwrap();
         assert_eq!(view.child_variables.get(&50).unwrap().len(), 1);
     }

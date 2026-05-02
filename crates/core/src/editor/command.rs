@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::theme::bundled_theme_names;
 
+use super::ex_parse::{self, ExWriteQuit, SetAction};
 use super::Editor;
 
 impl Editor {
@@ -13,37 +14,22 @@ impl Editor {
             None => (cmd, None),
         };
 
+        // Write/quit compound commands: w, q, wq, wq!, qa, qa!, wqa, wqa!, x, xa, xa!
+        // The `:w <path>` variant needs special handling (args = path).
+        if command == "w" && args.is_some() {
+            // `:w <filename>` — save-as
+            if let Some(path) = args {
+                let idx = self.active_buffer_idx();
+                self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
+            }
+            self.save_current_buffer();
+            return true;
+        }
+        if let Some(actions) = ex_parse::parse_write_quit(command) {
+            return self.execute_write_quit(&actions);
+        }
+
         match command {
-            "w" => {
-                if let Some(path) = args {
-                    let idx = self.active_buffer_idx();
-                    self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
-                }
-                self.save_current_buffer();
-                true
-            }
-            "q" => {
-                if self.active_buffer().modified {
-                    self.set_status("No write since last change (add ! to override)");
-                } else {
-                    self.on_quit();
-                    self.running = false;
-                }
-                true
-            }
-            "q!" => {
-                self.on_quit();
-                self.running = false;
-                true
-            }
-            "wq" | "x" => {
-                self.save_current_buffer();
-                if self.running && !self.active_buffer().modified {
-                    self.on_quit();
-                    self.running = false;
-                }
-                true
-            }
             "e" => {
                 if let Some(path) = args {
                     self.open_file(path);
@@ -208,6 +194,30 @@ impl Editor {
                 }
                 true
             }
+            "copy" => {
+                if let Some(new_path) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    let idx = self.active_buffer_idx();
+                    if let Some(old_path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                        let new = std::path::PathBuf::from(new_path);
+                        match std::fs::copy(&old_path, &new) {
+                            Ok(_) => {
+                                self.open_file(new.display().to_string());
+                                self.set_status(format!(
+                                    "Copied: {} → {}",
+                                    old_path.display(),
+                                    new.display()
+                                ));
+                            }
+                            Err(e) => self.set_status(format!("Copy failed: {}", e)),
+                        }
+                    } else {
+                        self.set_status("Buffer has no file path");
+                    }
+                } else {
+                    self.set_status("Usage: :copy <new-path>");
+                }
+                true
+            }
             "saveas" => {
                 if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
                     let idx = self.active_buffer_idx();
@@ -215,6 +225,78 @@ impl Editor {
                     self.save_current_buffer();
                 } else {
                     self.set_status("Usage: :saveas <path>");
+                }
+                true
+            }
+            "recover" => {
+                let idx = self.active_buffer_idx();
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                if let Some(fp) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    let swap_path = crate::swap::swap_path_for(&fp, custom_dir);
+                    match crate::swap::read_swap(&swap_path) {
+                        Ok((_header, rope)) => {
+                            self.buffers[idx].replace_rope(rope);
+                            self.buffers[idx].modified = true;
+                            let _ = crate::swap::delete_swap(&fp, custom_dir);
+                            self.buffers[idx].swap = crate::swap::SwapState::default();
+                            self.set_status(
+                                "Recovered from swap file. Review and :w to save.".to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            self.set_status(format!("No swap file to recover: {}", e));
+                        }
+                    }
+                } else {
+                    self.set_status("Buffer has no file path");
+                }
+                true
+            }
+            "recover-session" => {
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                let orphans = crate::swap::find_orphaned_swaps(custom_dir);
+                if orphans.is_empty() {
+                    self.set_status("No orphaned swap files found");
+                } else {
+                    let list: Vec<String> = orphans
+                        .iter()
+                        .map(|(_, h)| format!("{}", h.original_path.display()))
+                        .collect();
+                    self.set_status(format!(
+                        "Recoverable files ({}): {}",
+                        orphans.len(),
+                        list.join(", ")
+                    ));
+                }
+                true
+            }
+            "delete-swap" => {
+                let idx = self.active_buffer_idx();
+                let custom_dir = if self.swap_directory.is_empty() {
+                    None
+                } else {
+                    Some(std::path::Path::new(&self.swap_directory))
+                };
+                if let Some(fp) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    match crate::swap::delete_swap(&fp, custom_dir) {
+                        Ok(()) => {
+                            self.buffers[idx].swap = crate::swap::SwapState::default();
+                            self.set_status("Swap file deleted");
+                        }
+                        Err(e) => {
+                            self.set_status(format!("Failed to delete swap: {}", e));
+                        }
+                    }
+                } else {
+                    self.set_status("Buffer has no file path");
                 }
                 true
             }
@@ -315,31 +397,162 @@ impl Editor {
             }
             "set" => {
                 if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
-                    let parts: Vec<&str> = kv.splitn(2, ' ').collect();
-                    if parts.len() == 2 {
-                        match self.set_option(parts[0], parts[1]) {
+                    match ex_parse::parse_set_args(kv) {
+                        SetAction::Query(name) => match self.get_option(&name) {
+                            Some((val, def)) => {
+                                self.set_status(format!("{} = {}", def.name, val));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Assign(name, value) => match self.set_option(&name, &value) {
                             Ok(msg) => self.set_status(msg),
                             Err(e) => self.set_status(e),
-                        }
-                    } else {
-                        // Single arg: toggle boolean or show current value
-                        match self.get_option(parts[0]) {
+                        },
+                        SetAction::Toggle(name) => match self.get_option(&name) {
                             Some((val, def)) if def.kind == crate::options::OptionKind::Bool => {
                                 let toggled = if val == "true" { "false" } else { "true" };
-                                match self.set_option(parts[0], toggled) {
+                                match self.set_option(&name, toggled) {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
+                                }
+                            }
+                            Some((_, def)) => {
+                                self.set_status(format!("{} is not a boolean option", def.name));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Enable(name) => match self.get_option(&name) {
+                            Some((val, def)) if def.kind == crate::options::OptionKind::Bool => {
+                                if val == "true" {
+                                    self.set_status(format!("{} = true", def.name));
+                                } else {
+                                    match self.set_option(&name, "true") {
+                                        Ok(msg) => self.set_status(msg),
+                                        Err(e) => self.set_status(e),
+                                    }
                                 }
                             }
                             Some((val, def)) => {
                                 self.set_status(format!("{} = {}", def.name, val));
                             }
-                            None => self.set_status(format!("Unknown option: {}", parts[0])),
-                        }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
+                        SetAction::Disable(name) => match self.get_option(&name) {
+                            Some((_, def)) if def.kind == crate::options::OptionKind::Bool => {
+                                match self.set_option(def.name, "false") {
+                                    Ok(msg) => self.set_status(msg),
+                                    Err(e) => self.set_status(e),
+                                }
+                            }
+                            Some((_, def)) => {
+                                self.set_status(format!("{} is not a boolean option", def.name));
+                            }
+                            None => self.set_status(format!("Unknown option: {}", name)),
+                        },
                     }
                 } else {
                     // No args: list all options
                     self.show_all_options();
+                }
+                true
+            }
+            "setlocal" => {
+                if let Some(kv) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    match ex_parse::parse_set_args(kv) {
+                        SetAction::Assign(name, value) => {
+                            match self.set_local_option(&name, &value) {
+                                Ok(msg) => self.set_status(msg),
+                                Err(e) => self.set_status(e),
+                            }
+                        }
+                        SetAction::Toggle(name) => {
+                            // Toggle: read effective, flip, set local
+                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            if let Some(dn) = def_name {
+                                let current = match dn {
+                                    "word_wrap" => self.effective_word_wrap(),
+                                    "line_numbers" => {
+                                        self.line_numbers_for(self.active_buffer_idx())
+                                    }
+                                    "relative_line_numbers" => {
+                                        self.relative_line_numbers_for(self.active_buffer_idx())
+                                    }
+                                    "break_indent" => {
+                                        self.break_indent_for(self.active_buffer_idx())
+                                    }
+                                    "heading_scale" => {
+                                        self.heading_scale_for(self.active_buffer_idx())
+                                    }
+                                    _ => {
+                                        self.set_status(format!(
+                                            "Option '{}' does not support buffer-local toggle",
+                                            dn
+                                        ));
+                                        return true;
+                                    }
+                                };
+                                let new_val = if current { "false" } else { "true" };
+                                match self.set_local_option(dn, new_val) {
+                                    Ok(msg) => self.set_status(msg),
+                                    Err(e) => self.set_status(e),
+                                }
+                            } else {
+                                self.set_status(format!("Unknown option: {}", name));
+                            }
+                        }
+                        SetAction::Enable(name) => match self.set_local_option(&name, "true") {
+                            Ok(msg) => self.set_status(msg),
+                            Err(e) => self.set_status(e),
+                        },
+                        SetAction::Disable(name) => match self.set_local_option(&name, "false") {
+                            Ok(msg) => self.set_status(msg),
+                            Err(e) => self.set_status(e),
+                        },
+                        SetAction::Query(name) => {
+                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            if let Some(dn) = def_name {
+                                let idx = self.active_buffer_idx();
+                                let local_val = match dn {
+                                    "word_wrap" => self.buffers[idx]
+                                        .local_options
+                                        .word_wrap
+                                        .map(|v| v.to_string()),
+                                    "line_numbers" => self.buffers[idx]
+                                        .local_options
+                                        .line_numbers
+                                        .map(|v| v.to_string()),
+                                    "relative_line_numbers" => self.buffers[idx]
+                                        .local_options
+                                        .relative_line_numbers
+                                        .map(|v| v.to_string()),
+                                    "break_indent" => self.buffers[idx]
+                                        .local_options
+                                        .break_indent
+                                        .map(|v| v.to_string()),
+                                    "show_break" => {
+                                        self.buffers[idx].local_options.show_break.clone()
+                                    }
+                                    "heading_scale" => self.buffers[idx]
+                                        .local_options
+                                        .heading_scale
+                                        .map(|v| v.to_string()),
+                                    _ => None,
+                                };
+                                match local_val {
+                                    Some(v) => {
+                                        self.set_status(format!("{} = {} (buffer-local)", dn, v))
+                                    }
+                                    None => {
+                                        self.set_status(format!("{}: no buffer-local override", dn))
+                                    }
+                                }
+                            } else {
+                                self.set_status(format!("Unknown option: {}", name));
+                            }
+                        }
+                    }
+                } else {
+                    self.set_status("Usage: :setlocal <option> [value]");
                 }
                 true
             }
@@ -642,6 +855,60 @@ impl Editor {
                 false
             }
         }
+    }
+
+    /// Execute a parsed write/quit compound command.
+    fn execute_write_quit(&mut self, actions: &[ExWriteQuit]) -> bool {
+        for action in actions {
+            match action {
+                ExWriteQuit::Write { all: false } => {
+                    self.save_current_buffer();
+                    if !self.running {
+                        return true;
+                    }
+                }
+                ExWriteQuit::Write { all: true } => {
+                    let (saved, errors) = self.save_all_modified_buffers();
+                    if !errors.is_empty() {
+                        self.set_status(format!("Saved {}, errors: {}", saved, errors.join(", ")));
+                        return true;
+                    }
+                    // If this is a standalone :wa (no quit follows), show status.
+                    if !actions
+                        .iter()
+                        .any(|a| matches!(a, ExWriteQuit::Quit { .. }))
+                    {
+                        self.set_status(format!("Saved {} buffer(s)", saved));
+                    }
+                }
+                ExWriteQuit::WriteIfModified { all: false } => {
+                    if self.active_buffer().modified {
+                        self.save_current_buffer();
+                    }
+                }
+                ExWriteQuit::WriteIfModified { all: true } => {
+                    let (_saved, errors) = self.save_all_modified_buffers();
+                    if !errors.is_empty() {
+                        self.set_status(format!("Save errors: {}", errors.join(", ")));
+                        return true;
+                    }
+                }
+                ExWriteQuit::Quit { all, force } => {
+                    if *all {
+                        if !force && self.any_buffer_modified() {
+                            self.set_status("No write since last change (add ! to override)");
+                            return true;
+                        }
+                    } else if !force && self.active_buffer().modified {
+                        self.set_status("No write since last change (add ! to override)");
+                        return true;
+                    }
+                    self.on_quit();
+                    self.running = false;
+                }
+            }
+        }
+        true
     }
 
     /// Shared handler for `:<cmd> <path>` style commands backed by a
