@@ -1034,6 +1034,9 @@ fn install_command_nodes(
             crate::commands::CommandSource::Scheme(fn_name) => {
                 format!("**Source:** Scheme (`{}`)", fn_name)
             }
+            crate::commands::CommandSource::Autoload { feature } => {
+                format!("**Source:** autoload (feature `{}`)", feature)
+            }
         };
         let category = infer_category(&cmd.name);
 
@@ -1388,6 +1391,27 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_KEYMAP_INHERITANCE,
         )
         .with_tags(["data-model", "modal-editing", "extensibility"]),
+        Node::new(
+            "concept:package-system",
+            "Concept: Package System",
+            NodeKind::Concept,
+            CONCEPT_PACKAGE_SYSTEM,
+        )
+        .with_tags(["extensibility", "scheme", "packages"]),
+        Node::new(
+            "concept:option-registry",
+            "Concept: Option Registry",
+            NodeKind::Concept,
+            CONCEPT_OPTION_REGISTRY,
+        )
+        .with_tags(["configuration", "core", "options"]),
+        Node::new(
+            "concept:scheme-api",
+            "Concept: Scheme API",
+            NodeKind::Concept,
+            CONCEPT_SCHEME_API,
+        )
+        .with_tags(["extensibility", "scheme", "api"]),
     ]
 }
 
@@ -1424,7 +1448,10 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:conceal|Link & Markup Rendering]] — Descriptive links and inline styling\n\
 - [[concept:buffer-mode|BufferMode Trait]] — the contract every buffer kind implements\n\
 - [[concept:buffer-view|BufferView Enum]] — mode-specific state on Buffer\n\
-- [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback
+- [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback\n\
+- [[concept:package-system|Package System]] — require/provide for Scheme extensions\n\
+- [[concept:option-registry|Option Registry]] — single source of truth for editor settings\n\
+- [[concept:scheme-api|Scheme API]] — 40+ functions for buffer/window/command/keymap access
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -1990,6 +2017,62 @@ backend uses ratatui/crossterm. The binary selects the backend at startup based 
 - **Terminal:** `crossterm::EventStream` + tokio `select!`.\n\
 - **GUI:** `winit::pump_app_events()` + tokio `select!` with dirty-flag gating.\n\n\
 See also: [[concept:terminal]], [[concept:mode]], [[index]]\n";
+
+const CONCEPT_PACKAGE_SYSTEM: &str = "\
+The **package system** enables Scheme-based extensions via `require`/`provide`.\n\n\
+## Loading\n\
+- `(require \"feature\")` — searches `load-path` for `feature.scm` and evaluates it.\n\
+- `(provide \"feature\")` — marks the current file as providing a feature.\n\
+- `(featurep \"feature\")` — returns `#t` if the feature is loaded.\n\n\
+## Load path\n\
+Default: `~/.config/mae/packages/`, `~/.config/mae/lisp/`.\n\
+- `(load-path)` — returns current search path as a list.\n\
+- `(add-to-load-path! \"/path/to/dir\")` — prepends to search path.\n\n\
+## Autoload\n\
+`CommandSource::Autoload { feature }` enables deferred loading: when a command is first \
+dispatched, `(require feature)` is triggered, then the command re-dispatches.\n\n\
+See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
+
+const CONCEPT_OPTION_REGISTRY: &str = "\
+The **option registry** (`options.rs`) is the single source of truth for all editor settings.\n\n\
+Each `OptionDef` has: name, aliases, kind, default, config_key, doc, valid_values.\n\
+Kinds: `Bool`, `String`, `Float`, `Int`, `Theme`.\n\n\
+## Flow\n\
+1. `:set foo bar` → `Editor::set_option(\"foo\", \"bar\")`\n\
+2. Validates kind + range → sets field on `Editor`\n\
+3. `get_option(name)` reads back the current value\n\n\
+## Scheme\n\
+- `(set-option! \"name\" \"value\")` — from Scheme\n\
+- `(get-option \"name\")` — returns current value as string\n\
+- `*option-list*` — all options as `(name kind default doc)` tuples\n\n\
+## Range clamping\n\
+Options with numeric types are clamped to valid ranges in `set_option()` to prevent \
+rendering corruption (e.g. heading_scale ≤0 → infinite loop).\n\n\
+See also: [[concept:command]], [[concept:hooks]], [[index]]\n";
+
+const CONCEPT_SCHEME_API: &str = "\
+MAE exposes ~40 Scheme functions to extension code. They fall into categories:\n\n\
+## Buffer editing\n\
+`buffer-insert`, `buffer-delete-range`, `buffer-replace-range`, `buffer-undo`, `buffer-redo`\n\n\
+## Buffer read\n\
+`*buffer-name*`, `*buffer-text*`, `*buffer-char-count*`, `buffer-text-range`, \
+`*buffer-list*`, `get-buffer-by-name`\n\n\
+## Cursor / navigation\n\
+`cursor-goto`, `*cursor-row*`, `*cursor-col*`, `open-file`, `switch-to-buffer`\n\n\
+## Windows\n\
+`*window-count*`, `*window-list*`\n\n\
+## Options / commands\n\
+`set-option!`, `set-local-option!`, `get-option`, `*option-list*`, \
+`define-command`, `run-command`, `command-exists?`, `*command-list*`\n\n\
+## Keymaps\n\
+`define-key`, `define-keymap`, `undefine-key!`, `*keymap-list*`, `keymap-bindings`\n\n\
+## File I/O\n\
+`read-file`, `file-exists?`, `list-directory`\n\n\
+## Architecture\n\
+Write-side: `SharedState` (Arc<Mutex>) accumulates `pending_*` fields during eval.\n\
+Read-side: `inject_editor_state()` snapshots editor state as globals before eval.\n\
+Apply: `apply_to_editor()` drains pending changes after eval.\n\n\
+See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
 
 #[cfg(test)]
 mod tests {

@@ -82,6 +82,8 @@ pub struct GuiRenderer {
     /// Cached FrameLayout from the last render of the focused window.
     /// Used by the mouse handler for pixel-precise click positioning.
     last_focused_layout: Option<layout::FrameLayout>,
+    /// Window title (read from editor config at construction).
+    window_title: String,
 }
 
 impl GuiRenderer {
@@ -101,7 +103,13 @@ impl GuiRenderer {
             icon_font_family: None,
             font_size: None,
             last_focused_layout: None,
+            window_title: "MAE — Modern AI Editor".to_string(),
         }
+    }
+
+    /// Set the window title before window initialization.
+    pub fn set_window_title(&mut self, title: String) {
+        self.window_title = title;
     }
 
     /// Set the font family and size before window initialization.
@@ -119,7 +127,7 @@ impl GuiRenderer {
     /// Initialize the window and Skia canvas. Called from the event loop.
     pub fn init_window(&mut self, event_loop: &ActiveEventLoop) -> io::Result<()> {
         let attrs = Window::default_attributes()
-            .with_title("MAE — Modern AI Editor")
+            .with_title(&self.window_title)
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0));
 
         let window = event_loop
@@ -483,16 +491,25 @@ fn render_window_area(
     // Font engines grid-fit advances at each font size, so `cell_width * scale`
     // is incorrect. We measure once and pass into layout/render.
     let (cw, _ch) = canvas.cell_size();
-    let advance_1_15 = canvas.scaled_cell_width(1.15);
-    let advance_1_30 = canvas.scaled_cell_width(1.3);
-    let advance_1_50 = canvas.scaled_cell_width(1.5);
+    let h1 = editor.heading_scale_h1;
+    let h2 = editor.heading_scale_h2;
+    let h3 = editor.heading_scale_h3;
+    let advance_h3 = canvas.scaled_cell_width(h3);
+    let advance_h2 = canvas.scaled_cell_width(h2);
+    let advance_h1 = canvas.scaled_cell_width(h1);
+    let key_h1 = (h1 * 100.0).round() as u32;
+    let key_h2 = (h2 * 100.0).round() as u32;
+    let key_h3 = (h3 * 100.0).round() as u32;
     let glyph_advance_fn = |scale: f32| -> f32 {
         let key = (scale * 100.0).round() as u32;
-        match key {
-            115 => advance_1_15,
-            130 => advance_1_30,
-            150 => advance_1_50,
-            _ => cw * scale, // fallback for unexpected scales
+        if key == key_h1 {
+            advance_h1
+        } else if key == key_h2 {
+            advance_h2
+        } else if key == key_h3 {
+            advance_h3
+        } else {
+            cw * scale // fallback for unexpected scales
         }
     };
 

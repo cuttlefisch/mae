@@ -112,6 +112,53 @@ after pressing Enter at EOF.
 
 See `crates/gui/src/RENDERING.md` for the full decision table and pixel budget rules.
 
+## Option Registry
+
+`OptionRegistry` (`options.rs`) is the single source of truth for all editor settings.
+Each `OptionDef` has: name, aliases, kind (Bool/String/Float/Int/Theme), default, config_key, doc, valid_values.
+
+Flow: `:set foo bar` → `Editor::set_option("foo", "bar")` → validates kind + range → sets field on `Editor`.
+`get_option(name)` reads the field back. `OptionKind::Int` added in v0.6.0 for scroll_speed, popup sizing, etc.
+
+Range clamping prevents rendering corruption (e.g. heading_scale ≤0 → infinite loop, scrollbar_width > cell_width).
+
+## Scheme API Surface
+
+The Scheme runtime exposes ~40 functions to extension code:
+
+| Category | Functions |
+|---|---|
+| Buffer editing | `buffer-insert`, `buffer-delete-range`, `buffer-replace-range`, `buffer-undo`, `buffer-redo` |
+| Buffer read | `*buffer-name*`, `*buffer-text*`, `*buffer-char-count*`, `buffer-text-range`, `*buffer-list*`, `get-buffer-by-name` |
+| Cursor/nav | `cursor-goto`, `*cursor-row*`, `*cursor-col*`, `open-file`, `switch-to-buffer` |
+| Windows | `*window-count*`, `*window-list*` |
+| Options | `set-option!`, `set-local-option!`, `get-option`, `*option-list*` |
+| Commands | `define-command`, `run-command`, `command-exists?`, `*command-list*` |
+| Keymaps | `define-key`, `define-keymap`, `undefine-key!`, `*keymap-list*`, `keymap-bindings` |
+| Hooks | `add-hook!`, `remove-hook!` |
+| File I/O | `read-file`, `file-exists?`, `list-directory` |
+| Packages | `require`, `provide`, `featurep`, `load-path`, `add-to-load-path!` |
+| UI | `set-status!`, `set-theme!`, `message` |
+
+Write-side: `SharedState` (Arc<Mutex>) accumulates `pending_*` fields during eval.
+Read-side: `inject_editor_state()` snapshots editor state as global variables before each eval.
+Apply: `apply_to_editor()` drains pending changes after eval completes.
+
+## Package System
+
+`require`/`provide` implement Emacs-style feature loading:
+
+1. `(require "feature")` searches `load-path` for `feature.scm`
+2. If found, evaluates the file
+3. File must call `(provide "feature")` to mark itself as loaded
+4. Subsequent `(require "feature")` returns immediately (no-op)
+
+`load-path` defaults: `~/.config/mae/packages/`, `~/.config/mae/lisp/`.
+`(add-to-load-path! DIR)` prepends to search path.
+
+`CommandSource::Autoload { feature }` enables deferred loading: command dispatch triggers
+`(require feature)` on first invocation, then re-dispatches the command.
+
 ## Key Invariants
 
 1. **Span parity**: Layout and renderer must see identical spans. Divergence causes cursor misalignment.

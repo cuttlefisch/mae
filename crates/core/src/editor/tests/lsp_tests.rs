@@ -334,3 +334,80 @@ fn syntax_node_kind_at_cursor_on_keyword() {
     // assert we got a non-empty kind.
     assert!(!kind.is_empty());
 }
+
+// --- LSP root_uri late detection ---
+
+#[test]
+fn open_file_in_project_sets_pending_lsp_root_change_when_no_project() {
+    use std::io::Write;
+    // Create a temp dir with a Cargo.toml so detect_project_root finds it.
+    let dir = tempfile::tempdir().unwrap();
+    let cargo = dir.path().join("Cargo.toml");
+    fs::File::create(&cargo)
+        .unwrap()
+        .write_all(b"[package]\nname = \"test\"")
+        .unwrap();
+    let src = dir.path().join("main.rs");
+    fs::File::create(&src)
+        .unwrap()
+        .write_all(b"fn main() {}")
+        .unwrap();
+
+    let mut editor = Editor::new();
+    assert!(editor.project.is_none());
+    assert!(editor.pending_lsp_root_change.is_none());
+
+    editor.open_file(src.to_str().unwrap());
+
+    // Project should now be detected.
+    assert!(editor.project.is_some());
+    // pending_lsp_root_change should be set.
+    let root_uri = editor
+        .pending_lsp_root_change
+        .as_ref()
+        .expect("should be set");
+    assert!(
+        root_uri.starts_with("file://"),
+        "expected file:// URI, got: {}",
+        root_uri
+    );
+    assert!(
+        root_uri.contains(dir.path().to_str().unwrap()),
+        "URI should contain project root"
+    );
+}
+
+#[test]
+fn open_second_file_same_project_does_not_set_pending_lsp_root_change() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let cargo = dir.path().join("Cargo.toml");
+    fs::File::create(&cargo)
+        .unwrap()
+        .write_all(b"[package]\nname = \"test\"")
+        .unwrap();
+    let src1 = dir.path().join("a.rs");
+    fs::File::create(&src1)
+        .unwrap()
+        .write_all(b"fn a() {}")
+        .unwrap();
+    let src2 = dir.path().join("b.rs");
+    fs::File::create(&src2)
+        .unwrap()
+        .write_all(b"fn b() {}")
+        .unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(src1.to_str().unwrap());
+    // Consume the pending change.
+    assert!(editor.pending_lsp_root_change.is_some());
+    editor.pending_lsp_root_change = None;
+
+    // Open a second file in the same project.
+    editor.open_file(src2.to_str().unwrap());
+    // Should NOT set pending_lsp_root_change again (project already set).
+    assert!(
+        editor.pending_lsp_root_change.is_none(),
+        "should not re-signal LSP root for same project"
+    );
+}

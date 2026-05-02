@@ -1,14 +1,19 @@
 //! Heading scale/level utilities shared between core scroll logic and GUI rendering.
 
-/// Default heading scale factors by level.
-/// Level 1 = largest (e.g., `# Title` or `* Title`), level 4+ = normal.
-pub fn heading_scale_for_level(level: u8) -> f32 {
+/// Heading scale for a given level, using editor-configured values.
+pub fn heading_scale_for_level_with(level: u8, h1: f32, h2: f32, h3: f32) -> f32 {
     match level {
-        1 => 1.5,
-        2 => 1.3,
-        3 => 1.15,
+        1 => h1,
+        2 => h2,
+        3 => h3,
         _ => 1.0,
     }
+}
+
+/// Default heading scale factors by level (used by tests and fallback).
+/// Level 1 = largest (e.g., `# Title` or `* Title`), level 4+ = normal.
+pub fn heading_scale_for_level(level: u8) -> f32 {
+    heading_scale_for_level_with(level, 1.5, 1.3, 1.15)
 }
 
 /// Detect heading level from a line's leading characters.

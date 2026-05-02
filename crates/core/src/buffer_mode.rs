@@ -86,7 +86,7 @@ impl BufferMode for BufferKind {
     fn has_gutter(&self) -> bool {
         !matches!(
             self,
-            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard | Self::Diff
+            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard
         )
     }
 
@@ -257,12 +257,25 @@ mod tests {
     }
 
     #[test]
-    fn diff_buffer_kind_has_no_gutter() {
-        assert!(!BufferKind::Diff.has_gutter());
+    fn diff_buffer_kind_has_gutter() {
+        assert!(BufferKind::Diff.has_gutter());
     }
 
     #[test]
     fn diff_buffer_kind_mode_name() {
         assert_eq!(BufferKind::Diff.mode_name(), "Diff");
+    }
+
+    #[test]
+    fn diff_buffer_kind_mode_properties() {
+        // BufferKind::Diff: read_only=true, word_wrap=false, has_gutter=true, keymap="normal"
+        assert!(BufferKind::Diff.read_only());
+        assert!(!BufferKind::Diff.default_word_wrap());
+        assert!(BufferKind::Diff.has_gutter());
+        assert_eq!(BufferKind::Diff.keymap_name(), None); // falls through to "normal"
+        assert_eq!(BufferKind::Diff.insert_mode(), crate::Mode::Insert);
+        assert_eq!(BufferKind::Diff.status_hint(), None);
+        assert_eq!(BufferKind::Diff.mode_theme_key(), None);
+        assert_eq!(BufferKind::Diff.markup_flavor(), None);
     }
 }

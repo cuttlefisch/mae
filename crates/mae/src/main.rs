@@ -509,6 +509,7 @@ fn run_gui(
         },
         Some(editor.gui_font_size),
     );
+    renderer.set_window_title(editor.window_title.clone());
     editor.renderer_name = "gui".to_string();
     editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
     editor.clipboard = "unnamedplus".to_string();

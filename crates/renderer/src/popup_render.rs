@@ -31,11 +31,11 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
     let cursor_screen_row = win.cursor_row.saturating_sub(scroll_row) as u16;
     let cursor_screen_col = win.cursor_col as u16;
 
-    const MAX_ITEMS: usize = 10;
-    let visible_count = items.len().min(MAX_ITEMS) as u16;
+    let max_items = editor.completion_max_items;
+    let visible_count = items.len().min(max_items) as u16;
     let popup_width = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|i| {
             let detail_len = i.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
             i.label.len() + detail_len + 4
@@ -43,7 +43,7 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
         .max()
         .unwrap_or(20)
         .min(50) as u16;
-    let popup_height = visible_count + 2;
+    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
 
     let popup_top = if cursor_screen_row + 1 + popup_height < editor_area.height {
         editor_area.y + cursor_screen_row + 1
@@ -79,7 +79,7 @@ pub(crate) fn render_completion_popup(frame: &mut Frame, editor_area: Rect, edit
 
     let lines: Vec<Line> = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .enumerate()
         .map(|(i, item)| {
             let style = if i == editor.completion_selected {
@@ -442,17 +442,17 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
     let win = editor.window_mgr.focused_window();
     let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
 
-    const MAX_VISIBLE: usize = 15;
-    let visible_count = lines.len().min(MAX_VISIBLE) as u16;
+    let max_visible = editor.hover_max_lines;
+    let visible_count = lines.len().min(max_visible) as u16;
     let popup_width = lines
         .iter()
-        .take(MAX_VISIBLE)
+        .take(max_visible)
         .map(|l| l.len())
         .max()
         .unwrap_or(20)
         .min(76) as u16
         + 2;
-    let popup_height = visible_count + 2;
+    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
 
     // Position below cursor with a 1-line gap so the trigger line stays visible.
     let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
@@ -490,7 +490,7 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
     let content_lines: Vec<Line> = lines
         .iter()
         .skip(scroll)
-        .take(MAX_VISIBLE)
+        .take(max_visible)
         .map(|l| Line::styled(l.as_str(), text_style))
         .collect();
 

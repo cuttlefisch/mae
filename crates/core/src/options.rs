@@ -15,6 +15,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionKind {
     Bool,
+    Int,
     String,
     Float,
     Theme,
@@ -24,6 +25,7 @@ impl std::fmt::Display for OptionKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OptionKind::Bool => write!(f, "boolean"),
+            OptionKind::Int => write!(f, "integer"),
             OptionKind::String => write!(f, "string"),
             OptionKind::Float => write!(f, "float"),
             OptionKind::Theme => write!(f, "theme name"),
@@ -285,7 +287,7 @@ impl OptionRegistry {
                     name: "autosave_interval",
                     aliases: &["autosave-interval"],
                     doc: "Auto-save interval in seconds (0 = disabled). Saves all modified file-backed buffers.",
-                    kind: OptionKind::String,
+                    kind: OptionKind::Int,
                     default_value: "0",
                     config_key: Some("editor.autosave_interval"),
                     valid_values: &[],
@@ -375,7 +377,7 @@ impl OptionRegistry {
                     name: "scrolloff",
                     aliases: &["scroll-off", "so"],
                     doc: "Minimum lines of context above/below cursor during scrolling",
-                    kind: OptionKind::String,
+                    kind: OptionKind::Int,
                     default_value: "5",
                     config_key: Some("editor.scrolloff"),
                     valid_values: &[],
@@ -416,6 +418,114 @@ impl OptionRegistry {
                     config_key: Some("editor.lsp_completion"),
                     valid_values: &[],
                 },
+                OptionDef {
+                    name: "scroll_speed",
+                    aliases: &["scroll-speed"],
+                    doc: "Mouse scroll speed multiplier (lines per scroll tick)",
+                    kind: OptionKind::Int,
+                    default_value: "3",
+                    config_key: Some("editor.scroll_speed"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "completion_max_items",
+                    aliases: &["completion-max-items"],
+                    doc: "Maximum items shown in the LSP completion popup",
+                    kind: OptionKind::Int,
+                    default_value: "10",
+                    config_key: Some("editor.completion_max_items"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "hover_max_lines",
+                    aliases: &["hover-max-lines"],
+                    doc: "Maximum lines shown in the LSP hover popup",
+                    kind: OptionKind::Int,
+                    default_value: "15",
+                    config_key: Some("editor.hover_max_lines"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "popup_width_pct",
+                    aliases: &["popup-width-pct"],
+                    doc: "File picker/palette popup width as percentage of screen",
+                    kind: OptionKind::Int,
+                    default_value: "70",
+                    config_key: Some("editor.popup_width_pct"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "popup_height_pct",
+                    aliases: &["popup-height-pct"],
+                    doc: "File picker/palette popup height as percentage of screen",
+                    kind: OptionKind::Int,
+                    default_value: "60",
+                    config_key: Some("editor.popup_height_pct"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "scrollbar_width",
+                    aliases: &["scrollbar-width"],
+                    doc: "GUI scrollbar width in pixels (1.0\u{2013}20.0)",
+                    kind: OptionKind::Float,
+                    default_value: "6.0",
+                    config_key: Some("editor.scrollbar_width"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "file_picker_max_depth",
+                    aliases: &["file-picker-max-depth"],
+                    doc: "Maximum directory recursion depth for the file picker",
+                    kind: OptionKind::Int,
+                    default_value: "12",
+                    config_key: Some("editor.file_picker_max_depth"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "file_picker_max_candidates",
+                    aliases: &["file-picker-max-candidates"],
+                    doc: "Maximum number of file candidates to collect",
+                    kind: OptionKind::Int,
+                    default_value: "50000",
+                    config_key: Some("editor.file_picker_max_candidates"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "window_title",
+                    aliases: &["window-title"],
+                    doc: "Window title for the GUI",
+                    kind: OptionKind::String,
+                    default_value: "MAE \u{2014} Modern AI Editor",
+                    config_key: Some("editor.window_title"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "heading_scale_h1",
+                    aliases: &["heading-scale-h1"],
+                    doc: "Font scale factor for level-1 headings (0.5\u{2013}3.0)",
+                    kind: OptionKind::Float,
+                    default_value: "1.5",
+                    config_key: Some("editor.heading_scale_h1"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "heading_scale_h2",
+                    aliases: &["heading-scale-h2"],
+                    doc: "Font scale factor for level-2 headings (0.5\u{2013}3.0)",
+                    kind: OptionKind::Float,
+                    default_value: "1.3",
+                    config_key: Some("editor.heading_scale_h2"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "heading_scale_h3",
+                    aliases: &["heading-scale-h3"],
+                    doc: "Font scale factor for level-3 headings (0.5\u{2013}3.0)",
+                    kind: OptionKind::Float,
+                    default_value: "1.15",
+                    config_key: Some("editor.heading_scale_h3"),
+                    valid_values: &[],
+                },
             ],
         }
     }
@@ -441,6 +551,11 @@ impl OptionRegistry {
     pub fn has_option(&self, name: &str) -> bool {
         self.find(name).is_some()
     }
+}
+
+/// Parse a string as an integer value.
+pub fn parse_option_int(s: &str) -> Result<i64, String> {
+    s.parse().map_err(|_| format!("Invalid integer: '{}'", s))
 }
 
 /// Parse a string as a boolean value. Accepts: true, #t, 1, yes, on → true; everything else → false.
@@ -535,5 +650,44 @@ mod tests {
         assert!(reg.find("so").is_some());
         assert_eq!(reg.find("so").unwrap().name, "scrolloff");
         assert!(reg.find("scroll-off").is_some());
+    }
+
+    #[test]
+    fn int_option_kind_display() {
+        assert_eq!(format!("{}", OptionKind::Int), "integer");
+    }
+
+    #[test]
+    fn parse_option_int_valid() {
+        assert_eq!(parse_option_int("42"), Ok(42));
+        assert_eq!(parse_option_int("-1"), Ok(-1));
+        assert!(parse_option_int("abc").is_err());
+    }
+
+    #[test]
+    fn new_options_registered() {
+        let reg = OptionRegistry::new();
+        assert!(reg.find("scroll_speed").is_some());
+        assert!(reg.find("completion_max_items").is_some());
+        assert!(reg.find("hover_max_lines").is_some());
+        assert!(reg.find("popup_width_pct").is_some());
+        assert!(reg.find("popup_height_pct").is_some());
+        assert!(reg.find("scrollbar_width").is_some());
+        assert!(reg.find("file_picker_max_depth").is_some());
+        assert!(reg.find("file_picker_max_candidates").is_some());
+        assert!(reg.find("window_title").is_some());
+        assert!(reg.find("heading_scale_h1").is_some());
+        assert!(reg.find("heading_scale_h2").is_some());
+        assert!(reg.find("heading_scale_h3").is_some());
+    }
+
+    #[test]
+    fn new_options_aliases() {
+        let reg = OptionRegistry::new();
+        assert_eq!(reg.find("scroll-speed").unwrap().name, "scroll_speed");
+        assert_eq!(
+            reg.find("heading-scale-h1").unwrap().name,
+            "heading_scale_h1"
+        );
     }
 }

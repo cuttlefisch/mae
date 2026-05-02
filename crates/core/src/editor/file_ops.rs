@@ -1073,8 +1073,15 @@ impl Editor {
                             .map(|p| p.root != root)
                             .unwrap_or(true);
                         if should_switch {
-                            self.project = Some(crate::project::Project::from_root(root));
+                            let had_project = self.project.is_some();
+                            self.project = Some(crate::project::Project::from_root(root.clone()));
                             self.refresh_git_branch();
+                            // Signal LSP to update root when project is first detected.
+                            if !had_project {
+                                let root_path = root.display().to_string();
+                                self.pending_lsp_root_change =
+                                    Some(format!("file://{}", root_path));
+                            }
                         }
                     }
                     // Ingest project as KB node

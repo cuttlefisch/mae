@@ -149,6 +149,9 @@ impl Editor {
         let source = match &cmd.source {
             crate::commands::CommandSource::Builtin => "Builtin".to_string(),
             crate::commands::CommandSource::Scheme(f) => format!("Scheme (`{}`)", f),
+            crate::commands::CommandSource::Autoload { feature } => {
+                format!("Autoload (feature `{}`)", feature)
+            }
         };
         out.push_str(&format!("**Source:** {}\n", source));
 

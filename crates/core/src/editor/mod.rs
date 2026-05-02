@@ -290,6 +290,10 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// Signal for the binary to send `workspace/didChangeWorkspaceFolders`
+    /// when a project root is first detected after LSP has already started
+    /// (e.g. launched from app launcher with `cwd = $HOME`).
+    pub pending_lsp_root_change: Option<String>,
     /// Queue of pending DAP requests for the binary to drain each event-loop tick.
     /// Same pattern as `pending_lsp_requests`: core cannot call async DAP code
     /// directly; commands push intents here and `main.rs` forwards them to
@@ -536,6 +540,30 @@ pub struct Editor {
     pub scrolloff: usize,
     pub scrollbar: bool,
     pub nyan_mode: bool,
+    /// Mouse scroll speed multiplier. Default 3.
+    pub scroll_speed: usize,
+    /// Max items in LSP completion popup. Default 10.
+    pub completion_max_items: usize,
+    /// Max lines in LSP hover popup. Default 15.
+    pub hover_max_lines: usize,
+    /// Popup width as percentage of screen. Default 70.
+    pub popup_width_pct: usize,
+    /// Popup height as percentage of screen. Default 60.
+    pub popup_height_pct: usize,
+    /// GUI scrollbar width in pixels. Default 6.0.
+    pub scrollbar_width: f32,
+    /// File picker max recursion depth. Default 12.
+    pub file_picker_max_depth: usize,
+    /// File picker max candidates. Default 50000.
+    pub file_picker_max_candidates: usize,
+    /// GUI window title. Default "MAE — Modern AI Editor".
+    pub window_title: String,
+    /// Heading scale for h1 (0.5–3.0). Default 1.5.
+    pub heading_scale_h1: f32,
+    /// Heading scale for h2 (0.5–3.0). Default 1.3.
+    pub heading_scale_h2: f32,
+    /// Heading scale for h3 (0.5–3.0). Default 1.15.
+    pub heading_scale_h3: f32,
     /// Show link labels instead of raw markup (Emacs org-link-descriptive). Default true.
     pub link_descriptive: bool,
     /// Apply inline bold/italic/code styling in conversation/help buffers. Default true.
@@ -625,7 +653,7 @@ impl Editor {
             commands,
             keymaps,
             which_key_prefix: Vec::new(),
-            message_log: MessageLog::new(1000),
+            message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             debug_state: None,
             registers: HashMap::new(),
@@ -663,6 +691,7 @@ impl Editor {
             command_history_idx: None,
             command_cursor: 0,
             pending_lsp_requests: Vec::new(),
+            pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
             pending_agent_spawns: Vec::new(),
@@ -759,6 +788,18 @@ impl Editor {
             scrolloff: 5,
             scrollbar: true,
             nyan_mode: false,
+            scroll_speed: 3,
+            completion_max_items: 10,
+            hover_max_lines: 15,
+            popup_width_pct: 70,
+            popup_height_pct: 60,
+            scrollbar_width: 6.0,
+            file_picker_max_depth: 12,
+            file_picker_max_candidates: 50000,
+            window_title: "MAE — Modern AI Editor".to_string(),
+            heading_scale_h1: 1.5,
+            heading_scale_h2: 1.3,
+            heading_scale_h3: 1.15,
             link_descriptive: true,
             render_markup: true,
             lsp_hover_popup: true,
@@ -1112,6 +1153,18 @@ impl Editor {
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
             "lsp_completion" => self.lsp_completion.to_string(),
+            "scroll_speed" => self.scroll_speed.to_string(),
+            "completion_max_items" => self.completion_max_items.to_string(),
+            "hover_max_lines" => self.hover_max_lines.to_string(),
+            "popup_width_pct" => self.popup_width_pct.to_string(),
+            "popup_height_pct" => self.popup_height_pct.to_string(),
+            "scrollbar_width" => self.scrollbar_width.to_string(),
+            "file_picker_max_depth" => self.file_picker_max_depth.to_string(),
+            "file_picker_max_candidates" => self.file_picker_max_candidates.to_string(),
+            "window_title" => self.window_title.clone(),
+            "heading_scale_h1" => self.heading_scale_h1.to_string(),
+            "heading_scale_h2" => self.heading_scale_h2.to_string(),
+            "heading_scale_h3" => self.heading_scale_h3.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1288,11 +1341,82 @@ impl Editor {
             "lsp_completion" => {
                 self.lsp_completion = parse_option_bool(value)?;
             }
+            "scroll_speed" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.scroll_speed = v.clamp(1, 50);
+            }
+            "completion_max_items" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.completion_max_items = v.clamp(1, 50);
+            }
+            "hover_max_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.hover_max_lines = v.clamp(1, 50);
+            }
+            "popup_width_pct" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.popup_width_pct = v.clamp(10, 100);
+            }
+            "popup_height_pct" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.popup_height_pct = v.clamp(10, 100);
+            }
+            "scrollbar_width" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.scrollbar_width = v.clamp(1.0, 20.0);
+            }
+            "file_picker_max_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.file_picker_max_depth = v.clamp(1, 100);
+            }
+            "file_picker_max_candidates" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.file_picker_max_candidates = v.clamp(100, 500000);
+            }
+            "window_title" => {
+                self.window_title = value.to_string();
+            }
+            "heading_scale_h1" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h1 = v.clamp(0.5, 3.0);
+            }
+            "heading_scale_h2" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h2 = v.clamp(0.5, 3.0);
+            }
+            "heading_scale_h3" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.heading_scale_h3 = v.clamp(0.5, 3.0);
+            }
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self
             .get_option(def_name)
             .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;
+        // Fire parameterized option-change hook (e.g. "option-change:font_size")
+        self.fire_hook(&format!("option-change:{}", def_name));
         Ok(format!("{} = {}", def_name, current))
     }
 
@@ -1353,6 +1477,12 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid bool: '{}'", value))?;
                 toml::Value::Boolean(b)
+            }
+            OptionKind::Int => {
+                let i: i64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                toml::Value::Integer(i)
             }
             OptionKind::Float => {
                 let f: f64 = value
@@ -2269,7 +2399,7 @@ impl Editor {
         if cols == 0 {
             return;
         }
-        let scroll_speed = 3;
+        let scroll_speed = self.scroll_speed;
         let buf_idx = self.active_buffer_idx();
         let kind = self.buffers[buf_idx].kind;
         if kind != crate::BufferKind::Text {
@@ -2318,7 +2448,7 @@ impl Editor {
         if lines == 0 {
             return;
         }
-        let scroll_speed = 3;
+        let scroll_speed = self.scroll_speed;
         let buf_idx = self.active_buffer_idx();
         let kind = self.buffers[buf_idx].kind;
 

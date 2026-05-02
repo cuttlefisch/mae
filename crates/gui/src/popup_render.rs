@@ -42,13 +42,23 @@ fn truncate_end(s: &str, max_cols: usize) -> String {
     s.to_string()
 }
 
-/// Centered popup rect (70% x 60% of the area, clamped).
-pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
-    let w = (area_width * 70 / 100).max(40).min(area_width);
-    let h = (area_height * 60 / 100).max(10).min(area_height);
+/// Centered popup rect using editor-configured percentages.
+pub fn centered_popup_rect_from(
+    area_width: usize,
+    area_height: usize,
+    width_pct: usize,
+    height_pct: usize,
+) -> CellRect {
+    let w = (area_width * width_pct / 100).max(40).min(area_width);
+    let h = (area_height * height_pct / 100).max(10).min(area_height);
     let x = (area_width.saturating_sub(w)) / 2;
     let y = (area_height.saturating_sub(h)) / 2;
     CellRect::new(y, x, w, h)
+}
+
+/// Centered popup rect (70% x 60% of the area, clamped).
+pub fn centered_popup_rect(area_width: usize, area_height: usize) -> CellRect {
+    centered_popup_rect_from(area_width, area_height, 70, 60)
 }
 
 // ---------------------------------------------------------------------------
@@ -76,11 +86,11 @@ pub fn render_completion_popup(
         .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
     let cursor_screen_col = win.cursor_col;
 
-    const MAX_ITEMS: usize = 10;
-    let visible_count = items.len().min(MAX_ITEMS);
+    let max_items = editor.completion_max_items;
+    let visible_count = items.len().min(max_items);
     let popup_width = items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|i| {
             let detail_len = i.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
             i.label.len() + detail_len + 4
@@ -88,7 +98,7 @@ pub fn render_completion_popup(
         .max()
         .unwrap_or(20)
         .min(50);
-    let popup_height = visible_count + 2; // border top+bottom
+    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
     let popup_top = if cursor_screen_row + 1 + popup_height < area_height {
         area_row + cursor_screen_row + 1
@@ -122,7 +132,7 @@ pub fn render_completion_popup(
     let inner_left = popup_left + 1;
     let inner_width = popup_width.saturating_sub(2);
 
-    for (i, item) in items.iter().take(MAX_ITEMS).enumerate() {
+    for (i, item) in items.iter().take(max_items).enumerate() {
         let is_selected = i == editor.completion_selected;
         let fg = if is_selected { selected_fg } else { normal_fg };
         let item_bg = if is_selected { selected_bg } else { normal_bg };
@@ -570,8 +580,8 @@ pub fn render_hover_popup(
         return;
     }
 
-    const MAX_VISIBLE: usize = 15;
-    let visible_count = lines.len().min(MAX_VISIBLE);
+    let max_visible = editor.hover_max_lines;
+    let visible_count = lines.len().min(max_visible);
     let popup_width = lines
         .iter()
         .take(visible_count)
@@ -580,7 +590,7 @@ pub fn render_hover_popup(
         .unwrap_or(20)
         .min(78)
         + 2; // border
-    let popup_height = visible_count + 2; // border top+bottom
+    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
     // Position below cursor with a 1-line gap so the trigger line stays visible.
     let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
@@ -622,7 +632,7 @@ pub fn render_hover_popup(
     }
 
     // Scroll indicator (clear border chars beneath it first to avoid strikethrough artifact).
-    if lines.len() > MAX_VISIBLE {
+    if lines.len() > max_visible {
         let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
         let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
         canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);

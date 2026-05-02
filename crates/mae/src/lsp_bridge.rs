@@ -53,6 +53,13 @@ pub(crate) fn drain_lsp_intents(
     editor: &mut Editor,
     lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>,
 ) {
+    // Late project detection: update LSP root_uri.
+    if let Some(root_uri) = editor.pending_lsp_root_change.take() {
+        let _ = lsp_tx.try_send(LspCommand::DidChangeWorkspaceFolders {
+            added: vec![root_uri],
+        });
+    }
+
     if editor.pending_lsp_requests.is_empty() {
         return;
     }

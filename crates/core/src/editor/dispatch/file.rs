@@ -102,7 +102,11 @@ impl Editor {
                     .map(|p| p.to_path_buf())
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_default();
-                self.file_picker = Some(FilePicker::scan(&root));
+                self.file_picker = Some(FilePicker::scan(
+                    &root,
+                    self.file_picker_max_depth,
+                    self.file_picker_max_candidates,
+                ));
                 self.set_mode(Mode::FilePicker);
             }
             "file-browser" => {

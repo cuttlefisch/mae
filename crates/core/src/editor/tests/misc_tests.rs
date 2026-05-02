@@ -913,5 +913,41 @@ fn set_font_size_updates_default() {
     );
 }
 
+// --- New configurable option tests ---
+
+#[test]
+fn set_scroll_speed_clamped() {
+    let mut editor = Editor::new();
+    editor.set_option("scroll_speed", "0").unwrap();
+    assert_eq!(editor.scroll_speed, 1); // clamped to min
+    editor.set_option("scroll_speed", "100").unwrap();
+    assert_eq!(editor.scroll_speed, 50); // clamped to max
+    editor.set_option("scroll_speed", "5").unwrap();
+    assert_eq!(editor.scroll_speed, 5);
+}
+
+#[test]
+fn set_heading_scale_clamped() {
+    let mut editor = Editor::new();
+    editor.set_option("heading_scale_h1", "0.1").unwrap();
+    assert_eq!(editor.heading_scale_h1, 0.5); // clamped
+    editor.set_option("heading_scale_h1", "5.0").unwrap();
+    assert_eq!(editor.heading_scale_h1, 3.0); // clamped
+    editor.set_option("heading_scale_h1", "2.0").unwrap();
+    assert_eq!(editor.heading_scale_h1, 2.0);
+}
+
+#[test]
+fn get_new_options() {
+    let editor = Editor::new();
+    assert_eq!(editor.get_option("scroll_speed").unwrap().0, "3");
+    assert_eq!(editor.get_option("completion_max_items").unwrap().0, "10");
+    assert_eq!(
+        editor.get_option("window_title").unwrap().0,
+        "MAE \u{2014} Modern AI Editor"
+    );
+    assert_eq!(editor.get_option("heading_scale_h1").unwrap().0, "1.5");
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

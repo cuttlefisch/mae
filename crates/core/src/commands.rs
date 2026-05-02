@@ -36,6 +36,8 @@ pub enum CommandSource {
     Builtin,
     /// Implemented in Scheme — the runtime calls the named Scheme function.
     Scheme(String),
+    /// Lazily loaded from a Scheme feature — `require` is called on first use.
+    Autoload { feature: String },
 }
 
 /// Registry of all known commands.
@@ -87,6 +89,26 @@ impl CommandRegistry {
                 name,
                 doc: doc.into(),
                 source: CommandSource::Scheme(scheme_fn.into()),
+            },
+        );
+    }
+
+    /// Register a command that will `(require FEATURE)` on first invocation.
+    pub fn register_autoload(
+        &mut self,
+        name: impl Into<String>,
+        doc: impl Into<String>,
+        feature: impl Into<String>,
+    ) {
+        let name = name.into();
+        self.commands.insert(
+            name.clone(),
+            Command {
+                name,
+                doc: doc.into(),
+                source: CommandSource::Autoload {
+                    feature: feature.into(),
+                },
             },
         );
     }

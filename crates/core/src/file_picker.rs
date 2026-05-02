@@ -18,6 +18,10 @@ pub struct FilePicker {
     /// text is the chosen value, not a candidate). Set by C-p/Up past the
     /// first candidate, or automatically when `filtered` is empty.
     pub query_selected: bool,
+    /// Max recursion depth for directory walking.
+    pub max_depth: usize,
+    /// Max number of candidates to collect.
+    pub max_candidates: usize,
 }
 
 /// Directories to skip during recursive scan.
@@ -40,17 +44,17 @@ const SKIP_DIRS: &[&str] = &[
     "zig-out",
 ];
 
-/// Max recursion depth for directory walking.
-const MAX_DEPTH: usize = 12;
+/// Default max recursion depth for directory walking.
+pub const DEFAULT_MAX_DEPTH: usize = 12;
 
-/// Max number of candidates to collect.
-const MAX_CANDIDATES: usize = 50_000;
+/// Default max number of candidates to collect.
+pub const DEFAULT_MAX_CANDIDATES: usize = 50_000;
 
 impl FilePicker {
     /// Scan a directory tree and create a new file picker.
-    pub fn scan(root: &Path) -> Self {
+    pub fn scan(root: &Path, max_depth: usize, max_candidates: usize) -> Self {
         let mut candidates = Vec::new();
-        walk_dir(root, root, 0, &mut candidates);
+        walk_dir(root, root, 0, &mut candidates, max_depth, max_candidates);
         candidates.sort();
 
         let filtered: Vec<usize> = (0..candidates.len()).collect();
@@ -63,6 +67,8 @@ impl FilePicker {
             root: root.to_path_buf(),
             root_label,
             query_selected: false,
+            max_depth,
+            max_candidates,
         }
     }
 
@@ -298,7 +304,14 @@ impl FilePicker {
         self.root = new_root.to_path_buf();
         self.root_label = unexpand_tilde(&new_root.to_string_lossy());
         self.candidates.clear();
-        walk_dir(new_root, new_root, 0, &mut self.candidates);
+        walk_dir(
+            new_root,
+            new_root,
+            0,
+            &mut self.candidates,
+            self.max_depth,
+            self.max_candidates,
+        );
         self.candidates.sort();
         self.filtered = (0..self.candidates.len()).collect();
         self.selected = 0;
@@ -490,8 +503,15 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
 }
 
 /// Recursively walk a directory tree, collecting file paths.
-fn walk_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
-    if depth > MAX_DEPTH || out.len() >= MAX_CANDIDATES {
+fn walk_dir(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<String>,
+    max_depth: usize,
+    max_candidates: usize,
+) {
+    if depth > max_depth || out.len() >= max_candidates {
         return;
     }
 
@@ -503,7 +523,7 @@ fn walk_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
     let mut dirs = Vec::new();
 
     for entry in entries.flatten() {
-        if out.len() >= MAX_CANDIDATES {
+        if out.len() >= max_candidates {
             return;
         }
 
@@ -535,7 +555,7 @@ fn walk_dir(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
     // Sort directories for deterministic output
     dirs.sort();
     for d in dirs {
-        walk_dir(root, &d, depth + 1, out);
+        walk_dir(root, &d, depth + 1, out, max_depth, max_candidates);
     }
 }
 
@@ -621,7 +641,7 @@ mod tests {
     fn scan_finds_files() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         assert!(picker.candidates.contains(&"src/main.rs".to_string()));
         assert!(picker.candidates.contains(&"Cargo.toml".to_string()));
         assert!(picker.candidates.contains(&"docs/readme.md".to_string()));
@@ -631,7 +651,7 @@ mod tests {
     fn scan_skips_hidden_dirs() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         for c in &picker.candidates {
             assert!(!c.contains(".git"), "should skip .git: {}", c);
         }
@@ -641,7 +661,7 @@ mod tests {
     fn scan_skips_target_and_node_modules() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         for c in &picker.candidates {
             assert!(!c.contains("target/"), "should skip target: {}", c);
             assert!(
@@ -658,7 +678,7 @@ mod tests {
         let deep = tmp.path().join("a/b/c/d/e/f/g/h/i/j/k/l/m/n");
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("deep.txt"), "").unwrap();
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         // MAX_DEPTH is 12, so depth 14 file should not appear
         assert!(
             !picker.candidates.iter().any(|c| c.contains("deep.txt")),
@@ -670,7 +690,7 @@ mod tests {
     fn filter_empty_query_returns_all() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         assert_eq!(picker.filtered.len(), picker.candidates.len());
     }
 
@@ -678,7 +698,7 @@ mod tests {
     fn filter_subsequence_match() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "mrs".to_string();
         picker.update_filter();
         // "main.rs" matches subsequence m-r-s (via src/main.rs)
@@ -698,7 +718,7 @@ mod tests {
     fn filter_no_match() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "zzzzzzz".to_string();
         picker.update_filter();
         assert!(picker.filtered.is_empty());
@@ -710,7 +730,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("src")).unwrap();
         fs::write(tmp.path().join("src/main.rs"), "").unwrap();
         fs::write(tmp.path().join("src/remain.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "main".to_string();
         picker.update_filter();
         let names: Vec<&str> = picker
@@ -730,7 +750,7 @@ mod tests {
     fn selected_wraps_around() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         let count = picker.filtered.len();
         assert!(count > 0);
         // Wrap down
@@ -751,7 +771,7 @@ mod tests {
     fn selected_path_returns_full_path() {
         let tmp = tempfile::tempdir().unwrap();
         create_test_tree(tmp.path());
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         let path = picker.selected_path().unwrap();
         assert!(path.starts_with(tmp.path()));
         assert!(path.exists());
@@ -842,7 +862,7 @@ mod tests {
         fs::write(tmp.path().join("crates/core/src/editor/mod.rs"), "").unwrap();
         fs::write(tmp.path().join("crates/core/src/editor/dispatch.rs"), "").unwrap();
         fs::write(tmp.path().join("crates/core/src/editor/macros.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "editor/".to_string();
         picker.update_filter();
         let expanded = picker.complete_longest_prefix();
@@ -857,7 +877,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("b")).unwrap();
         fs::write(tmp.path().join("a/foo.rs"), "").unwrap();
         fs::write(tmp.path().join("b/foo.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         // Fuzzy match both on "f" — common prefix is "", so no extension.
         picker.query = "f".to_string();
         picker.update_filter();
@@ -868,7 +888,7 @@ mod tests {
     fn tab_completion_is_idempotent_on_single_match() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("single.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "si".to_string();
         picker.update_filter();
         assert!(picker.complete_longest_prefix(), "single match extends");
@@ -891,7 +911,7 @@ mod tests {
         // the path the user typed.
         fs::write(tmp.path().join("crates/core/src/commands.rs"), "").unwrap();
 
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "editor/mod.rs".to_string();
         picker.update_filter();
         let top = picker.candidates[picker.filtered[0]].as_str();
@@ -906,7 +926,7 @@ mod tests {
         fs::write(sub.join("inner.txt"), "").unwrap();
         fs::write(tmp.path().join("outer.txt"), "").unwrap();
 
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         assert!(picker.candidates.iter().any(|c| c == "outer.txt"));
         assert!(picker.candidates.iter().any(|c| c == "subdir/inner.txt"));
 
@@ -923,7 +943,7 @@ mod tests {
     fn switch_root_ignores_non_dir() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("file.txt"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = format!("{}", tmp.path().join("file.txt").display());
         assert!(!picker.maybe_switch_root());
     }
@@ -933,7 +953,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("a.rs"), "").unwrap();
         fs::write(tmp.path().join("b.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "zzz".to_string();
         picker.update_filter();
         assert!(picker.filtered.is_empty());
@@ -955,7 +975,7 @@ mod tests {
     fn root_label_uses_tilde() {
         if let Some(home) = std::env::var_os("HOME") {
             let home_path = Path::new(&home);
-            let picker = FilePicker::scan(home_path);
+            let picker = FilePicker::scan(home_path, DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
             assert_eq!(picker.root_label, "~");
         }
     }
@@ -970,7 +990,7 @@ mod tests {
         fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
         fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
         fs::write(tmp.path().join("docs/readme.md"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "src/editor/".to_string();
         picker.update_filter();
         // Should only show files under src/editor/
@@ -989,7 +1009,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("src/editor")).unwrap();
         fs::write(tmp.path().join("src/editor/mod.rs"), "").unwrap();
         fs::write(tmp.path().join("src/editor/dispatch.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "src/editor/mod".to_string();
         picker.update_filter();
         assert!(!picker.filtered.is_empty());
@@ -1003,7 +1023,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("editor")).unwrap();
         fs::write(tmp.path().join("editor/mod.rs"), "").unwrap();
         fs::write(tmp.path().join("module_helper.rs"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "mod.rs".to_string();
         picker.update_filter();
         assert!(!picker.filtered.is_empty());
@@ -1023,7 +1043,7 @@ mod tests {
     fn switch_root_skips_filesystem_root() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("a.txt"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         // Typing just "/" should NOT switch root to /
         picker.query = "/".to_string();
         assert!(!picker.maybe_switch_root());
@@ -1036,7 +1056,7 @@ mod tests {
         let sub = tmp.path().join("mydir");
         fs::create_dir_all(&sub).unwrap();
         fs::write(sub.join("inner.txt"), "").unwrap();
-        let mut picker = FilePicker::scan(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         picker.query = "mydir/".to_string();
         assert!(picker.maybe_switch_root());
         assert!(picker.root.ends_with("mydir"));
@@ -1062,7 +1082,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("a.rs"), "").unwrap();
         fs::write(tmp.path().join("b.rs"), "").unwrap();
-        let picker = FilePicker::scan(tmp.path());
+        let picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
         assert_eq!(picker.filtered.len(), 2);
     }
 }

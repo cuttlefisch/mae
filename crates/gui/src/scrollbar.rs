@@ -14,8 +14,9 @@ use crate::theme;
 use mae_core::Editor;
 use skia_safe::Color4f;
 
-/// Thin bar width in pixels.
-const SCROLLBAR_WIDTH: f32 = 6.0;
+/// Default thin bar width in pixels.
+#[allow(dead_code)]
+const DEFAULT_SCROLLBAR_WIDTH: f32 = 6.0;
 /// Corner radius for the thumb pill shape.
 const THUMB_RADIUS: f32 = 3.0;
 /// Minimum thumb height in pixels (so it's always grabbable).
@@ -43,9 +44,10 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     }
 
     let (cw, _ch) = canvas.cell_size();
-    // Center the thin bar within the column.
+    let scrollbar_width = editor.scrollbar_width.min(cw); // clamp to cell_width
+                                                          // Center the thin bar within the column.
     let col_x = sb_col as f32 * cw;
-    let bar_x = col_x + (cw - SCROLLBAR_WIDTH) / 2.0;
+    let bar_x = col_x + (cw - scrollbar_width) / 2.0;
     let track_y_start = fl.area_row as f32 * fl.cell_height;
     let track_height = fl.pixel_y_limit - track_y_start;
 
@@ -58,7 +60,7 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     canvas.draw_pixel_rrect(
         bar_x,
         track_y_start,
-        SCROLLBAR_WIDTH,
+        scrollbar_width,
         track_height,
         THUMB_RADIUS,
         track_color,
@@ -85,7 +87,7 @@ pub fn render_scrollbar(canvas: &mut SkiaCanvas, editor: &Editor, fl: &FrameLayo
     canvas.draw_pixel_rrect(
         bar_x,
         thumb_y,
-        SCROLLBAR_WIDTH,
+        scrollbar_width,
         thumb_height,
         THUMB_RADIUS,
         thumb_color,

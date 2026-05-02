@@ -377,6 +377,38 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                 }
             }
         }
+        Some(CommandSource::Autoload { feature }) => {
+            debug!(command = name, feature = %feature, "autoloading feature for command");
+            match scheme.require_feature(&feature) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    // After loading, the command should now be a Scheme command.
+                    // Re-dispatch.
+                    let new_source = editor.commands.get(name).map(|c| c.source.clone());
+                    if let Some(CommandSource::Scheme(fn_name)) = new_source {
+                        scheme.inject_editor_state(editor);
+                        match scheme.call_function(&fn_name) {
+                            Ok(result) => {
+                                scheme.apply_to_editor(editor);
+                                if !result.is_empty() {
+                                    editor.set_status(result);
+                                }
+                            }
+                            Err(e) => {
+                                error!(command = name, error = %e, "autoloaded command failed");
+                                editor.set_status(format!("Scheme error: {}", e));
+                            }
+                        }
+                    } else {
+                        editor.dispatch_builtin(name);
+                    }
+                }
+                Err(e) => {
+                    error!(command = name, feature = %feature, error = %e, "autoload require failed");
+                    editor.set_status(format!("Autoload error: {}", e));
+                }
+            }
+        }
         None => {
             if !editor.dispatch_builtin(name) {
                 warn!(command = name, "unknown command");

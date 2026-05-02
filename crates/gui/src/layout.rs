@@ -318,9 +318,16 @@ pub fn compute_layout(
             continue;
         }
 
-        // Compute heading scale.
+        // Compute heading scale using editor-configured values.
         let org_heading_scale = if editor.heading_scale {
-            buffer_render::line_heading_scale(buf, syntax_spans, line_idx)
+            buffer_render::line_heading_scale_with(
+                buf,
+                syntax_spans,
+                line_idx,
+                editor.heading_scale_h1,
+                editor.heading_scale_h2,
+                editor.heading_scale_h3,
+            )
         } else {
             1.0
         };

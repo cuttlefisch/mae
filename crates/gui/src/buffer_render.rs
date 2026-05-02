@@ -13,18 +13,27 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
-/// Compute the font scale for an org heading level.
+/// Compute the font scale for an org heading level using default scale values.
 /// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
+#[allow(dead_code)]
 pub fn org_heading_scale_for_level(level: u8) -> f32 {
     mae_core::heading::heading_scale_for_level(level)
 }
 
-/// Get the heading scale for a single line. Returns 1.0 if not a heading
-/// or if heading scaling is disabled.
-pub fn line_heading_scale(
+/// Compute the font scale for an org heading level using editor-configured values.
+pub fn org_heading_scale_for_level_with(level: u8, h1: f32, h2: f32, h3: f32) -> f32 {
+    mae_core::heading::heading_scale_for_level_with(level, h1, h2, h3)
+}
+
+/// Get the heading scale for a single line using editor-configured scale values.
+/// Returns 1.0 if not a heading or if heading scaling is disabled.
+pub fn line_heading_scale_with(
     buf: &mae_core::Buffer,
     syntax_spans: Option<&[HighlightSpan]>,
     line_idx: usize,
+    h1: f32,
+    h2: f32,
+    h3: f32,
 ) -> f32 {
     let spans = match syntax_spans {
         Some(s) if !s.is_empty() => s,
@@ -59,10 +68,21 @@ pub fn line_heading_scale(
         } else {
             0
         };
-        org_heading_scale_for_level(level.min(255) as u8)
+        org_heading_scale_for_level_with(level.min(255) as u8, h1, h2, h3)
     } else {
         1.0
     }
+}
+
+/// Get the heading scale for a single line. Returns 1.0 if not a heading
+/// or if heading scaling is disabled. Uses default scale values.
+#[allow(dead_code)]
+pub fn line_heading_scale(
+    buf: &mae_core::Buffer,
+    syntax_spans: Option<&[HighlightSpan]>,
+    line_idx: usize,
+) -> f32 {
+    line_heading_scale_with(buf, syntax_spans, line_idx, 1.5, 1.3, 1.15)
 }
 
 /// Render a text buffer's content using a pre-computed `FrameLayout`.

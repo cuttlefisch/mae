@@ -26,6 +26,11 @@ pub const HOOK_NAMES: &[&str] = &[
     "app-exit",
     "focus-in",
     "focus-out",
+    "option-change",
+    "before-revert",
+    "after-revert",
+    "window-split",
+    "window-close",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.

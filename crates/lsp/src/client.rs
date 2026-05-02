@@ -300,6 +300,21 @@ impl LspClient {
         self.send_notification_raw(&notif).await
     }
 
+    /// Send a workspace/didChangeWorkspaceFolders notification.
+    pub async fn did_change_workspace_folders(&self, added_uris: &[String]) -> Result<(), String> {
+        let params = serde_json::json!({
+            "event": {
+                "added": added_uris.iter().map(|uri| serde_json::json!({
+                    "uri": uri,
+                    "name": "project"
+                })).collect::<Vec<serde_json::Value>>(),
+                "removed": []
+            }
+        });
+        let notif = Notification::new("workspace/didChangeWorkspaceFolders", Some(params));
+        self.send_notification_raw(&notif).await
+    }
+
     /// Send a request and wait for the matching response via oneshot.
     ///
     /// Registers a pending entry in the correlation map before writing the
