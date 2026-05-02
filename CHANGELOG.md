@@ -6,6 +6,95 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(tests)* Harden flaky timing-dependent tests ([84a696d](https://github.com/cuttlefisch/mae/commit/84a696da9862a368aa60d6a40ecf198a62dbe2b1))
+- *(v0.6.0)* Org keymap fallback, insert undo groups, change markers, link rendering, bold baseline ([ea11b33](https://github.com/cuttlefisch/mae/commit/ea11b336f01c827dc64661d4871dc327e3cd1be2))
+- *(v0.6.0)* Parse_key_seq bracket fix, GUI perf (font cache, scroll, span search) ([be50f9e](https://github.com/cuttlefisch/mae/commit/be50f9eaed585915c0da04322b1440818423f1a6))
+- *(v0.6.0)* Cursor alignment on scaled headings + bottom row overlap ([37c2e8d](https://github.com/cuttlefisch/mae/commit/37c2e8dc219de8d7567bda645a3b6b8027ac660c))
+- *(gui)* Fold-aware relative line numbers + cursor X alignment ([3e5c386](https://github.com/cuttlefisch/mae/commit/3e5c3864d2afb364693ae762c72fd2a37e784390))
+- *(gui)* Pixel-precise cursor X, fold-aware scroll, viewport overflow guard ([88081e8](https://github.com/cuttlefisch/mae/commit/88081e8fb5934f1901049d411b1e6c7c14873a01))
+- *(gui)* Use actual font glyph advance for cursor + text positioning ([1445706](https://github.com/cuttlefisch/mae/commit/144570633f47397a822a4fac8b860558fa2cfead))
+- *(gui)* Pixel-precise multi-run text rendering for scaled headings ([9b61731](https://github.com/cuttlefisch/mae/commit/9b617311c20d8341e23b24b738a7634757b7a730))
+- *(gui)* Scrollbar redesign + horizontal mouse scroll + toggle ([df284f4](https://github.com/cuttlefisch/mae/commit/df284f4db0c1c66239dfe5af96f94cc7624aad9a))
+- *(gui)* Scrollbar thumb visibility + horizontal scroll clamping ([a2e2444](https://github.com/cuttlefisch/mae/commit/a2e2444cea407a66e80b2c1a040b4f51ffca41b1))
+- *(core)* Wrap-aware scroll-up cursor clamping (C-y + mouse) ([c410639](https://github.com/cuttlefisch/mae/commit/c410639ff102e328a650abe7fa4f1e33e12eab84))
+- *(core)* Fold-aware scroll — skip invisible lines in C-y/C-e/mouse scroll ([75f0ddd](https://github.com/cuttlefisch/mae/commit/75f0ddde5b425197cd90530bcf8274d8dca8b137))
+- *(gui)* Heading-scale-aware viewport guard prevents cursor below viewport ([71a1bfb](https://github.com/cuttlefisch/mae/commit/71a1bfb472ff94d07c92f8eb4df8775c5883abfa))
+- *(core)* Unified line_visual_rows eliminates scroll-up/guard desync ([e72cdf8](https://github.com/cuttlefisch/mae/commit/e72cdf83c246a0cf4f2271b5134d99d68eef0e0d))
+- *(gui)* Place *ai* scrollbar inside window border, not overlapping it ([d05dbb6](https://github.com/cuttlefisch/mae/commit/d05dbb6c6873b75d066799cf83edce6c4fc74e7a))
+- *(gui)* Render cursor on trailing empty line after newline insertion ([6a66e6b](https://github.com/cuttlefisch/mae/commit/6a66e6b05efbc4159c8baca6735f52f39b9ec47a))
+- *(tui)* ConversationInput cursor follows typed text ([6a852f5](https://github.com/cuttlefisch/mae/commit/6a852f5d6b91b815eeb01094ed276523350c260c))
+- *(conv)* Unified cursor/viewport via FrameLayout + command registry gap ([f8448ee](https://github.com/cuttlefisch/mae/commit/f8448ee5848906e3d2c24bda9664fbea81749a77))
+- *(gui)* Conversation tilde bug, line count audit, text-width unification, horizontal scroll ([c504b04](https://github.com/cuttlefisch/mae/commit/c504b044dd763aa89b095307ce68949bec145889))
+- *(self-test+scrollbar)* Max_rounds override, benchmark threshold, scrollbar clamping ([c95c327](https://github.com/cuttlefisch/mae/commit/c95c3273bbca32c5a8287719dfd76a4e4500b0d4))
+- *(lsp)* Popup theming on light themes, scroll indicator artifact, KB docs + e2e tests (2,171 tests) ([0968937](https://github.com/cuttlefisch/mae/commit/096893732b3a5c1fe26b41f9a633283c0b3e2f15))
+- *(gui)* Ghost line at bottom of viewport from FP drift + phantom line ([a1cfc75](https://github.com/cuttlefisch/mae/commit/a1cfc75d5c47162c301f198da864e8ef299c7558))
+- *(gui)* Hover popup dismiss on click, popup gap, font reset default, status bar clipping (2,195 tests) ([9cd3d72](https://github.com/cuttlefisch/mae/commit/9cd3d72df429ddffc6c86ace96948796678db31b))
+
+### Documentation
+
+- *(v0.6.0)* KB nodes for org/markdown structural editing, ROADMAP update ([bcdcdc3](https://github.com/cuttlefisch/mae/commit/bcdcdc398438dd7231130e85c43e397e220a6512))
+- Update ROADMAP + KB nodes for v0.6.0 Round 3 features ([b165f2c](https://github.com/cuttlefisch/mae/commit/b165f2c757a961e993facfd5a1ce0fba1438148b))
+- Update README badges and feature list for v0.6.0 ([55a9077](https://github.com/cuttlefisch/mae/commit/55a9077eb71fe7a914798f7e5ece10f5f24e01aa))
+
+### Features
+
+- *(v0.6.0)* Chained ex commands, org structural editing, autosave, change markers, links ([4bd81d2](https://github.com/cuttlefisch/mae/commit/4bd81d2fdd3be40fd0c6021eadf4f4bede8c16e1))
+- *(v0.6.0)* Help buffer heading scaling ([1f30f38](https://github.com/cuttlefisch/mae/commit/1f30f386c7c5cf9ccd22bc9fbe2b84e54ee8f63b))
+- *(v0.6.0)* SPC r register access leader keys ([de12c78](https://github.com/cuttlefisch/mae/commit/de12c78c0d3603ad60e327e64be142c8acfaac89))
+- *(v0.6.0)* Window resize, move, balance, maximize (SPC w +/-/=/m/H/J/K/L) ([c5b4fa5](https://github.com/cuttlefisch/mae/commit/c5b4fa5d7cf9563e1daf15689b6c78f4ecd57601))
+- *(v0.6.0)* Per-message token display in conversation ([f7a28fd](https://github.com/cuttlefisch/mae/commit/f7a28fd72e4a8df2df6e38698d4c38c6fcdf3c32))
+- *(v0.6.0)* Code folding (za/zM/zR) with tree-sitter fold ranges ([67a5cf6](https://github.com/cuttlefisch/mae/commit/67a5cf68fc948f0acf634470a499bdbd34dcb529))
+- *(v0.6.0)* Unified diff display for AI propose_changes ([ff8a1f0](https://github.com/cuttlefisch/mae/commit/ff8a1f0c05fcdd80713ceecb2dec75293996873c))
+- *(v0.6.0)* Three-state org heading cycle + fold-aware move subtree ([891c66d](https://github.com/cuttlefisch/mae/commit/891c66df73d7419d365bcc0f36ce4f5022b37c3c))
+- *(v0.6.0)* Markdown structural editing parity + zM/zR for headings ([7819c0f](https://github.com/cuttlefisch/mae/commit/7819c0f6f4133ebbbf2edc06a0b2f230f827105d))
+- *(v0.6.0)* Heading_scale option (toggle heading font scaling) ([1ed876a](https://github.com/cuttlefisch/mae/commit/1ed876adcdde6a95de3c08e45361898f4c762888))
+- *(v0.6.0)* Narrow/widen for org and markdown (SPC m s n / SPC m s w) ([6eefac3](https://github.com/cuttlefisch/mae/commit/6eefac309690c1743b65037d16055e75346d83f3))
+- *(core,gui)* V0.6.0 round 3 — framework solutions + GUI features ([61e1797](https://github.com/cuttlefisch/mae/commit/61e17976379d331837a1bfbc323bf300fd1147e6))
+- *(conv)* Split-pair conversation input + clamp_cursor fix + TUI cursor shape ([4250f14](https://github.com/cuttlefisch/mae/commit/4250f14068e5fa7eb2abc6edfe0c8c8a60354eae))
+- *(keys)* Doom which-key parity + file tree enhancements (1,915 tests) ([0f9dd71](https://github.com/cuttlefisch/mae/commit/0f9dd71c6998f27ea528a54d1ee8151f634aaf48))
+- *(git+kb)* File tree git markers, gutter diff indicators, enriched help (1,995 tests) ([f8e18fa](https://github.com/cuttlefisch/mae/commit/f8e18fa3fa76b6e978405584898caf7439672c9d))
+- *(render+tree)* Unified markup rendering, help span fix, file tree keymap (2,007 tests) ([a962ebb](https://github.com/cuttlefisch/mae/commit/a962ebb5455ac1e4a67c21179d53514395954b96))
+- *(options)* Per-buffer word-wrap via BufferLocalOptions + :setlocal + CI clippy fix (2,011 tests) ([8e99718](https://github.com/cuttlefisch/mae/commit/8e9971892036b2d77abef845be181077fa9ecc4b))
+- *(links+options+selftest)* Clickable links (gx), expanded buffer-local options, atomic self-tests (2,018 tests) ([22a7b02](https://github.com/cuttlefisch/mae/commit/22a7b02932ca1b61f19f0920aab28e5e5387fe46))
+- *(display)* Display overlays for link concealment in text buffers (2,081 tests) ([6cea050](https://github.com/cuttlefisch/mae/commit/6cea0508f127372afd13bbc9ca04d5ff2547feaf))
+- *(display)* Cursor sensors + org-appear reveal + Tab link navigation (2,091 tests) ([988ab1f](https://github.com/cuttlefisch/mae/commit/988ab1f43ef663d3317690a0275dcf47d24332d8))
+- *(core)* BufferView enum + BufferMode trait + enhanced git status (2,091 tests) ([cd478c2](https://github.com/cuttlefisch/mae/commit/cd478c21e29d8b02ab6976897bcd7c78dfc27fd1))
+- *(ux)* Keymap overlay architecture + Magit parity + which-key discoverability (2,039 tests) ([9f87e6b](https://github.com/cuttlefisch/mae/commit/9f87e6b5dddee27240a21765bcbb1627931c93da))
+- *(core)* Swap files + rendering dedup + code map (2,066 tests) ([2c4030c](https://github.com/cuttlefisch/mae/commit/2c4030c6be10e56ea69b334075bd12d5751b94a2))
+- *(core)* File-type hooks + display optimization + variable-height polish + code block fix (2,103 tests) ([4e3ada3](https://github.com/cuttlefisch/mae/commit/4e3ada3a8f748e9d8923652c39e3c4636e5343f3))
+- *(lsp)* Hover popup, inline diagnostics, code actions, config discovery (2,165 tests) ([51b84d9](https://github.com/cuttlefisch/mae/commit/51b84d9f408f87c0a65f35f0c8fab168dc70683c))
+- *(lsp)* Popup hints, loading feedback, enriched status indicator (2,175 tests) ([67162ab](https://github.com/cuttlefisch/mae/commit/67162ab996fa2ce86e33cf26f65cfa431f4a2042))
+- Full audit — LSP fix, 12 configurable options, Scheme API, package system, KB docs (2,252 tests) ([0e8f88f](https://github.com/cuttlefisch/mae/commit/0e8f88f7733c2e805a583f2fe3e5ef8f788e9777))
+
+### Performance
+
+- *(v0.6.0)* Eliminate per-frame syntax span cloning via Arc ([20e2dca](https://github.com/cuttlefisch/mae/commit/20e2dcab322075acb962f350cf18a125f94d3086))
+- *(v0.6.0)* Font pre-scaling cache in SkiaCanvas ([19f56a6](https://github.com/cuttlefisch/mae/commit/19f56a672878ded17072156ca9c22d56452a74e8))
+- *(v0.6.0)* Incremental syntax reparse via Tree::edit() ([ac1c099](https://github.com/cuttlefisch/mae/commit/ac1c0995f78ce77430b9d77446de27d7fcb66f3c))
+
+### Refactor
+
+- *(v0.6.0)* Extract render_common shared module, deduplicate GUI/TUI rendering ([144e80b](https://github.com/cuttlefisch/mae/commit/144e80b5b87b725a914bb96ecc32415de35e02cd))
+- *(v0.6.0)* Extract debug render_common, optimize Theme::style() hot path ([6961773](https://github.com/cuttlefisch/mae/commit/696177352fea58f17bf7afa156593f1eeb432cc7))
+- *(v0.6.0)* Deduplicate Buffer and Editor constructors ([1c4e019](https://github.com/cuttlefisch/mae/commit/1c4e01957944ce5cd1084e13c90e7a3fedb25ba6))
+- *(v0.6.0)* Extract shared color utilities (parse_hex, luminance) ([f343d08](https://github.com/cuttlefisch/mae/commit/f343d08a3fbb1e9aec4348389413bec030494e58))
+- *(v0.6.0)* Extract dispatch.rs helper methods, remove copy-paste ([66167aa](https://github.com/cuttlefisch/mae/commit/66167aa31e59550fa7a8423dfc00101f9c3baeb5))
+- *(v0.6.0)* Modularize dispatch.rs into 10 submodules ([379957b](https://github.com/cuttlefisch/mae/commit/379957bbfd1c2ffb0ed91770ea2ce4db203eff02))
+- *(gui)* Extract FrameLayout as single source of truth for text positioning ([3102a01](https://github.com/cuttlefisch/mae/commit/3102a01a5519258acce1ed898c5466b235a8a8e9))
+- *(gui)* Remove heading_extra_rows() — popup uses FrameLayout directly ([4b0fae6](https://github.com/cuttlefisch/mae/commit/4b0fae6952f5656ba04da7961f6d6426a1396f9d))
+- *(core)* Audit cleanup — remove dead fields, dedup git ops, add mode_theme_key() (2,033 tests) ([9cd71fd](https://github.com/cuttlefisch/mae/commit/9cd71fd74d924989f159b62926a2a7dbff603e1e))
+- *(core)* Structural fixes — dedup, type safety, file-type hooks, span sharing (2,047 tests) ([f94b8b2](https://github.com/cuttlefisch/mae/commit/f94b8b25c4f6f2d9f52d55f3e717bd1569ca4221))
+- Split syntax.rs into 7 submodules, add BufferKind::Diff, split executor into submodules (2,243 tests) ([e1012ce](https://github.com/cuttlefisch/mae/commit/e1012ce35d0a497828b8030d074cb1bb9c574980))
+
+### Testing
+
+- *(v0.6.0)* AI guidance self-test category (keybindings, windows, themes) ([3e22ad9](https://github.com/cuttlefisch/mae/commit/3e22ad948d875b164d32e549adc0a0ab90fb8d43))
+- *(v0.6.0)* Regression tests for keymap fallback, change markers, link rendering ([5048a0a](https://github.com/cuttlefisch/mae/commit/5048a0a5abfcdcea0c941a31e88c029b18da8e41))
+
+## [0.5.1] - 2026-04-28
+
+### Bug Fixes
+
 - *(ci)* Version-bump workflow — target root Cargo.toml, handle tag conflicts ([f612752](https://github.com/cuttlefisch/mae/commit/f6127520bedf1fd33f107ed7850721bdeba83cf3))
 - *(v0.5.1)* Hardening, config error surfacing, docs update (1,673 tests) ([a94893d](https://github.com/cuttlefisch/mae/commit/a94893da69c1a7d6119882de56136422139812a7))
 - *(v0.5.1)* Block visual I, undo grouping, search perf, range :s, :set completion ([71dcee3](https://github.com/cuttlefisch/mae/commit/71dcee331c851a1309721a1533865d50f64b6c13))
@@ -19,6 +108,10 @@ All notable changes to this project will be documented in this file.
 - *(v0.5.1)* Ghost cursor fix, status bar overhaul, vim parity, AI help ([479e5fd](https://github.com/cuttlefisch/mae/commit/479e5fd62e5c814f59e6e3a25dd86a17444ee5bd))
 - *(gui)* Org heading tiered scaling, cursor/cursorline fixes, roadmap additions ([7a6807e](https://github.com/cuttlefisch/mae/commit/7a6807e1c59c73d933af617bcc1754fe8a373df4))
 - *(gui)* Pixel-based variable-height line rendering ([69801c3](https://github.com/cuttlefisch/mae/commit/69801c3221f005f64068971623d648fa6e55b69c))
+
+### Miscellaneous
+
+- Bump version to 0.5.1 ([585a7a0](https://github.com/cuttlefisch/mae/commit/585a7a0f1f0a60377d7a0d715ec7df0660286bea))
 
 ## [0.5.0] - 2026-04-26
 
