@@ -65,6 +65,11 @@ impl Editor {
                             topic.to_string(),
                             format!("cmd:{}", topic),
                             format!("concept:{}", topic),
+                            format!("scheme:{}", topic),
+                            format!("option:{}", topic),
+                            format!("lesson:{}", topic),
+                            format!("tutorial:{}", topic),
+                            format!("category:{}", topic),
                         ];
                         let found = candidates.iter().find(|id| self.kb.contains(id));
                         match found {

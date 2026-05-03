@@ -927,7 +927,7 @@ impl Editor {
     fn complete_command_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
         match cmd {
             "e" => crate::file_picker::complete_path(prefix),
-            "help" | "describe-command" => {
+            "describe-command" => {
                 let mut matches: Vec<String> = self
                     .commands
                     .list_names()
@@ -936,6 +936,28 @@ impl Editor {
                     .map(|n| n.to_string())
                     .collect();
                 matches.sort();
+                matches
+            }
+            "help" => {
+                // Complete from all KB node IDs + bare names (without namespace prefix)
+                let mut matches: Vec<String> = self
+                    .kb
+                    .list_ids(None)
+                    .into_iter()
+                    .filter(|id| id.starts_with(prefix))
+                    .collect();
+                // Also match bare names (e.g. "buffer-insert" matches "scheme:buffer-insert")
+                if !prefix.contains(':') {
+                    for id in self.kb.list_ids(None) {
+                        if let Some(name) = id.split(':').nth(1) {
+                            if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
+                                matches.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+                matches.sort();
+                matches.dedup();
                 matches
             }
             "set-theme" | "theme" => bundled_theme_names()

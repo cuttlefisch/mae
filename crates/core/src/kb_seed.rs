@@ -3416,4 +3416,32 @@ mod tests {
             "index should link to tutorial:getting-started"
         );
     }
+
+    #[test]
+    fn help_namespace_fallback_finds_scheme_nodes() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        // The :help handler tries scheme:X as a candidate
+        let candidates = [
+            "buffer-insert".to_string(),
+            format!("cmd:{}", "buffer-insert"),
+            format!("concept:{}", "buffer-insert"),
+            format!("scheme:{}", "buffer-insert"),
+        ];
+        let found = candidates.iter().find(|id| kb.contains(id));
+        assert_eq!(found, Some(&"scheme:buffer-insert".to_string()));
+    }
+
+    #[test]
+    fn help_namespace_fallback_finds_option_nodes() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        let candidates = [
+            "line_numbers".to_string(),
+            format!("cmd:{}", "line_numbers"),
+            format!("concept:{}", "line_numbers"),
+            format!("scheme:{}", "line_numbers"),
+            format!("option:{}", "line_numbers"),
+        ];
+        let found = candidates.iter().find(|id| kb.contains(id));
+        assert_eq!(found, Some(&"option:line_numbers".to_string()));
+    }
 }
