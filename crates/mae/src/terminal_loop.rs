@@ -67,6 +67,16 @@ pub(crate) async fn run_terminal_loop(
     let mut last_render = std::time::Instant::now() - MIN_FRAME_INTERVAL; // allow first render immediately
     let mut render_pending = false;
 
+    // Set initial layout area for per-window viewport height calculations.
+    if let Ok((w, h)) = renderer.size() {
+        editor.last_layout_area = mae_core::WinRect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h.saturating_sub(2),
+        };
+    }
+
     loop {
         // Heartbeat for watchdog — tick each loop iteration so the watchdog
         // thread knows the main thread is alive.
@@ -384,7 +394,13 @@ pub(crate) async fn run_terminal_loop(
                             }
                         }
                     }
-                    Some(Ok(Event::Resize(_w, _h))) => {
+                    Some(Ok(Event::Resize(w, h))) => {
+                        editor.last_layout_area = mae_core::WinRect {
+                            x: 0,
+                            y: 0,
+                            width: w,
+                            height: h.saturating_sub(2),
+                        };
                         tui_dirty = true;
                     }
                     Some(Err(e)) => {

@@ -241,6 +241,10 @@ pub struct Editor {
     /// Viewport height in lines, updated each frame from the renderer.
     /// Used by scroll commands (Ctrl-U/D/F/B, H/M/L, zz/zt/zb).
     pub viewport_height: usize,
+    /// Last known layout area (cell units), updated on resize events.
+    /// Used by `scroll_output_to_bottom()` to compute per-window viewport heights
+    /// without adding per-frame overhead.
+    pub last_layout_area: Rect,
     /// Text area width in columns (after gutter), updated each frame.
     /// Used by word-wrap aware cursor movement (gj/gk).
     pub text_area_width: usize,
@@ -672,6 +676,12 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            last_layout_area: Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             text_area_width: 80,
             file_picker: None,
             file_browser: None,

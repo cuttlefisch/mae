@@ -35,13 +35,34 @@ fn clear_input_buffer(editor: &mut Editor) {
 }
 
 /// Scroll the output window to the bottom of the conversation.
+///
+/// Uses the output window's actual height (from `last_layout_area`) rather than
+/// `editor.viewport_height` which reflects the focused window — typically the
+/// small input pane, not the tall output pane.
 pub fn scroll_output_to_bottom(editor: &mut Editor) {
     if let Some(ref pair) = editor.conversation_pair {
         if pair.output_buffer_idx < editor.buffers.len() {
             let total_lines = editor.buffers[pair.output_buffer_idx].display_line_count();
+
+            // Compute the output window's real height from the layout tree.
+            let output_vh = editor
+                .window_mgr
+                .layout_rects(editor.last_layout_area)
+                .iter()
+                .find(|(id, _)| *id == pair.output_window_id)
+                .map(|(_, r)| (r.height as usize).saturating_sub(2))
+                .unwrap_or(editor.viewport_height);
+
+            tracing::debug!(
+                total_lines,
+                output_vh,
+                layout_h = editor.last_layout_area.height,
+                "scroll_output_to_bottom"
+            );
+
             if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                 win.cursor_row = total_lines.saturating_sub(1);
-                win.scroll_offset = total_lines.saturating_sub(editor.viewport_height);
+                win.scroll_offset = total_lines.saturating_sub(output_vh);
             }
         }
         // Also reset conversation scroll to bottom.
@@ -336,5 +357,93 @@ pub(super) fn handle_conversation_input(
             // Fall through to standard keymap handling for unhandled keys.
             super::normal::handle_keymap_mode(editor, scheme, key, &mut Vec::new());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mae_core::WinRect;
+
+    /// Helper: create an editor with an AI conversation pair and a realistic layout.
+    fn editor_with_conversation(layout_height: u16) -> Editor {
+        let mut editor = Editor::new();
+        editor.last_layout_area = WinRect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: layout_height,
+        };
+        editor.dispatch_builtin("ai-prompt");
+        editor
+    }
+
+    #[test]
+    fn scroll_uses_output_window_height_not_viewport_height() {
+        let mut editor = editor_with_conversation(40);
+        // Simulate the focused window being the small input pane.
+        editor.viewport_height = 5;
+
+        // Add a long response to the conversation output.
+        let pair = editor.conversation_pair.clone().unwrap();
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
+            let long_response = (0..60)
+                .map(|i| format!("Line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n");
+            conv.push_assistant(&long_response);
+            conv.push_system("Transcript saved to: /tmp/test.json");
+        }
+        editor.sync_conversation_buffer_rope();
+
+        scroll_output_to_bottom(&mut editor);
+
+        let total = editor.buffers[pair.output_buffer_idx].display_line_count();
+        let win = editor.window_mgr.window(pair.output_window_id).unwrap();
+
+        // If the old bug were present (using viewport_height=5), scroll_offset
+        // would be total-5, leaving only 5 lines visible. With the real output
+        // window height (~18+ rows from the split), many more lines should be visible.
+        let visible_lines = total - win.scroll_offset;
+        assert!(
+            visible_lines > 10,
+            "Only {} lines visible (scroll_offset={}, total={}); \
+             output window height should be used, not viewport_height=5",
+            visible_lines,
+            win.scroll_offset,
+            total
+        );
+    }
+
+    #[test]
+    fn scroll_falls_back_gracefully_with_zero_layout() {
+        let mut editor = editor_with_conversation(0);
+        editor.viewport_height = 20;
+
+        let pair = editor.conversation_pair.clone().unwrap();
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
+            conv.push_assistant("Test response");
+        }
+        editor.sync_conversation_buffer_rope();
+
+        // Should not panic with a zero-height layout.
+        scroll_output_to_bottom(&mut editor);
+    }
+
+    #[test]
+    fn scroll_positions_cursor_at_last_line() {
+        let mut editor = editor_with_conversation(40);
+
+        let pair = editor.conversation_pair.clone().unwrap();
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
+            conv.push_assistant("Hello world");
+        }
+        editor.sync_conversation_buffer_rope();
+
+        scroll_output_to_bottom(&mut editor);
+
+        let total = editor.buffers[pair.output_buffer_idx].display_line_count();
+        let win = editor.window_mgr.window(pair.output_window_id).unwrap();
+        assert_eq!(win.cursor_row, total.saturating_sub(1));
     }
 }

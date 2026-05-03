@@ -959,6 +959,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
             WindowEvent::Resized(size) => {
                 self.renderer.handle_resize(size.width, size.height);
+                if let Ok((w, h)) = self.renderer.size() {
+                    self.editor.last_layout_area = mae_core::WinRect {
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h.saturating_sub(2),
+                    };
+                }
                 self.dirty = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
