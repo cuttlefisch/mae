@@ -365,4 +365,213 @@ fn mouse_click_dismisses_code_action_menu() {
     );
 }
 
+// --- Multi-window mouse tests ---
+
+#[test]
+fn rect_contains_inside() {
+    let r = crate::window::Rect {
+        x: 5,
+        y: 10,
+        width: 20,
+        height: 15,
+    };
+    assert!(r.contains(5, 10)); // top-left corner
+    assert!(r.contains(10, 15)); // interior
+    assert!(r.contains(24, 24)); // just inside bottom-right
+}
+
+#[test]
+fn rect_contains_edge_exclusive() {
+    let r = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+    };
+    assert!(!r.contains(10, 5)); // right edge is exclusive
+    assert!(!r.contains(5, 10)); // bottom edge is exclusive
+    assert!(!r.contains(10, 10)); // bottom-right corner
+}
+
+#[test]
+fn rect_contains_outside() {
+    let r = crate::window::Rect {
+        x: 5,
+        y: 5,
+        width: 10,
+        height: 10,
+    };
+    assert!(!r.contains(0, 0)); // above and left
+    assert!(!r.contains(4, 5)); // just left
+    assert!(!r.contains(5, 4)); // just above
+    assert!(!r.contains(20, 20)); // far out
+}
+
+#[test]
+fn window_at_cell_single_window() {
+    let wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    assert_eq!(wm.window_at_cell(10, 5, area), Some(0));
+    assert_eq!(wm.window_at_cell(0, 0, area), Some(0));
+    assert_eq!(wm.window_at_cell(79, 23, area), Some(0));
+}
+
+#[test]
+fn window_at_cell_outside() {
+    let wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    assert_eq!(wm.window_at_cell(80, 5, area), None);
+    assert_eq!(wm.window_at_cell(5, 24, area), None);
+}
+
+#[test]
+fn window_at_cell_split_v() {
+    let mut wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_id = wm
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    // Left half should be window 0, right half should be new_id.
+    assert_eq!(wm.window_at_cell(5, 5, area), Some(0));
+    assert_eq!(wm.window_at_cell(60, 5, area), Some(new_id));
+}
+
+#[test]
+fn window_at_cell_split_h() {
+    let mut wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_id = wm
+        .split(crate::window::SplitDirection::Horizontal, 1, area)
+        .unwrap();
+    // Top half should be window 0, bottom half should be new_id.
+    assert_eq!(wm.window_at_cell(5, 2, area), Some(0));
+    assert_eq!(wm.window_at_cell(5, 20, area), Some(new_id));
+}
+
+#[test]
+fn focus_window_at_switches() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+    // Add a second buffer + split
+    editor.buffers.push(crate::buffer::Buffer::new());
+    let new_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+    // Click in the right half should switch focus.
+    let switched = editor.focus_window_at(60, 5);
+    assert!(switched);
+    assert_eq!(editor.window_mgr.focused_id(), new_id);
+}
+
+#[test]
+fn focus_window_at_same_window_noop() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+
+    let switched = editor.focus_window_at(10, 5);
+    assert!(!switched);
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+}
+
+#[test]
+fn scroll_in_window_preserves_focus() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+    // Add content so scrolling is possible
+    for _ in 0..50 {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, '\n');
+    }
+    // Split
+    editor.buffers.push(crate::buffer::Buffer::new());
+    let new_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+    // Scroll in the other window — focus should stay on window 0.
+    editor.handle_mouse_scroll_in_window(new_id, -2);
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+}
+
+#[test]
+fn mouse_options_defaults() {
+    let editor = Editor::new();
+    assert!(!editor.mouse_autoselect_window);
+    assert!(editor.mouse_wheel_follow_mouse);
+}
+
+#[test]
+fn mouse_options_set_via_set_option() {
+    let mut editor = Editor::new();
+
+    editor
+        .set_option("mouse_autoselect_window", "true")
+        .unwrap();
+    assert!(editor.mouse_autoselect_window);
+
+    editor
+        .set_option("mouse_wheel_follow_mouse", "false")
+        .unwrap();
+    assert!(!editor.mouse_wheel_follow_mouse);
+
+    // Alias lookup
+    editor
+        .set_option("mouse-autoselect-window", "false")
+        .unwrap();
+    assert!(!editor.mouse_autoselect_window);
+}
+
+#[test]
+fn idle_work_clears_pending_reparses() {
+    let mut editor = Editor::new();
+    // Mark buffer 0 for reparse.
+    editor.syntax_reparse_pending.insert(0);
+    assert!(!editor.syntax_reparse_pending.is_empty());
+    editor.idle_work();
+    assert!(editor.syntax_reparse_pending.is_empty());
+}
+
 // --- Debug mode tests ---

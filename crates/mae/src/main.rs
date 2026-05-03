@@ -597,6 +597,7 @@ fn run_gui(
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
         input_dirty: false,
+        last_input_time: std::time::Instant::now(),
         bell_sent: false,
         last_theme_name,
         shell_active,
@@ -636,11 +637,13 @@ async fn bridge_task(
     let mut shell_interval = tokio::time::interval(Duration::from_millis(33));
     let mut mcp_interval = tokio::time::interval(Duration::from_millis(500));
     let mut health_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut idle_interval = tokio::time::interval(Duration::from_millis(100));
 
     // Skip the initial immediate tick from each interval.
     shell_interval.tick().await;
     mcp_interval.tick().await;
     health_interval.tick().await;
+    idle_interval.tick().await;
 
     loop {
         tokio::select! {
@@ -670,6 +673,9 @@ async fn bridge_task(
             }
             _ = health_interval.tick() => {
                 let _ = proxy.send_event(MaeEvent::HealthCheck);
+            }
+            _ = idle_interval.tick() => {
+                let _ = proxy.send_event(MaeEvent::IdleTick);
             }
         }
     }
@@ -735,6 +741,8 @@ struct GuiApp {
     /// Keyboard/mouse input needs immediate visual feedback.
     /// Bypasses the 60fps frame cap so scroll/movement is never delayed.
     input_dirty: bool,
+    /// Timestamp of last keyboard/mouse input. Used for idle tick scheduling.
+    last_input_time: std::time::Instant,
 
     // Bell urgency state
     bell_sent: bool,
@@ -941,6 +949,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
             }
+            MaeEvent::IdleTick => {
+                if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
+                    self.editor.idle_work();
+                    // Don't set dirty — idle work shouldn't trigger redraws.
+                }
+            }
         }
     }
 
@@ -1001,6 +1015,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
                 self.dirty = true;
                 self.input_dirty = true;
+                self.last_input_time = std::time::Instant::now();
                 self.editor.last_edit_time = std::time::Instant::now();
                 self.editor.clear_highlights();
                 // Default to full redraw for keyboard input. Commands that only
@@ -1071,13 +1086,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_x = position.x;
                 self.cursor_y = position.y;
-                if self.mouse_pressed {
-                    let (cell_w, cell_h) = self.renderer.cell_dimensions();
-                    if cell_w > 0.0 && cell_h > 0.0 {
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    if self.mouse_pressed {
                         let col = (self.cursor_x / cell_w as f64) as u16;
                         let row = (self.cursor_y / cell_h as f64) as u16;
+                        // Drag across windows: switch focus so visual selection extends correctly.
+                        self.editor.focus_window_at(col, row);
                         self.editor.handle_mouse_drag(row as usize, col as usize);
                         self.dirty = true;
+                    } else if self.editor.mouse_autoselect_window {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        if self.editor.focus_window_at(col, row) {
+                            self.dirty = true;
+                        }
                     }
                 }
             }
@@ -1090,26 +1113,32 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     if matches!(mae_button, mae_core::input::MouseButton::Left) {
                         self.mouse_pressed = true;
                     }
+                    self.last_input_time = std::time::Instant::now();
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        // Try pixel-precise positioning via cached FrameLayout
-                        // (handles scaled headings and folded lines correctly).
-                        let px_x = self.cursor_x as f32;
-                        let px_y = self.cursor_y as f32;
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+
+                        // Click-to-focus: switch window before dispatching the click.
+                        self.editor.focus_window_at(col, row);
+
                         // Dismiss stale popups on any mouse click.
                         self.editor.hover_popup = None;
                         self.editor.code_action_menu = None;
 
-                        if let Some(fl) = self.renderer.last_focused_layout() {
+                        // Try pixel-precise positioning via cached FrameLayout
+                        // (handles scaled headings and folded lines correctly).
+                        let px_x = self.cursor_x as f32;
+                        let px_y = self.cursor_y as f32;
+                        let focused_id = self.editor.window_mgr.focused_id();
+                        let fl = self.renderer.window_layout(focused_id);
+                        if let Some(fl) = fl {
                             if let Some((buf_row, char_col)) =
                                 fl.pixel_to_buffer_position(px_x, px_y)
                             {
                                 self.editor.set_cursor_position(buf_row, char_col);
                                 self.dirty = true;
                             } else {
-                                // Click outside text area — fall back to grid math.
-                                let col = (self.cursor_x / cell_w as f64) as u16;
-                                let row = (self.cursor_y / cell_h as f64) as u16;
                                 self.editor.handle_mouse_click(
                                     row as usize,
                                     col as usize,
@@ -1118,8 +1147,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                                 self.dirty = true;
                             }
                         } else {
-                            let col = (self.cursor_x / cell_w as f64) as u16;
-                            let row = (self.cursor_y / cell_h as f64) as u16;
                             self.editor
                                 .handle_mouse_click(row as usize, col as usize, mae_button);
                             self.dirty = true;
@@ -1142,6 +1169,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                self.last_input_time = std::time::Instant::now();
                 use tracing::debug;
                 let (h_delta, v_delta) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
@@ -1164,12 +1192,51 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     }
                 };
                 if v_delta != 0 {
-                    self.editor.handle_mouse_scroll(v_delta);
+                    if self.editor.mouse_wheel_follow_mouse {
+                        let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                        if cell_w > 0.0 && cell_h > 0.0 {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            if let Some(target) = self.editor.window_mgr.window_at_cell(
+                                col,
+                                row,
+                                self.editor.last_layout_area,
+                            ) {
+                                self.editor.handle_mouse_scroll_in_window(target, v_delta);
+                            } else {
+                                self.editor.handle_mouse_scroll(v_delta);
+                            }
+                        } else {
+                            self.editor.handle_mouse_scroll(v_delta);
+                        }
+                    } else {
+                        self.editor.handle_mouse_scroll(v_delta);
+                    }
                     self.dirty = true;
                     self.input_dirty = true;
                 }
                 if h_delta != 0 {
-                    self.editor.handle_mouse_scroll_horizontal(h_delta);
+                    if self.editor.mouse_wheel_follow_mouse {
+                        let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                        if cell_w > 0.0 && cell_h > 0.0 {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            if let Some(target) = self.editor.window_mgr.window_at_cell(
+                                col,
+                                row,
+                                self.editor.last_layout_area,
+                            ) {
+                                self.editor
+                                    .handle_mouse_scroll_horizontal_in_window(target, h_delta);
+                            } else {
+                                self.editor.handle_mouse_scroll_horizontal(h_delta);
+                            }
+                        } else {
+                            self.editor.handle_mouse_scroll_horizontal(h_delta);
+                        }
+                    } else {
+                        self.editor.handle_mouse_scroll_horizontal(h_delta);
+                    }
                     self.dirty = true;
                     self.input_dirty = true;
                 }

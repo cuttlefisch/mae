@@ -79,9 +79,9 @@ pub struct GuiRenderer {
     icon_font_family: Option<String>,
     /// Configured font size (None = 14.0).
     font_size: Option<f32>,
-    /// Cached FrameLayout from the last render of the focused window.
+    /// Cached FrameLayouts from the last render, keyed by window ID.
     /// Used by the mouse handler for pixel-precise click positioning.
-    last_focused_layout: Option<layout::FrameLayout>,
+    window_layouts: HashMap<mae_core::WindowId, layout::FrameLayout>,
     /// Window title (read from editor config at construction).
     window_title: String,
 }
@@ -102,7 +102,7 @@ impl GuiRenderer {
             font_family: None,
             icon_font_family: None,
             font_size: None,
-            last_focused_layout: None,
+            window_layouts: HashMap::new(),
             window_title: "MAE — Modern AI Editor".to_string(),
         }
     }
@@ -202,11 +202,19 @@ impl GuiRenderer {
         self.font_size.unwrap_or(14.0)
     }
 
-    /// Access the cached FrameLayout from the last render.
-    /// Used by the mouse handler for pixel-precise click positioning
-    /// on scaled/folded lines.
+    /// Access the cached FrameLayout for a specific window.
+    pub fn window_layout(&self, win_id: mae_core::WindowId) -> Option<&layout::FrameLayout> {
+        self.window_layouts.get(&win_id)
+    }
+
+    /// Access the cached FrameLayout for the focused window from the last render.
+    /// Falls back to the single entry if only one window is cached.
     pub fn last_focused_layout(&self) -> Option<&layout::FrameLayout> {
-        self.last_focused_layout.as_ref()
+        if self.window_layouts.len() == 1 {
+            self.window_layouts.values().next()
+        } else {
+            None
+        }
     }
 
     /// Apply a new font size at runtime — recreates font objects, recalculates
@@ -281,8 +289,8 @@ impl Renderer for GuiRenderer {
         let cmd_row = rows.saturating_sub(1);
         let window_height = rows.saturating_sub(2);
 
-        // Track focused layout across render branches for mouse click caching.
-        let mut focused_frame_layout: Option<layout::FrameLayout> = None;
+        // Track all window layouts across render branches for mouse click caching.
+        let mut all_layouts: HashMap<mae_core::WindowId, layout::FrameLayout> = HashMap::new();
 
         // Check for fullscreen overlays first.
         if editor.file_picker.is_some() {
@@ -296,6 +304,7 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -311,6 +320,7 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -326,6 +336,7 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -355,6 +366,7 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 win_height,
+                &mut all_layouts,
             );
             popup_render::render_which_key_popup(
                 canvas,
@@ -372,7 +384,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            focused_frame_layout = render_window_area(
+            render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -381,9 +393,12 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
+
+            let focused_frame_layout = all_layouts.get(&editor.window_mgr.focused_id());
 
             // Cursor (not for shell buffers — they render their own).
             if editor.mode != mae_core::Mode::ShellInsert {
@@ -395,7 +410,7 @@ impl Renderer for GuiRenderer {
                     status_row,
                     cmd_row,
                     &syntax_spans,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
                 );
             }
 
@@ -408,7 +423,7 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
                 );
             }
 
@@ -420,7 +435,7 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
                 );
             }
 
@@ -432,13 +447,13 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
                 );
             }
         }
 
-        // Cache focused layout for mouse click positioning.
-        self.last_focused_layout = focused_frame_layout;
+        // Cache all window layouts for mouse click positioning.
+        self.window_layouts = all_layouts;
 
         canvas.end_frame();
 
@@ -486,7 +501,8 @@ fn render_window_area(
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) -> Option<layout::FrameLayout> {
+    layouts_out: &mut HashMap<mae_core::WindowId, layout::FrameLayout>,
+) {
     // Pre-compute scaled glyph advances for heading scales.
     // Font engines grid-fit advances at each font size, so `cell_width * scale`
     // is incorrect. We measure once and pass into layout/render.
@@ -513,7 +529,6 @@ fn render_window_area(
         }
     };
 
-    let mut focused_layout: Option<layout::FrameLayout> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -643,9 +658,7 @@ fn render_window_area(
                         canvas, editor, buf, win, is_focused, &fl, spans,
                     );
                     scrollbar::render_scrollbar(canvas, editor, &fl);
-                    if is_focused {
-                        focused_layout = Some(fl);
-                    }
+                    layouts_out.insert(*win_id, fl);
                 }
             }
         }
@@ -667,8 +680,6 @@ fn render_window_area(
             }
         }
     }
-
-    focused_layout
 }
 
 fn render_visual_buffer(

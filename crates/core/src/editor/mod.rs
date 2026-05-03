@@ -546,6 +546,10 @@ pub struct Editor {
     pub scrolloff: usize,
     pub scrollbar: bool,
     pub nyan_mode: bool,
+    /// Emacs `mouse-autoselect-window`: focus follows mouse hover. Default false.
+    pub mouse_autoselect_window: bool,
+    /// Emacs `mouse-wheel-follow-mouse`: scroll targets window under pointer. Default true.
+    pub mouse_wheel_follow_mouse: bool,
     /// Mouse scroll speed multiplier. Default 3.
     pub scroll_speed: usize,
     /// Max items in LSP completion popup. Default 10.
@@ -804,6 +808,8 @@ impl Editor {
             scrolloff: 5,
             scrollbar: true,
             nyan_mode: false,
+            mouse_autoselect_window: false,
+            mouse_wheel_follow_mouse: true,
             scroll_speed: 3,
             completion_max_items: 10,
             hover_max_lines: 15,
@@ -1170,6 +1176,8 @@ impl Editor {
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
             "lsp_completion" => self.lsp_completion.to_string(),
+            "mouse_autoselect_window" => self.mouse_autoselect_window.to_string(),
+            "mouse_wheel_follow_mouse" => self.mouse_wheel_follow_mouse.to_string(),
             "scroll_speed" => self.scroll_speed.to_string(),
             "completion_max_items" => self.completion_max_items.to_string(),
             "hover_max_lines" => self.hover_max_lines.to_string(),
@@ -1357,6 +1365,12 @@ impl Editor {
             }
             "lsp_completion" => {
                 self.lsp_completion = parse_option_bool(value)?;
+            }
+            "mouse_autoselect_window" => {
+                self.mouse_autoselect_window = parse_option_bool(value)?;
+            }
+            "mouse_wheel_follow_mouse" => {
+                self.mouse_wheel_follow_mouse = parse_option_bool(value)?;
             }
             "scroll_speed" => {
                 let v: usize = value
@@ -2735,6 +2749,66 @@ impl Editor {
     ///
     /// Vim-style: scroll moves the viewport and clamps the cursor into the
     /// visible area, so `ensure_scroll` on the next frame is a no-op.
+    /// Perform background housekeeping when the editor is idle (~100ms no input).
+    /// Called from the event loop's IdleTick handler.
+    pub fn idle_work(&mut self) {
+        // 1. Reparse dirty non-visible buffers (tree-sitter incremental).
+        //    Visible buffers are reparsed during render; this catches background ones.
+        let pending: Vec<usize> = self.syntax_reparse_pending.drain().collect();
+        for buf_idx in pending {
+            if buf_idx < self.buffers.len() {
+                let gen = self.buffers[buf_idx].generation;
+                let source: String = self.buffers[buf_idx].rope().chars().collect();
+                let _ = self.syntax.spans_for(buf_idx, &source, gen);
+            }
+        }
+
+        // 2. Write swap files for dirty buffers.
+        if self.swap_file {
+            let custom_dir = if self.swap_directory.is_empty() {
+                None
+            } else {
+                Some(std::path::Path::new(&self.swap_directory))
+            };
+            for buf in &self.buffers {
+                if buf.modified {
+                    if let Some(path) = buf.file_path() {
+                        let _ = crate::swap::write_swap(path, buf.rope(), custom_dir);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Switch focus to whichever window contains the given cell coordinates.
+    /// Returns `true` if focus actually changed.
+    pub fn focus_window_at(&mut self, col: u16, row: u16) -> bool {
+        let area = self.last_layout_area;
+        if let Some(win_id) = self.window_mgr.window_at_cell(col, row, area) {
+            if win_id != self.window_mgr.focused_id() {
+                self.window_mgr.set_focused(win_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_in_window(&mut self, target_id: WindowId, delta: i16) {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        self.handle_mouse_scroll(delta);
+        self.window_mgr.set_focused(original);
+    }
+
+    /// Horizontal-scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_horizontal_in_window(&mut self, target_id: WindowId, delta: i16) {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        self.handle_mouse_scroll_horizontal(delta);
+        self.window_mgr.set_focused(original);
+    }
+
     pub fn handle_mouse_scroll(&mut self, delta: i16) {
         let lines = delta.unsigned_abs() as usize;
         if lines == 0 {

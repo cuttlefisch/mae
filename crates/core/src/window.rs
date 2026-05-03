@@ -554,6 +554,13 @@ pub struct Rect {
     pub height: u16,
 }
 
+impl Rect {
+    /// Test if a point (col, row) is inside this rectangle (exclusive upper bound).
+    pub fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x && col < self.x + self.width && row >= self.y && row < self.y + self.height
+    }
+}
+
 /// Manages the window tree, focus, and window-buffer associations.
 ///
 /// Vim's model: closing a window does NOT delete the buffer. The editor always
@@ -827,6 +834,14 @@ impl WindowManager {
         let mut result = Vec::new();
         Self::compute_rects(&self.layout, total, &mut result);
         result
+    }
+
+    /// Find the window at the given cell coordinates, or `None` if outside all windows.
+    pub fn window_at_cell(&self, col: u16, row: u16, total: Rect) -> Option<WindowId> {
+        self.layout_rects(total)
+            .iter()
+            .find(|(_, rect)| rect.contains(col, row))
+            .map(|(id, _)| *id)
     }
 
     fn compute_rects(node: &LayoutNode, area: Rect, out: &mut Vec<(WindowId, Rect)>) {
