@@ -31,6 +31,7 @@ pub const HOOK_NAMES: &[&str] = &[
     "after-revert",
     "window-split",
     "window-close",
+    "after-load",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.
@@ -222,5 +223,11 @@ mod tests {
         assert_eq!(reg.get("buffer-open:rust"), &["my-rust-fn"]);
         // Base hook is separate
         assert!(reg.get("buffer-open").is_empty());
+    }
+
+    #[test]
+    fn after_load_hook_valid() {
+        assert!(HookRegistry::is_valid("after-load"));
+        assert!(HookRegistry::is_valid("after-load:init.scm"));
     }
 }
