@@ -183,7 +183,7 @@ impl Editor {
                 self.help_reopen();
             }
             "tutor" => {
-                self.open_help_at("tutor:index");
+                self.open_help_at("tutorial:getting-started");
             }
 
             // Shell / terminal
@@ -240,7 +240,7 @@ impl Editor {
             }
 
             // AI
-            "ai-prompt" => {
+            "ai-prompt" | "ai-chat" => {
                 self.open_conversation_buffer();
             }
             "ai-set-mode" => {
@@ -278,6 +278,61 @@ impl Editor {
             }
             "describe-option" => {
                 self.show_all_options();
+            }
+            "reload-config" => {
+                // Reload config.toml — parse as TOML table and apply known editor options.
+                // This lives in mae-core so we can't import the mae crate's Config struct.
+                // Instead we read the raw TOML and extract [editor] keys.
+                let config_path = std::env::var("XDG_CONFIG_HOME")
+                    .ok()
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        std::env::var("HOME")
+                            .ok()
+                            .map(|h| std::path::PathBuf::from(h).join(".config"))
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(".config"))
+                    .join("mae")
+                    .join("config.toml");
+                if !config_path.exists() {
+                    self.set_status("No config.toml found");
+                } else {
+                    match std::fs::read_to_string(&config_path) {
+                        Ok(contents) => {
+                            match contents.parse::<toml::Table>() {
+                                Ok(table) => {
+                                    let mut applied = 0;
+                                    // Apply [editor] section options
+                                    if let Some(editor_table) =
+                                        table.get("editor").and_then(|v| v.as_table())
+                                    {
+                                        for (key, val) in editor_table {
+                                            let val_str = match val {
+                                                toml::Value::String(s) => s.clone(),
+                                                toml::Value::Boolean(b) => b.to_string(),
+                                                toml::Value::Integer(i) => i.to_string(),
+                                                toml::Value::Float(f) => f.to_string(),
+                                                _ => continue,
+                                            };
+                                            let _ = self.set_option(key, &val_str);
+                                            applied += 1;
+                                        }
+                                    }
+                                    self.set_status(format!(
+                                        "Configuration reloaded ({} options)",
+                                        applied
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.set_status(format!("Config parse error: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.set_status(format!("Failed to read config: {}", e));
+                        }
+                    }
+                }
             }
 
             // Theme

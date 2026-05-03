@@ -851,9 +851,25 @@ impl Editor {
                 let _ = std::process::Command::new("xdg-open").arg(target).spawn();
                 self.set_status(format!("Opening {}", target));
             } else {
-                // Jump to internal heading
-                self.set_status(format!("Jumping to heading: {}", target));
-                // TODO: implement actual search/jump logic
+                // Jump to internal heading — search buffer for matching heading
+                let buf = self.active_buffer();
+                let target_lower = target.to_lowercase();
+                let mut found = false;
+                for line_idx in 0..buf.line_count() {
+                    let line = buf.line_text(line_idx);
+                    let trimmed = line.trim_start_matches('*').trim_start();
+                    if trimmed.to_lowercase().starts_with(&target_lower) {
+                        let win = self.window_mgr.focused_window_mut();
+                        win.cursor_row = line_idx;
+                        win.cursor_col = 0;
+                        self.set_status(format!("Jumped to: {}", target));
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    self.set_status(format!("Heading not found: {}", target));
+                }
             }
         }
     }

@@ -448,7 +448,14 @@ impl CommandRegistry {
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("new-buffer", "Create a new empty scratch buffer");
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
-        reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
+        reg.register_builtin(
+            "ai-prompt",
+            "AI Chat — built-in conversation with editor context (SPC a p)",
+        );
+        reg.register_builtin(
+            "ai-chat",
+            "AI Chat — built-in conversation with editor context (SPC a p)",
+        );
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("ai-accept", "Accept proposed AI changes");
         reg.register_builtin("ai-reject", "Reject proposed AI changes");
@@ -969,7 +976,7 @@ impl CommandRegistry {
         reg.register_builtin("debug-path", "Show current PATH environment variable");
 
         // AI agent launcher
-        reg.register_builtin("open-ai-agent", "Open AI agent in a shell terminal");
+        reg.register_builtin("open-ai-agent", "AI Agent — terminal shell (SPC a a)");
 
         // Tutorial
         reg.register_builtin("tutor", "Open interactive MAE tutorial");

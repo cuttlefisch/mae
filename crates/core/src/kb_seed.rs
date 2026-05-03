@@ -35,6 +35,8 @@ pub fn seed_kb(
     let mut kb = KnowledgeBase::new();
     install_static_nodes(&mut kb);
     install_tutor_nodes(&mut kb);
+    install_tutorial_nodes(&mut kb);
+    install_scheme_nodes(&mut kb);
     let keybinding_map = collect_keybindings(keymaps);
     install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
     install_category_nodes(&mut kb, registry, &keybinding_map);
@@ -1019,6 +1021,904 @@ would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform \
 line heights in conversation buffers.\n\n\
 See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]\n";
 
+/// Install `scheme:<name>` nodes for all Scheme API functions and variables.
+fn install_scheme_nodes(kb: &mut KnowledgeBase) {
+    // Each entry: (name, signature, doc, example, category)
+    let functions: &[(&str, &str, &str, &str, &str)] = &[
+        // Buffer editing
+        (
+            "buffer-insert",
+            "(buffer-insert TEXT)",
+            "Insert TEXT at the current cursor position.",
+            "(buffer-insert \"hello world\")",
+            "buffer-editing",
+        ),
+        (
+            "buffer-delete-range",
+            "(buffer-delete-range START END)",
+            "Delete characters from byte offset START to END.",
+            "(buffer-delete-range 0 10)",
+            "buffer-editing",
+        ),
+        (
+            "buffer-replace-range",
+            "(buffer-replace-range START END TEXT)",
+            "Replace characters from START to END with TEXT.",
+            "(buffer-replace-range 0 5 \"new\")",
+            "buffer-editing",
+        ),
+        (
+            "buffer-undo",
+            "(buffer-undo)",
+            "Undo the last edit in the active buffer.",
+            "(buffer-undo)",
+            "buffer-editing",
+        ),
+        (
+            "buffer-redo",
+            "(buffer-redo)",
+            "Redo the last undone edit in the active buffer.",
+            "(buffer-redo)",
+            "buffer-editing",
+        ),
+        // Cursor / navigation
+        (
+            "cursor-goto",
+            "(cursor-goto ROW COL)",
+            "Move the cursor to absolute position (0-indexed).",
+            "(cursor-goto 0 0) ; go to top-left",
+            "navigation",
+        ),
+        (
+            "open-file",
+            "(open-file PATH)",
+            "Open a file in a new buffer.",
+            "(open-file \"/tmp/test.txt\")",
+            "navigation",
+        ),
+        (
+            "switch-to-buffer",
+            "(switch-to-buffer IDX)",
+            "Switch to the buffer at index IDX.",
+            "(switch-to-buffer 0)",
+            "navigation",
+        ),
+        // Buffer read
+        (
+            "buffer-line",
+            "(buffer-line N)",
+            "Return the text of line N (0-indexed) in the active buffer.",
+            "(buffer-line 0) ; first line",
+            "buffer-read",
+        ),
+        (
+            "buffer-text-range",
+            "(buffer-text-range START END)",
+            "Return a substring of the active buffer from char START to END.",
+            "(buffer-text-range 0 100)",
+            "buffer-read",
+        ),
+        (
+            "get-buffer-by-name",
+            "(get-buffer-by-name NAME)",
+            "Return the buffer index for NAME, or #f if not found.",
+            "(get-buffer-by-name \"*scratch*\")",
+            "buffer-read",
+        ),
+        // Commands
+        (
+            "define-command",
+            "(define-command NAME DOC FN-NAME)",
+            "Register a new command backed by a Scheme function.",
+            "(define-command \"greet\" \"Say hello\" \"my-greet-fn\")",
+            "commands",
+        ),
+        (
+            "run-command",
+            "(run-command NAME)",
+            "Dispatch a registered command by name.",
+            "(run-command \"save\")",
+            "commands",
+        ),
+        (
+            "command-exists?",
+            "(command-exists? NAME)",
+            "Return #t if a command with NAME is registered.",
+            "(command-exists? \"save\") ; => #t",
+            "commands",
+        ),
+        // Keymaps
+        (
+            "define-key",
+            "(define-key MAP KEY COMMAND)",
+            "Bind KEY in keymap MAP to COMMAND.",
+            "(define-key \"normal\" \"g g\" \"goto-first-line\")",
+            "keymaps",
+        ),
+        (
+            "define-keymap",
+            "(define-keymap NAME PARENT)",
+            "Create a new keymap with an optional parent for inheritance.",
+            "(define-keymap \"my-mode\" \"normal\")",
+            "keymaps",
+        ),
+        (
+            "undefine-key!",
+            "(undefine-key! MAP KEY)",
+            "Remove a key binding from a keymap.",
+            "(undefine-key! \"normal\" \"q\")",
+            "keymaps",
+        ),
+        (
+            "keymap-bindings",
+            "(keymap-bindings MAP-NAME)",
+            "Return a list of (key command) pairs for a keymap.",
+            "(keymap-bindings \"normal\")",
+            "keymaps",
+        ),
+        // Options
+        (
+            "set-option!",
+            "(set-option! KEY VALUE)",
+            "Set a global editor option.",
+            "(set-option! \"theme\" \"dracula\")",
+            "options",
+        ),
+        (
+            "set-local-option!",
+            "(set-local-option! KEY VALUE)",
+            "Set a buffer-local option on the active buffer.",
+            "(set-local-option! \"word_wrap\" \"true\")",
+            "options",
+        ),
+        (
+            "get-option",
+            "(get-option NAME)",
+            "Return the current value of an option as a string, or #f.",
+            "(get-option \"theme\") ; => \"dracula\"",
+            "options",
+        ),
+        // Hooks
+        (
+            "add-hook!",
+            "(add-hook! HOOK-NAME FN-NAME)",
+            "Register FN-NAME to run when HOOK-NAME fires.",
+            "(add-hook! \"buffer-open\" \"my-on-open\")",
+            "hooks",
+        ),
+        (
+            "remove-hook!",
+            "(remove-hook! HOOK-NAME FN-NAME)",
+            "Remove a function from a hook.",
+            "(remove-hook! \"buffer-open\" \"my-on-open\")",
+            "hooks",
+        ),
+        // Display
+        (
+            "set-status",
+            "(set-status MSG)",
+            "Set the status bar message.",
+            "(set-status \"Done!\")",
+            "display",
+        ),
+        (
+            "set-theme",
+            "(set-theme NAME)",
+            "Switch the editor theme.",
+            "(set-theme \"gruvbox\")",
+            "display",
+        ),
+        (
+            "message",
+            "(message TEXT)",
+            "Append TEXT to the *Messages* log buffer.",
+            "(message \"Init complete\")",
+            "display",
+        ),
+        // Visual buffer (canvas)
+        (
+            "visual-buffer-add-rect!",
+            "(visual-buffer-add-rect! X Y W H FILL STROKE)",
+            "Draw a rectangle on the visual canvas.",
+            "(visual-buffer-add-rect! 10.0 10.0 100.0 50.0 \"#ff0000\" #f)",
+            "visual",
+        ),
+        (
+            "visual-buffer-clear!",
+            "(visual-buffer-clear!)",
+            "Clear all shapes from the visual canvas.",
+            "(visual-buffer-clear!)",
+            "visual",
+        ),
+        (
+            "visual-buffer-add-line!",
+            "(visual-buffer-add-line! X1 Y1 X2 Y2 COLOR THICKNESS)",
+            "Draw a line on the visual canvas.",
+            "(visual-buffer-add-line! 0.0 0.0 100.0 100.0 \"white\" 2.0)",
+            "visual",
+        ),
+        (
+            "visual-buffer-add-circle!",
+            "(visual-buffer-add-circle! CX CY R FILL STROKE)",
+            "Draw a circle on the visual canvas.",
+            "(visual-buffer-add-circle! 50.0 50.0 25.0 \"blue\" #f)",
+            "visual",
+        ),
+        (
+            "visual-buffer-add-text!",
+            "(visual-buffer-add-text! X Y TEXT FONT-SIZE COLOR)",
+            "Draw text on the visual canvas.",
+            "(visual-buffer-add-text! 10.0 20.0 \"Hello\" 16.0 \"white\")",
+            "visual",
+        ),
+        // Shell
+        (
+            "shell-send-input",
+            "(shell-send-input BUF-IDX TEXT)",
+            "Send TEXT to the PTY of a terminal buffer.",
+            "(shell-send-input 1 \"ls\\n\")",
+            "shell",
+        ),
+        (
+            "shell-cwd",
+            "(shell-cwd BUF-IDX)",
+            "Return the current working directory of a shell buffer.",
+            "(shell-cwd 1)",
+            "shell",
+        ),
+        (
+            "shell-read-output",
+            "(shell-read-output BUF-IDX MAX-LINES)",
+            "Read the last MAX-LINES from a shell buffer's viewport.",
+            "(shell-read-output 1 20)",
+            "shell",
+        ),
+        // File I/O
+        (
+            "read-file",
+            "(read-file PATH)",
+            "Read a file's contents as a string (max 1MB).",
+            "(read-file \"/etc/hostname\")",
+            "file-io",
+        ),
+        (
+            "file-exists?",
+            "(file-exists? PATH)",
+            "Return #t if PATH exists on disk.",
+            "(file-exists? \"/tmp/test.txt\")",
+            "file-io",
+        ),
+        (
+            "list-directory",
+            "(list-directory PATH)",
+            "Return a list of (name is-dir?) pairs for entries in PATH.",
+            "(list-directory \"/tmp\")",
+            "file-io",
+        ),
+        // Packages
+        (
+            "provide-feature",
+            "(provide-feature FEATURE)",
+            "Mark FEATURE as loaded in the package system.",
+            "(provide-feature \"my-package\")",
+            "packages",
+        ),
+        (
+            "featurep",
+            "(featurep FEATURE)",
+            "Return #t if FEATURE has been loaded.",
+            "(featurep \"my-package\")",
+            "packages",
+        ),
+        (
+            "require-feature",
+            "(require-feature FEATURE)",
+            "Request loading of FEATURE from the load-path.",
+            "(require-feature \"my-package\")",
+            "packages",
+        ),
+        (
+            "load-path",
+            "(load-path)",
+            "Return the current load-path as a list of directory strings.",
+            "(load-path)",
+            "packages",
+        ),
+        (
+            "add-to-load-path!",
+            "(add-to-load-path! DIR)",
+            "Prepend DIR to the load-path.",
+            "(add-to-load-path! \"~/.config/mae/lisp\")",
+            "packages",
+        ),
+        (
+            "autoload",
+            "(autoload COMMAND FEATURE DOC)",
+            "Register a command that auto-loads FEATURE on first use.",
+            "(autoload \"my-cmd\" \"my-pkg\" \"Does something\")",
+            "packages",
+        ),
+        // Recent files
+        (
+            "recent-files-add!",
+            "(recent-files-add! PATH)",
+            "Add PATH to the recent files list.",
+            "(recent-files-add! \"/tmp/test.txt\")",
+            "navigation",
+        ),
+        (
+            "recent-projects-add!",
+            "(recent-projects-add! PATH)",
+            "Add PATH to the recent projects list.",
+            "(recent-projects-add! \"~/src/my-project\")",
+            "navigation",
+        ),
+    ];
+
+    // Variables (injected from editor state before each eval)
+    let variables: &[(&str, &str, &str)] = &[
+        ("*buffer-name*", "string", "Name of the active buffer."),
+        (
+            "*buffer-modified?*",
+            "boolean",
+            "Whether the active buffer has unsaved changes.",
+        ),
+        (
+            "*buffer-line-count*",
+            "integer",
+            "Number of lines in the active buffer.",
+        ),
+        (
+            "*buffer-char-count*",
+            "integer",
+            "Total characters in the active buffer.",
+        ),
+        (
+            "*buffer-text*",
+            "string",
+            "Full text content of the active buffer.",
+        ),
+        ("*buffer-count*", "integer", "Number of open buffers."),
+        (
+            "*buffer-list*",
+            "list of (index name kind modified?)",
+            "Information about all open buffers.",
+        ),
+        (
+            "*buffer-language*",
+            "string",
+            "Detected language of the active buffer (e.g. \"rust\", \"text\").",
+        ),
+        (
+            "*buffer-file-path*",
+            "string",
+            "File path of the active buffer, or empty if unsaved.",
+        ),
+        ("*cursor-row*", "integer", "Current cursor row (0-indexed)."),
+        (
+            "*cursor-col*",
+            "integer",
+            "Current cursor column (0-indexed).",
+        ),
+        (
+            "*mode*",
+            "string",
+            "Current editor mode (\"normal\", \"insert\", \"visual\", etc).",
+        ),
+        ("*window-count*", "integer", "Number of open windows."),
+        (
+            "*window-list*",
+            "list of (id buffer-idx cursor-row cursor-col)",
+            "Information about all windows.",
+        ),
+        (
+            "*shell-buffers*",
+            "list of integers",
+            "Buffer indices that are shell terminals.",
+        ),
+        (
+            "*option-list*",
+            "list of (name kind default doc)",
+            "All registered editor options.",
+        ),
+        (
+            "*command-list*",
+            "list of (name doc source)",
+            "All registered commands.",
+        ),
+        ("*keymap-list*", "list of strings", "Names of all keymaps."),
+    ];
+
+    for &(name, sig, doc, example, category) in functions {
+        let body = format!(
+            "## Signature\n```scheme\n{sig}\n```\n\n\
+             {doc}\n\n\
+             ## Example\n```scheme\n{example}\n```\n\n\
+             **Category:** {category}\n\n\
+             See also: [[concept:scheme-api]], [[index]]"
+        );
+        let id = format!("scheme:{}", name);
+        let title = format!("Scheme: {}", name);
+        kb.insert(
+            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", category]),
+        );
+    }
+
+    for &(name, typ, doc) in variables {
+        let body = format!(
+            "**Type:** {typ}\n\n\
+             {doc}\n\n\
+             This is a read-only variable injected from editor state before each Scheme evaluation. \
+             Access it directly by name in your Scheme code.\n\n\
+             ## Example\n```scheme\n(message (string-append \"Buffer: \" {name}))\n```\n\n\
+             See also: [[concept:scheme-api]], [[index]]"
+        );
+        let id = format!("scheme:{}", name);
+        let title = format!("Scheme: {}", name);
+        kb.insert(
+            Node::new(id, title, NodeKind::Concept, body).with_tags(["scheme", "api", "variable"]),
+        );
+    }
+}
+
+/// Install the progressive getting-started tutorial nodes.
+fn install_tutorial_nodes(kb: &mut KnowledgeBase) {
+    let nodes = vec![
+        // Hub
+        Node::new(
+            "tutorial:getting-started",
+            "Getting Started with MAE",
+            NodeKind::Concept,
+            TUTORIAL_GETTING_STARTED,
+        )
+        .with_tags(["tutorial"]),
+        // Vim track
+        Node::new(
+            "tutorial:vim-familiar",
+            "Tutorial: What Carries Over from Vim",
+            NodeKind::Concept,
+            TUTORIAL_VIM_FAMILIAR,
+        )
+        .with_tags(["tutorial", "vim"]),
+        Node::new(
+            "tutorial:vim-differences",
+            "Tutorial: What's Different from Vim",
+            NodeKind::Concept,
+            TUTORIAL_VIM_DIFFERENCES,
+        )
+        .with_tags(["tutorial", "vim"]),
+        // Beginner track
+        Node::new(
+            "tutorial:what-is-modal",
+            "Tutorial: What Is Modal Editing?",
+            NodeKind::Concept,
+            TUTORIAL_WHAT_IS_MODAL,
+        )
+        .with_tags(["tutorial", "beginner"]),
+        Node::new(
+            "tutorial:basic-movement",
+            "Tutorial: Basic Movement",
+            NodeKind::Concept,
+            TUTORIAL_BASIC_MOVEMENT,
+        )
+        .with_tags(["tutorial", "beginner"]),
+        Node::new(
+            "tutorial:basic-editing",
+            "Tutorial: Basic Editing",
+            NodeKind::Concept,
+            TUTORIAL_BASIC_EDITING,
+        )
+        .with_tags(["tutorial", "beginner"]),
+        // Shared convergence nodes
+        Node::new(
+            "tutorial:mae-navigation",
+            "Tutorial: MAE Navigation",
+            NodeKind::Concept,
+            TUTORIAL_MAE_NAVIGATION,
+        )
+        .with_tags(["tutorial"]),
+        Node::new(
+            "tutorial:mae-extending",
+            "Tutorial: Extending MAE",
+            NodeKind::Concept,
+            TUTORIAL_MAE_EXTENDING,
+        )
+        .with_tags(["tutorial"]),
+        // AI track
+        Node::new(
+            "tutorial:ai-setup",
+            "Tutorial: AI Setup",
+            NodeKind::Concept,
+            TUTORIAL_AI_SETUP,
+        )
+        .with_tags(["tutorial", "ai"]),
+        Node::new(
+            "tutorial:ai-agent",
+            "Tutorial: AI Agent (Terminal)",
+            NodeKind::Concept,
+            TUTORIAL_AI_AGENT,
+        )
+        .with_tags(["tutorial", "ai"]),
+        Node::new(
+            "tutorial:ai-chat",
+            "Tutorial: AI Chat (Built-in)",
+            NodeKind::Concept,
+            TUTORIAL_AI_CHAT,
+        )
+        .with_tags(["tutorial", "ai"]),
+    ];
+
+    for node in nodes {
+        kb.insert(node);
+    }
+}
+
+// --- Tutorial content ---
+
+const TUTORIAL_GETTING_STARTED: &str = "\
+# Getting Started with MAE\n\n\
+MAE (Modern AI Editor) is an AI-native Lisp machine editor with modal editing.\n\n\
+Choose your track:\n\n\
+## I know Vim\n\
+→ [[tutorial:vim-familiar|Start here]] — what carries over, what's different, MAE extensions\n\n\
+## I'm new to modal editing\n\
+→ [[tutorial:what-is-modal|Start here]] — what modes are, basic movement, basic editing\n\n\
+## Set up AI\n\
+→ [[tutorial:ai-setup|AI Setup]] — API key configuration, provider selection, agent vs chat\n\n\
+Each track is a linked sequence of short lessons. Follow the **Next:** links at the bottom.\n\n\
+See also: [[tutor:index|Lesson-style Tutorial]], [[index|Help Index]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_VIM_FAMILIAR: &str = "\
+# What Carries Over from Vim\n\n\
+If you know Vim, you already know most of MAE. These all work as expected:\n\n\
+## Movement\n\
+`h`/`j`/`k`/`l`, `w`/`b`/`e`, `gg`/`G`, `0`/`$`, `Ctrl-d`/`Ctrl-u`, `f`/`t`, `%`\n\n\
+## Modes\n\
+Normal, Insert (`i`/`a`/`o`/`O`), Visual (`v`/`V`), Command (`:`)\n\n\
+## Editing\n\
+`dd`/`yy`/`p`/`P`, `ciw`/`diw`/`yiw`, `x`/`r`, `.` (dot-repeat), `u`/`Ctrl-r`\n\n\
+## Text objects\n\
+`iw`/`aw`, `i\"`/`a\"`, `i(`/`a(`, `i{`/`a{`, `it`/`at`\n\n\
+## Registers\n\
+`\"ay` to yank into register a, `\"ap` to paste from it. `\"+` for system clipboard.\n\n\
+## Ex commands\n\
+`:w`, `:q`, `:wq`, `:e file`, `:set option`, `/search`\n\n\
+## Macros\n\
+`q{reg}` to record, `q` to stop, `@{reg}` to replay\n\n\
+**Next:** [[tutorial:vim-differences|What's Different from Vim]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_VIM_DIFFERENCES: &str = "\
+# What's Different from Vim\n\n\
+## SPC leader instead of backslash\n\
+MAE uses **Space** as the leader key (Doom Emacs style). This gives access \
+to 14+ command groups:\n\
+- `SPC f` — file operations\n\
+- `SPC b` — buffer operations\n\
+- `SPC w` — window operations\n\
+- `SPC a` — AI commands\n\
+- `SPC h` — help system\n\
+- `SPC p` — project commands\n\
+...and more. A **which-key** popup appears after pressing SPC.\n\n\
+## Scheme instead of VimL/Lua\n\
+Configuration is in `init.scm` (R7RS Scheme), not `.vimrc` or `init.lua`.\n\
+Edit it with `SPC f c`.\n\n\
+```scheme\n\
+(set-option! \"theme\" \"dracula\")\n\
+(define-key \"normal\" \"g g\" \"goto-first-line\")\n\
+(add-hook! \"buffer-open\" \"my-on-open\")\n\
+```\n\n\
+## Built-in AI\n\
+- `SPC a p` — AI Chat (built-in conversation with editor context)\n\
+- `SPC a a` — AI Agent (terminal-based, e.g. Claude Code)\n\
+See [[tutorial:ai-setup|AI Setup]] for configuration.\n\n\
+## No plugins — packages\n\
+MAE uses a Scheme-based package system with `require-feature`/`provide-feature` \
+instead of Vim plugins. See [[concept:package-system|Package System]].\n\n\
+**Next:** [[tutorial:mae-navigation|MAE Navigation]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_WHAT_IS_MODAL: &str = "\
+# What Is Modal Editing?\n\n\
+In most editors, pressing `j` types the letter \"j\". In MAE, what a key does \
+depends on which **mode** you're in.\n\n\
+## Normal mode (default)\n\
+Keys are **commands**: `j` moves down, `dd` deletes a line, `w` jumps to the next word.\n\
+You navigate and manipulate text without ever reaching for the mouse.\n\n\
+## Insert mode\n\
+Keys type text, like a normal editor. Press `i` from Normal mode to enter Insert mode.\n\
+Press `Escape` to return to Normal mode.\n\n\
+## Visual mode\n\
+Select text with movement keys. Press `v` from Normal mode.\n\n\
+## Command mode\n\
+Type commands after `:`. Press `:` from Normal mode.\n\n\
+## Why modal?\n\
+- Your fingers never leave the home row\n\
+- Every key does something useful (no wasted Ctrl-Shift-Alt chords)\n\
+- Composable: `d` + `w` = delete word, `c` + `i` + `\"` = change inside quotes\n\n\
+**The golden rule:** If you get lost, press **Escape** to return to Normal mode.\n\n\
+**Next:** [[tutorial:basic-movement|Basic Movement]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_BASIC_MOVEMENT: &str = "\
+# Basic Movement\n\n\
+All movement happens in **Normal mode** (press Escape if you're elsewhere).\n\n\
+## Character movement\n\
+```\n\
+     k\n\
+  h     l\n\
+     j\n\
+```\n\
+`h` = left, `j` = down, `k` = up, `l` = right\n\n\
+## Word movement\n\
+- `w` — jump to next word start\n\
+- `b` — jump to previous word start\n\
+- `e` — jump to next word end\n\n\
+## Line movement\n\
+- `0` — beginning of line\n\
+- `$` — end of line\n\
+- `^` — first non-blank character\n\n\
+## File movement\n\
+- `gg` — go to first line\n\
+- `G` — go to last line\n\
+- `Ctrl-d` — half page down\n\
+- `Ctrl-u` — half page up\n\n\
+## Searching\n\
+- `/pattern` — search forward\n\
+- `n` — next match\n\
+- `N` — previous match\n\n\
+**Try it:** Open a file with `:e filename` and practice moving around!\n\n\
+**Next:** [[tutorial:basic-editing|Basic Editing]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_BASIC_EDITING: &str = "\
+# Basic Editing\n\n\
+## Entering Insert mode\n\
+- `i` — insert before cursor\n\
+- `a` — insert after cursor\n\
+- `o` — open new line below\n\
+- `O` — open new line above\n\
+- `Escape` — return to Normal mode\n\n\
+## Deleting\n\
+- `x` — delete character under cursor\n\
+- `dd` — delete entire line\n\
+- `dw` — delete from cursor to next word\n\
+- `d$` — delete to end of line\n\n\
+## Copy and paste\n\
+- `yy` — yank (copy) entire line\n\
+- `yw` — yank word\n\
+- `p` — paste after cursor\n\
+- `P` — paste before cursor\n\n\
+## Undo and redo\n\
+- `u` — undo\n\
+- `Ctrl-r` — redo\n\n\
+## Saving and quitting\n\
+- `:w` — save\n\
+- `:q` — quit\n\
+- `:wq` — save and quit\n\
+- `:q!` — quit without saving\n\n\
+## The dot command\n\
+`.` repeats your last edit. Delete a word with `dw`, then press `.` to delete another.\n\n\
+**Next:** [[tutorial:mae-navigation|MAE Navigation]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_MAE_NAVIGATION: &str = "\
+# MAE Navigation\n\n\
+MAE's **SPC leader** gives fast access to every subsystem.\n\n\
+## Files\n\
+- `SPC f f` — fuzzy find file in project\n\
+- `SPC f d` — file browser (directory listing)\n\
+- `SPC f t` — toggle file tree sidebar\n\
+- `SPC f r` — recent files\n\
+- `SPC f c` — edit config (init.scm)\n\n\
+## Buffers\n\
+- `SPC b b` — switch buffer (fuzzy palette)\n\
+- `SPC b d` — close current buffer\n\
+- `SPC b n` / `SPC b p` — next / previous buffer\n\n\
+## Windows\n\
+- `SPC w v` — split vertically\n\
+- `SPC w s` — split horizontally\n\
+- `SPC w h/j/k/l` — focus left/down/up/right window\n\
+- `SPC w q` — close window\n\
+- `SPC w =` — balance window sizes\n\n\
+## Project\n\
+- `SPC p s` — search text in project (grep)\n\
+- `SPC p f` — find file in project\n\n\
+## Search\n\
+- `/` — search in current buffer\n\
+- `SPC p s` — search across project\n\
+- `SPC SPC` — command palette (search for any command)\n\n\
+## Help\n\
+- `SPC h` — help menu\n\
+- `SPC h s` — search help topics\n\
+- `SPC h k` — describe key\n\
+- `:help topic` — look up a topic\n\n\
+**Next:** [[tutorial:mae-extending|Extending MAE]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_MAE_EXTENDING: &str = "\
+# Extending MAE\n\n\
+MAE is extensible via **R7RS Scheme** (the Steel runtime).\n\n\
+## The REPL\n\
+- `:eval (+ 1 2)` — evaluate an expression (result shown in status bar)\n\
+- `SPC e e` — evaluate current line\n\
+- `SPC e b` — evaluate entire buffer\n\n\
+## Configuration (init.scm)\n\
+Your config file is `~/.config/mae/init.scm`. Open it with `SPC f c`.\n\n\
+```scheme\n\
+;; Set theme\n\
+(set-option! \"theme\" \"dracula\")\n\n\
+;; Custom keybinding\n\
+(define-key \"normal\" \"g r\" \"lsp-find-references\")\n\n\
+;; React to editor events\n\
+(add-hook! \"buffer-save\" \"my-on-save\")\n\n\
+;; Define a custom command\n\
+(define-command \"hello\" \"Say hello\" \"my-hello-fn\")\n\
+(define (my-hello-fn) (set-status \"Hello from Scheme!\"))\n\
+```\n\n\
+## Packages\n\
+Place `.scm` files in `~/.config/mae/packages/`. Use `require-feature` and \
+`provide-feature` to manage dependencies.\n\
+See [[concept:package-system|Package System]] for details.\n\n\
+## Full Scheme API\n\
+MAE exposes 45+ functions and 18 variables to Scheme.\n\
+See [[concept:scheme-api|Scheme API]] for the full reference, or use \
+`:help scheme:function-name` for individual docs.\n\n\
+See also: [[tutorial:ai-setup|Set up AI]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_AI_SETUP: &str = "\
+# AI Setup\n\n\
+MAE has two AI interfaces: **AI Agent** (terminal) and **AI Chat** (built-in).\n\n\
+## AI Chat — built-in conversation\n\
+The built-in AI has full access to your editor context (buffers, LSP, diagnostics).\n\n\
+### Configure provider\n\
+In `~/.config/mae/config.toml`:\n\
+```toml\n\
+[ai]\n\
+provider = \"claude\"        # or \"openai\", \"gemini\", \"deepseek\"\n\
+model = \"claude-sonnet-4-20250514\"\n\
+```\n\n\
+### API key\n\
+Set the appropriate environment variable:\n\
+- Claude: `ANTHROPIC_API_KEY`\n\
+- OpenAI: `OPENAI_API_KEY`\n\
+- Gemini: `GEMINI_API_KEY`\n\
+- DeepSeek: `DEEPSEEK_API_KEY`\n\n\
+Or use `api_key_command` to fetch from a secrets manager:\n\
+```toml\n\
+[ai]\n\
+api_key_command = \"pass show api/anthropic\"\n\
+```\n\n\
+## AI Agent — terminal-based\n\
+`SPC a a` opens an external AI agent (Claude Code, gemini-cli, etc.) in a terminal.\n\
+Configure which command to run:\n\
+```toml\n\
+[ai]\n\
+editor = \"claude\"          # command to run\n\
+```\n\n\
+## Verify setup\n\
+Press `SPC a p` and type a message. If you see a response, AI Chat is working.\n\
+Press `SPC a a` to launch the agent terminal.\n\n\
+**Next:** [[tutorial:ai-agent|AI Agent (Terminal)]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_AI_AGENT: &str = "\
+# AI Agent (Terminal)\n\n\
+The **AI Agent** (`SPC a a`) runs an external tool like Claude Code or gemini-cli \
+in MAE's embedded terminal.\n\n\
+## How it works\n\
+1. Press `SPC a a` — MAE opens a terminal and runs the configured `ai.editor` command\n\
+2. The agent has access to your project files via the filesystem\n\
+3. Via the MCP bridge, the agent can also call MAE's editor tools\n\n\
+## Configuration\n\
+```toml\n\
+[ai]\n\
+editor = \"claude\"          # or \"gemini\", or a custom command\n\
+```\n\n\
+## When to use\n\
+- Autonomous coding tasks (write a feature, fix a bug)\n\
+- Complex multi-file refactors\n\
+- Tasks that need shell access (running tests, installing packages)\n\
+- When you want the AI to drive and you review\n\n\
+## Terminal controls\n\
+- `Ctrl-\\ Ctrl-n` — exit terminal mode (return to Normal)\n\
+- The agent's terminal is a full VT100 emulator (colors, scrollback)\n\n\
+**Next:** [[tutorial:ai-chat|AI Chat (Built-in)]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
+const TUTORIAL_AI_CHAT: &str = "\
+# AI Chat (Built-in)\n\n\
+The **AI Chat** (`SPC a p`) is MAE's native conversation interface.\n\n\
+## How it works\n\
+1. Press `SPC a p` — the prompt line activates at the bottom of the conversation buffer\n\
+2. Type your message and press Enter\n\
+3. The AI responds with full editor context: it can see your buffers, LSP diagnostics, \
+syntax trees, and debug state\n\n\
+## What the AI can do\n\
+- Read and edit buffers\n\
+- Navigate files and project structure\n\
+- Run registered commands\n\
+- Query LSP (definitions, references, hover)\n\
+- Inspect DAP debug state\n\
+- Search the knowledge base\n\n\
+## Configuration\n\
+```toml\n\
+[ai]\n\
+provider = \"claude\"\n\
+model = \"claude-sonnet-4-20250514\"\n\
+permission = \"trusted\"      # readonly, standard, trusted, privileged\n\
+budget_warn_tokens = 50000\n\
+budget_limit_tokens = 100000\n\
+```\n\n\
+## Conversation persistence\n\
+Conversations are saved per project in `.mae/conversation.json`.\n\
+- `:ai-save` — manually save the conversation\n\
+- `:ai-load` — load a saved conversation\n\
+- `restore_session = true` — auto-restore on startup\n\n\
+## Tips\n\
+- Use `SPC a c` to cancel an in-flight AI request\n\
+- Use `Escape` during AI operation to cancel and regain input\n\
+- The token budget dashboard shows usage in the status bar\n\n\
+See also: [[concept:ai-as-peer|AI as Peer]], [[concept:ai-modes|Agent vs Chat]]\n\n\
+* Getting Help\n\
+- `SPC h` opens the help system\n\
+- `SPC h s` searches all help topics\n\
+- `:help TOPIC` looks up any command, option, or concept\n\
+- `SPC h k` describes what a key does\n\
+- `SPC SPC` opens the command palette — search for anything\n";
+
 /// Install a `cmd:<name>` node for every registered command. Source
 /// (builtin vs scheme) is surfaced in the body so users can tell which
 /// commands are implemented in Rust vs Scheme.
@@ -1412,6 +2312,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_SCHEME_API,
         )
         .with_tags(["extensibility", "scheme", "api"]),
+        Node::new(
+            "concept:ai-modes",
+            "Concept: AI Agent vs AI Chat",
+            NodeKind::Concept,
+            CONCEPT_AI_MODES,
+        )
+        .with_tags(["ai", "configuration"]),
     ]
 }
 
@@ -1451,7 +2358,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback\n\
 - [[concept:package-system|Package System]] — require/provide for Scheme extensions\n\
 - [[concept:option-registry|Option Registry]] — single source of truth for editor settings\n\
-- [[concept:scheme-api|Scheme API]] — 40+ functions for buffer/window/command/keymap access
+- [[concept:scheme-api|Scheme API]] — 40+ functions for buffer/window/command/keymap access\n\
+- [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -1461,7 +2369,8 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - Browse by category: `category:movement`, `category:editing`, `category:git`, etc.
 
 ## Tutorial
-- [[tutor:index|MAE Tutorial]] — interactive lessons covering all essentials
+- [[tutorial:getting-started|Getting Started]] — progressive guide (Vim track / Beginner track / AI setup)
+- [[tutor:index|Lesson-style Tutorial]] — 12 focused lessons covering all essentials
 
 ## Getting around
 - **Enter** on a link follows it.
@@ -2074,6 +2983,41 @@ Read-side: `inject_editor_state()` snapshots editor state as globals before eval
 Apply: `apply_to_editor()` drains pending changes after eval.\n\n\
 See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
 
+const CONCEPT_AI_MODES: &str = "\
+MAE provides two distinct AI interfaces, each suited to different workflows.\n\n\
+## AI Agent (`SPC a a`)\n\
+An **external tool** (Claude Code, gemini-cli, etc.) running in MAE's embedded terminal.\n\n\
+**When to use:**\n\
+- Autonomous coding: writing features, fixing bugs, multi-file refactors\n\
+- Tasks that need shell access: running tests, installing packages, git operations\n\
+- When you want the AI to drive and you review the results\n\n\
+**Configuration:**\n\
+```toml\n\
+[ai]\n\
+editor = \"claude\"  # command to run in terminal\n\
+```\n\n\
+The agent communicates with MAE via the MCP bridge — it can call editor tools \
+just like the built-in AI.\n\n\
+## AI Chat (`SPC a p`)\n\
+MAE's **native conversation** interface with full editor context.\n\n\
+**When to use:**\n\
+- Quick questions about code in your current buffer\n\
+- LSP-aware code review (the AI sees diagnostics, types, references)\n\
+- Editor-integrated tasks: explain this function, suggest a refactor, write a docstring\n\
+- When you want to stay in the editor flow without context-switching\n\n\
+**Configuration:**\n\
+```toml\n\
+[ai]\n\
+provider = \"claude\"  # or openai, gemini, deepseek\n\
+model = \"claude-sonnet-4-20250514\"\n\
+```\n\n\
+## Shared configuration\n\
+Both interfaces respect:\n\
+- **Permission tiers:** `readonly`, `standard`, `trusted`, `privileged`\n\
+- **Budget limits:** `budget_warn_tokens`, `budget_limit_tokens`\n\
+- **API keys:** env vars (ANTHROPIC_API_KEY, etc.) or `api_key_command`\n\n\
+See also: [[tutorial:ai-setup]], [[concept:ai-as-peer]], [[index]]\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2112,6 +3056,7 @@ mod tests {
             "concept:event-recording",
             "concept:dap-attach",
             "concept:introspect",
+            "concept:ai-modes",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
@@ -2359,6 +3304,116 @@ mod tests {
             category_count >= 5,
             "category nodes: {} < 5",
             category_count
+        );
+    }
+
+    // --- Round 1: Scheme nodes + Tutorial ---
+
+    #[test]
+    fn scheme_nodes_exist() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        // Check a representative set of scheme function nodes
+        for name in [
+            "scheme:buffer-insert",
+            "scheme:cursor-goto",
+            "scheme:define-key",
+            "scheme:set-option!",
+            "scheme:read-file",
+            "scheme:add-hook!",
+            "scheme:provide-feature",
+            "scheme:shell-send-input",
+        ] {
+            assert!(kb.contains(name), "missing scheme node: {}", name);
+        }
+        // Check variable nodes
+        for name in [
+            "scheme:*buffer-name*",
+            "scheme:*cursor-row*",
+            "scheme:*mode*",
+            "scheme:*buffer-list*",
+        ] {
+            assert!(kb.contains(name), "missing scheme variable node: {}", name);
+        }
+    }
+
+    #[test]
+    fn scheme_nodes_link_to_concept() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        let links = kb.links_from("scheme:buffer-insert");
+        assert!(
+            links.contains(&"concept:scheme-api".to_string()),
+            "scheme node should link to concept:scheme-api"
+        );
+    }
+
+    #[test]
+    fn tutorial_hub_exists() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        assert!(
+            kb.contains("tutorial:getting-started"),
+            "missing tutorial hub"
+        );
+    }
+
+    #[test]
+    fn tutorial_vim_track_nodes_exist() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for id in [
+            "tutorial:vim-familiar",
+            "tutorial:vim-differences",
+            "tutorial:mae-navigation",
+            "tutorial:mae-extending",
+        ] {
+            assert!(kb.contains(id), "missing vim track node: {}", id);
+        }
+    }
+
+    #[test]
+    fn tutorial_beginner_track_nodes_exist() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for id in [
+            "tutorial:what-is-modal",
+            "tutorial:basic-movement",
+            "tutorial:basic-editing",
+            "tutorial:mae-navigation",
+            "tutorial:mae-extending",
+        ] {
+            assert!(kb.contains(id), "missing beginner track node: {}", id);
+        }
+    }
+
+    #[test]
+    fn tutorial_ai_track_nodes_exist() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for id in ["tutorial:ai-setup", "tutorial:ai-agent", "tutorial:ai-chat"] {
+            assert!(kb.contains(id), "missing AI track node: {}", id);
+        }
+    }
+
+    #[test]
+    fn tutorial_shared_nodes_linked_from_both_tracks() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        // Vim track links to mae-navigation
+        let vim_links = kb.links_from("tutorial:vim-differences");
+        assert!(
+            vim_links.contains(&"tutorial:mae-navigation".to_string()),
+            "vim track should link to mae-navigation"
+        );
+        // Beginner track links to mae-navigation
+        let beginner_links = kb.links_from("tutorial:basic-editing");
+        assert!(
+            beginner_links.contains(&"tutorial:mae-navigation".to_string()),
+            "beginner track should link to mae-navigation"
+        );
+    }
+
+    #[test]
+    fn index_links_to_getting_started() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        let links = kb.links_from("index");
+        assert!(
+            links.contains(&"tutorial:getting-started".to_string()),
+            "index should link to tutorial:getting-started"
         );
     }
 }
