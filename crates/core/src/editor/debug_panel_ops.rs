@@ -19,10 +19,7 @@ impl Editor {
         if prev != buf_idx {
             self.alternate_buffer_idx = Some(prev);
         }
-        let win = self.window_mgr.focused_window_mut();
-        win.buffer_idx = buf_idx;
-        win.cursor_row = 0;
-        win.cursor_col = 0;
+        self.display_buffer(buf_idx);
         self.set_mode(crate::Mode::Normal);
     }
 

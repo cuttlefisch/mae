@@ -215,24 +215,26 @@ impl Editor {
             .iter()
             .position(|b| b.kind == crate::buffer::BufferKind::Messages);
 
-        if let Some(idx) = existing_idx {
-            self.window_mgr.focused_window_mut().buffer_idx = idx;
+        let msg_idx = if let Some(idx) = existing_idx {
+            idx
         } else {
             self.buffers.push(Buffer::new_messages());
-            let new_idx = self.buffers.len() - 1;
-            self.window_mgr.focused_window_mut().buffer_idx = new_idx;
-        }
+            self.buffers.len() - 1
+        };
+        self.display_buffer(msg_idx);
         self.sync_messages_rope();
         // Scroll to bottom so newest entries are visible.
-        // scroll_offset = first visible entry index.
         let total = self.message_log.len();
         let vh = self.viewport_height;
-        self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
-        // Also position cursor at the last line so yank etc. work from the bottom.
-        let buf_idx = self.active_buffer_idx();
-        let last_line = self.buffers[buf_idx].display_line_count().saturating_sub(1);
-        self.window_mgr.focused_window_mut().cursor_row = last_line;
-        self.window_mgr.focused_window_mut().cursor_col = 0;
+        // Find the window now showing messages and position it.
+        if let Some(win_id) = self.find_window_with_kind(crate::buffer::BufferKind::Messages) {
+            if let Some(win) = self.window_mgr.window_mut(win_id) {
+                win.scroll_offset = total.saturating_sub(vh);
+                let last_line = self.buffers[msg_idx].display_line_count().saturating_sub(1);
+                win.cursor_row = last_line;
+                win.cursor_col = 0;
+            }
+        }
         self.set_status(format!("{} log entries", total));
     }
 
@@ -1057,7 +1059,7 @@ impl Editor {
         if let Some(new_idx) = self.open_file_hidden(path) {
             let prev_idx = self.active_buffer_idx();
             self.alternate_buffer_idx = Some(prev_idx);
-            self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+            self.display_buffer(new_idx);
         }
     }
 

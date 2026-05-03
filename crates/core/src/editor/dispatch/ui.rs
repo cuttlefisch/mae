@@ -14,21 +14,19 @@ impl Editor {
                 self.open_messages_buffer();
             }
             "dashboard" => {
-                if let Some(idx) = self
+                let idx = if let Some(idx) = self
                     .buffers
                     .iter()
                     .position(|b| b.kind == crate::BufferKind::Dashboard)
                 {
-                    let prev = self.active_buffer_idx();
-                    self.alternate_buffer_idx = Some(prev);
-                    self.window_mgr.focused_window_mut().buffer_idx = idx;
+                    idx
                 } else {
-                    let prev = self.active_buffer_idx();
                     self.buffers.push(Buffer::new_dashboard());
-                    let idx = self.buffers.len() - 1;
-                    self.alternate_buffer_idx = Some(prev);
-                    self.window_mgr.focused_window_mut().buffer_idx = idx;
-                }
+                    self.buffers.len() - 1
+                };
+                let prev = self.active_buffer_idx();
+                self.alternate_buffer_idx = Some(prev);
+                self.display_buffer(idx);
                 self.set_mode(Mode::Normal);
             }
             "toggle-scratch-buffer" => {
@@ -39,23 +37,21 @@ impl Editor {
                     let alt = self.alternate_buffer_idx.unwrap_or(0);
                     if alt < self.buffers.len() && alt != current {
                         self.alternate_buffer_idx = Some(current);
-                        self.window_mgr.focused_window_mut().buffer_idx = alt;
+                        self.display_buffer(alt);
                         self.sync_mode_to_buffer();
                     }
                 } else {
-                    if let Some(idx) = self
-                        .buffers
-                        .iter()
-                        .position(|b| b.kind == crate::BufferKind::Text && b.name == "[scratch]")
-                    {
-                        self.alternate_buffer_idx = Some(current);
-                        self.window_mgr.focused_window_mut().buffer_idx = idx;
-                    } else {
-                        self.buffers.push(Buffer::new());
-                        let idx = self.buffers.len() - 1;
-                        self.alternate_buffer_idx = Some(current);
-                        self.window_mgr.focused_window_mut().buffer_idx = idx;
-                    }
+                    let idx =
+                        if let Some(idx) = self.buffers.iter().position(|b| {
+                            b.kind == crate::BufferKind::Text && b.name == "[scratch]"
+                        }) {
+                            idx
+                        } else {
+                            self.buffers.push(Buffer::new());
+                            self.buffers.len() - 1
+                        };
+                    self.alternate_buffer_idx = Some(current);
+                    self.display_buffer(idx);
                     self.set_mode(Mode::Normal);
                 }
             }
@@ -282,6 +278,17 @@ impl Editor {
             "describe-configuration" => {
                 self.show_configuration_report();
             }
+            "describe-display-policy" => {
+                let report = self.display_policy.format_report();
+                let mut buf = crate::buffer::Buffer::new();
+                buf.name = "*Display Policy*".to_string();
+                buf.replace_contents(&report);
+                buf.modified = false;
+                buf.read_only = true;
+                let buf_idx = self.buffers.len();
+                self.buffers.push(buf);
+                self.display_buffer(buf_idx);
+            }
             "reload-config" => {
                 // Reload config.toml — parse as TOML table and apply known editor options.
                 // This lives in mae-core so we can't import the mae crate's Config struct.
@@ -321,8 +328,17 @@ impl Editor {
                                             applied += 1;
                                         }
                                     }
+                                    // Also re-evaluate init.scm
+                                    let init_path = config_path
+                                        .parent()
+                                        .unwrap_or(std::path::Path::new("."))
+                                        .join("init.scm");
+                                    if init_path.exists() {
+                                        self.pending_scheme_eval
+                                            .push(format!("(load \"{}\")", init_path.display()));
+                                    }
                                     self.set_status(format!(
-                                        "Configuration reloaded ({} options)",
+                                        "Configuration reloaded ({} options + init.scm)",
                                         applied
                                     ));
                                 }
@@ -549,7 +565,7 @@ impl Editor {
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
                 self.alternate_buffer_idx = Some(prev_idx);
-                self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+                self.display_buffer(new_idx);
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);

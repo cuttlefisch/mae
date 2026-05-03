@@ -194,9 +194,7 @@ impl Editor {
             self.alternate_buffer_idx = Some(prev_idx);
         }
         self.help_populate_buffer(idx);
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
-        self.window_mgr.focused_window_mut().cursor_row = 0;
-        self.window_mgr.focused_window_mut().cursor_col = 0;
+        self.display_buffer(idx);
     }
 
     /// Render the current KB node into the help buffer's rope and store

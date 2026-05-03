@@ -121,11 +121,17 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
 }
 
 pub fn execute_file_read(args: &serde_json::Value) -> Result<String, String> {
-    let path = args
+    let raw_path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
-    let content = std::fs::read_to_string(path).map_err(|e| format!("File read error: {}", e))?;
+    let path = mae_core::file_picker::expand_tilde(raw_path);
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "File read error: {} (path: {}). Hint: use absolute paths — call audit_configuration for correct config paths.",
+            e, path
+        )
+    })?;
     let mut output = String::new();
     for (i, line) in content.lines().enumerate() {
         output.push_str(&format!("{:>4} | {}\n", i + 1, line));

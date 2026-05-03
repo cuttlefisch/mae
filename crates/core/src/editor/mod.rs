@@ -627,6 +627,9 @@ pub struct Editor {
     /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
     /// cleared on the next keypress.
     pub buffer_keys_popup: bool,
+    /// Display policy: maps BufferKind → DisplayAction for buffer placement.
+    /// Governs how buffers become visible (replace, avoid conversation, reuse/split, hidden).
+    pub display_policy: crate::display_policy::DisplayPolicy,
     /// Tiered redraw level — how much work the renderer needs to do this frame.
     /// Set by event handlers, cleared after render.
     pub redraw_level: crate::redraw::RedrawLevel,
@@ -836,6 +839,7 @@ impl Editor {
             swap_file: true,
             swap_directory: String::new(),
             buffer_keys_popup: false,
+            display_policy: crate::display_policy::DisplayPolicy::default(),
             redraw_level: crate::redraw::RedrawLevel::Full,
             dirty_line_range: None,
             last_click: None,
@@ -1560,7 +1564,7 @@ impl Editor {
 
         let buf_idx = self.buffers.len();
         self.buffers.push(buf);
-        self.window_mgr.focused_window_mut().buffer_idx = buf_idx;
+        self.display_buffer(buf_idx);
     }
 
     /// Generate a configuration health report and open it in a read-only buffer.
@@ -1732,7 +1736,7 @@ impl Editor {
 
         let buf_idx = self.buffers.len();
         self.buffers.push(buf);
-        self.window_mgr.focused_window_mut().buffer_idx = buf_idx;
+        self.display_buffer(buf_idx);
     }
 
     /// Clamp all window cursors to their buffer bounds. Safety net against
@@ -2145,6 +2149,109 @@ impl Editor {
                 }
             }
         }
+    }
+
+    /// Policy-aware buffer display: routes the buffer to the right window
+    /// based on its `BufferKind` and the active `DisplayPolicy`.
+    ///
+    /// This is the primary entry point for making a buffer visible. It replaces
+    /// direct `focused_window_mut().buffer_idx = idx` assignments throughout
+    /// the codebase, adding conversation protection and side-window reuse.
+    pub fn display_buffer(&mut self, buf_idx: usize) {
+        if buf_idx >= self.buffers.len() {
+            return;
+        }
+        let kind = self.buffers[buf_idx].kind;
+        let action = self.display_policy.action_for(kind);
+        match action {
+            crate::display_policy::DisplayAction::ReplaceFocused => {
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
+                    self.switch_to_buffer_non_conversation(buf_idx);
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    win.buffer_idx = buf_idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+            }
+            crate::display_policy::DisplayAction::AvoidConversation => {
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
+                    self.switch_to_buffer_non_conversation(buf_idx);
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    win.buffer_idx = buf_idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+            }
+            crate::display_policy::DisplayAction::ReuseOrSplit { direction, ratio } => {
+                // Side-window pattern: reuse existing window of same kind.
+                let reuse_win_id = self.find_window_with_kind(kind);
+                if let Some(win_id) = reuse_win_id {
+                    if let Some(win) = self.window_mgr.window_mut(win_id) {
+                        win.buffer_idx = buf_idx;
+                        win.cursor_row = 0;
+                        win.cursor_col = 0;
+                    }
+                } else {
+                    self.display_buffer_split(buf_idx, direction, ratio);
+                }
+            }
+            crate::display_policy::DisplayAction::Hidden => {}
+        }
+    }
+
+    /// Find a window showing a buffer of the given kind (non-conversation).
+    fn find_window_with_kind(&self, kind: crate::BufferKind) -> Option<crate::window::WindowId> {
+        for w in self.window_mgr.iter_windows() {
+            if w.buffer_idx < self.buffers.len()
+                && self.buffers[w.buffer_idx].kind == kind
+                && !self.is_conversation_buffer(w.buffer_idx)
+            {
+                return Some(w.id);
+            }
+        }
+        None
+    }
+
+    /// Split helper for display_buffer: creates a new split, avoiding conversation windows.
+    fn display_buffer_split(
+        &mut self,
+        buf_idx: usize,
+        direction: crate::window::SplitDirection,
+        ratio: f32,
+    ) {
+        // Don't split from a conversation window.
+        if self.is_conversation_buffer(self.active_buffer_idx()) {
+            let non_conv = self.find_non_conversation_window();
+            if let Some(win_id) = non_conv {
+                self.window_mgr.set_focused(win_id);
+            }
+        }
+        let area = self.default_area();
+        match self
+            .window_mgr
+            .split_with_ratio(direction, buf_idx, area, ratio)
+        {
+            Ok(new_win_id) => {
+                // Focus the new window showing the buffer.
+                self.window_mgr.set_focused(new_win_id);
+            }
+            Err(_) => {
+                // Too small to split — fall back to non-conversation switch.
+                self.switch_to_buffer_non_conversation(buf_idx);
+            }
+        }
+    }
+
+    /// Find any non-conversation window ID.
+    fn find_non_conversation_window(&self) -> Option<crate::window::WindowId> {
+        for w in self.window_mgr.iter_windows() {
+            if !self.is_conversation_buffer(w.buffer_idx) {
+                return Some(w.id);
+            }
+        }
+        None
     }
 
     /// Open a file without stealing focus from a conversation window.

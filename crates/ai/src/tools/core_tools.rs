@@ -115,7 +115,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         // --- File tools ---
         ToolDefinition {
             name: "file_read".into(),
-            description: "Read a file from disk. Returns contents with line numbers.".into(),
+            description: "Read a file from disk. Returns contents with line numbers. Path supports ~ (home dir). If not found, call audit_configuration for correct paths.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -1061,7 +1061,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         // --- Scheme evaluation ---
         ToolDefinition {
             name: "eval_scheme".into(),
-            description: "Evaluate a Scheme expression in the editor's embedded runtime. Returns the result or error. Use this to call editor primitives, inspect state, or perform computations. Examples: '(+ 3 4)', '(buffer-name)', '(define-key \"normal\" \"g t\" \"cycle-theme\")'.".into(),
+            description: "Evaluate a Scheme expression in the editor's embedded runtime. Returns the result or error. To dispatch editor commands from Scheme use (run-command \"name\") — NOT (command ...). NOTE: Scheme (load) does NOT expand ~ — use absolute paths from audit_configuration. For running editor commands, prefer calling command_<name> tools directly instead of eval_scheme. Examples: '(+ 3 4)', '(buffer-name)', '(run-command \"reload-config\")'.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -1079,7 +1079,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         // --- Configuration audit ---
         ToolDefinition {
             name: "audit_configuration".into(),
-            description: "Audit the editor configuration and return a structured JSON report. Includes AI agent/chat status, LSP servers, DAP adapters, init files, modified options, and actionable issues. Use this to diagnose configuration problems or verify setup.".into(),
+            description: "Audit the editor configuration and return a structured JSON report. Includes AI agent/chat status, LSP servers, DAP adapters, init files (with absolute paths), modified options, prompt tier, and actionable issues. Call FIRST when diagnosing config problems or when you need absolute paths to config files.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),

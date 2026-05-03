@@ -50,9 +50,7 @@ impl Editor {
                 // Switch to it
                 let prev = self.active_buffer_idx();
                 self.alternate_buffer_idx = Some(prev);
-                self.window_mgr.focused_window_mut().buffer_idx = idx;
-                self.window_mgr.focused_window_mut().cursor_row = 0;
-                self.window_mgr.focused_window_mut().cursor_col = 0;
+                self.display_buffer(idx);
             }
             Err(e) => {
                 self.set_status(format!("git: {}", e));
@@ -389,9 +387,7 @@ impl Editor {
         // Switch to it
         let prev = self.active_buffer_idx();
         self.alternate_buffer_idx = Some(prev);
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
-        self.window_mgr.focused_window_mut().cursor_row = 0;
-        self.window_mgr.focused_window_mut().cursor_col = 0;
+        self.display_buffer(idx);
         self.set_mode(crate::Mode::Normal);
 
         use crate::buffer_mode::BufferMode;

@@ -838,6 +838,34 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         }
     }
 
+    // Prompt tier (auto-detected from model)
+    let prompt_tier = crate::context_limits::tier(&model).as_str();
+
+    // Display policy rules
+    let display_policy: std::collections::HashMap<String, String> = [
+        mae_core::BufferKind::Text,
+        mae_core::BufferKind::Diff,
+        mae_core::BufferKind::Help,
+        mae_core::BufferKind::Messages,
+        mae_core::BufferKind::Shell,
+        mae_core::BufferKind::Debug,
+        mae_core::BufferKind::FileTree,
+        mae_core::BufferKind::GitStatus,
+        mae_core::BufferKind::Dashboard,
+        mae_core::BufferKind::Visual,
+        mae_core::BufferKind::Preview,
+        mae_core::BufferKind::Conversation,
+    ]
+    .iter()
+    .map(|kind| {
+        let action = editor.display_policy.action_for(*kind);
+        (
+            format!("{:?}", kind),
+            mae_core::display_policy::action_to_string(&action),
+        )
+    })
+    .collect();
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -848,11 +876,13 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
             "model": model,
             "api_key_set": api_key_set,
             "api_key_source": api_key_source,
+            "prompt_tier": prompt_tier,
         },
         "lsp_servers": lsp_json,
         "dap_adapters": dap_json,
         "init_files": init_files,
         "options_modified": options_modified,
+        "display_policy": display_policy,
         "issues": issues,
     });
 

@@ -209,6 +209,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 41 | Autosave config.toml + idle debounce: `autosave_interval` in config, 5s idle guard | v0.6.0 ✅ |
 | 42 | Diff display syntax highlighting: `diff.added`/`removed`/`hunk`/`header` theme keys, all 8 themes | v0.6.0 ✅ |
 | 43 | File tree sidebar: `SPC f t`, icons, expand/collapse, j/k/Enter/o/R/q, AI `toggle_file_tree` tool | v0.6.0 ✅ |
+| 44 | AI chat scroll tracking: auto-scroll during streaming, scroll-lock on user scroll-up, smooth catch-up on resume | future |
 
 ---
 

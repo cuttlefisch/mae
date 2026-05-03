@@ -119,12 +119,23 @@ impl Editor {
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     if path.is_file() {
-                        // Focus a non-tree window to open the file in it.
+                        // Focus a non-tree, non-conversation window to open the file in.
                         let tree_win_id = self.file_tree_window_id;
+                        let buffers = &self.buffers;
+                        let conv_pair = &self.conversation_pair;
                         let target_win = self
                             .window_mgr
                             .iter_windows()
-                            .find(|w| Some(w.id) != tree_win_id)
+                            .find(|w| {
+                                Some(w.id) != tree_win_id && {
+                                    let bi = w.buffer_idx;
+                                    !(bi < buffers.len()
+                                        && (buffers[bi].kind == crate::BufferKind::Conversation
+                                            || conv_pair
+                                                .as_ref()
+                                                .is_some_and(|p| bi == p.input_buffer_idx)))
+                                }
+                            })
                             .map(|w| w.id);
                         if let Some(win_id) = target_win {
                             self.window_mgr.set_focused(win_id);

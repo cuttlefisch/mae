@@ -1,48 +1,55 @@
 //! Help-buffer tool implementations.
 //!
-//! `help_open` mirrors the human `:help <node>` command: it opens the
-//! *Help* buffer on a KB node so the user can see what the agent is
-//! referencing. Because the human and agent read the same KB, the agent
-//! pointing the user at a help page is a cheap, high-signal UX move.
+//! `help_open` returns help content invisibly for the agent's context
+//! without opening a visible buffer. To show help to the user, suggest
+//! `:help <topic>`.
 
 use mae_core::Editor;
 
-/// Open the *Help* buffer focused on a KB node. If the node id is missing,
-/// the editor falls back to the `index` node and records a status message
-/// — we surface that fallback in the tool result so the agent knows.
+/// Return help content for the agent's context without any window changes.
+/// The agent can read KB content and reason about it, but the user's layout
+/// is never disrupted. To show the user help, suggest `:help <topic>`.
 pub fn execute_help_open(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    let existed = editor.kb.contains(id);
-    editor.open_help_at(id);
-    let view = editor
-        .help_view()
-        .ok_or_else(|| "Failed to open help buffer".to_string())?;
-    let msg = if existed {
-        format!("Opened help buffer on '{}'", view.current)
+    let target = if editor.kb.contains(id) {
+        id.to_string()
     } else {
-        format!(
-            "No KB node '{}' — opened help buffer on '{}' instead",
-            id, view.current
-        )
+        "index".to_string()
     };
-    Ok(msg)
+    let content = editor
+        .kb
+        .get(&target)
+        .map(|node| node.body.clone())
+        .unwrap_or_else(|| "Node not found.".to_string());
+    let header = if editor.kb.contains(id) {
+        format!("Help: {}\n\n", target)
+    } else {
+        format!("No KB node '{}' -- showing 'index' instead.\n\n", id)
+    };
+    Ok(format!(
+        "{}{}\n\n(Returned invisibly. To show the user, suggest `:help {}`)",
+        header, content, target
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mae_core::buffer::BufferKind;
 
     #[test]
-    fn help_open_creates_help_buffer() {
+    fn help_open_returns_content_invisibly() {
         let mut editor = Editor::new();
+        let initial_buf_count = editor.buffers.len();
+        let initial_active = editor.active_buffer_idx();
         let result = execute_help_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
         assert!(result.contains("index"));
-        assert_eq!(editor.active_buffer().kind, BufferKind::Help);
-        assert_eq!(editor.help_view().unwrap().current, "index");
+        assert!(result.contains("Returned invisibly"));
+        // No new buffer created, no window change.
+        assert_eq!(editor.buffers.len(), initial_buf_count);
+        assert_eq!(editor.active_buffer_idx(), initial_active);
     }
 
     #[test]
@@ -51,7 +58,7 @@ mod tests {
         let result =
             execute_help_open(&mut editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
         assert!(result.contains("concept:buffer"));
-        assert_eq!(editor.help_view().unwrap().current, "concept:buffer");
+        assert!(result.contains("Returned invisibly"));
     }
 
     #[test]
@@ -61,7 +68,6 @@ mod tests {
             execute_help_open(&mut editor, &serde_json::json!({"id": "no:such:node"})).unwrap();
         assert!(result.contains("No KB node"));
         assert!(result.contains("index"));
-        assert_eq!(editor.help_view().unwrap().current, "index");
     }
 
     #[test]

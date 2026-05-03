@@ -93,6 +93,11 @@ pub struct AiSection {
     ///   "full"      — everything including quit/force-quit
     /// Env override: MAE_AI_PERMISSIONS (highest precedence).
     pub auto_approve_tier: Option<String>,
+    /// Override the prompt tier for this model: "full" or "compact".
+    /// If unset, auto-detected from the model name via the built-in table.
+    /// Full tier: concise prompt for frontier models (Claude Opus/Sonnet, GPT-4o).
+    /// Compact tier: explicit guardrails for smaller models (DeepSeek, Haiku).
+    pub prompt_tier: Option<String>,
     /// Command to launch for AI agent shell sessions (SPC a a).
     /// Default: "claude"
     pub editor: Option<String>,
@@ -677,6 +682,11 @@ pub fn default_config_template() -> String {
 # Tiers: \"readonly\", \"standard\", \"trusted\" (default), \"full\"\n\
 # Env override: MAE_AI_PERMISSIONS=full\n\
 # auto_approve_tier = \"trusted\"\n\
+\n\
+# Override auto-detected prompt tier: \"full\" or \"compact\".\n\
+# Full: concise prompts for frontier models (Claude Opus/Sonnet, GPT-4o).\n\
+# Compact: explicit guardrails for smaller models (DeepSeek, Haiku).\n\
+# prompt_tier = \"compact\"\n\
 \n\
 # HTTP timeout in seconds. Increase for slow local inference.\n\
 # timeout_secs = 300\n\

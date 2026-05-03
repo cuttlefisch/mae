@@ -211,7 +211,7 @@ impl Editor {
             self.buffers.push(buf);
             self.buffers.len() - 1
         };
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
+        self.display_buffer(idx);
         self.set_status(format!("Changes: {} entries", self.changes.len()));
     }
 }

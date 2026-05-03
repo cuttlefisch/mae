@@ -124,7 +124,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "help_open".into(),
-            description: "Open the *Help* buffer focused on a KB node. The human sees the same content via `:help <node>`. Use this when the user asks about a topic that has a help page — they'll see it in a buffer and can navigate with Tab / Enter / Alt-Left / Alt-Right. Falls back to the `index` node if the id isn't found.".into(),
+            description: "Returns help content for the agent's context without opening a visible buffer. Use this to look up KB documentation for your own reasoning. To show help to the user, suggest they run `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -137,7 +137,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                 )]),
                 required: vec!["id".into()],
             },
-            permission: Some(PermissionTier::Write),
+            permission: Some(PermissionTier::ReadOnly),
         },
         // --- Org tools ---
         ToolDefinition {

@@ -1381,6 +1381,21 @@ fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             "(recent-projects-add! \"~/src/my-project\")",
             "navigation",
         ),
+        // Display policy
+        (
+            "display-buffer-policy",
+            "(display-buffer-policy KIND)",
+            "Query the active display rule for a BufferKind. Returns a string like \"reuse-or-split:vertical:0.5\" or \"avoid-conversation\".",
+            "(display-buffer-policy \"help\")",
+            "configuration",
+        ),
+        (
+            "set-display-rule!",
+            "(set-display-rule! KIND ACTION)",
+            "Override the display policy for a BufferKind. ACTION formats: \"replace-focused\", \"avoid-conversation\", \"hidden\", \"reuse-or-split:vertical:0.5\".",
+            "(set-display-rule! \"help\" \"replace-focused\")",
+            "configuration",
+        ),
     ];
 
     // Variables (injected from editor state before each eval)
@@ -2347,8 +2362,79 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_AI_MODES,
         )
         .with_tags(["ai", "configuration"]),
+        Node::new(
+            "concept:prompt-tiers",
+            "Concept: Prompt Tiers",
+            NodeKind::Concept,
+            CONCEPT_PROMPT_TIERS,
+        )
+        .with_tags(["ai", "configuration"]),
+        Node::new(
+            "concept:display-policy",
+            "Concept: Display Policy",
+            NodeKind::Concept,
+            CONCEPT_DISPLAY_POLICY,
+        )
+        .with_tags(["core", "window", "conversation"]),
     ]
 }
+
+const CONCEPT_PROMPT_TIERS: &str = "\
+## Prompt Tiers\n\n\
+MAE uses tiered system prompts to optimize AI agent behavior for different models.\n\n\
+### Full Tier\n\
+Concise prompt (~25 lines) for frontier models with strong implicit reasoning:\n\
+- Claude Opus, Claude Sonnet, GPT-4o, GPT-4 Turbo, Gemini 2.5 Pro, o1\n\n\
+### Compact Tier\n\
+Explicit guardrails (~70 lines) for smaller/cheaper models:\n\
+- DeepSeek, Claude Haiku, GPT-4o-mini, Gemini Flash, o1-mini\n\
+- Includes: tool preferences, fallback chains, anti-looping rules, common recipes\n\n\
+### Default Assignments\n\
+Unknown models default to **compact** (safe: over-prompting wastes a few tokens; \
+under-prompting wastes millions in looping).\n\n\
+### Override\n\
+Set `[ai] prompt_tier = \"full\"` or `\"compact\"` in `config.toml` to force a tier \
+regardless of model.\n\n\
+### Custom Prompts\n\
+Place `pair-programmer.xml` or `pair-programmer-compact.xml` in:\n\
+- `~/.config/mae/prompts/` (user override)\n\
+- `.mae/prompts/` (project-local override)\n\n\
+See also: [[concept:ai-modes|AI Agent vs Chat]], [[concept:ai-as-peer|AI as Peer]]\n";
+
+const CONCEPT_DISPLAY_POLICY: &str = "\
+## Display Policy\n\n\
+Controls how buffers become visible in windows — the O(1) enum-dispatch replacement \
+for Emacs's 29 `display-buffer-*` functions and regex alist.\n\n\
+### The Problem\n\
+Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-status, \
+file-tree) had zero conversation awareness. If the AI agent called `help_open` while \
+focused on the tiny AI input pane, the help buffer got crammed in and the conversation \
+layout was destroyed.\n\n\
+### The 4 Actions (vs Emacs's 29)\n\
+- **ReplaceFocused** — replace the focused window, but fall through to AvoidConversation \
+if focused on a conversation buffer (git-status, dashboard)\n\
+- **AvoidConversation** — route via `switch_to_buffer_non_conversation` which has a \
+3-step strategy protecting conversation pairs (text, diff)\n\
+- **ReuseOrSplit** — reuse an existing window of the same BufferKind, or create a split \
+with the given direction and ratio (help → 50% vsplit, messages → 30% hsplit)\n\
+- **Hidden** — buffer exists for programmatic access only, never shown (conversation — \
+managed by `open_conversation_buffer`)\n\n\
+### Default Rules\n\
+| Kind        | Action               | Rationale                   |\n\
+| Text        | AvoidConversation    | Normal files never invade   |\n\
+| Help        | ReuseOrSplit V 50%   | Reuse help window or vsplit |\n\
+| Messages    | ReuseOrSplit H 30%   | Bottom 30%, reuse if open   |\n\
+| Debug       | ReuseOrSplit H 40%   | Bottom 40%                  |\n\
+| GitStatus   | ReplaceFocused       | Full window (Magit style)   |\n\
+| Conversation| Hidden               | Managed internally          |\n\n\
+### Customization\n\
+From init.scm: `(set-display-rule! \"help\" \"reuse-or-split:vertical:0.5\")`\n\
+Inspect: `(display-buffer-policy \"help\")` or `SPC h D` ([[cmd:describe-display-policy]])\n\n\
+### Emacs Comparison\n\
+Emacs: `display-buffer-alist` (29 action functions, regex matching, order-dependent). \
+Doom: `set-popup-rules!` (simpler but still regex). MAE: enum dispatch by BufferKind — \
+O(1), no order bugs, no regex.\n\n\
+See also: [[concept:buffer]], [[concept:window]], [[concept:buffer-mode]]\n";
 
 const INDEX_BODY: &str = "Welcome to MAE's built-in help. This knowledge base is the same data \
 surface the AI agent queries via its `kb_*` tools — you and the AI read the same pages.
@@ -2387,7 +2473,9 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:package-system|Package System]] — require/provide for Scheme extensions\n\
 - [[concept:option-registry|Option Registry]] — single source of truth for editor settings\n\
 - [[concept:scheme-api|Scheme API]] — 40+ functions for buffer/window/command/keymap access\n\
-- [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface
+- [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface\n\
+- [[concept:prompt-tiers|Prompt Tiers]] — model-aware prompt selection (full vs compact)\n\
+- [[concept:display-policy|Display Policy]] — how buffers are placed in windows (4 actions, O(1) dispatch)
 
 ## Reference
 - [[key:normal-mode|Normal-mode keys]]
@@ -2416,7 +2504,10 @@ state, and either a rope (for text) or a structured payload (for conversations, 
 ## What buffers do NOT own\n\
 Cursor position lives on [[concept:window|Window]], not on the buffer. Two windows can \
 view the same buffer at different points — the design is deliberately Emacs-shaped here.\n\n\
-See also: [[concept:window]], [[concept:command]], [[cmd:list-buffers]]\n";
+## Display Policy\n\
+How a buffer becomes visible is governed by the [[concept:display-policy|Display Policy]], \
+which maps each BufferKind to a DisplayAction (replace, avoid conversation, reuse/split, hidden).\n\n\
+See also: [[concept:window]], [[concept:command]], [[cmd:list-buffers]], [[concept:display-policy]]\n";
 
 const CONCEPT_WINDOW: &str =
     "A **window** is a rectangular view onto a [[concept:buffer|buffer]]. \

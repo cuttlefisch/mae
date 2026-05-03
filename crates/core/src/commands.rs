@@ -779,7 +779,10 @@ impl CommandRegistry {
             "debug-mode",
             "Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D)",
         );
-        reg.register_builtin("reload-config", "Reload config.toml and init.scm");
+        reg.register_builtin(
+            "reload-config",
+            "Reload config.toml and re-evaluate init.scm",
+        );
         reg.register_builtin(
             "describe-option",
             "Show documentation for an editor option (SPC h o)",
@@ -787,6 +790,10 @@ impl CommandRegistry {
         reg.register_builtin(
             "describe-configuration",
             "Show a configuration health report (AI, LSP, DAP status)",
+        );
+        reg.register_builtin(
+            "describe-display-policy",
+            "Show the active display policy rules (how buffers are placed in windows)",
         );
         reg.register_builtin(
             "set-save",

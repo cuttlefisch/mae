@@ -79,6 +79,8 @@ struct SharedState {
     pending_requires: Vec<String>,
     /// Pending `(autoload CMD FEATURE DOC)` registrations.
     pending_autoloads: Vec<(String, String, String)>,
+    /// Pending display-rule overrides: (kind_name, action_string).
+    pending_display_rules: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +281,33 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("set-local-option!", move |key: String, value: String| {
             s.lock().unwrap().pending_local_options.push((key, value));
+            SteelVal::Void
+        });
+
+        // (display-buffer-policy KIND) — query active display rule for a BufferKind
+        {
+            // This is read-only from Scheme — just needs editor access at apply time.
+            // We return a static value by having the engine store nothing; the real
+            // query happens in apply_to_editor. For now, expose a simple version
+            // that doesn't need editor state.
+            engine.register_fn("display-buffer-policy", move |kind: String| -> SteelVal {
+                use mae_core::display_policy::{
+                    action_to_string, parse_buffer_kind, DisplayPolicy,
+                };
+                match parse_buffer_kind(&kind) {
+                    Some(bk) => {
+                        let policy = DisplayPolicy::default();
+                        SteelVal::StringV(action_to_string(&policy.action_for(bk)).into())
+                    }
+                    None => SteelVal::StringV(format!("unknown kind: {}", kind).into()),
+                }
+            });
+        }
+
+        // (set-display-rule! KIND ACTION) — override display policy from init.scm
+        let s = shared.clone();
+        engine.register_fn("set-display-rule!", move |kind: String, action: String| {
+            s.lock().unwrap().pending_display_rules.push((kind, action));
             SteelVal::Void
         });
 
@@ -992,6 +1021,24 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply display-rule overrides from (set-display-rule!)
+        for (kind_str, action_str) in state.pending_display_rules.drain(..) {
+            use mae_core::display_policy::{parse_action, parse_buffer_kind};
+            match (parse_buffer_kind(&kind_str), parse_action(&action_str)) {
+                (Some(kind), Some(action)) => {
+                    editor.display_policy.set_override(kind, action);
+                    debug!(kind = %kind_str, action = %action_str, "display rule override applied");
+                }
+                _ => {
+                    warn!(kind = %kind_str, action = %action_str, "invalid set-display-rule! args");
+                    editor.set_status(format!(
+                        "Invalid display rule: kind='{}', action='{}'",
+                        kind_str, action_str
+                    ));
+                }
+            }
+        }
+
         // Apply editor options via the OptionRegistry (single source of truth)
         for (key, value) in state.pending_options.drain(..) {
             match editor.set_option(&key, &value) {
@@ -1094,7 +1141,7 @@ impl SchemeRuntime {
             if idx < editor.buffers.len() {
                 let prev = editor.active_buffer_idx();
                 editor.alternate_buffer_idx = Some(prev);
-                editor.window_mgr.focused_window_mut().buffer_idx = idx;
+                editor.display_buffer(idx);
             }
         }
 
@@ -1403,36 +1450,54 @@ mod tests {
     use super::*;
     use mae_core::{parse_key_seq, CommandSource, Editor};
 
+    /// Isolate Steel's filesystem state so tests don't race with other
+    /// test binaries accessing `~/.steel/cached-modules/`.
+    fn isolate_steel_home() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let dir =
+                std::env::temp_dir().join(format!("steel-scheme-test-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            std::env::set_var("STEEL_HOME", &dir);
+        });
+    }
+
+    fn new_runtime() -> SchemeRuntime {
+        isolate_steel_home();
+        SchemeRuntime::new().unwrap()
+    }
+
     #[test]
     fn new_runtime_creates_successfully() {
+        isolate_steel_home();
         let rt = SchemeRuntime::new();
         assert!(rt.is_ok());
     }
 
     #[test]
     fn eval_arithmetic() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval("(+ 1 2 3)").unwrap();
         assert_eq!(result, "6");
     }
 
     #[test]
     fn eval_string_ops() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval(r#"(string-append "hello" " " "world")"#).unwrap();
         assert_eq!(result, "hello world");
     }
 
     #[test]
     fn eval_boolean() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         assert_eq!(rt.eval("(= 1 1)").unwrap(), "#t");
         assert_eq!(rt.eval("(= 1 2)").unwrap(), "#f");
     }
 
     #[test]
     fn define_key_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(define-key "normal" "Q" "quit")"#).unwrap();
@@ -1445,7 +1510,7 @@ mod tests {
 
     #[test]
     fn define_command_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(define-command "greet" "Say hello" "greet-fn")"#)
@@ -1459,7 +1524,7 @@ mod tests {
 
     #[test]
     fn set_status_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-status "Hello from Scheme!")"#).unwrap();
@@ -1470,7 +1535,7 @@ mod tests {
 
     #[test]
     fn inject_and_read_editor_state() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         // Insert some text so we have state to read
@@ -1498,7 +1563,7 @@ mod tests {
         let path = dir.join("test.scm");
         std::fs::write(&path, r#"(define-key "normal" "Q" "my-custom-save")"#).unwrap();
 
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.load_file(&path).unwrap();
@@ -1515,7 +1580,7 @@ mod tests {
 
     #[test]
     fn define_key_spaced_sequence_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(define-key "normal" "SPC t t" "my-custom-cmd")"#)
@@ -1532,14 +1597,14 @@ mod tests {
 
     #[test]
     fn eval_error_returns_scheme_error() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval("(undefined-function)");
         assert!(result.is_err());
     }
 
     #[test]
     fn eval_error_recorded_in_history() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let _ = rt.eval("(undefined-function)");
         let errors = rt.last_errors();
         assert_eq!(errors.len(), 1);
@@ -1550,7 +1615,7 @@ mod tests {
 
     #[test]
     fn set_theme_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-theme "gruvbox-dark")"#).unwrap();
@@ -1561,7 +1626,7 @@ mod tests {
 
     #[test]
     fn list_user_commands_after_define() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         rt.eval(r#"(define-command "greet" "Say hello" "greet-fn")"#)
             .unwrap();
         let cmds = rt.list_user_commands();
@@ -1571,7 +1636,7 @@ mod tests {
 
     #[test]
     fn list_keybindings_after_define() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         rt.eval(r#"(define-key "normal" "Q" "quit")"#).unwrap();
         let bindings = rt.list_keybindings();
         assert_eq!(bindings.len(), 1);
@@ -1580,7 +1645,7 @@ mod tests {
 
     #[test]
     fn define_keymap_creates_with_parent() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(define-keymap "python" "normal")"#).unwrap();
@@ -1599,7 +1664,7 @@ mod tests {
 
     #[test]
     fn eval_for_debug_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval_for_debug("(+ 10 20)").unwrap();
         assert_eq!(result, "30");
     }
@@ -1608,7 +1673,7 @@ mod tests {
 
     #[test]
     fn buffer_text_global_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         {
             let win = editor.window_mgr.focused_window_mut();
@@ -1623,7 +1688,7 @@ mod tests {
 
     #[test]
     fn mode_global_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         assert_eq!(rt.eval("*mode*").unwrap(), "normal");
@@ -1631,7 +1696,7 @@ mod tests {
 
     #[test]
     fn buffer_line_function_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         {
             let win = editor.window_mgr.focused_window_mut();
@@ -1651,7 +1716,7 @@ mod tests {
 
     #[test]
     fn buffer_insert_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         rt.eval(r#"(buffer-insert "hello")"#).unwrap();
         rt.apply_to_editor(&mut editor);
@@ -1660,7 +1725,7 @@ mod tests {
 
     #[test]
     fn cursor_goto_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         {
             let win = editor.window_mgr.focused_window_mut();
@@ -1677,7 +1742,7 @@ mod tests {
 
     #[test]
     fn run_command_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         // search-forward-start switches to Search mode.
         rt.eval(r#"(run-command "search-forward-start")"#).unwrap();
@@ -1687,7 +1752,7 @@ mod tests {
 
     #[test]
     fn eval_for_repl_formats_output() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         let output = rt.eval_for_repl("(+ 1 2)", &mut editor);
         assert!(output.contains("> (+ 1 2)"));
@@ -1696,7 +1761,7 @@ mod tests {
 
     #[test]
     fn eval_for_repl_formats_error() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         let output = rt.eval_for_repl("(undefined-fn)", &mut editor);
         assert!(output.contains("> (undefined-fn)"));
@@ -1705,7 +1770,7 @@ mod tests {
 
     #[test]
     fn multiple_define_keys_in_sequence() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(
@@ -1737,7 +1802,7 @@ mod tests {
 
     #[test]
     fn add_hook_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(add-hook! "before-save" "my-save-fn")"#)
@@ -1749,7 +1814,7 @@ mod tests {
 
     #[test]
     fn remove_hook_from_scheme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(add-hook! "after-save" "fn-a")"#).unwrap();
@@ -1764,7 +1829,7 @@ mod tests {
 
     #[test]
     fn add_hook_invalid_name_warns() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(add-hook! "nonexistent" "fn")"#).unwrap();
@@ -1778,7 +1843,7 @@ mod tests {
 
     #[test]
     fn set_option_line_numbers() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         assert!(editor.show_line_numbers); // default true
 
@@ -1789,7 +1854,7 @@ mod tests {
 
     #[test]
     fn set_option_word_wrap() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         assert!(!editor.word_wrap); // default false
 
@@ -1800,7 +1865,7 @@ mod tests {
 
     #[test]
     fn set_option_relative_line_numbers() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-option! "relative-line-numbers" "on")"#)
@@ -1811,7 +1876,7 @@ mod tests {
 
     #[test]
     fn set_option_theme() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-option! "theme" "gruvbox-dark")"#).unwrap();
@@ -1821,7 +1886,7 @@ mod tests {
 
     #[test]
     fn set_option_show_break() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-option! "show-break" ">> ")"#).unwrap();
@@ -1831,7 +1896,7 @@ mod tests {
 
     #[test]
     fn set_option_unknown_warns() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
 
         rt.eval(r#"(set-option! "nonexistent" "value")"#).unwrap();
@@ -1843,7 +1908,7 @@ mod tests {
 
     #[test]
     fn test_shell_cwd_returns_cached_value() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.shell_cwds.insert(1, "/home/user".to_string());
         rt.inject_editor_state(&editor);
@@ -1853,7 +1918,7 @@ mod tests {
 
     #[test]
     fn test_shell_read_output_returns_viewport() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor
             .shell_viewports
@@ -1866,7 +1931,7 @@ mod tests {
 
     #[test]
     fn test_shell_list_with_buffers() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor
             .buffers
@@ -1880,7 +1945,7 @@ mod tests {
     #[test]
     fn test_recent_files_and_projects() {
         let mut editor = Editor::new();
-        let mut runtime = SchemeRuntime::new().unwrap();
+        let mut runtime = new_runtime();
 
         // Initially empty
         assert_eq!(editor.recent_files.len(), 0);
@@ -1914,7 +1979,7 @@ mod tests {
 
     #[test]
     fn buffer_text_range_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.buffers[0].insert_text_at(0, "Hello, World!");
         rt.inject_editor_state(&editor);
@@ -1924,7 +1989,7 @@ mod tests {
 
     #[test]
     fn buffer_text_range_out_of_bounds() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.buffers[0].insert_text_at(0, "Hi");
         rt.inject_editor_state(&editor);
@@ -1934,7 +1999,7 @@ mod tests {
 
     #[test]
     fn buffer_delete_range_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.buffers[0].insert_text_at(0, "Hello, World!");
         rt.eval("(buffer-delete-range 5 13)").unwrap();
@@ -1944,7 +2009,7 @@ mod tests {
 
     #[test]
     fn buffer_replace_range_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.buffers[0].insert_text_at(0, "Hello, World!");
         rt.eval(r#"(buffer-replace-range 7 12 "Scheme")"#).unwrap();
@@ -1954,7 +2019,7 @@ mod tests {
 
     #[test]
     fn buffer_undo_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         {
             let win = editor.window_mgr.focused_window_mut();
@@ -1968,7 +2033,7 @@ mod tests {
 
     #[test]
     fn buffer_redo_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         {
             let win = editor.window_mgr.focused_window_mut();
@@ -1988,7 +2053,7 @@ mod tests {
 
     #[test]
     fn buffer_list_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("(length *buffer-list*)").unwrap();
@@ -1997,7 +2062,7 @@ mod tests {
 
     #[test]
     fn get_buffer_by_name_found() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(get-buffer-by-name "[scratch]")"#).unwrap();
@@ -2006,7 +2071,7 @@ mod tests {
 
     #[test]
     fn get_buffer_by_name_not_found() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(get-buffer-by-name "nonexistent")"#).unwrap();
@@ -2015,7 +2080,7 @@ mod tests {
 
     #[test]
     fn switch_to_buffer_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         // Add a second buffer manually
         editor.buffers.push(mae_core::Buffer::new());
@@ -2032,7 +2097,7 @@ mod tests {
 
     #[test]
     fn window_count_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("*window-count*").unwrap();
@@ -2041,7 +2106,7 @@ mod tests {
 
     #[test]
     fn window_list_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("(length *window-list*)").unwrap();
@@ -2052,7 +2117,7 @@ mod tests {
 
     #[test]
     fn command_exists_true() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(command-exists? "save")"#).unwrap();
@@ -2061,7 +2126,7 @@ mod tests {
 
     #[test]
     fn command_exists_false() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(command-exists? "nonexistent-cmd")"#).unwrap();
@@ -2070,7 +2135,7 @@ mod tests {
 
     #[test]
     fn command_list_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("(length *command-list*)").unwrap();
@@ -2084,7 +2149,7 @@ mod tests {
 
     #[test]
     fn option_list_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("(length *option-list*)").unwrap();
@@ -2094,7 +2159,7 @@ mod tests {
 
     #[test]
     fn get_option_returns_value() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(get-option "scroll_speed")"#).unwrap();
@@ -2103,7 +2168,7 @@ mod tests {
 
     #[test]
     fn get_option_unknown_returns_false() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(get-option "nonexistent_option")"#).unwrap();
@@ -2114,7 +2179,7 @@ mod tests {
 
     #[test]
     fn keymap_list_available() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval("(length *keymap-list*)").unwrap();
@@ -2128,7 +2193,7 @@ mod tests {
 
     #[test]
     fn keymap_bindings_returns_list() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt.eval(r#"(length (keymap-bindings "normal"))"#).unwrap();
@@ -2138,7 +2203,7 @@ mod tests {
 
     #[test]
     fn keymap_bindings_unknown_returns_empty() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let editor = Editor::new();
         rt.inject_editor_state(&editor);
         let result = rt
@@ -2149,7 +2214,7 @@ mod tests {
 
     #[test]
     fn undefine_key_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         rt.eval(r#"(define-key "normal" "Q" "quit")"#).unwrap();
         rt.apply_to_editor(&mut editor);
@@ -2177,14 +2242,14 @@ mod tests {
 
     #[test]
     fn file_exists_check() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval(r#"(file-exists? "/tmp")"#).unwrap();
         assert_eq!(result, "#t");
     }
 
     #[test]
     fn file_exists_false() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt
             .eval(r#"(file-exists? "/tmp/nonexistent_file_12345")"#)
             .unwrap();
@@ -2193,7 +2258,7 @@ mod tests {
 
     #[test]
     fn read_file_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let test_path = "/tmp/mae_test_read_file.txt";
         std::fs::write(test_path, "test content").unwrap();
         let result = rt.eval(&format!(r#"(read-file "{}")"#, test_path)).unwrap();
@@ -2203,7 +2268,7 @@ mod tests {
 
     #[test]
     fn read_file_missing_returns_error() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt
             .eval(r#"(read-file "/tmp/nonexistent_file_99999")"#)
             .unwrap();
@@ -2212,7 +2277,7 @@ mod tests {
 
     #[test]
     fn list_directory_works() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval(r#"(length (list-directory "/tmp"))"#).unwrap();
         let count: i32 = result.parse().unwrap();
         assert!(count >= 0);
@@ -2233,7 +2298,7 @@ mod tests {
 
     #[test]
     fn buffer_char_count_injected() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         editor.buffers[0].insert_text_at(0, "ABCDE");
         rt.inject_editor_state(&editor);
@@ -2245,7 +2310,7 @@ mod tests {
 
     #[test]
     fn require_feature_not_found() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.require_feature("nonexistent_feature_xyz");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found in load-path"));
@@ -2253,7 +2318,7 @@ mod tests {
 
     #[test]
     fn provide_marks_feature() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         // provide-feature is the Rust-registered canonical name.
         // Steel's built-in `provide` shadows any redefinition, so packages
         // must use `provide-feature`.
@@ -2272,7 +2337,7 @@ mod tests {
 
     #[test]
     fn load_path_default() {
-        let rt = SchemeRuntime::new().unwrap();
+        let rt = new_runtime();
         assert_eq!(rt.load_path.len(), 2);
         let paths: Vec<String> = rt
             .load_path
@@ -2293,7 +2358,7 @@ mod tests {
 
     #[test]
     fn add_to_load_path() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         rt.eval(r#"(add-to-load-path! "/tmp/mae-test-packages")"#)
             .unwrap();
         // Sync from SharedState.
@@ -2307,14 +2372,14 @@ mod tests {
 
     #[test]
     fn featurep_false_initially() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let result = rt.eval(r#"(featurep "unknown-feature")"#).unwrap();
         assert_eq!(result, "#f");
     }
 
     #[test]
     fn require_already_loaded_is_noop() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         // Manually mark as loaded.
         rt.loaded_features.insert("already-loaded".to_string());
         let result = rt.require_feature("already-loaded");
@@ -2327,7 +2392,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("test-pkg.scm"), r#"(provide-feature "test-pkg")"#).unwrap();
 
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         rt.load_path.insert(0, dir.clone());
         let result = rt.require_feature("test-pkg");
         assert!(result.is_ok(), "require_feature failed: {:?}", result);
@@ -2337,7 +2402,7 @@ mod tests {
 
     #[test]
     fn autoload_registers_command() {
-        let mut rt = SchemeRuntime::new().unwrap();
+        let mut rt = new_runtime();
         let mut editor = Editor::new();
         rt.eval(r#"(autoload "my-cmd" "my-pkg" "My autoloaded command")"#)
             .unwrap();

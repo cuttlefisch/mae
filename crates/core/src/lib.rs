@@ -9,6 +9,7 @@ pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
 pub mod diff;
+pub mod display_policy;
 pub mod display_region;
 pub mod editor;
 pub mod event_record;
@@ -71,6 +72,7 @@ pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
+pub use display_policy::{DisplayAction, DisplayPolicy};
 pub use syntax::{
     compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
     detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,

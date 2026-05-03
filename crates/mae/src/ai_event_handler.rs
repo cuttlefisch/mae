@@ -443,10 +443,20 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 t
             };
 
+            let effective_tier = {
+                let (file_cfg, _) = crate::config::load_config();
+                file_cfg
+                    .ai
+                    .prompt_tier
+                    .as_deref()
+                    .map(mae_ai::context_limits::ModelTier::parse_tier)
+                    .unwrap_or_else(|| mae_ai::context_limits::tier(&config.model))
+            };
+
             let sub_session = AgentSession::new(
                 provider,
                 tools,
-                build_system_prompt(&profile),
+                build_system_prompt(&profile, effective_tier),
                 proxy_tx,
                 sub_cmd_rx,
             )
