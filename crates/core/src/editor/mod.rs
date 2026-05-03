@@ -509,6 +509,8 @@ pub struct Editor {
     /// Debug mode: show RSS/CPU/frame time in status bar. Toggled via
     /// `--debug` CLI flag, `:debug-mode`, or `SPC t D`.
     pub debug_mode: bool,
+    /// Debug init mode: verbose init file loading. Set via `--debug-init`.
+    pub debug_init: bool,
     /// Rolling performance statistics (frame time, RSS, CPU).
     pub perf_stats: perf::PerfStats,
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
@@ -778,6 +780,7 @@ impl Editor {
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
+            debug_init: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
@@ -1541,6 +1544,178 @@ impl Editor {
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();
         buf.name = "*Options*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.window_mgr.focused_window_mut().buffer_idx = buf_idx;
+    }
+
+    /// Generate a configuration health report and open it in a read-only buffer.
+    pub fn show_configuration_report(&mut self) {
+        fn find_on_path(cmd: &str) -> bool {
+            std::process::Command::new("which")
+                .arg(cmd)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+        let mut lines = vec![
+            "MAE Configuration Report".to_string(),
+            "========================".to_string(),
+            String::new(),
+            "AI Agent (SPC a a):".to_string(),
+        ];
+        let ai_cmd = if self.ai_editor.is_empty() {
+            "claude"
+        } else {
+            &self.ai_editor
+        };
+        let ai_found = find_on_path(ai_cmd);
+        lines.push(format!(
+            "  Command: {:<20} [{}]",
+            ai_cmd,
+            if ai_found {
+                "found on PATH"
+            } else {
+                "not found"
+            }
+        ));
+        lines.push(String::new());
+
+        // AI Chat
+        lines.push("AI Chat (SPC a p):".to_string());
+        let provider = if self.ai_provider.is_empty() {
+            "(not configured)"
+        } else {
+            &self.ai_provider
+        };
+        lines.push(format!("  Provider: {}", provider));
+        if !self.ai_model.is_empty() {
+            lines.push(format!("  Model: {}", self.ai_model));
+        }
+        // Check API key from env
+        let key_env = match provider {
+            "claude" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            "openai" => std::env::var("OPENAI_API_KEY").ok(),
+            "gemini" => std::env::var("GEMINI_API_KEY").ok(),
+            "deepseek" => std::env::var("DEEPSEEK_API_KEY").ok(),
+            _ => None,
+        };
+        if let Some(key) = &key_env {
+            let masked = if key.len() > 4 {
+                format!("****...{}", &key[key.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            lines.push(format!("  API Key: {}", masked));
+        } else if !self.ai_api_key_command.is_empty() {
+            lines.push(format!(
+                "  API Key: via command `{}`",
+                self.ai_api_key_command
+            ));
+        } else {
+            lines.push("  API Key: [not set]".to_string());
+        }
+        lines.push(String::new());
+
+        // LSP Servers
+        lines.push("LSP Servers:".to_string());
+        for (lang, cmd) in &[
+            ("rust", "rust-analyzer"),
+            ("python", "pyright"),
+            ("typescript", "typescript-language-server"),
+            ("go", "gopls"),
+        ] {
+            let found = find_on_path(cmd);
+            lines.push(format!(
+                "  {:<28} [{}]  {}",
+                cmd,
+                if found {
+                    "found on PATH"
+                } else {
+                    "not found    "
+                },
+                if found { "✓" } else { "✗" }
+            ));
+            let _ = lang; // suppress unused
+        }
+        lines.push(String::new());
+
+        // DAP Adapters
+        lines.push("DAP Adapters:".to_string());
+        for cmd in &["lldb-dap", "debugpy"] {
+            let found = find_on_path(cmd);
+            lines.push(format!(
+                "  {:<28} [{}]  {}",
+                cmd,
+                if found {
+                    "found on PATH"
+                } else {
+                    "not found    "
+                },
+                if found { "✓" } else { "✗" }
+            ));
+        }
+        lines.push(String::new());
+
+        // Init files
+        lines.push("Init Files:".to_string());
+        // Check user init
+        let user_config_dir = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".config"))
+            });
+        if let Some(ref dir) = user_config_dir {
+            let user_init = dir.join("mae").join("init.scm");
+            let exists = user_init.exists();
+            lines.push(format!(
+                "  {:<40} [{}]",
+                user_init.display(),
+                if exists { "found" } else { "not found" }
+            ));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let project_init = cwd.join(".mae").join("init.scm");
+            let exists = project_init.exists();
+            lines.push(format!(
+                "  {:<40} [{}]",
+                project_init.display(),
+                if exists { "found" } else { "not found" }
+            ));
+        }
+        lines.push(String::new());
+
+        // Modified options
+        let mut modified = Vec::new();
+        for def in self.option_registry.list() {
+            if let Some((val, _)) = self.get_option(def.name) {
+                if val != def.default_value {
+                    modified.push(def.name.to_string());
+                }
+            }
+        }
+        if modified.is_empty() {
+            lines.push("Options Modified: (none)".to_string());
+        } else {
+            lines.push(format!(
+                "Options Modified: {} ({})",
+                modified.len(),
+                modified.join(", ")
+            ));
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Configuration*".to_string();
         buf.replace_contents(&content);
         buf.modified = false;
         buf.read_only = true;

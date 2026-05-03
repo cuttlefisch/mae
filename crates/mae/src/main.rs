@@ -84,6 +84,8 @@ fn main() -> io::Result<()> {
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
+        println!("  --check-config --report Print configuration health report and exit");
+        println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
         println!("CONFIG:");
@@ -148,6 +150,7 @@ fn main() -> io::Result<()> {
 
     // --check-config: bootstrap editor + Scheme, load init.scm, exit with status.
     // Useful in CI to validate that init.scm parses and evaluates cleanly.
+    // --check-config --report: also print a configuration health report.
     if args.iter().any(|a| a == "--check-config") {
         let mut editor = Editor::new();
         let (app_config, _) = config::load_config();
@@ -164,8 +167,20 @@ fn main() -> io::Result<()> {
         load_init_file(&mut scheme, &mut editor);
         // Check if init.scm set an error status
         let status = &editor.status_msg;
-        if status.starts_with("Error in") {
+        let has_error = status.starts_with("Error in");
+        if has_error {
             eprintln!("mae: {}", status);
+        }
+
+        if args.iter().any(|a| a == "--report") {
+            // Print configuration health report to stdout
+            match mae_ai::execute_audit_configuration(&editor) {
+                Ok(json) => println!("{}", json),
+                Err(e) => eprintln!("mae: report generation failed: {}", e),
+            }
+        }
+
+        if has_error {
             std::process::exit(1);
         }
         println!("mae: config OK");
@@ -282,6 +297,12 @@ fn main() -> io::Result<()> {
             std::env::set_var("MAE_LOG", "debug");
         }
         info!("debug mode enabled via --debug flag");
+    }
+
+    // --debug-init: verbose init file loading
+    if args.iter().any(|a| a == "--debug-init") {
+        editor.debug_init = true;
+        info!("debug-init mode enabled");
     }
 
     let use_gui = args.iter().any(|a| a == "--gui");

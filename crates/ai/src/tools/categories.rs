@@ -75,7 +75,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "read_messages"
         | "syntax_tree"
         | "switch_project"
-        | "toggle_file_tree" => ToolTier::Core,
+        | "toggle_file_tree"
+        | "audit_configuration" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }

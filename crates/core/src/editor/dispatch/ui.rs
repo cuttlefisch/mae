@@ -279,6 +279,9 @@ impl Editor {
             "describe-option" => {
                 self.show_all_options();
             }
+            "describe-configuration" => {
+                self.show_configuration_report();
+            }
             "reload-config" => {
                 // Reload config.toml — parse as TOML table and apply known editor options.
                 // This lives in mae-core so we can't import the mae crate's Config struct.

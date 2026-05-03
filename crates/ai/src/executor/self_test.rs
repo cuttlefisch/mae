@@ -48,6 +48,11 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "ai_permissions",
                     "args": {},
                     "assert": "Returns text with current auto-approve tier"
+                },
+                {
+                    "tool": "audit_configuration",
+                    "args": {},
+                    "assert": "Returns JSON with ai_agent, ai_chat, lsp_servers, dap_adapters, init_files, options_modified, issues fields"
                 }
             ]
         }));

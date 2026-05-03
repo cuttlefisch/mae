@@ -108,11 +108,12 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 98,
-            "Expected at least 97 AI tools, got {}",
+            tools.len() >= 99,
+            "Expected at least 99 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"audit_configuration"));
         assert!(names.contains(&"web_fetch"));
         assert!(names.contains(&"ai_set_mode"));
         assert!(names.contains(&"ai_set_profile"));

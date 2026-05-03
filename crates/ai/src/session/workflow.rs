@@ -210,8 +210,14 @@ impl WorkflowTracker {
 /// Returns None if the tool doesn't map to a known self-test category.
 pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'static str> {
     match tool_name {
-        "introspect" | "cursor_info" | "editor_state" | "list_buffers" | "window_layout"
-        | "command_list" | "ai_permissions" => Some("introspection"),
+        "introspect"
+        | "cursor_info"
+        | "editor_state"
+        | "list_buffers"
+        | "window_layout"
+        | "command_list"
+        | "ai_permissions"
+        | "audit_configuration" => Some("introspection"),
 
         "create_file" | "buffer_write" | "buffer_read" | "open_file" | "close_buffer"
         | "switch_buffer" | "rename_file" | "file_read" => Some("editing"),

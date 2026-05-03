@@ -578,12 +578,27 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
             continue;
         }
 
+        let debug = editor.debug_init;
+        if debug {
+            editor.message_log.push(
+                mae_core::MessageLevel::Info,
+                "init",
+                format!("Loading {}...", path.display()),
+            );
+        }
         info!(path = %path.display(), "loading init file");
         scheme.inject_editor_state(editor);
         match scheme.load_file(path) {
             Ok(()) => {
                 scheme.apply_to_editor(editor);
                 info!(path = %path.display(), "init file loaded successfully");
+                if debug {
+                    editor.message_log.push(
+                        mae_core::MessageLevel::Info,
+                        "init",
+                        format!("  Loaded {} OK", path.display()),
+                    );
+                }
                 // Fire after-load hook with filename
                 let filename = path
                     .file_name()
@@ -595,6 +610,13 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
             Err(e) => {
                 error!(path = %path.display(), error = %e, "init file load failed");
                 editor.set_status(format!("Error in {}: {}", path.display(), e));
+                if debug {
+                    editor.message_log.push(
+                        mae_core::MessageLevel::Error,
+                        "init",
+                        format!("  ERROR in {}: {}", path.display(), e),
+                    );
+                }
                 // Continue to next layer — errors don't block
             }
         }

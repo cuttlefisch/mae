@@ -785,6 +785,10 @@ impl CommandRegistry {
             "Show documentation for an editor option (SPC h o)",
         );
         reg.register_builtin(
+            "describe-configuration",
+            "Show a configuration health report (AI, LSP, DAP status)",
+        );
+        reg.register_builtin(
             "set-save",
             "Set an option and persist to config.toml (:set-save <key> [value])",
         );
@@ -1196,5 +1200,32 @@ mod tests {
             source: CommandSource::Builtin,
         };
         assert_eq!(cmd.which_key_label(), "Run tests (unit) and report");
+    }
+
+    #[test]
+    fn describe_configuration_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(
+            reg.contains("describe-configuration"),
+            "describe-configuration should be registered"
+        );
+    }
+
+    #[test]
+    fn help_edit_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("help-edit"), "help-edit should be registered");
+    }
+
+    #[test]
+    fn ai_chat_alias_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("ai-chat"), "ai-chat should be registered");
+    }
+
+    #[test]
+    fn debug_init_field_default_false() {
+        let editor = crate::Editor::new();
+        assert!(!editor.debug_init, "debug_init should default to false");
     }
 }

@@ -1076,6 +1076,17 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Configuration audit ---
+        ToolDefinition {
+            name: "audit_configuration".into(),
+            description: "Audit the editor configuration and return a structured JSON report. Includes AI agent/chat status, LSP servers, DAP adapters, init files, modified options, and actionable issues. Use this to diagnose configuration problems or verify setup.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // --- UI ---
         ToolDefinition {
             name: "toggle_file_tree".into(),

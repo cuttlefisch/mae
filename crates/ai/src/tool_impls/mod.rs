@@ -22,13 +22,14 @@ pub use dap::{
     execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_restore_state,
-    execute_editor_save_state, execute_editor_state, execute_event_recording, execute_get_option,
-    execute_mouse_event, execute_org_cycle, execute_org_open_link, execute_org_todo_cycle,
-    execute_read_messages, execute_render_inspect, execute_set_option, execute_shell_scrollback,
-    execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
-    execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
-    execute_visual_buffer_clear, execute_window_layout,
+    execute_audit_configuration, execute_command_list, execute_debug_state,
+    execute_editor_restore_state, execute_editor_save_state, execute_editor_state,
+    execute_event_recording, execute_get_option, execute_mouse_event, execute_org_cycle,
+    execute_org_open_link, execute_org_todo_cycle, execute_read_messages, execute_render_inspect,
+    execute_set_option, execute_shell_scrollback, execute_theme_inspect, execute_trigger_hook,
+    execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
+    execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
+    execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
