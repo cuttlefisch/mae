@@ -1,6 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use mae_core::cursor::CursorOp;
 use mae_core::{Editor, KeyPress};
 use mae_scheme::SchemeRuntime;
+
+/// If multi-cursor is active, replay the given operation at all secondary cursors.
+fn mc_replay(editor: &mut Editor, op: CursorOp) {
+    if !editor.window_mgr.focused_window().cursor_set.is_single() {
+        editor.mc_replay_op(&op);
+    }
+}
 
 pub(super) fn handle_insert_mode(
     editor: &mut Editor,
@@ -57,6 +65,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, ch);
+            mc_replay(editor, CursorOp::InsertChar(ch));
             // Invalidate cached search match offsets (they shift on every edit).
             editor.search_state.matches.clear();
             // Trigger completion after word characters.
@@ -73,6 +82,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, '\n');
+            mc_replay(editor, CursorOp::InsertChar('\n'));
             editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
@@ -81,6 +91,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].insert_char(win, '\n');
+            mc_replay(editor, CursorOp::InsertChar('\n'));
             editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
@@ -90,6 +101,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
+            mc_replay(editor, CursorOp::DeleteBackward);
             editor.search_state.matches.clear();
             editor.lsp_request_completion();
             return;
@@ -98,6 +110,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_char_backward(win);
+            mc_replay(editor, CursorOp::DeleteBackward);
             editor.search_state.matches.clear();
             editor.lsp_request_completion();
             return;
@@ -120,6 +133,7 @@ pub(super) fn handle_insert_mode(
             let idx = editor.active_buffer_idx();
             let win = editor.window_mgr.focused_window_mut();
             editor.buffers[idx].delete_word_backward(win);
+            mc_replay(editor, CursorOp::DeleteWord);
             editor.search_state.matches.clear();
             editor.lsp_dismiss_completion();
             return;
@@ -154,6 +168,7 @@ pub(super) fn handle_insert_mode(
                 let idx = editor.active_buffer_idx();
                 let win = editor.window_mgr.focused_window_mut();
                 editor.buffers[idx].delete_char_forward(win);
+                mc_replay(editor, CursorOp::DeleteForward);
                 editor.search_state.matches.clear();
             } else {
                 editor.dispatch_builtin("dedent-line");

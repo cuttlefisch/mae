@@ -574,4 +574,146 @@ fn idle_work_clears_pending_reparses() {
     assert!(editor.syntax_reparse_pending.is_empty());
 }
 
+// --- Multi-click tests ---
+
+#[test]
+fn click_counting_increments_to_3_then_resets() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'H');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'i');
+
+    // First click
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 1);
+
+    // Second click same position
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 2);
+
+    // Third click
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 3);
+
+    // Fourth click wraps to 1
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 1);
+}
+
+#[test]
+fn double_click_selects_word() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world");
+    editor.show_line_numbers = false; // Simplify gutter
+
+    // First click positions cursor
+    editor.handle_mouse_click(1, 0, crate::input::MouseButton::Left);
+    // Second click selects word
+    editor.handle_mouse_click(1, 0, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
+        "double-click should enter visual char mode, got {:?}",
+        editor.mode
+    );
+}
+
+#[test]
+fn triple_click_selects_line() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world\nsecond line");
+    editor.show_line_numbers = false;
+
+    // Three clicks
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Line)),
+        "triple-click should enter visual line mode, got {:?}",
+        editor.mode
+    );
+}
+
+#[test]
+fn shift_click_starts_selection() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world here");
+    editor.show_line_numbers = false;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 0;
+
+    // Shift-click at col 5
+    editor.handle_mouse_click_shift(1, 5, crate::input::MouseButton::Left, true);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
+        "shift-click should enter visual char mode"
+    );
+    assert_eq!(editor.visual_anchor_row, 0);
+    assert_eq!(editor.visual_anchor_col, 0);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 5);
+}
+
+#[test]
+fn shift_click_extends_existing_selection() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world here");
+    editor.show_line_numbers = false;
+
+    // Enter visual mode manually
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 2;
+    editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_col = 5;
+
+    // Shift-click at col 10 — should extend selection
+    editor.handle_mouse_click_shift(1, 10, crate::input::MouseButton::Left, true);
+
+    // Anchor unchanged, cursor moved
+    assert_eq!(editor.visual_anchor_col, 2);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 10);
+}
+
+#[test]
+fn single_click_exits_visual_mode() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world");
+    editor.show_line_numbers = false;
+    editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+
+    editor.handle_mouse_click(1, 3, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Normal),
+        "single click should exit visual mode"
+    );
+}
+
+// --- Double-click edge cases ---
+
+#[test]
+fn double_click_empty_line() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello\n\nworld");
+    editor.show_line_numbers = false;
+
+    // Double-click on the empty line (row 1) — should not panic, no word selected.
+    // Screen row 2, col 0 (col 0 is gutter when line_numbers=false, so use 1).
+    editor.handle_mouse_click(2, 0, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(2, 0, crate::input::MouseButton::Left);
+
+    // The key assertion is that this doesn't panic.
+    // With line_numbers=false, col 0 may be gutter-ignored, leaving cursor unchanged.
+    // We just verify no crash and cursor is within valid bounds.
+    let win = editor.window_mgr.focused_window();
+    assert!(win.cursor_row < 3); // within buffer bounds
+}
+
 // --- Debug mode tests ---

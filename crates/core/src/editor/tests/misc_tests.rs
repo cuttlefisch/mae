@@ -949,5 +949,76 @@ fn get_new_options() {
     assert_eq!(editor.get_option("heading_scale_h1").unwrap().0, "1.5");
 }
 
+// --- Edit-link command ---
+
+#[test]
+fn edit_link_opens_mini_dialog() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("[Click here](http://example.com)\n"));
+    editor.buffers[idx].set_file_path(std::path::PathBuf::from("test.md"));
+    editor.buffers[idx].local_options.link_descriptive = Some(true);
+    editor.buffers[idx].recompute_display_regions(true);
+    // Cursor at col 0 (on the link region)
+    editor.dispatch_builtin("edit-link");
+    // Should open a mini-dialog in CommandPalette mode
+    assert_eq!(editor.mode, crate::Mode::CommandPalette);
+    assert!(editor.mini_dialog.is_some());
+    let dialog = editor.mini_dialog.as_ref().unwrap();
+    assert_eq!(dialog.fields.len(), 2);
+    assert_eq!(dialog.fields[0].label, "URL");
+    assert_eq!(dialog.fields[0].value, "http://example.com");
+    assert_eq!(dialog.fields[1].label, "Label");
+    assert_eq!(dialog.fields[1].value, "Click here");
+}
+
+#[test]
+fn edit_link_no_link_shows_status() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("plain text\n"));
+    editor.dispatch_builtin("edit-link");
+    // Should stay in normal mode
+    assert_eq!(editor.mode, crate::Mode::Normal);
+}
+
+// --- Image-aware line_visual_rows ---
+
+#[test]
+fn line_visual_rows_normal_line_unchanged() {
+    let editor = Editor::new();
+    let rows = editor.line_visual_rows(0, 0);
+    assert_eq!(rows, 1);
+}
+
+#[test]
+fn line_visual_rows_accounts_for_image() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("assets");
+    if !assets.join("test-image.png").exists() {
+        return;
+    }
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("![img](test-image.png)\nline 2\n"));
+    editor.buffers[idx].local_options.inline_images = Some(true);
+    editor.buffers[idx].set_file_path(assets.join("test.md"));
+    editor.buffers[idx].recompute_display_regions(true);
+    editor.text_area_width = 80;
+    let rows = editor.line_visual_rows(0, 0);
+    assert!(
+        rows > 1,
+        "image line should consume multiple visual rows, got {}",
+        rows
+    );
+    // Non-image line should still be 1
+    let rows2 = editor.line_visual_rows(0, 1);
+    assert_eq!(rows2, 1);
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

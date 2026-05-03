@@ -332,6 +332,12 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
 // ---------------------------------------------------------------------------
 
 pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize, rows: usize) {
+    // If a mini-dialog is active, render that instead of the fuzzy palette.
+    if let Some(ref dialog) = editor.mini_dialog {
+        render_mini_dialog(canvas, editor, dialog, cols, rows);
+        return;
+    }
+
     let palette = match &editor.command_palette {
         Some(p) => p,
         None => return,
@@ -385,6 +391,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {
         inner.width.saturating_sub(2)
@@ -783,6 +790,91 @@ fn draw_border_titled(
     // Bottom border.
     let bottom = format!("└{}┘", "─".repeat(inner_w));
     canvas.draw_text_at(row + height - 1, col, &bottom, color);
+}
+
+// ---------------------------------------------------------------------------
+// Mini-dialog renderer (edit-link, rename, etc.)
+// ---------------------------------------------------------------------------
+
+fn render_mini_dialog(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    dialog: &mae_core::command_palette::MiniDialogState,
+    cols: usize,
+    rows: usize,
+) {
+    // Smaller dialog box than the full palette.
+    let dialog_width = 50.min(cols.saturating_sub(4));
+    let dialog_height = (4 + dialog.fields.len()).min(rows.saturating_sub(2));
+    let col = cols.saturating_sub(dialog_width) / 2;
+    let row = rows.saturating_sub(dialog_height) / 2;
+
+    let text_fg = theme::ts_fg(editor, "ui.text");
+    let prompt_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selection_bg = theme::ts_bg(editor, "ui.selection");
+    let border_fg = theme::ts_fg(editor, "ui.window.border.active");
+    let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(row, col, dialog_width, dialog_height, bg);
+    let title = format!(" {} ", dialog.title());
+    draw_border_titled(
+        canvas,
+        row,
+        col,
+        dialog_width,
+        dialog_height,
+        border_fg,
+        &title,
+    );
+
+    let inner_col = col + 2;
+    let inner_width = dialog_width.saturating_sub(4);
+
+    for (i, field) in dialog.fields.iter().enumerate() {
+        let field_row = row + 1 + i;
+        let is_active = i == dialog.active_field;
+
+        if is_active {
+            if let Some(bg) = selection_bg {
+                canvas.draw_rect_fill(field_row, col + 1, dialog_width - 2, 1, bg);
+            }
+        }
+
+        let label = format!("{}: ", field.label);
+        canvas.draw_text_at(field_row, inner_col, &label, prompt_fg);
+
+        let value_col = inner_col + label.len();
+        let max_value_len = inner_width.saturating_sub(label.len());
+        let display_value = if field.value.is_empty() {
+            &field.placeholder
+        } else {
+            &field.value
+        };
+        let fg = if field.value.is_empty() {
+            // Dim placeholder
+            theme::ts_fg(editor, "ui.popup.text")
+        } else {
+            text_fg
+        };
+        let truncated: String = display_value.chars().take(max_value_len).collect();
+        canvas.draw_text_at(field_row, value_col, &truncated, fg);
+
+        // Draw cursor for active field
+        if is_active && !field.value.is_empty() {
+            let cursor_col = value_col + field.value.len().min(max_value_len);
+            canvas.draw_text_at(field_row, cursor_col, "│", text_fg);
+        } else if is_active {
+            canvas.draw_text_at(field_row, value_col, "│", text_fg);
+        }
+    }
+
+    // Footer hint
+    let footer_row = row + 1 + dialog.fields.len();
+    if footer_row < row + dialog_height - 1 {
+        let hint = "Tab: next  Enter: apply  Esc: cancel";
+        let hint_col = inner_col;
+        canvas.draw_text_at(footer_row, hint_col, hint, prompt_fg);
+    }
 }
 
 #[cfg(test)]

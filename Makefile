@@ -116,6 +116,15 @@ test:
 check:
 	$(CARGO) check $(FEAT_FLAG)
 
+## verify: check + test + GUI check — single command for development validation
+verify:
+	@echo "=== Check (workspace) ==="
+	$(CARGO) check --workspace --exclude mae-gui
+	@echo "=== Check (GUI) ==="
+	$(CARGO) check --package mae-gui
+	@echo "=== Test ==="
+	$(CARGO) test --workspace --exclude mae-gui 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
+
 ## fmt: format all Rust sources in place
 fmt:
 	$(CARGO) fmt

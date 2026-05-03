@@ -18,7 +18,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
   - `make build-tui` for terminal-only build
   - `make ci` still excludes GUI (skia system deps)
   - `make check-config` validates init.scm + config.toml without launching the editor
-- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`.
+- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`, `scrolling`.
 
 ## Crate Layout
 

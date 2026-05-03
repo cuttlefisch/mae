@@ -102,12 +102,12 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
     // Find a window showing this buffer to get a cursor position.
     // If multiple windows show it, we use the first one.
     // If no window shows it (unlikely for active/target), we default to (0,0).
-    let (row, col) = editor
+    let (row, col, scroll_offset) = editor
         .window_mgr
         .iter_windows()
         .find(|w| w.buffer_idx == buf_idx)
-        .map(|w| (w.cursor_row, w.cursor_col))
-        .unwrap_or((0, 0));
+        .map(|w| (w.cursor_row, w.cursor_col, w.scroll_offset))
+        .unwrap_or((0, 0, 0));
 
     let info = serde_json::json!({
         "buffer_name": buf.name,
@@ -116,6 +116,8 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
         "line_count": buf.line_count(),
         "modified": buf.modified,
         "mode": format!("{:?}", editor.mode),
+        "scroll_offset": scroll_offset,
+        "viewport_height": editor.viewport_height,
     });
     Ok(info.to_string())
 }

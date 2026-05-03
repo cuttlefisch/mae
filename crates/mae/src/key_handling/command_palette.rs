@@ -9,6 +9,12 @@ pub(super) fn handle_command_palette_mode(
     scheme: &mut SchemeRuntime,
     key: KeyEvent,
 ) {
+    // Redirect to mini-dialog handler if active.
+    if editor.mini_dialog.is_some() {
+        handle_mini_dialog(editor, key);
+        return;
+    }
+
     // Pull the selected command name out *before* doing anything that
     // might need a mutable borrow on `editor` (like closing the palette
     // and dispatching). This avoids borrow-checker friction.
@@ -86,6 +92,9 @@ pub(super) fn handle_command_palette_mode(
                         editor.set_status("No project selected");
                     }
                 }
+                (_, PalettePurpose::MiniDialog) => {
+                    // Handled by handle_mini_dialog — should not reach here
+                }
                 (None, _) => editor.set_status("No command selected"),
             }
         }
@@ -117,6 +126,89 @@ pub(super) fn handle_command_palette_mode(
         KeyCode::Char(ch) => {
             palette.query.push(ch);
             palette.update_filter();
+        }
+        _ => {}
+    }
+}
+
+/// Handle keyboard input for a mini-dialog (edit-link, etc.).
+fn handle_mini_dialog(editor: &mut Editor, key: KeyEvent) {
+    use mae_core::command_palette::{MiniDialogContext, MiniDialogKind};
+
+    match key.code {
+        KeyCode::Esc => {
+            editor.mini_dialog = None;
+            editor.command_palette = None;
+            editor.set_mode(Mode::Normal);
+            editor.set_status("Cancelled");
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut dialog) = editor.mini_dialog {
+                dialog.active_field = (dialog.active_field + 1) % dialog.fields.len();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut dialog) = editor.mini_dialog {
+                if dialog.active_field == 0 {
+                    dialog.active_field = dialog.fields.len() - 1;
+                } else {
+                    dialog.active_field -= 1;
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut dialog) = editor.mini_dialog {
+                let field = &mut dialog.fields[dialog.active_field];
+                field.value.pop();
+            }
+        }
+        KeyCode::Enter => {
+            // Apply the dialog result
+            let dialog = match editor.mini_dialog.take() {
+                Some(d) => d,
+                None => return,
+            };
+            editor.command_palette = None;
+            editor.set_mode(Mode::Normal);
+
+            match (&dialog.kind, &dialog.context) {
+                (
+                    MiniDialogKind::EditLink,
+                    MiniDialogContext::LinkEdit {
+                        buf_idx,
+                        byte_start,
+                        byte_end,
+                        is_org,
+                    },
+                ) => {
+                    let url = &dialog.fields[0].value;
+                    let label = &dialog.fields[1].value;
+                    let new_text = if *is_org {
+                        mae_core::display_region::build_org_link(
+                            url,
+                            if label.is_empty() { None } else { Some(label) },
+                        )
+                    } else {
+                        mae_core::display_region::build_md_link(url, label)
+                    };
+                    let buf_idx = *buf_idx;
+                    let byte_start = *byte_start;
+                    let byte_end = *byte_end;
+                    if buf_idx < editor.buffers.len() {
+                        let buf = &mut editor.buffers[buf_idx];
+                        let start_char = buf.rope().byte_to_char(byte_start);
+                        let end_char = buf.rope().byte_to_char(byte_end);
+                        buf.delete_range(start_char, end_char);
+                        buf.insert_text_at(start_char, &new_text);
+                        editor.set_status("Link updated");
+                    }
+                }
+            }
+        }
+        KeyCode::Char(ch) => {
+            if let Some(ref mut dialog) = editor.mini_dialog {
+                dialog.fields[dialog.active_field].value.push(ch);
+            }
         }
         _ => {}
     }

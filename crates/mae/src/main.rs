@@ -1008,6 +1008,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     _ => {}
                 }
 
+                // Bare modifier keys don't dispatch commands — skip dirty/frame.
+                if matches!(
+                    &event.logical_key,
+                    WinitKey::Named(
+                        NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super
+                    )
+                ) {
+                    return;
+                }
+
                 // Only process non-release events for actual key dispatch.
                 if event.state != winit::event::ElementState::Pressed {
                     return;
@@ -1139,16 +1149,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                                 self.editor.set_cursor_position(buf_row, char_col);
                                 self.dirty = true;
                             } else {
-                                self.editor.handle_mouse_click(
+                                self.editor.handle_mouse_click_shift(
                                     row as usize,
                                     col as usize,
                                     mae_button,
+                                    self.shift_held,
                                 );
                                 self.dirty = true;
                             }
                         } else {
-                            self.editor
-                                .handle_mouse_click(row as usize, col as usize, mae_button);
+                            self.editor.handle_mouse_click_shift(
+                                row as usize,
+                                col as usize,
+                                mae_button,
+                                self.shift_held,
+                            );
                             self.dirty = true;
                         }
                     }
@@ -1284,6 +1299,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.dirty = true;
         }
 
+        // Push real cell dimensions so image_extra_rows() matches GUI layout.
+        let (cw, ch) = self.renderer.cell_dimensions();
+        self.editor.gui_cell_width = cw;
+        self.editor.gui_cell_height = ch;
+
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
         if let Ok((w, h)) = self.renderer.size() {
@@ -1327,23 +1347,28 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
                 let scroll = self.editor.window_mgr.focused_window().scroll_offset;
                 let so = self.editor.scrolloff;
-                let range_start = scroll.min(cursor_row);
+                // Extend range backward to cover ensure_scroll_wrapped backward walk
+                let range_start = scroll.min(cursor_row).saturating_sub(vh);
                 let range_end = (scroll.max(cursor_row) + vh + 2)
                     .min(self.editor.buffers[buf_idx].display_line_count());
                 let row_cache: Vec<(usize, usize)> = (range_start..range_end)
                     .map(|l| (l, self.editor.line_visual_rows(buf_idx, l)))
                     .collect();
 
-                self.editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll_wrapped_with_margin(vh, so, |line| {
+                let line_count = self.editor.buffers[buf_idx].display_line_count();
+                let win = self.editor.window_mgr.focused_window_mut();
+                if win.scroll_locked && win.cursor_row == win.scroll_locked_cursor {
+                    // Cursor hasn't moved since scroll command; keep lock active
+                } else {
+                    win.scroll_locked = false;
+                    win.ensure_scroll_wrapped_with_margin(vh, so, line_count, |line| {
                         row_cache
                             .iter()
                             .find(|(l, _)| *l == line)
                             .map(|(_, r)| *r)
                             .unwrap_or(1)
                     });
+                }
             }
         }
 

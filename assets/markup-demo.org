@@ -80,6 +80,26 @@ print(list(fibonacci(10)))
 - [ ] Beta
 - [ ] Gamma
 
+** Inline Images
+
+Default width (fits to text area):
+
+[[file:test-image.png]]
+
+With explicit width directive:
+
+#+attr_html: :width 200px
+[[file:mae.svg][MAE logo]]
+
+Narrower width:
+
+#+attr_org: :width 100
+[[file:test-image.png]]
+
+Missing image (should show placeholder):
+
+[[file:does-not-exist.png][Missing image]]
+
 ** Timestamps and Properties
 
 Meeting: <2026-05-01 Thu 10:00>

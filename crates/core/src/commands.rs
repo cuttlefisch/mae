@@ -680,6 +680,12 @@ impl CommandRegistry {
         reg.register_builtin("lsp-code-action-dismiss", "Dismiss code action menu");
         reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
         reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
+        reg.register_builtin(
+            "lsp-range-format",
+            "Format visual selection via LSP (SPC c F)",
+        );
+        reg.register_builtin("lsp-rename-apply", "Apply pending rename preview");
+        reg.register_builtin("lsp-rename-abort", "Abort pending rename preview");
         reg.register_builtin("lsp-status", "Show LSP server status buffer (SPC c s)");
         reg.register_builtin(
             "toggle-lsp-diagnostics-inline",
@@ -690,6 +696,21 @@ impl CommandRegistry {
         reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");
         reg.register_builtin("close-all-folds", "Close all folds (zM)");
         reg.register_builtin("open-all-folds", "Open all folds (zR)");
+
+        // Multi-cursor
+        reg.register_builtin("mc-add-cursor-below", "Add cursor below (SPC m j)");
+        reg.register_builtin("mc-add-cursor-above", "Add cursor above (SPC m k)");
+        reg.register_builtin(
+            "mc-add-at-next-word",
+            "Add cursor at next word match (SPC m d)",
+        );
+        reg.register_builtin(
+            "mc-add-all-word",
+            "Add cursors at all word matches (SPC m a)",
+        );
+        reg.register_builtin("mc-skip-next", "Skip current match, find next (SPC m s)");
+        reg.register_builtin("mc-clear", "Remove all secondary cursors (SPC m c)");
+        reg.register_builtin("mc-align", "Align all cursors to primary column (SPC m l)");
 
         // Org-mode
         reg.register_builtin("org-cycle", "Cycle org heading visibility (Tab)");
@@ -704,6 +725,10 @@ impl CommandRegistry {
         reg.register_builtin(
             "open-link-at-cursor",
             "Open URL or file path under cursor (gx)",
+        );
+        reg.register_builtin(
+            "edit-link",
+            "Edit link at cursor — enter insert mode in link region (gl)",
         );
         reg.register_builtin("org-promote", "Promote org heading (M-Left)");
         reg.register_builtin("org-demote", "Demote org heading (M-Right)");
@@ -818,6 +843,18 @@ impl CommandRegistry {
             "Toggle relative line numbers (SPC t r)",
         );
         reg.register_builtin("toggle-word-wrap", "Toggle word wrap (SPC t w)");
+        reg.register_builtin(
+            "toggle-inline-images",
+            "Toggle inline image display in current buffer (SPC t i)",
+        );
+        reg.register_builtin(
+            "toggle-image-at-point",
+            "Collapse/expand the image at the cursor line",
+        );
+        reg.register_builtin(
+            "image-info-at-point",
+            "Show image metadata for the image at cursor (SPC m i)",
+        );
         reg.register_builtin("toggle-scrollbar", "Toggle scrollbar visibility (SPC t s)");
 
         // Git commands (shell-out stubs)
@@ -902,6 +939,10 @@ impl CommandRegistry {
 
         // Shell / terminal emulator
         reg.register_builtin("terminal", "Open a terminal emulator buffer (:terminal)");
+        reg.register_builtin(
+            "terminal-here",
+            "Open terminal in current buffer's file directory (SPC o T)",
+        );
         reg.register_builtin(
             "terminal-reset",
             "Reset/clear the current terminal emulator",

@@ -301,6 +301,60 @@ pub fn strip_markdown_links(text: &str) -> (String, Vec<(usize, usize, String)>)
     (result, link_positions)
 }
 
+/// Check if a file path has an image extension.
+pub fn is_image_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".svg")
+        || lower.ends_with(".bmp")
+        || lower.ends_with(".ico")
+}
+
+/// Parse org `#+attr_html: :width XXXpx` or `#+attr_org: :width XXX` directives.
+/// Returns the width in pixels if found.
+pub fn parse_org_attr_width(line: &str) -> Option<u32> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("#+attr_html:")
+        && !trimmed.starts_with("#+attr_org:")
+        && !trimmed.starts_with("#+ATTR_HTML:")
+        && !trimmed.starts_with("#+ATTR_ORG:")
+    {
+        return None;
+    }
+    // Look for :width followed by a number (optionally with "px" suffix).
+    let lower = trimmed.to_ascii_lowercase();
+    let idx = lower.find(":width")?;
+    let rest = trimmed[idx + 6..].trim_start();
+    let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num_str.parse().ok()
+}
+
+/// Parse markdown image width from `{width=XXX}` attribute or `<!-- width=XXX -->` comment.
+/// The `text` should be the line containing or following a markdown image.
+pub fn parse_md_image_width(text: &str) -> Option<u32> {
+    // Check for {width=XXX} after ![...](...) on the same line.
+    if let Some(idx) = text.find("{width=") {
+        let rest = &text[idx + 7..];
+        let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(w) = num_str.parse() {
+            return Some(w);
+        }
+    }
+    // Check for <!-- width=XXX --> comment.
+    if let Some(idx) = text.find("<!-- width=") {
+        let rest = &text[idx + 11..];
+        let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(w) = num_str.parse() {
+            return Some(w);
+        }
+    }
+    None
+}
+
 fn dedup_overlapping(spans: &mut Vec<LinkSpan>) {
     let mut i = 0;
     while i + 1 < spans.len() {
@@ -476,6 +530,42 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].2, "https://a.com");
         assert_eq!(links[1].2, "https://b.com");
+    }
+
+    // --- Image detection tests ---
+
+    #[test]
+    fn is_image_path_extensions() {
+        assert!(is_image_path("photo.png"));
+        assert!(is_image_path("photo.PNG"));
+        assert!(is_image_path("img.jpg"));
+        assert!(is_image_path("img.jpeg"));
+        assert!(is_image_path("img.webp"));
+        assert!(is_image_path("img.gif"));
+        assert!(is_image_path("img.svg"));
+        assert!(is_image_path("img.bmp"));
+        assert!(!is_image_path("file.txt"));
+        assert!(!is_image_path("file.rs"));
+        assert!(!is_image_path("file.png.bak"));
+    }
+
+    #[test]
+    fn parse_org_attr_width_basic() {
+        assert_eq!(parse_org_attr_width("#+attr_html: :width 600px"), Some(600));
+        assert_eq!(parse_org_attr_width("#+attr_org: :width 400"), Some(400));
+        assert_eq!(parse_org_attr_width("#+ATTR_HTML: :width 800px"), Some(800));
+        assert_eq!(parse_org_attr_width("no attr here"), None);
+        assert_eq!(parse_org_attr_width("#+attr_html: :height 400"), None);
+    }
+
+    #[test]
+    fn parse_md_image_width_basic() {
+        assert_eq!(
+            parse_md_image_width("![alt](img.png){width=500}"),
+            Some(500)
+        );
+        assert_eq!(parse_md_image_width("<!-- width=300 -->"), Some(300));
+        assert_eq!(parse_md_image_width("![alt](img.png)"), None);
     }
 
     #[test]

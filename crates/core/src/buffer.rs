@@ -88,6 +88,7 @@ pub struct BufferLocalOptions {
     pub heading_scale: Option<bool>,
     pub link_descriptive: Option<bool>,
     pub render_markup: Option<bool>,
+    pub inline_images: Option<bool>,
 }
 
 impl BufferLocalOptions {
@@ -116,6 +117,9 @@ impl BufferLocalOptions {
         }
         if self.render_markup.is_none() {
             self.render_markup = defaults.render_markup;
+        }
+        if self.inline_images.is_none() {
+            self.inline_images = defaults.inline_images;
         }
     }
 }
@@ -186,6 +190,8 @@ pub struct Buffer {
     pub display_regions: Vec<crate::display_region::DisplayRegion>,
     /// Generation at which `display_regions` were last computed.
     pub display_regions_gen: u64,
+    /// Set of line indices where images are individually collapsed (Tab toggle).
+    pub collapsed_images: HashSet<usize>,
     /// Cursor byte offset for org-appear reveal. When the cursor is inside a
     /// display region, that region is suppressed so raw text is visible.
     /// Set per-frame from the focused window's cursor position. `None` = no reveal.
@@ -227,22 +233,19 @@ impl Buffer {
             local_options: BufferLocalOptions::default(),
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
+            collapsed_images: HashSet::new(),
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
         }
     }
 
-    /// Recompute display regions for link concealment.
+    /// Recompute display regions for link concealment and inline images.
     /// Called when buffer generation changes or `link_descriptive` toggles.
     pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
         self.display_regions.clear();
         self.display_regions_gen = self.generation;
 
-        if !link_descriptive {
-            return;
-        }
-
-        // Only text buffers have link concealment.
+        // Only text buffers have display regions.
         if self.kind != BufferKind::Text {
             return;
         }
@@ -254,7 +257,24 @@ impl Buffer {
             .and_then(|e| e.to_str());
 
         let source: String = self.rope.chars().collect();
-        self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
+
+        if link_descriptive {
+            self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
+        }
+
+        // Append image regions when inline_images is enabled.
+        if self.local_options.inline_images.unwrap_or(false) {
+            let base_dir = self.file_path.as_ref().and_then(|p| p.parent());
+            let image_regions = crate::display_region::compute_image_regions(
+                &source,
+                ext,
+                base_dir,
+                &self.collapsed_images,
+            );
+            self.display_regions.extend(image_regions);
+            // Re-sort by byte_start so regions stay ordered for rendering.
+            self.display_regions.sort_by_key(|r| r.byte_start);
+        }
     }
 
     /// Create a dashboard buffer (startup splash screen).
@@ -630,6 +650,15 @@ impl Buffer {
         let row = row.min(self.line_count().saturating_sub(1));
         let line_start = self.rope.line_to_char(row);
         line_start + col
+    }
+
+    /// Convert a char offset back to (row, col).
+    pub fn row_col_from_offset(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.rope.len_chars().saturating_sub(1));
+        let row = self.rope.char_to_line(offset);
+        let line_start = self.rope.line_to_char(row);
+        let col = offset - line_start;
+        (row, col)
     }
 
     /// Maximum number of undo entries to retain.
@@ -2020,5 +2049,41 @@ mod tests {
         assert_eq!(opts.link_descriptive, Some(true));
         // Fields None in both stay None
         assert_eq!(opts.word_wrap, None);
+    }
+
+    #[test]
+    fn recompute_display_regions_includes_image_regions() {
+        let mut buf = Buffer::new();
+        buf.local_options.inline_images = Some(true);
+        let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        buf.file_path = Some(assets.join("test.md"));
+        buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(true);
+        let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
+        assert!(has_image, "display_regions should include image regions");
+    }
+
+    #[test]
+    fn recompute_display_regions_no_images_when_disabled() {
+        let mut buf = Buffer::new();
+        buf.local_options.inline_images = Some(false);
+        let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        buf.file_path = Some(assets.join("test.md"));
+        buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(true);
+        let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
+        assert!(!has_image, "no image regions when inline_images disabled");
     }
 }

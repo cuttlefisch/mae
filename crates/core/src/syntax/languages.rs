@@ -103,6 +103,7 @@ impl Language {
                 render_markup: Some(true),
                 link_descriptive: Some(true),
                 word_wrap: Some(true),
+                inline_images: Some(true),
                 ..Default::default()
             },
             Language::Json | Language::Yaml | Language::Toml => crate::buffer::BufferLocalOptions {

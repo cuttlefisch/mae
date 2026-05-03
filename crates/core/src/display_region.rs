@@ -8,7 +8,23 @@
 //! Regions are per-buffer, sorted by `byte_start`, and rebuilt when buffer
 //! generation changes (same invalidation pattern as tree-sitter spans).
 
+use std::path::{Path, PathBuf};
+
+use crate::link_detect::is_image_path;
 use crate::link_detect::{detect_markdown_links, detect_org_links};
+
+/// Parsed image attributes from `#+attr_*` directives or markdown equivalents.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageAttrs {
+    /// Resolved absolute path to the image file.
+    pub path: PathBuf,
+    /// Explicit width from `#+attr_html/:width` or `{width=N}`. None = fit to text area.
+    pub width: Option<u32>,
+    /// Natural pixel dimensions, cached at region creation time.
+    /// `(0, 0)` if the image could not be read.
+    pub natural_width: u32,
+    pub natural_height: u32,
+}
 
 /// A region of buffer text with a display override.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +37,8 @@ pub struct DisplayRegion {
     pub replacement: Option<String>,
     /// Link target for clickable regions (gx navigation).
     pub link_target: Option<String>,
+    /// Image attrs for inline display (GUI renders image, TUI renders placeholder).
+    pub image: Option<ImageAttrs>,
 }
 
 /// Compute display regions for link concealment in a buffer.
@@ -52,6 +70,7 @@ pub fn compute_link_regions(
                 byte_end: link.byte_end,
                 replacement: Some(label.to_string()),
                 link_target: Some(link.target.clone()),
+                image: None,
             });
         }
     }
@@ -64,6 +83,7 @@ pub fn compute_link_regions(
                 byte_end: link.byte_end,
                 replacement: Some(label.to_string()),
                 link_target: Some(link.target.clone()),
+                image: None,
             });
         }
     }
@@ -82,6 +102,177 @@ pub fn compute_link_regions(
     }
 
     regions
+}
+
+/// Compute display regions for image links in a buffer.
+///
+/// Detects markdown `![alt](path)` and org `[[path]]` links where the target is
+/// an image file. Each image link gets a `DisplayRegion` with `image: Some(...)`.
+///
+/// `base_dir`: parent directory of the buffer's file, used to resolve relative paths.
+/// Pass `None` for unsaved buffers (image regions are skipped).
+///
+/// `collapsed_images`: set of line indices where images are individually collapsed.
+pub fn compute_image_regions(
+    text: &str,
+    extension: Option<&str>,
+    base_dir: Option<&Path>,
+    collapsed_images: &std::collections::HashSet<usize>,
+) -> Vec<DisplayRegion> {
+    let base_dir = match base_dir {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+
+    let detect_md = !matches!(extension, Some("org"));
+    let detect_org = !matches!(extension, Some("md"));
+
+    let mut regions = Vec::new();
+
+    // Helper to compute the line number for a byte offset.
+    let line_of_byte = |byte_offset: usize| -> usize {
+        text[..byte_offset].chars().filter(|&c| c == '\n').count()
+    };
+
+    // Helper to get the line text for the line before a byte offset.
+    let prev_line_text = |byte_offset: usize| -> Option<&str> {
+        let line_num = line_of_byte(byte_offset);
+        if line_num == 0 {
+            return None;
+        }
+        text.split('\n').nth(line_num - 1)
+    };
+
+    if detect_md {
+        // Markdown images: ![alt](path) — note the `!` prefix distinguishes from links.
+        let mut i = 0;
+        let bytes = text.as_bytes();
+        while i < bytes.len() {
+            if bytes[i] == b'!' && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                // Find matching ]
+                if let Some(close_bracket) = text[i + 2..].find(']') {
+                    let label_end = i + 2 + close_bracket;
+                    if label_end + 1 < bytes.len() && bytes[label_end + 1] == b'(' {
+                        if let Some(close_paren) = text[label_end + 2..].find(')') {
+                            let url_end = label_end + 2 + close_paren;
+                            let path_str = &text[label_end + 2..url_end];
+                            if is_image_path(path_str) {
+                                let line_num = line_of_byte(i);
+                                if !collapsed_images.contains(&line_num) {
+                                    let resolved = resolve_image_path(path_str, base_dir);
+                                    let width = {
+                                        // Check same line for {width=N} after the image.
+                                        let rest = &text[url_end + 1..];
+                                        let same_line = rest.split('\n').next().unwrap_or("");
+                                        crate::link_detect::parse_md_image_width(same_line).or_else(
+                                            || {
+                                                prev_line_text(i).and_then(
+                                                    crate::link_detect::parse_md_image_width,
+                                                )
+                                            },
+                                        )
+                                    };
+                                    let filename = Path::new(path_str)
+                                        .file_name()
+                                        .map(|f| f.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| path_str.to_string());
+                                    regions.push(DisplayRegion {
+                                        byte_start: i,
+                                        byte_end: url_end + 1,
+                                        replacement: Some(format!("[Image: {}]", filename)),
+                                        link_target: Some(path_str.to_string()),
+                                        image: resolved.map(|p| {
+                                            let (nw, nh) = crate::image_meta::read_image_meta(&p)
+                                                .map(|m| (m.width, m.height))
+                                                .unwrap_or((0, 0));
+                                            ImageAttrs {
+                                                path: p,
+                                                width,
+                                                natural_width: nw,
+                                                natural_height: nh,
+                                            }
+                                        }),
+                                    });
+                                }
+                            }
+                            i = url_end + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    if detect_org {
+        for link in detect_org_links(text) {
+            if is_image_path(&link.target) {
+                let line_num = line_of_byte(link.byte_start);
+                if !collapsed_images.contains(&line_num) {
+                    let resolved = resolve_image_path(&link.target, base_dir);
+                    let width = prev_line_text(link.byte_start)
+                        .and_then(crate::link_detect::parse_org_attr_width);
+                    let filename = Path::new(&link.target)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| link.target.clone());
+                    regions.push(DisplayRegion {
+                        byte_start: link.byte_start,
+                        byte_end: link.byte_end,
+                        replacement: Some(format!("[Image: {}]", filename)),
+                        link_target: Some(link.target.clone()),
+                        image: resolved.map(|p| {
+                            let (nw, nh) = crate::image_meta::read_image_meta(&p)
+                                .map(|m| (m.width, m.height))
+                                .unwrap_or((0, 0));
+                            ImageAttrs {
+                                path: p,
+                                width,
+                                natural_width: nw,
+                                natural_height: nh,
+                            }
+                        }),
+                    });
+                }
+            }
+        }
+    }
+
+    regions.sort_by_key(|r| r.byte_start);
+    regions
+}
+
+/// Resolve an image path relative to a base directory.
+/// Returns `None` if the resolved path doesn't exist.
+fn resolve_image_path(path_str: &str, base_dir: &Path) -> Option<PathBuf> {
+    let path = Path::new(path_str);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else if path_str.starts_with("~/") {
+        dirs_next_path(path_str)
+    } else {
+        // Strip file: or file:// prefix if present (org-mode convention).
+        let clean = path_str
+            .strip_prefix("file://")
+            .or_else(|| path_str.strip_prefix("file:"))
+            .unwrap_or(path_str);
+        base_dir.join(clean)
+    };
+    if resolved.exists() {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
+/// Expand ~/... to home directory.
+fn dirs_next_path(path_str: &str) -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(&path_str[2..])
+    } else {
+        PathBuf::from(path_str)
+    }
 }
 
 /// Apply display regions to a line's characters.
@@ -339,6 +530,56 @@ pub fn region_at_display_col<'a>(
     regions
         .iter()
         .find(|r| rope_byte >= r.byte_start && rope_byte < r.byte_end)
+}
+
+// ---------------------------------------------------------------------------
+// Link syntax parsing for edit-link dialog
+// ---------------------------------------------------------------------------
+
+/// Parse a markdown link `[label](url)` into `(url, label)`.
+pub fn parse_md_link(text: &str) -> Option<(String, String)> {
+    let text = text.trim();
+    if !text.starts_with('[') {
+        return None;
+    }
+    let close_bracket = text.find(']')?;
+    let label = &text[1..close_bracket];
+    let rest = &text[close_bracket + 1..];
+    if !rest.starts_with('(') {
+        return None;
+    }
+    let close_paren = rest.find(')')?;
+    let url = &rest[1..close_paren];
+    Some((url.to_string(), label.to_string()))
+}
+
+/// Parse an org link `[[url][label]]` or `[[url]]` into `(url, Option<label>)`.
+pub fn parse_org_link(text: &str) -> Option<(String, Option<String>)> {
+    let text = text.trim();
+    if !text.starts_with("[[") {
+        return None;
+    }
+    let inner = text.strip_prefix("[[")?.strip_suffix("]]")?;
+    if let Some(sep) = inner.find("][") {
+        let url = &inner[..sep];
+        let label = &inner[sep + 2..];
+        Some((url.to_string(), Some(label.to_string())))
+    } else {
+        Some((inner.to_string(), None))
+    }
+}
+
+/// Reconstruct markdown link syntax.
+pub fn build_md_link(url: &str, label: &str) -> String {
+    format!("[{}]({})", label, url)
+}
+
+/// Reconstruct org link syntax.
+pub fn build_org_link(url: &str, label: Option<&str>) -> String {
+    match label {
+        Some(l) if !l.is_empty() => format!("[[{}][{}]]", url, l),
+        _ => format!("[[{}]]", url),
+    }
 }
 
 #[cfg(test)]
@@ -614,5 +855,219 @@ mod tests {
         let regions: Vec<DisplayRegion> = vec![];
         assert!(next_link_region(&regions, 0).is_none());
         assert!(prev_link_region(&regions, 0).is_none());
+    }
+
+    // --- compute_image_regions ---
+
+    #[test]
+    fn compute_image_regions_markdown() {
+        let text = "![diagram](./img/arch.png)";
+        let empty = std::collections::HashSet::new();
+        // Use /tmp as base_dir; the file won't exist, so image will be None.
+        let regions =
+            compute_image_regions(text, Some("md"), Some(std::path::Path::new("/tmp")), &empty);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].replacement.as_deref(), Some("[Image: arch.png]"));
+        assert_eq!(regions[0].link_target.as_deref(), Some("./img/arch.png"));
+        assert!(regions[0].image.is_none()); // file doesn't exist
+    }
+
+    #[test]
+    fn compute_image_regions_org() {
+        let text = "[[./media/photo.jpg][My Photo]]";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(
+            text,
+            Some("org"),
+            Some(std::path::Path::new("/tmp")),
+            &empty,
+        );
+        assert_eq!(regions.len(), 1);
+        assert_eq!(
+            regions[0].replacement.as_deref(),
+            Some("[Image: photo.jpg]")
+        );
+    }
+
+    #[test]
+    fn compute_image_regions_non_image_link() {
+        let text = "![readme](./README.md)";
+        let empty = std::collections::HashSet::new();
+        let regions =
+            compute_image_regions(text, Some("md"), Some(std::path::Path::new("/tmp")), &empty);
+        assert!(regions.is_empty()); // .md is not an image
+    }
+
+    #[test]
+    fn compute_image_regions_collapsed() {
+        let text = "![diagram](./img/arch.png)";
+        let mut collapsed = std::collections::HashSet::new();
+        collapsed.insert(0); // collapse line 0
+        let regions = compute_image_regions(
+            text,
+            Some("md"),
+            Some(std::path::Path::new("/tmp")),
+            &collapsed,
+        );
+        assert!(regions.is_empty()); // collapsed = not shown
+    }
+
+    #[test]
+    fn compute_image_regions_no_base_dir() {
+        let text = "![img](photo.png)";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(text, Some("md"), None, &empty);
+        assert!(regions.is_empty()); // unsaved buffer = no image resolution
+    }
+
+    #[test]
+    fn compute_image_regions_org_with_attr_width() {
+        let text = "#+attr_html: :width 600px\n[[./media/diagram.png]]";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(
+            text,
+            Some("org"),
+            Some(std::path::Path::new("/tmp")),
+            &empty,
+        );
+        assert_eq!(regions.len(), 1);
+        // The image should have parsed the width from the preceding line.
+        // image is None because file doesn't exist, but we can verify the region was created.
+        assert_eq!(
+            regions[0].replacement.as_deref(),
+            Some("[Image: diagram.png]")
+        );
+    }
+
+    #[test]
+    fn compute_image_regions_real_fixture_md() {
+        // Use the actual test-image.png fixture to verify ImageAttrs population.
+        let assets_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        if !assets_dir.join("test-image.png").exists() {
+            return;
+        }
+        let text = "![Test](test-image.png)";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(text, Some("md"), Some(&assets_dir), &empty);
+        assert_eq!(regions.len(), 1);
+        let img = regions[0]
+            .image
+            .as_ref()
+            .expect("should resolve existing image");
+        assert_eq!(img.path, assets_dir.join("test-image.png"));
+        assert_eq!(img.width, None); // no explicit width attribute
+    }
+
+    #[test]
+    fn compute_image_regions_real_fixture_org() {
+        let assets_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        if !assets_dir.join("test-image.png").exists() {
+            return;
+        }
+        let text = "#+attr_html: :width 200px\n[[file:test-image.png]]";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(text, Some("org"), Some(&assets_dir), &empty);
+        assert_eq!(regions.len(), 1);
+        let img = regions[0]
+            .image
+            .as_ref()
+            .expect("should resolve existing image with width");
+        assert_eq!(img.path, assets_dir.join("test-image.png"));
+        assert_eq!(img.width, Some(200));
+    }
+
+    // --- ImageAttrs cached dimensions ---
+
+    #[test]
+    fn image_attrs_has_cached_dimensions() {
+        let assets_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        if !assets_dir.join("test-image.png").exists() {
+            return;
+        }
+        let text = "![Test](test-image.png)";
+        let empty = std::collections::HashSet::new();
+        let regions = compute_image_regions(text, Some("md"), Some(&assets_dir), &empty);
+        assert_eq!(regions.len(), 1);
+        let img = regions[0].image.as_ref().unwrap();
+        assert!(
+            img.natural_width > 0 && img.natural_height > 0,
+            "Expected cached dimensions, got {}x{}",
+            img.natural_width,
+            img.natural_height
+        );
+    }
+
+    // --- Link parsing ---
+
+    #[test]
+    fn parse_md_link_basic() {
+        let (url, label) = parse_md_link("[Click](http://example.com)").unwrap();
+        assert_eq!(url, "http://example.com");
+        assert_eq!(label, "Click");
+    }
+
+    #[test]
+    fn parse_md_link_empty_label() {
+        let (url, label) = parse_md_link("[](http://example.com)").unwrap();
+        assert_eq!(url, "http://example.com");
+        assert_eq!(label, "");
+    }
+
+    #[test]
+    fn parse_md_link_invalid() {
+        assert!(parse_md_link("not a link").is_none());
+        assert!(parse_md_link("[no url]").is_none());
+    }
+
+    #[test]
+    fn parse_org_link_with_label() {
+        let (url, label) = parse_org_link("[[http://example.com][Click]]").unwrap();
+        assert_eq!(url, "http://example.com");
+        assert_eq!(label, Some("Click".to_string()));
+    }
+
+    #[test]
+    fn parse_org_link_no_label() {
+        let (url, label) = parse_org_link("[[http://example.com]]").unwrap();
+        assert_eq!(url, "http://example.com");
+        assert_eq!(label, None);
+    }
+
+    #[test]
+    fn parse_org_link_invalid() {
+        assert!(parse_org_link("not a link").is_none());
+    }
+
+    #[test]
+    fn build_md_link_roundtrip() {
+        assert_eq!(build_md_link("http://x.com", "X"), "[X](http://x.com)");
+    }
+
+    #[test]
+    fn build_org_link_with_label() {
+        assert_eq!(
+            build_org_link("http://x.com", Some("X")),
+            "[[http://x.com][X]]"
+        );
+    }
+
+    #[test]
+    fn build_org_link_no_label() {
+        assert_eq!(build_org_link("http://x.com", None), "[[http://x.com]]");
     }
 }

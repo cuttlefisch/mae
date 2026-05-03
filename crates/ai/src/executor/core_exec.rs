@@ -4,10 +4,10 @@ use crate::tool_impls::{
     execute_audit_configuration, execute_buffer_read, execute_buffer_write, execute_close_buffer,
     execute_command_list, execute_create_file, execute_cursor_info, execute_debug_state,
     execute_editor_restore_state, execute_editor_save_state, execute_editor_state,
-    execute_file_read, execute_get_option, execute_list_buffers, execute_open_file,
-    execute_project_files, execute_project_info, execute_project_search, execute_read_messages,
-    execute_rename_file, execute_set_option, execute_switch_buffer, execute_switch_project,
-    execute_syntax_tree, execute_window_layout,
+    execute_file_read, execute_get_option, execute_image_info, execute_image_list,
+    execute_list_buffers, execute_open_file, execute_project_files, execute_project_info,
+    execute_project_search, execute_read_messages, execute_rename_file, execute_set_option,
+    execute_switch_buffer, execute_switch_project, execute_syntax_tree, execute_window_layout,
 };
 use crate::types::ToolCall;
 
@@ -23,6 +23,22 @@ fn execute_eval_scheme(editor: &mut Editor, args: &serde_json::Value) -> Result<
     editor.pending_scheme_eval.push(code.to_string());
     // Placeholder — replaced by drain_pending_scheme_evals in ai_event_handler.
     Ok("eval_scheme: queued".into())
+}
+
+/// Execute a registered editor command by name (MCP tool handler).
+fn execute_command_dispatch(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let cmd = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'command' argument")?;
+    if editor.dispatch_builtin(cmd) {
+        Ok(format!("Executed: {}", cmd))
+    } else {
+        Err(format!("Unknown command: {}", cmd))
+    }
 }
 
 /// Dispatch core editor tools: buffer, cursor, file, project, editor state, options.
@@ -55,10 +71,13 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "editor_restore_state" => execute_editor_restore_state(editor),
         "eval_scheme" => execute_eval_scheme(editor, &call.arguments),
         "audit_configuration" => execute_audit_configuration(editor),
+        "execute_command" => execute_command_dispatch(editor, &call.arguments),
         "toggle_file_tree" => {
             editor.dispatch_builtin("file-tree-toggle");
             Ok("File tree toggled".into())
         }
+        "image_info" => execute_image_info(&call.arguments),
+        "image_list" => execute_image_list(editor),
         _ => return None,
     };
     Some(result)

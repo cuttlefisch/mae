@@ -6,7 +6,7 @@ use crate::tool_impls::{
     execute_git_stage, execute_git_stash_list, execute_git_stash_pop, execute_git_stash_push,
     execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
     execute_shell_list, execute_shell_read_output, execute_shell_scrollback,
-    execute_shell_send_input, execute_terminal_spawn,
+    execute_shell_send_input, execute_terminal_at_file, execute_terminal_spawn,
 };
 use crate::types::ToolCall;
 
@@ -18,6 +18,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "shell_read_output" => execute_shell_read_output(editor, &call.arguments),
         "shell_send_input" => execute_shell_send_input(editor, &call.arguments),
         "terminal_spawn" => execute_terminal_spawn(editor, &call.arguments),
+        "terminal_at_file" => execute_terminal_at_file(editor, &call.arguments),
         "terminal_send" => execute_shell_send_input(editor, &call.arguments),
         "terminal_read" => execute_shell_read_output(editor, &call.arguments),
         "shell_scrollback" => execute_shell_scrollback(editor, &call.arguments),

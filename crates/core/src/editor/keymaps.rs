@@ -133,6 +133,8 @@ impl Editor {
         normal.bind(parse_key_seq("gf"), "goto-file-under-cursor");
         // gx — open link under cursor (URL or file path with :line:col).
         normal.bind(parse_key_seq("gx"), "open-link-at-cursor");
+        // gl — edit link at cursor (jump into link region + insert mode)
+        normal.bind(parse_key_seq("gl"), "edit-link");
         // Marks (m<letter> sets, '<letter> jumps)
         normal.bind(parse_key_seq("m"), "set-mark-await");
         normal.bind(parse_key_seq("'"), "jump-mark-await");
@@ -333,6 +335,7 @@ impl Editor {
             "toggle-relative-line-numbers",
         );
         normal.bind(parse_key_seq_spaced("SPC t w"), "toggle-word-wrap");
+        normal.bind(parse_key_seq_spaced("SPC t i"), "toggle-inline-images");
         normal.bind(parse_key_seq_spaced("SPC t s"), "toggle-scrollbar");
         normal.bind(parse_key_seq_spaced("SPC t F"), "toggle-fps");
         normal.bind(parse_key_seq_spaced("SPC t D"), "debug-mode");
@@ -351,6 +354,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC g U"), "git-unstage-all");
         // +open
         normal.bind(parse_key_seq_spaced("SPC o t"), "terminal");
+        normal.bind(parse_key_seq_spaced("SPC o T"), "terminal-here");
         normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
         normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
         // +register
@@ -366,6 +370,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c a"), "lsp-code-action");
         normal.bind(parse_key_seq_spaced("SPC c R"), "lsp-rename");
         normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
+        normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
         normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
 
         // Group labels for which-key popup
@@ -385,6 +390,16 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
         normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
+        normal.set_group_name(parse_key_seq_spaced("SPC m"), "+multicursor");
+
+        // Multi-cursor (SPC m group)
+        normal.bind(parse_key_seq_spaced("SPC m j"), "mc-add-cursor-below");
+        normal.bind(parse_key_seq_spaced("SPC m k"), "mc-add-cursor-above");
+        normal.bind(parse_key_seq_spaced("SPC m d"), "mc-add-at-next-word");
+        normal.bind(parse_key_seq_spaced("SPC m a"), "mc-add-all-word");
+        normal.bind(parse_key_seq_spaced("SPC m s"), "mc-skip-next");
+        normal.bind(parse_key_seq_spaced("SPC m c"), "mc-clear");
+        normal.bind(parse_key_seq_spaced("SPC m l"), "mc-align");
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -617,8 +632,10 @@ impl Editor {
         org.bind(parse_key_seq_spaced("SPC m s n"), "org-narrow-subtree");
         org.bind(parse_key_seq_spaced("SPC m s N"), "org-widen");
         org.bind(parse_key_seq_spaced("SPC m s w"), "org-widen");
+        org.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
         org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
+        org.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
         org.bind(
             vec![KeyPress {
                 key: Key::Up,
@@ -709,8 +726,10 @@ impl Editor {
         markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
         markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
+        markdown.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
         markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
 
         maps.insert("markdown".to_string(), markdown);
 

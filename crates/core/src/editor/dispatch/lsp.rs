@@ -89,6 +89,15 @@ impl Editor {
             "lsp-format" => {
                 self.lsp_request_format();
             }
+            "lsp-range-format" => {
+                self.lsp_request_range_format();
+            }
+            "lsp-rename-apply" => {
+                self.apply_pending_rename();
+            }
+            "lsp-rename-abort" => {
+                self.abort_pending_rename();
+            }
             "syntax-select-node" => {
                 self.syntax_select_node();
             }

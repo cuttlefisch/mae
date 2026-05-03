@@ -19,6 +19,11 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "renderer": editor.renderer_name,
         "git_branch": editor.git_branch,
         "project_root": editor.project.as_ref().map(|p| p.root.display().to_string()),
+        "gui_cell_width": editor.gui_cell_width,
+        "gui_cell_height": editor.gui_cell_height,
+        "viewport_height": editor.viewport_height,
+        "text_area_width": editor.text_area_width,
+        "scrolloff": editor.scrolloff,
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }

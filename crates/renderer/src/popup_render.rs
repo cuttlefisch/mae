@@ -289,6 +289,12 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Editor) {
+    // If a mini-dialog is active, render that instead of the fuzzy palette.
+    if let Some(ref dialog) = editor.mini_dialog {
+        render_mini_dialog(frame, area, editor, dialog);
+        return;
+    }
+
     let palette = match &editor.command_palette {
         Some(p) => p,
         None => return,
@@ -345,6 +351,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {
         (inner.width as usize).saturating_sub(2)
@@ -580,4 +587,69 @@ pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, edi
 
     let para = Paragraph::new(content_lines);
     frame.render_widget(para, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Mini-dialog renderer (edit-link, rename, etc.)
+// ---------------------------------------------------------------------------
+
+fn render_mini_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &Editor,
+    dialog: &mae_core::command_palette::MiniDialogState,
+) {
+    let dialog_width = 50u16.min(area.width.saturating_sub(4));
+    let dialog_height = (4 + dialog.fields.len() as u16).min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
+    let popup_area = Rect::new(x, y, dialog_width, dialog_height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border.active");
+    let title = format!(" {} ", dialog.title());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let text_style = ts(editor, "ui.text");
+    let prompt_style = ts(editor, "ui.popup.key");
+    let selected_style = ts(editor, "ui.selection");
+
+    for (i, field) in dialog.fields.iter().enumerate() {
+        if i as u16 >= inner.height.saturating_sub(1) {
+            break;
+        }
+        let is_active = i == dialog.active_field;
+        let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+
+        let label = format!("{}: ", field.label);
+        let display_value = if field.value.is_empty() {
+            &field.placeholder
+        } else {
+            &field.value
+        };
+        let cursor = if is_active { "│" } else { "" };
+        let line_text = format!("{}{}{}", label, display_value, cursor);
+
+        let style = if is_active {
+            selected_style
+        } else {
+            text_style
+        };
+        let line = Line::styled(line_text, style);
+        frame.render_widget(Paragraph::new(line), row_area);
+    }
+
+    // Footer hint
+    let footer_row = dialog.fields.len() as u16;
+    if footer_row < inner.height {
+        let hint = "Tab: next  Enter: apply  Esc: cancel";
+        let hint_area = Rect::new(inner.x, inner.y + footer_row, inner.width, 1);
+        frame.render_widget(Paragraph::new(Line::styled(hint, prompt_style)), hint_area);
+    }
 }

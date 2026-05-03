@@ -12,8 +12,10 @@ impl Editor {
             let line_len = self.buffers[idx].line_len(row);
             if col < line_len {
                 let offset = self.buffers[idx].char_offset_at(row, col);
+                self.buffers[idx].begin_undo_group();
                 self.buffers[idx].delete_range(offset, offset + 1);
                 self.buffers[idx].insert_text_at(offset, &ch.to_string());
+                self.buffers[idx].end_undo_group();
                 // Record for dot-repeat
                 self.last_edit = Some(EditRecord {
                     command: "replace-char".to_string(),

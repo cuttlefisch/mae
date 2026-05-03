@@ -15,6 +15,7 @@ mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+mod multicursor;
 pub mod perf;
 mod project_ops;
 mod register_ops;
@@ -254,6 +255,8 @@ pub struct Editor {
     pub file_browser: Option<crate::FileBrowser>,
     /// Fuzzy command palette state. Some when the palette overlay is active.
     pub command_palette: Option<CommandPalette>,
+    /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
+    pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
     /// Tab completion matches for command mode (:e path).
     pub tab_completions: Vec<String>,
     pub tab_completion_idx: usize,
@@ -306,6 +309,9 @@ pub struct Editor {
     /// Buffer indices of newly created shell buffers that need PTY spawning.
     /// The binary drains this and creates `ShellTerminal` instances.
     pub pending_shell_spawns: Vec<usize>,
+    /// Working directory overrides for shell spawns: buffer_idx → dir.
+    /// Drained together with `pending_shell_spawns` by the binary.
+    pub pending_shell_cwds: HashMap<usize, std::path::PathBuf>,
     /// Agent shell spawns: (buf_idx, command). The binary spawns these with
     /// `spawn_command` so the PTY exits when the agent command exits.
     pub pending_agent_spawns: Vec<(usize, String)>,
@@ -639,8 +645,18 @@ pub struct Editor {
     pub redraw_level: crate::redraw::RedrawLevel,
     /// Dirty line range (start_line, end_line inclusive) for PartialLines redraws.
     pub dirty_line_range: Option<(usize, usize)>,
-    /// Double-click detection: (timestamp, row, col) of last left-click.
-    pub last_click: Option<(std::time::Instant, usize, usize)>,
+    /// Click detection: (timestamp, row, col, click_count) of last left-click.
+    pub last_click: Option<(std::time::Instant, usize, usize, u8)>,
+    /// Pending rename workspace edit JSON — stored while the *Rename Preview*
+    /// buffer is shown. Apply with `apply_pending_rename()`, discard with
+    /// `abort_pending_rename()`.
+    pub pending_rename_edit: Option<String>,
+    /// GUI cell width in pixels (set by GUI after font init). Default 8.0.
+    /// TUI should set to 1.0 (1 char = 1 cell).
+    pub gui_cell_width: f32,
+    /// GUI cell height in pixels (set by GUI after font init). Default 16.0.
+    /// TUI should set to 1.0.
+    pub gui_cell_height: f32,
 }
 
 impl Default for Editor {
@@ -693,6 +709,7 @@ impl Editor {
             file_picker: None,
             file_browser: None,
             command_palette: None,
+            mini_dialog: None,
             tab_completions: Vec::new(),
             tab_completion_idx: 0,
             last_edit: None,
@@ -713,6 +730,7 @@ impl Editor {
             pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
+            pending_shell_cwds: HashMap::new(),
             pending_agent_spawns: Vec::new(),
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
@@ -849,6 +867,9 @@ impl Editor {
             redraw_level: crate::redraw::RedrawLevel::Full,
             dirty_line_range: None,
             last_click: None,
+            pending_rename_edit: None,
+            gui_cell_width: 8.0,
+            gui_cell_height: 16.0,
         }
     }
 
@@ -2056,9 +2077,18 @@ impl Editor {
         // Check for external file changes before showing the buffer.
         self.check_and_reload_buffer(idx);
         let win = self.window_mgr.focused_window_mut();
-        win.buffer_idx = idx;
-        win.cursor_row = 0;
-        win.cursor_col = 0;
+        win.save_view_state();
+        win.restore_view_state(idx);
+        // Clamp cursor to buffer bounds (file may have changed on disk).
+        let line_count = self.buffers[idx].line_count();
+        let win = self.window_mgr.focused_window_mut();
+        if win.cursor_row >= line_count {
+            win.cursor_row = line_count.saturating_sub(1);
+        }
+        let line_len = self.buffers[idx].line_len(win.cursor_row);
+        if win.cursor_col > line_len {
+            win.cursor_col = line_len;
+        }
         // Recompute search matches for the new buffer so highlights and
         // `n`/`N` navigation are correct.
         self.recompute_search_matches();
@@ -2353,6 +2383,11 @@ impl Editor {
         }
     }
 
+    /// Replay a cursor operation at all secondary cursors (multi-cursor editing).
+    pub fn mc_replay_op(&mut self, op: &crate::cursor::CursorOp) {
+        multicursor::replay_at_secondaries(self, op);
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
         if !s.is_empty() {
@@ -2405,7 +2440,7 @@ impl Editor {
 
         let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
 
-        if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
+        let text_rows = if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
             let text: String = chars.iter().collect();
             let sb_w = self.show_break.chars().count();
             crate::wrap::wrap_line_display_rows(
@@ -2417,7 +2452,65 @@ impl Editor {
             .max(heading_rows)
         } else {
             heading_rows
+        };
+
+        // Account for inline image display height.
+        let image_rows = if buf.local_options.inline_images.unwrap_or(false) {
+            self.image_extra_rows(buf, line)
+        } else {
+            0
+        };
+
+        text_rows + image_rows
+    }
+
+    /// Estimate extra visual rows consumed by an inline image on this line.
+    /// Uses the same sizing logic as GUI layout (MAX_H=400, aspect-ratio fit).
+    fn image_extra_rows(&self, buf: &crate::buffer::Buffer, line: usize) -> usize {
+        let rope = buf.rope();
+        if line >= rope.len_lines() {
+            return 0;
         }
+        let line_byte_start = rope.line_to_byte(line);
+        let line_byte_end = if line + 1 < rope.len_lines() {
+            rope.line_to_byte(line + 1)
+        } else {
+            rope.len_bytes()
+        };
+        for region in &buf.display_regions {
+            if region.byte_start >= line_byte_end {
+                break;
+            }
+            if region.byte_end <= line_byte_start {
+                continue;
+            }
+            if let Some(ref img) = region.image {
+                // Mirror GUI layout sizing: MAX_H=400, text_area_width for max_w.
+                // Use actual cell dimensions pushed by the GUI (or 8.0/16.0 defaults).
+                let text_area_px = (self.text_area_width as f32) * self.gui_cell_width;
+                let max_w = if let Some(w) = img.width {
+                    (w as f32).min(text_area_px)
+                } else {
+                    text_area_px
+                };
+                const MAX_H: f32 = 400.0;
+                // Use cached dimensions from ImageAttrs (populated at region creation time).
+                let (img_w, img_h) = if img.natural_width > 0 && img.natural_height > 0 {
+                    (img.natural_width as f32, img.natural_height as f32)
+                } else {
+                    (max_w, max_w)
+                };
+                let display_h = if img_w > 0.0 && img_h > 0.0 {
+                    let h = max_w / (img_w / img_h);
+                    h.min(MAX_H)
+                } else {
+                    max_w.min(MAX_H)
+                };
+                let cell_h = self.gui_cell_height;
+                return (display_h / cell_h).ceil() as usize;
+            }
+        }
+        0
     }
 
     /// Calculate the actual inner height (text rows) for the focused window.
@@ -2470,6 +2563,27 @@ impl Editor {
         col: usize,
         button: crate::input::MouseButton,
     ) {
+        self.handle_mouse_click_inner(row, col, button, false);
+    }
+
+    /// Handle a mouse click with optional shift modifier for selection extension.
+    pub fn handle_mouse_click_shift(
+        &mut self,
+        row: usize,
+        col: usize,
+        button: crate::input::MouseButton,
+        shift_held: bool,
+    ) {
+        self.handle_mouse_click_inner(row, col, button, shift_held);
+    }
+
+    fn handle_mouse_click_inner(
+        &mut self,
+        row: usize,
+        col: usize,
+        button: crate::input::MouseButton,
+        shift_held: bool,
+    ) {
         use crate::input::MouseButton;
 
         // Dismiss stale popups on any mouse click.
@@ -2511,92 +2625,93 @@ impl Editor {
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
 
-                // Double-click detection
-                let is_double_click = if let Some((prev_time, prev_row, prev_col)) = self.last_click
-                {
-                    prev_row == target_row
-                        && prev_col == text_col
-                        && prev_time.elapsed() < std::time::Duration::from_millis(400)
-                } else {
-                    false
-                };
-                self.last_click = Some((std::time::Instant::now(), target_row, text_col));
-
-                if is_double_click {
-                    // Double-click: attempt link following
-
-                    // Check display regions (concealed links in markup buffers).
-                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if !buf.display_regions.is_empty() {
-                        let line_byte_start =
-                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
-                        let cursor_byte = line_byte_start + {
-                            let line_str: String = buf
-                                .rope()
-                                .line(target_row)
-                                .chars()
-                                .filter(|c| *c != '\n' && *c != '\r')
-                                .collect();
-                            line_str
-                                .char_indices()
-                                .nth(text_col)
-                                .map(|(b, _)| b)
-                                .unwrap_or(line_str.len())
-                        };
-                        if let Some(region) = buf
-                            .display_regions
-                            .iter()
-                            .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+                // Click counting: same position within 400ms increments count
+                let click_count =
+                    if let Some((prev_time, prev_row, prev_col, prev_count)) = self.last_click {
+                        if prev_row == target_row
+                            && prev_col == text_col
+                            && prev_time.elapsed() < std::time::Duration::from_millis(400)
                         {
-                            if let Some(ref target) = region.link_target {
-                                let target = target.clone();
-                                self.handle_link_click(&target);
-                                return;
+                            if prev_count >= 3 {
+                                1
+                            } else {
+                                prev_count + 1
                             }
+                        } else {
+                            1
                         }
-                    }
+                    } else {
+                        1
+                    };
+                self.last_click =
+                    Some((std::time::Instant::now(), target_row, text_col, click_count));
 
-                    // Check pre-populated link_spans
+                // --- Shift-click: extend or start selection ---
+                if shift_held {
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if !buf.link_spans.is_empty() {
-                        let line_start_byte =
-                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
-                        let click_byte = line_start_byte + text_col;
-                        if let Some(link) = buf
-                            .link_spans
-                            .iter()
-                            .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
-                        {
-                            let target = link.target.clone();
-                            self.handle_link_click(&target);
-                            return;
-                        }
+                    let line_len = buf.line_len(target_row);
+                    let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+
+                    if !matches!(self.mode, crate::Mode::Visual(_)) {
+                        // Start new visual selection from current cursor to click pos
+                        let cur_row = self.window_mgr.focused_window().cursor_row;
+                        let cur_col = self.window_mgr.focused_window().cursor_col;
+                        self.visual_anchor_row = cur_row;
+                        self.visual_anchor_col = cur_col;
+                        self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+                    }
+                    // Move cursor to click position (anchor stays)
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = target_row;
+                    win.cursor_col = target_col;
+                    return;
+                }
+
+                // --- Triple-click: select line ---
+                if click_count == 3 {
+                    self.visual_anchor_row = target_row;
+                    self.visual_anchor_col = 0;
+                    self.set_mode(crate::Mode::Visual(crate::VisualType::Line));
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = target_row;
+                    win.cursor_col = 0;
+                    return;
+                }
+
+                // --- Double-click: try link following, then word select ---
+                if click_count == 2 {
+                    // Try link following first (existing behavior)
+                    if self.try_link_follow_at(target_row, text_col) {
+                        return;
                     }
 
-                    // On-the-fly link detection
+                    // No link — select word at cursor
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if target_row < buf.rope().len_lines() {
-                        let line_text: String = buf.rope().line(target_row).chars().collect();
-                        let links = crate::link_detect::detect_links(&line_text);
-                        for link in &links {
-                            let link_char_start = line_text[..link.byte_start].chars().count();
-                            let link_char_end = line_text[..link.byte_end].chars().count();
-                            if text_col >= link_char_start && text_col < link_char_end {
-                                let target = link.target.clone();
-                                self.handle_link_click(&target);
-                                return;
-                            }
-                        }
+                    let offset = buf.char_offset_at(target_row, text_col);
+                    let word_start = crate::word::word_start_backward(buf.rope(), offset);
+                    let word_end = crate::word::word_end_forward(buf.rope(), offset);
+                    // word_end is inclusive (on last char of word)
+                    if word_start <= word_end {
+                        let (start_row, start_col) = buf.row_col_from_offset(word_start);
+                        let (end_row, end_col) = buf.row_col_from_offset(word_end);
+                        self.visual_anchor_row = start_row;
+                        self.visual_anchor_col = start_col;
+                        self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+                        let win = self.window_mgr.focused_window_mut();
+                        win.cursor_row = end_row;
+                        win.cursor_col = end_col;
                     }
-
-                    // No link found — select word at cursor
-                    // (just position cursor for now, word selection is future work)
+                    return;
                 }
 
                 // Single-click: just position cursor
                 let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+                // Exit visual mode on single click
+                if matches!(self.mode, crate::Mode::Visual(_)) {
+                    self.set_mode(crate::Mode::Normal);
+                }
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = target_row;
                 win.cursor_col = target_col;
@@ -2609,6 +2724,73 @@ impl Editor {
                 self.dispatch_builtin("paste-after");
             }
         }
+    }
+
+    /// Attempt link following at (row, col). Returns true if a link was found and followed.
+    fn try_link_follow_at(&mut self, target_row: usize, text_col: usize) -> bool {
+        // Check display regions (concealed links in markup buffers).
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if !buf.display_regions.is_empty() {
+            let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+            let cursor_byte = line_byte_start + {
+                let line_str: String = buf
+                    .rope()
+                    .line(target_row)
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect();
+                line_str
+                    .char_indices()
+                    .nth(text_col)
+                    .map(|(b, _)| b)
+                    .unwrap_or(line_str.len())
+            };
+            if let Some(region) = buf
+                .display_regions
+                .iter()
+                .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+            {
+                if let Some(ref target) = region.link_target {
+                    let target = target.clone();
+                    self.handle_link_click(&target);
+                    return true;
+                }
+            }
+        }
+
+        // Check pre-populated link_spans
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if !buf.link_spans.is_empty() {
+            let line_start_byte = buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+            let click_byte = line_start_byte + text_col;
+            if let Some(link) = buf
+                .link_spans
+                .iter()
+                .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+            {
+                let target = link.target.clone();
+                self.handle_link_click(&target);
+                return true;
+            }
+        }
+
+        // On-the-fly link detection
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if target_row < buf.rope().len_lines() {
+            let line_text: String = buf.rope().line(target_row).chars().collect();
+            let links = crate::link_detect::detect_links(&line_text);
+            for link in &links {
+                let link_char_start = line_text[..link.byte_start].chars().count();
+                let link_char_end = line_text[..link.byte_end].chars().count();
+                if text_col >= link_char_start && text_col < link_char_end {
+                    let target = link.target.clone();
+                    self.handle_link_click(&target);
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Handle a link click: open file paths in the editor, URLs externally.
@@ -2832,6 +3014,8 @@ impl Editor {
                     let max = total.saturating_sub(vh);
                     win.scroll_offset = (win.scroll_offset + amount).min(max);
                 }
+                win.scroll_locked = true;
+                win.scroll_locked_cursor = win.cursor_row;
             }
             crate::BufferKind::Shell => {
                 let amount = if delta > 0 {
@@ -2920,6 +3104,8 @@ impl Editor {
                     win.cursor_row = bottom;
                 }
                 win.clamp_cursor(buf);
+                win.scroll_locked = true;
+                win.scroll_locked_cursor = win.cursor_row;
             }
         }
     }

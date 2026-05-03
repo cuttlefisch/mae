@@ -544,9 +544,19 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
     }
 
     // After every AI event that may have mutated conversation state,
-    // sync the output rope and auto-scroll the output window to bottom.
+    // sync the output rope and auto-scroll the output window to bottom
+    // — but only if the user hasn't scroll-locked during streaming.
     editor.sync_conversation_buffer_rope();
-    crate::key_handling::conversation::scroll_output_to_bottom(editor);
+    let is_scroll_locked = editor
+        .conversation_pair
+        .as_ref()
+        .and_then(|p| editor.buffers.get(p.output_buffer_idx))
+        .and_then(|b| b.conversation())
+        .map(|conv| conv.scroll_locked)
+        .unwrap_or(false);
+    if !is_scroll_locked {
+        crate::key_handling::conversation::scroll_output_to_bottom(editor);
+    }
 }
 
 fn render_changes_to_diff(changes: &serde_json::Value) -> String {

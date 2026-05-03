@@ -188,5 +188,126 @@ pub(super) fn lsp_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "lsp_rename".into(),
+            description: "Rename the symbol at the given position across the workspace. Requires an LSP server. Positions are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "new_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The new name for the symbol".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number (default: cursor line)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "character".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed column (default: cursor column)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["new_name".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "lsp_format".into(),
+            description: "Format a buffer (or a range of lines) via LSP. Without start_line/end_line, formats the entire buffer. Positions are 1-indexed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "start_line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed start line for range format (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "end_line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed end line for range format (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "lsp_code_action".into(),
+            description: "List available code actions at the given position. Returns JSON array of {title, kind}. Use with an index parameter to apply a specific action.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "line".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed line number (default: cursor line)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "character".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "1-indexed column (default: cursor column)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Buffer name (default: active buffer)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "apply_index".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "0-indexed action to apply immediately (optional — omit to list actions)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }

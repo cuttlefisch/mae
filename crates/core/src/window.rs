@@ -3,6 +3,15 @@ use std::collections::HashMap;
 /// Unique window identifier.
 pub type WindowId = u32;
 
+/// Saved view state for a buffer that was previously displayed in this window.
+#[derive(Clone, Debug)]
+pub struct BufferViewState {
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub scroll_offset: usize,
+    pub col_offset: usize,
+}
+
 /// A window is a view onto a buffer — it owns cursor state and scroll position.
 ///
 /// Emacs lesson: Emacs got this right from day one — point (cursor) is per-window,
@@ -16,6 +25,16 @@ pub struct Window {
     pub cursor_col: usize,
     pub scroll_offset: usize,
     pub col_offset: usize,
+    /// Multi-cursor set. Index 0 = primary (synced with cursor_row/cursor_col).
+    pub cursor_set: crate::cursor::CursorSet,
+    /// Per-buffer saved view states for cursor/scroll preservation on buffer switch.
+    pub saved_view_states: HashMap<usize, BufferViewState>,
+    /// When true, skip ensure_scroll_wrapped for this frame.
+    /// Set by scroll commands (C-e/C-y/zz/zt/zb), cleared when cursor moves.
+    pub scroll_locked: bool,
+    /// cursor_row when scroll_locked was set. Lock clears when cursor_row
+    /// diverges (a non-scroll command moved the cursor).
+    pub scroll_locked_cursor: usize,
 }
 
 impl Window {
@@ -27,6 +46,39 @@ impl Window {
             cursor_col: 0,
             scroll_offset: 0,
             col_offset: 0,
+            cursor_set: crate::cursor::CursorSet::new(0, 0),
+            saved_view_states: HashMap::new(),
+            scroll_locked: false,
+            scroll_locked_cursor: 0,
+        }
+    }
+
+    /// Save current cursor + scroll state for the current buffer.
+    pub fn save_view_state(&mut self) {
+        self.saved_view_states.insert(
+            self.buffer_idx,
+            BufferViewState {
+                cursor_row: self.cursor_row,
+                cursor_col: self.cursor_col,
+                scroll_offset: self.scroll_offset,
+                col_offset: self.col_offset,
+            },
+        );
+    }
+
+    /// Restore saved state for a buffer, or reset to (0,0) if none.
+    pub fn restore_view_state(&mut self, buf_idx: usize) {
+        self.buffer_idx = buf_idx;
+        if let Some(state) = self.saved_view_states.get(&buf_idx) {
+            self.cursor_row = state.cursor_row;
+            self.cursor_col = state.cursor_col;
+            self.scroll_offset = state.scroll_offset;
+            self.col_offset = state.col_offset;
+        } else {
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            self.scroll_offset = 0;
+            self.col_offset = 0;
         }
     }
 
@@ -60,6 +112,7 @@ impl Window {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         }
+        self.sync_primary();
     }
 
     pub fn move_right(&mut self, buf: &crate::buffer::Buffer) {
@@ -70,10 +123,12 @@ impl Window {
 
     pub fn move_to_line_start(&mut self) {
         self.cursor_col = 0;
+        self.sync_primary();
     }
 
     pub fn move_to_line_end(&mut self, buf: &crate::buffer::Buffer) {
         self.cursor_col = buf.line_len(self.cursor_row);
+        self.sync_primary();
     }
 
     pub fn move_to_first_line(&mut self, buf: &crate::buffer::Buffer) {
@@ -97,12 +152,14 @@ impl Window {
         if rope.len_chars() == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;
+            self.sync_primary();
             return;
         }
         let pos = char_pos.min(rope.len_chars().saturating_sub(1));
         self.cursor_row = rope.char_to_line(pos);
         let line_start = rope.line_to_char(self.cursor_row);
         self.cursor_col = pos - line_start;
+        self.sync_primary();
     }
 
     pub fn move_word_forward(&mut self, buf: &crate::buffer::Buffer) {
@@ -211,15 +268,29 @@ impl Window {
         }
     }
 
+    // --- Cursor sync ---
+
+    /// Sync the `CursorSet` primary cursor with `cursor_row`/`cursor_col`.
+    ///
+    /// `cursor_row`/`cursor_col` are the authoritative cursor position used by
+    /// all 50+ movement/edit functions. The `CursorSet` primary must mirror
+    /// them so multi-cursor rendering and queries see the correct position.
+    pub fn sync_primary(&mut self) {
+        let p = self.cursor_set.primary_mut();
+        p.row = self.cursor_row;
+        p.col = self.cursor_col;
+    }
+
     // --- Cursor clamping ---
 
     /// Ensure cursor is within valid bounds after any structural change.
-    /// Respects narrowed range if set.
+    /// Respects narrowed range if set. Also syncs cursor_set primary.
     pub fn clamp_cursor(&mut self, buf: &crate::buffer::Buffer) {
         let line_count = buf.line_count();
         if line_count == 0 {
             self.cursor_row = 0;
             self.cursor_col = 0;
+            self.sync_primary();
             return;
         }
         // Respect narrowed range
@@ -240,6 +311,7 @@ impl Window {
         if self.cursor_col > line_len {
             self.cursor_col = line_len;
         }
+        self.sync_primary();
     }
 
     // --- Scroll commands ---
@@ -249,6 +321,8 @@ impl Window {
         let half = viewport_height / 2;
         self.cursor_row = self.cursor_row.saturating_sub(half);
         self.scroll_offset = self.scroll_offset.saturating_sub(half);
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll half a page down (Ctrl-D). Moves cursor down by half viewport.
@@ -258,6 +332,8 @@ impl Window {
         self.cursor_row = (self.cursor_row + half).min(max_row);
         self.scroll_offset = (self.scroll_offset + half).min(max_row);
         self.clamp_cursor(buf);
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll a full page up (Ctrl-B).
@@ -265,6 +341,8 @@ impl Window {
         let page = viewport_height.saturating_sub(2); // keep 2 lines overlap like vim
         self.cursor_row = self.cursor_row.saturating_sub(page);
         self.scroll_offset = self.scroll_offset.saturating_sub(page);
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll a full page down (Ctrl-F).
@@ -274,17 +352,23 @@ impl Window {
         self.cursor_row = (self.cursor_row + page).min(max_row);
         self.scroll_offset = (self.scroll_offset + page).min(max_row);
         self.clamp_cursor(buf);
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll so the cursor line is centered on screen (zz).
     pub fn scroll_center(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         self.scroll_offset = self.cursor_row.saturating_sub(half);
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll so the cursor line is at the top of the screen (zt).
     pub fn scroll_cursor_top(&mut self) {
         self.scroll_offset = self.cursor_row;
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll so the cursor line is at the bottom of the screen (zb).
@@ -292,12 +376,15 @@ impl Window {
         if viewport_height > 0 {
             self.scroll_offset = self.cursor_row.saturating_sub(viewport_height - 1);
         }
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll up one line (C-y). Cursor stays on screen.
     /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
         self.scroll_up_line_wrapped(buf, viewport_height, |_| 1);
+        self.scroll_locked = true;
     }
 
     /// Scroll up one line (C-y) with wrap-aware cursor clamping.
@@ -344,6 +431,8 @@ impl Window {
             self.cursor_row = bottom;
             self.clamp_cursor(buf);
         }
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     /// Scroll down one line (C-e). Cursor stays on screen.
@@ -359,6 +448,8 @@ impl Window {
             self.clamp_cursor(buf);
         }
         let _ = viewport_height; // used by scroll_up_line for symmetry
+        self.scroll_locked = true;
+        self.scroll_locked_cursor = self.cursor_row;
     }
 
     // --- Screen-relative cursor ---
@@ -367,6 +458,7 @@ impl Window {
     pub fn move_to_screen_top(&mut self) {
         self.cursor_row = self.scroll_offset;
         self.cursor_col = 0;
+        self.sync_primary();
     }
 
     /// Move cursor to middle visible line (M).
@@ -420,15 +512,20 @@ impl Window {
     where
         F: Fn(usize) -> usize,
     {
-        self.ensure_scroll_wrapped_with_margin(viewport_height, 0, line_visual_rows);
+        self.ensure_scroll_wrapped_with_margin(viewport_height, 0, usize::MAX, line_visual_rows);
     }
 
     /// Like `ensure_scroll_wrapped` but respects a scroll margin (vim `scrolloff`).
     /// The margin is applied as extra visual rows required above/below the cursor.
+    ///
+    /// `line_count` is the total number of buffer lines — used to reduce the
+    /// bottom margin when the cursor is near the buffer end (vim behavior:
+    /// scrolloff doesn't apply at buffer extremes).
     pub fn ensure_scroll_wrapped_with_margin<F>(
         &mut self,
         viewport_height: usize,
         scrolloff: usize,
+        line_count: usize,
         line_visual_rows: F,
     ) where
         F: Fn(usize) -> usize,
@@ -436,7 +533,13 @@ impl Window {
         if viewport_height == 0 {
             return;
         }
+        let old_offset = self.scroll_offset;
         let margin = scrolloff.min(viewport_height / 2);
+
+        // Adaptive margins: reduce at buffer extremes (vim behavior).
+        let top_margin = margin.min(self.cursor_row);
+        let lines_below = line_count.saturating_sub(self.cursor_row + 1);
+        let bottom_margin = margin.min(lines_below);
 
         // Cursor above viewport (with margin) — scroll up.
         // Count visual rows for margin lines above the cursor.
@@ -444,7 +547,7 @@ impl Window {
         let mut margin_above_rows = 0;
         {
             let mut line = self.cursor_row;
-            while margin_above_rows < margin && line > 0 {
+            while margin_above_rows < top_margin && line > 0 {
                 line -= 1;
                 margin_above_rows += line_visual_rows(line);
                 margin_above_lines += 1;
@@ -453,6 +556,14 @@ impl Window {
         let top_target = self.cursor_row.saturating_sub(margin_above_lines);
         if top_target < self.scroll_offset {
             self.scroll_offset = top_target;
+            tracing::trace!(
+                cursor = self.cursor_row,
+                old = old_offset,
+                new = self.scroll_offset,
+                top_margin,
+                bottom_margin,
+                "ensure_scroll: top adjust"
+            );
             return;
         }
 
@@ -462,7 +573,7 @@ impl Window {
         for line in self.scroll_offset..=self.cursor_row {
             let rows = line_visual_rows(line);
             if line == self.cursor_row {
-                if visual + rows + margin <= viewport_height {
+                if visual + rows + bottom_margin <= viewport_height {
                     cursor_visible = true;
                 }
                 break;
@@ -478,10 +589,12 @@ impl Window {
 
         // Cursor not visible — walk backward from cursor_row to find the
         // right scroll_offset, reserving margin rows below the cursor.
-        let cursor_rows = line_visual_rows(self.cursor_row);
+        // Cap cursor_rows at viewport_height so a single large line (e.g. image)
+        // doesn't make budget go to zero and force scroll_offset == cursor_row.
+        let cursor_rows = line_visual_rows(self.cursor_row).min(viewport_height);
         let mut budget = viewport_height
             .saturating_sub(cursor_rows)
-            .saturating_sub(margin);
+            .saturating_sub(bottom_margin);
         let mut new_offset = self.cursor_row;
         while new_offset > 0 {
             let prev_rows = line_visual_rows(new_offset - 1);
@@ -492,6 +605,17 @@ impl Window {
             new_offset -= 1;
         }
         self.scroll_offset = new_offset;
+        if self.scroll_offset != old_offset {
+            tracing::trace!(
+                cursor = self.cursor_row,
+                old = old_offset,
+                new = self.scroll_offset,
+                cursor_rows,
+                bottom_margin,
+                viewport_height,
+                "ensure_scroll: bottom adjust"
+            );
+        }
     }
 
     /// Adjust horizontal scroll so the cursor column stays visible.
@@ -1964,7 +2088,7 @@ mod tests {
         // All lines 1 visual row, scrolloff=3, viewport=10
         // Margin below: cursor_row(8) visual row 1 + margin 3 = needs 4 rows below
         // 8 visible lines (0..7) = 8 rows + cursor(1) + margin(3) = 12 > 10
-        win.ensure_scroll_wrapped_with_margin(10, 3, |_| 1);
+        win.ensure_scroll_wrapped_with_margin(10, 3, 100, |_| 1);
         // Should scroll forward so cursor has 3 lines of margin below
         assert!(
             win.scroll_offset > 0,
@@ -1974,6 +2098,89 @@ mod tests {
         // Verify: budget = 10 - 1(cursor) - 3(margin) = 6 rows above cursor
         // so scroll_offset = 8 - 6 = 2
         assert_eq!(win.scroll_offset, 2);
+    }
+
+    #[test]
+    fn ensure_scroll_wrapped_large_line_no_thrash() {
+        // A line with 50 visual rows (e.g. image) shouldn't force scroll_offset == cursor_row
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 5;
+        win.scroll_offset = 0;
+        win.ensure_scroll_wrapped_with_margin(30, 0, 100, |line| if line == 5 { 50 } else { 1 });
+        // scroll_offset should be at most cursor_row (not forced to cursor_row)
+        assert!(
+            win.scroll_offset <= 5,
+            "scroll_offset should be <= 5, got {}",
+            win.scroll_offset
+        );
+    }
+
+    #[test]
+    fn scroll_down_line_sets_scroll_locked() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.scroll_down_line(&buf, 20);
+        assert!(win.scroll_locked);
+    }
+
+    #[test]
+    fn scroll_up_line_sets_scroll_locked() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 10;
+        win.cursor_row = 10;
+        win.scroll_up_line(&buf, 20);
+        assert!(win.scroll_locked);
+    }
+
+    #[test]
+    fn ce_cy_roundtrip_with_scrolloff() {
+        // C-e 5 times then C-y 5 times should return to original scroll position.
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 15;
+        win.scroll_offset = 0;
+        for _ in 0..5 {
+            win.scroll_down_line(&buf, 30);
+        }
+        assert_eq!(win.scroll_offset, 5);
+        for _ in 0..5 {
+            win.scroll_up_line(&buf, 30);
+        }
+        assert_eq!(win.scroll_offset, 0);
+    }
+
+    #[test]
+    fn ensure_scroll_bottom_margin_reduces_at_buffer_end() {
+        // Cursor at last line of 50-line buffer, viewport=30, scrolloff=5
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 49;
+        win.scroll_offset = 20;
+        win.ensure_scroll_wrapped_with_margin(30, 5, 50, |_| 1);
+        // With lines_below=0, bottom_margin=0. Cursor at 49, budget=30-1-0=29.
+        // scroll_offset = 49-29 = 20. Should stay at 20.
+        assert_eq!(win.scroll_offset, 20);
+    }
+
+    #[test]
+    fn ensure_scroll_top_margin_reduces_at_buffer_start() {
+        // Cursor at line 2 of 100-line buffer, viewport=30, scrolloff=5
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 2;
+        win.scroll_offset = 10;
+        win.ensure_scroll_wrapped_with_margin(30, 5, 100, |_| 1);
+        // top_margin = min(5, 2) = 2. top_target = 2-2 = 0.
+        // 0 < 10 → scroll_offset = 0.
+        assert_eq!(win.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_half_up_sets_scroll_locked() {
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 20;
+        win.scroll_offset = 10;
+        win.scroll_half_up(20);
+        assert!(win.scroll_locked);
     }
 
     #[test]
@@ -1995,5 +2202,63 @@ mod tests {
         // But navigation should use display_line_count for bounds
         let nav_max = buf.display_line_count().saturating_sub(1);
         assert_eq!(nav_max, 1);
+    }
+
+    #[test]
+    fn scroll_locked_persists_until_cursor_moves() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 15;
+        win.scroll_offset = 0;
+
+        // C-e sets scroll_locked and records cursor position
+        win.scroll_down_line(&buf, 30);
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+        let locked_cursor = win.scroll_locked_cursor;
+
+        // Simulate frame: cursor hasn't moved → stays locked
+        assert_eq!(win.cursor_row, locked_cursor);
+
+        // If cursor moves (j command), lock should be detected as stale
+        win.cursor_row += 1;
+        assert_ne!(win.cursor_row, win.scroll_locked_cursor);
+    }
+
+    #[test]
+    fn scroll_locked_cursor_set_by_all_scroll_commands() {
+        let buf = make_buffer(100);
+
+        // scroll_half_up
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 20;
+        win.scroll_offset = 10;
+        win.scroll_half_up(30);
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+
+        // scroll_half_down
+        win.scroll_locked = false;
+        win.scroll_half_down(&buf, 30);
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+
+        // scroll_center
+        win.scroll_locked = false;
+        win.scroll_center(30);
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+
+        // scroll_cursor_top
+        win.scroll_locked = false;
+        win.scroll_cursor_top();
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+
+        // scroll_cursor_bottom
+        win.scroll_locked = false;
+        win.scroll_cursor_bottom(30);
+        assert!(win.scroll_locked);
+        assert_eq!(win.scroll_locked_cursor, win.cursor_row);
     }
 }

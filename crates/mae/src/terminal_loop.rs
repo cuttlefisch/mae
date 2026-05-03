@@ -122,6 +122,9 @@ pub(crate) async fn run_terminal_loop(
         };
         let viewport_height = editor.focused_window_viewport_height(total_window_area);
         editor.viewport_height = viewport_height;
+        // TUI: 1 char = 1 cell (no pixel scaling).
+        editor.gui_cell_width = 1.0;
+        editor.gui_cell_height = 1.0;
         // Horizontal scroll + text_area_width
         {
             let (term_w, term_h) = renderer.size()?;
@@ -160,23 +163,28 @@ pub(crate) async fn run_terminal_loop(
             let cursor_row = editor.window_mgr.focused_window().cursor_row;
             let scroll = editor.window_mgr.focused_window().scroll_offset;
             let so = editor.scrolloff;
-            let range_start = scroll.min(cursor_row);
+            // Extend range backward to cover ensure_scroll_wrapped backward walk
+            let range_start = scroll.min(cursor_row).saturating_sub(viewport_height);
             let range_end = (scroll.max(cursor_row) + viewport_height + 2)
                 .min(editor.buffers[buf_idx].display_line_count());
             let row_cache: Vec<(usize, usize)> = (range_start..range_end)
                 .map(|l| (l, editor.line_visual_rows(buf_idx, l)))
                 .collect();
 
-            editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll_wrapped_with_margin(viewport_height, so, |line| {
+            let line_count = editor.buffers[buf_idx].display_line_count();
+            let win = editor.window_mgr.focused_window_mut();
+            if win.scroll_locked && win.cursor_row == win.scroll_locked_cursor {
+                // Cursor hasn't moved since scroll command; keep lock active
+            } else {
+                win.scroll_locked = false;
+                win.ensure_scroll_wrapped_with_margin(viewport_height, so, line_count, |line| {
                     row_cache
                         .iter()
                         .find(|(l, _)| *l == line)
                         .map(|(_, r)| *r)
                         .unwrap_or(1)
                 });
+            }
         }
 
         // Debounced syntax reparse: drain pending reparses after 50ms idle.
@@ -392,6 +400,56 @@ pub(crate) async fn run_terminal_loop(
                                 editor.input_lock = mae_core::InputLock::None;
                                 pending_interactive_event = None;
                             }
+                        }
+                    }
+                    Some(Ok(Event::Mouse(mouse))) => {
+                        use crossterm::event::{MouseButton as XButton, MouseEventKind};
+                        tui_dirty = true;
+                        match mouse.kind {
+                            MouseEventKind::Down(XButton::Left) => {
+                                let shift = mouse.modifiers.contains(crossterm::event::KeyModifiers::SHIFT);
+                                // Try focus window at click position first.
+                                editor.focus_window_at(mouse.column, mouse.row);
+                                editor.handle_mouse_click_shift(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Left,
+                                    shift,
+                                );
+                            }
+                            MouseEventKind::Down(XButton::Right) => {
+                                editor.handle_mouse_click(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Right,
+                                );
+                            }
+                            MouseEventKind::Down(XButton::Middle) => {
+                                editor.handle_mouse_click(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Middle,
+                                );
+                            }
+                            MouseEventKind::Drag(XButton::Left) => {
+                                editor.handle_mouse_drag(mouse.row as usize, mouse.column as usize);
+                            }
+                            MouseEventKind::Up(XButton::Left) => {
+                                editor.handle_mouse_release(mouse.row as usize, mouse.column as usize);
+                            }
+                            MouseEventKind::ScrollUp => {
+                                editor.handle_mouse_scroll(1);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                editor.handle_mouse_scroll(-1);
+                            }
+                            MouseEventKind::ScrollLeft => {
+                                editor.handle_mouse_scroll_horizontal(-1);
+                            }
+                            MouseEventKind::ScrollRight => {
+                                editor.handle_mouse_scroll_horizontal(1);
+                            }
+                            _ => {}
                         }
                     }
                     Some(Ok(Event::Resize(w, h))) => {

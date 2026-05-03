@@ -36,6 +36,7 @@ pub enum PalettePurpose {
     AiMode,
     AiProfile,
     GitBranch,
+    MiniDialog,
 }
 
 impl PalettePurpose {
@@ -53,6 +54,61 @@ impl PalettePurpose {
             Self::AiMode => "AI Operating Mode",
             Self::AiProfile => "AI Prompt Profile",
             Self::GitBranch => "Git Branch",
+            Self::MiniDialog => "Dialog",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MiniDialog — reusable multi-field interactive dialog
+// ---------------------------------------------------------------------------
+
+/// What interactive command opened this mini-dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MiniDialogKind {
+    EditLink,
+}
+
+/// One editable field in a mini-dialog.
+#[derive(Debug, Clone)]
+pub struct MiniDialogField {
+    /// Prompt label (e.g. "URL", "Label").
+    pub label: String,
+    /// Current text value.
+    pub value: String,
+    /// Hint text when value is empty.
+    pub placeholder: String,
+}
+
+/// Context needed to apply the dialog result back to the buffer.
+#[derive(Debug, Clone)]
+pub enum MiniDialogContext {
+    LinkEdit {
+        buf_idx: usize,
+        byte_start: usize,
+        byte_end: usize,
+        is_org: bool,
+    },
+}
+
+/// State for a multi-field mini-dialog (edit-link, rename, etc.)
+#[derive(Debug, Clone)]
+pub struct MiniDialogState {
+    /// What interactive command opened this dialog.
+    pub kind: MiniDialogKind,
+    /// The field prompts and current values.
+    pub fields: Vec<MiniDialogField>,
+    /// Which field is currently being edited (0-indexed).
+    pub active_field: usize,
+    /// Context needed to apply the result.
+    pub context: MiniDialogContext,
+}
+
+impl MiniDialogState {
+    /// Title for the dialog window.
+    pub fn title(&self) -> &'static str {
+        match self.kind {
+            MiniDialogKind::EditLink => "Edit Link",
         }
     }
 }
@@ -274,6 +330,7 @@ mod tests {
             PalettePurpose::AiMode,
             PalettePurpose::AiProfile,
             PalettePurpose::GitBranch,
+            PalettePurpose::MiniDialog,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);

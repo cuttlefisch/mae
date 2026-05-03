@@ -4,6 +4,7 @@ mod editor_tools;
 mod file;
 mod git;
 mod help;
+mod image;
 mod introspect;
 mod kb;
 pub(crate) mod lsp;
@@ -42,6 +43,7 @@ pub use git::{
     execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
 };
 pub use help::execute_help_open;
+pub use image::{execute_image_info, execute_image_list};
 pub use introspect::execute_introspect;
 pub use kb::{
     execute_kb_get, execute_kb_graph, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
@@ -53,7 +55,8 @@ pub use project::{
     execute_save_memory, execute_switch_project, execute_update_plan,
 };
 pub use shell::{
-    execute_shell_list, execute_shell_read_output, execute_shell_send_input, execute_terminal_spawn,
+    execute_shell_list, execute_shell_read_output, execute_shell_send_input,
+    execute_terminal_at_file, execute_terminal_spawn,
 };
 pub use syntax::execute_syntax_tree;
 

@@ -30,6 +30,8 @@ tree-sitter-scheme = "0.24"
 tree-sitter-yaml = "0.7"
 sysinfo = "0.38"
 libc = "0.2"
+imagesize = "0.13"
+kamadak-exif = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

@@ -495,6 +495,105 @@ impl Editor {
                     if new_val { "on" } else { "off" }
                 ));
             }
+            "toggle-inline-images" => {
+                let idx = self.active_buffer_idx();
+                let cur = self.buffers[idx]
+                    .local_options
+                    .inline_images
+                    .unwrap_or(false);
+                let new_val = !cur;
+                self.buffers[idx].local_options.inline_images = Some(new_val);
+                self.buffers[idx].collapsed_images.clear();
+                // Force display region recompute.
+                self.buffers[idx].display_regions_gen = u64::MAX;
+                self.set_status(format!(
+                    "Inline images: {}",
+                    if new_val { "on" } else { "off" }
+                ));
+            }
+            "toggle-image-at-point" => {
+                let idx = self.active_buffer_idx();
+                let row = self.window_mgr.focused_window().cursor_row;
+                // Check if this line has an image region.
+                let has_image = self.buffers[idx].display_regions.iter().any(|r| {
+                    r.image.is_some() && {
+                        let text: String = self.buffers[idx].rope().chars().collect();
+                        let line_num = text[..r.byte_start].chars().filter(|&c| c == '\n').count();
+                        line_num == row
+                    }
+                });
+                if has_image {
+                    if self.buffers[idx].collapsed_images.contains(&row) {
+                        self.buffers[idx].collapsed_images.remove(&row);
+                        self.set_status("Image expanded");
+                    } else {
+                        self.buffers[idx].collapsed_images.insert(row);
+                        self.set_status("Image collapsed");
+                    }
+                    self.buffers[idx].display_regions_gen = u64::MAX;
+                } else {
+                    self.set_status("No image at cursor line");
+                }
+            }
+            "image-info-at-point" => {
+                let idx = self.active_buffer_idx();
+                let row = self.window_mgr.focused_window().cursor_row;
+                let image_path = self.buffers[idx]
+                    .display_regions
+                    .iter()
+                    .find_map(|r| {
+                        r.image.as_ref().map(|img| {
+                            let text: String = self.buffers[idx].rope().chars().collect();
+                            let line_num =
+                                text[..r.byte_start].chars().filter(|&c| c == '\n').count();
+                            (line_num, img.path.clone())
+                        })
+                    })
+                    .and_then(|(line_num, path)| if line_num == row { Some(path) } else { None });
+                match image_path {
+                    Some(path) => {
+                        let meta = std::fs::metadata(&path);
+                        match meta {
+                            Ok(m) => {
+                                let size_kb = m.len() / 1024;
+                                self.set_status(format!(
+                                    "Image: {} ({}KB)",
+                                    path.display(),
+                                    size_kb
+                                ));
+                            }
+                            Err(e) => {
+                                self.set_status(format!("Image error: {}", e));
+                            }
+                        }
+                    }
+                    None => {
+                        self.set_status("No image at cursor line");
+                    }
+                }
+            }
+            "terminal-here" => {
+                // Open terminal in current buffer's file directory.
+                let idx = self.active_buffer_idx();
+                let cwd = self.buffers[idx]
+                    .file_path()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .or_else(|| self.project.as_ref().map(|p| p.root.clone()));
+                if let Some(dir) = cwd {
+                    let shell_name = format!("*Terminal {}*", self.buffers.len());
+                    let buf = Buffer::new_shell(shell_name);
+                    self.buffers.push(buf);
+                    let shell_idx = self.buffers.len() - 1;
+                    self.pending_shell_spawns.push(shell_idx);
+                    self.pending_shell_cwds.insert(shell_idx, dir.clone());
+                    self.switch_to_buffer(shell_idx);
+                    self.set_mode(Mode::ShellInsert);
+                    self.set_status(format!("Terminal: {}", dir.display()));
+                } else {
+                    // Fall back to regular terminal.
+                    self.dispatch_builtin("terminal");
+                }
+            }
             "toggle-scrollbar" => {
                 self.scrollbar = !self.scrollbar;
                 self.set_status(format!(
@@ -569,6 +668,113 @@ impl Editor {
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
+            }
+
+            // Edit a link under cursor: open a mini-dialog with URL + Label fields.
+            "edit-link" => {
+                use crate::command_palette::{
+                    MiniDialogContext, MiniDialogField, MiniDialogKind, MiniDialogState,
+                    PalettePurpose,
+                };
+                let idx = self.active_buffer_idx();
+                let win = self.window_mgr.focused_window();
+                let row = win.cursor_row;
+                let col = win.cursor_col;
+                let buf = &self.buffers[idx];
+
+                // Compute cursor byte offset
+                let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(row));
+                let line_chars: Vec<char> = buf
+                    .rope()
+                    .line(row)
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect();
+                let line_str: String = line_chars.iter().collect();
+                let cursor_byte = line_byte_start
+                    + line_str
+                        .char_indices()
+                        .nth(col)
+                        .map(|(b, _)| b)
+                        .unwrap_or(line_str.len());
+
+                // Find link region at cursor, or the next link region
+                let region = buf
+                    .display_regions
+                    .iter()
+                    .find(|r| {
+                        r.link_target.is_some()
+                            && cursor_byte >= r.byte_start
+                            && cursor_byte < r.byte_end
+                    })
+                    .or_else(|| {
+                        crate::display_region::next_link_region(&buf.display_regions, cursor_byte)
+                            .and_then(|(s, _)| {
+                                buf.display_regions
+                                    .iter()
+                                    .find(|r| r.link_target.is_some() && r.byte_start == s)
+                            })
+                    });
+
+                if let Some(region) = region {
+                    // Extract raw link text from the buffer
+                    let raw_text: String = buf
+                        .rope()
+                        .byte_slice(region.byte_start..region.byte_end)
+                        .chars()
+                        .collect();
+                    let is_org = buf
+                        .file_path()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("org"))
+                        .unwrap_or(false);
+
+                    let (url, label) = if is_org {
+                        crate::display_region::parse_org_link(&raw_text)
+                            .map(|(u, l)| (u, l.unwrap_or_default()))
+                            .unwrap_or_else(|| (raw_text.clone(), String::new()))
+                    } else {
+                        crate::display_region::parse_md_link(&raw_text)
+                            .unwrap_or_else(|| (raw_text.clone(), String::new()))
+                    };
+
+                    let state = MiniDialogState {
+                        kind: MiniDialogKind::EditLink,
+                        fields: vec![
+                            MiniDialogField {
+                                label: "URL".to_string(),
+                                value: url,
+                                placeholder: "https://...".to_string(),
+                            },
+                            MiniDialogField {
+                                label: "Label".to_string(),
+                                value: label,
+                                placeholder: "Link text".to_string(),
+                            },
+                        ],
+                        active_field: 0,
+                        context: MiniDialogContext::LinkEdit {
+                            buf_idx: idx,
+                            byte_start: region.byte_start,
+                            byte_end: region.byte_end,
+                            is_org,
+                        },
+                    };
+                    self.mini_dialog = Some(state);
+                    // Open an empty palette in MiniDialog mode — renderers check mini_dialog
+                    self.command_palette = Some(crate::command_palette::CommandPalette {
+                        query: String::new(),
+                        entries: Vec::new(),
+                        filtered: Vec::new(),
+                        selected: 0,
+                        purpose: PalettePurpose::MiniDialog,
+                    });
+                    self.set_mode(Mode::CommandPalette);
+                    self.set_status("Edit link — Tab: next field, Enter: apply, Esc: cancel");
+                } else {
+                    self.set_status("No link at cursor");
+                }
             }
 
             _ => return None,

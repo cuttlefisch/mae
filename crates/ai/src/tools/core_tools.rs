@@ -194,6 +194,23 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "execute_command".into(),
+            description: "Execute a registered editor command by name. Equivalent to typing the command in command mode. Use command_list to discover available commands.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "command".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "The command name to execute (e.g. 'move-to-last-line', 'scroll-down-line')".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["command".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "command_list".into(),
             description: "List all available editor commands. Use format='names' for a compact list of just command names (recommended). Default returns full JSON with docs and sources.".into(),
             parameters: ToolParameters {
@@ -1091,6 +1108,34 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         ToolDefinition {
             name: "toggle_file_tree".into(),
             description: "Toggle the file tree sidebar. Opens a project directory browser on the left side of the editor, or closes it if already open. Use this to browse the project structure.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Image tools ---
+        ToolDefinition {
+            name: "image_info".into(),
+            description: "Read image metadata: dimensions, format, file size, EXIF data (camera, date, GPS, exposure). Path supports ~.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Path to the image file".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["path".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "image_list".into(),
+            description: "List all image links in the current buffer with resolved paths, dimensions, and display attributes (#+attr width).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),

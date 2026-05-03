@@ -341,6 +341,66 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("scrolling") {
+        categories.push(serde_json::json!({
+            "name": "scrolling",
+            "conditional": false,
+            "setup": [
+                "Open assets/markup-demo.md (contains images and links)"
+            ],
+            "tests": [
+                {
+                    "tool": "open_file",
+                    "args": {"path": "assets/markup-demo.md"},
+                    "assert": "Buffer opened"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "move-to-last-line"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "cursor_row should be > 10 (file has many lines)"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "move-to-first-line"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "cursor_row == 0, scroll_offset == 0"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "scroll-down-line"},
+                    "assert": "Success (repeat 5 times)"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "scroll_offset > 0"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "scroll-up-line"},
+                    "assert": "Success (repeat 5 times)"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "scroll_offset back to 0 or close"
+                }
+            ],
+            "cleanup": [
+                "close_buffer(name: 'markup-demo.md', force: true), then switch_buffer(name: '*AI*')"
+            ]
+        }));
+    }
+
     if include("guidance") {
         categories.push(serde_json::json!({
             "name": "guidance",

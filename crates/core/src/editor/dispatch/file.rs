@@ -29,11 +29,11 @@ impl Editor {
                 self.save_mode_to_buffer();
                 let prev_idx = self.active_buffer_idx();
                 let win = self.window_mgr.focused_window_mut();
-                win.buffer_idx = (win.buffer_idx + 1) % self.buffers.len();
-                win.cursor_row = 0;
-                win.cursor_col = 0;
+                win.save_view_state();
+                let new_idx = (win.buffer_idx + 1) % self.buffers.len();
+                win.restore_view_state(new_idx);
                 self.alternate_buffer_idx = Some(prev_idx);
-                let name = self.buffers[win.buffer_idx].name.clone();
+                let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();
             }
@@ -45,11 +45,11 @@ impl Editor {
                 let prev_idx = self.active_buffer_idx();
                 let count = self.buffers.len();
                 let win = self.window_mgr.focused_window_mut();
-                win.buffer_idx = (win.buffer_idx + count - 1) % count;
-                win.cursor_row = 0;
-                win.cursor_col = 0;
+                win.save_view_state();
+                let new_idx = (win.buffer_idx + count - 1) % count;
+                win.restore_view_state(new_idx);
                 self.alternate_buffer_idx = Some(prev_idx);
-                let name = self.buffers[win.buffer_idx].name.clone();
+                let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();
             }

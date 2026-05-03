@@ -74,6 +74,38 @@ impl Editor {
         if let Some(v) = self.dispatch_fold_org(name) {
             return v;
         }
+        // Multi-cursor commands
+        match name {
+            "mc-add-cursor-below" => {
+                super::multicursor::mc_add_cursor_below(self);
+                return true;
+            }
+            "mc-add-cursor-above" => {
+                super::multicursor::mc_add_cursor_above(self);
+                return true;
+            }
+            "mc-add-at-next-word" => {
+                super::multicursor::mc_add_at_next_word(self);
+                return true;
+            }
+            "mc-add-all-word" => {
+                super::multicursor::mc_add_all_word(self);
+                return true;
+            }
+            "mc-skip-next" => {
+                super::multicursor::mc_skip_next(self);
+                return true;
+            }
+            "mc-clear" => {
+                super::multicursor::mc_clear(self);
+                return true;
+            }
+            "mc-align" => {
+                super::multicursor::mc_align(self);
+                return true;
+            }
+            _ => {}
+        }
         if let Some(v) = self.dispatch_git(name) {
             return v;
         }
@@ -90,8 +122,17 @@ impl Editor {
         false
     }
 
+    /// Dispatch a command and replay at secondary cursors if applicable.
+    pub fn dispatch_with_multicursor(&mut self, name: &str) -> bool {
+        let result = self.dispatch_builtin(name);
+        if result {
+            super::multicursor::replay_command_at_secondaries(self, name);
+        }
+        result
+    }
+
     /// Kill buffer at `idx`, handling LSP notification, window fixup, and fallback.
-    fn kill_buffer_at(&mut self, idx: usize) {
+    pub fn kill_buffer_at(&mut self, idx: usize) {
         // If this buffer is part of a conversation pair, close both halves.
         if let Some(ref pair) = self.conversation_pair {
             let sibling_idx = if idx == pair.output_buffer_idx {

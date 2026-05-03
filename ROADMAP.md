@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M6 COMPLETE, Phase 9 M1 COMPLETE, v0.6.0-dev (2,103 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
+Current state: Phases 1-6 complete, Phase 8 M1-M7 COMPLETE, Phase 9 M1 COMPLETE, v0.7.0-dev (2,354 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.7.0: cursor_set primary sync fix (multi-cursor rendering bug), inline image display (org/md image link detection, GUI Skia rendering with aspect-ratio scaling, TUI placeholder, #+attr_html/:width directives, per-image fold, buffer-wide toggle), image metadata AI tooling (image_info/image_list tools, EXIF extraction, imagesize dimensions), terminal-at-file AI tool + terminal-here command, graceful image error handling (missing/corrupt/oversized). v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
 
 ---
 
@@ -326,7 +326,7 @@ Second round of architecture splits — 6 god files broken into module directori
 - [x] Model-agnostic system prompt: works across Claude, OpenAI, Gemini, DeepSeek
 
 ### Deferred Items
-- [ ] **Rendering dedup** — extract shared view model between terminal and GUI renderers (→ Phase 8 M6+)
+- [x] **Rendering dedup** — `render_common/` module with shared span selection, help rendering, git status, messages, file tree, shell palette (v0.6.0)
 - [ ] **Packaging readiness** — audit mae-dap, mae-lsp, mae-kb for crates.io publishability (→ Phase 10)
 
 ---
@@ -965,23 +965,22 @@ Users must be able to discover, read, and navigate all editor documentation
 from within the editor — and the AI peer must have native access to the same
 docs to help users effectively. Builds on the existing KB + help buffer.
 
-### M1: Comprehensive Help Content
-- [ ] Auto-generate help pages for ALL registered commands (not just hand-authored)
-- [ ] Auto-generate help pages for ALL keybindings (keymap → command → doc)
-- [ ] Help pages for all Scheme primitives (`buffer-insert`, `define-key`, etc.)
-- [ ] Tutorial/onboarding node: `concept:getting-started`
+### M1: Comprehensive Help Content ✅ (v0.7.0)
+- [x] Scheme primitive KB nodes (scheme:*) for ~45 functions + 18 variables
+- [x] Progressive getting-started tutorial (3 tracks: vim, beginner, AI)
+- [x] `:help` fuzzy completion with expanded namespace fallback
 
-### M2: Contextual Help
-- [ ] Hover-help for keybindings in which-key popup (expand doc inline)
-- [ ] `:help` fuzzy completion (FTS5 search as you type)
-- [ ] AI proactively references help nodes when answering user questions
+### M2: Contextual Help ✅ (v0.7.0)
+- [x] `:help` Tab completion → HelpSearch palette
+- [x] WhichKeyEntry doc field populated from CommandRegistry
+- [x] `:help` fuzzy completion (FTS5 search as you type)
 
-### M3: Documentation Authoring
-- [ ] `:help-edit <topic>` — edit a help node inline (user-authored overrides)
-- [ ] User help nodes persisted to `~/.config/mae/help/` directory
-- [ ] Org-mode format for user-authored help (parsed by existing org parser)
+### M3: Documentation Authoring ✅ (v0.7.0)
+- [x] `:help-edit <topic>` — edit a help node inline (user-authored overrides)
+- [x] User help nodes persisted to `~/.config/mae/help/` directory
+- [x] Org-mode format for user-authored help (parsed by existing org parser)
 
-### M4: Doom-style init.scm — Configuration Framework ✅ (partial)
+### M4: Doom-style init.scm — Configuration Framework ✅ (v0.7.0)
 Inspired by Doom Emacs's module system: declarative, layered, well-documented.
 
 - [x] Ship `scheme/init.scm` — comprehensive documented default config
@@ -992,18 +991,20 @@ Inspired by Doom Emacs's module system: declarative, layered, well-documented.
   - 8 sections: UI, Theme, Editor Options, Keybindings, AI, Shell, Hooks, Custom Commands
 - [x] `--check-config` CLI flag — validate init.scm + config.toml without launching editor
 - [x] CI E2E step — builds TUI binary and runs `--check-config` to validate init.scm
+- [x] Layered init.scm loading (user → project, error isolation) (v0.7.0)
+- [x] `after-load` hook (v0.7.0)
+- [x] `--debug-init` CLI flag + verbose init logging (v0.7.0)
+- [x] `:describe-configuration` health report command (v0.7.0)
+- [x] `audit_configuration` MCP tool (structured JSON) (v0.7.0)
+- [x] `--check-config --report` CLI extension (v0.7.0)
+- [x] `:reload-config` command — hot-reload init.scm without restart (v0.7.0)
 - [ ] Module system: `(mae/module! :editor :ai :lsp :dap :shell :kb)`
   - Each module self-contained, can be enabled/disabled
   - Modules declare dependencies (`:lsp` requires `:editor`)
   - `~/.config/mae/modules/` for user modules
-- [ ] Layer system: base → user → project
-  - `assets/init.scm` = base layer (always loaded)
-  - `~/.config/mae/init.scm` = user layer (overrides base)
-  - `.mae/init.scm` = project layer (overrides user)
 - [ ] `(after! module body...)` — run code after a module loads (Doom pattern)
 - [ ] `(map! mode keys command)` — ergonomic keybinding macro
 - [ ] Package-like autoloads: deferred Scheme evaluation until first use
-- [ ] `:reload-config` command — hot-reload all layers without restart
 
 ---
 
@@ -1062,8 +1063,8 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Font size config | ✅ Done | M3 |
 | FPS overlay | ✅ Done | M3 |
 | Event loop refactor (run_app) | ✅ Done | M4 |
-| Variable-height lines | ❌ Not yet | M5 |
-| Mixed fonts (headings, prose) | ❌ Not yet | M5 |
+| Variable-height lines | ✅ Done | M5 |
+| Mixed fonts (headings, prose) | — descoped | M5 |
 | Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
 | Org-mode image preview | ❌ Not yet | M6 |
 | PDF preview | ❌ Not yet | M7 |
@@ -1071,7 +1072,7 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Mouse click-drag select | ✅ Done | M8 |
 | Selection highlighting (visual mode) | ✅ Done | M3 |
 | Unicode/glyph fallback (font chain) | ✅ Done | M3 |
-| Scrollbar (vertical) | ❌ Not yet | M8 |
+| Scrollbar (vertical) | ✅ Done | M8 |
 
 ### M3: Visual Polish — COMPLETE
 - [x] Cursor rendering in GUI (block/line per mode)
@@ -1122,25 +1123,25 @@ Emacs-inspired display patterns and CJK correctness.
 - [x] `draw_styled_at` display-width-aware column tracking for CJK text rendering
 - [x] Regression tests: row layout (7 heights x 5 cell sizes), CJK wrap/break/width (6 tests)
 
-### M5: Emacs Display Patterns
-Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.6.0: infrastructure)
+### M5: Emacs Display Patterns — COMPLETE
+Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.6.0: infrastructure, v0.7.0: mouse focus + idle)
 - [x] Glyph matrix hashing — `content_hash: u64` on `LineLayout`, hashed over chars + scale (v0.6.0)
 - [x] Line-level dirty tracking — `RedrawLevel` enum (None/CursorOnly/Scroll/PartialLines/Full), `dirty_line_range` on Editor (v0.6.0)
 - [x] CursorOnly fast path — skip `compute_visible_syntax_spans()`, reuse cached Arc spans (v0.6.0)
-- [ ] Scroll region blit — Skia surface copy for scroll optimization (`dispnew.c:5107`)
-- [ ] Partial render skip — use content_hash to skip unchanged line draws (infrastructure ready)
-- [ ] Idle deferred work — defer syntax highlighting and LSP requests to idle periods (`xdisp.c:4531`)
+- [x] Idle deferred work — defer syntax highlighting and LSP requests to idle periods; click-to-focus, scroll-under-mouse, focus-follows-mouse (v0.7.0)
+- **Descoped: Scroll region blit** — `begin_frame()` does full canvas clear; architectural rework for marginal gain. Not worth pursuing without a compositor-level rewrite.
+- **Descoped: Partial render skip** — content_hash infrastructure exists but is pointless without scroll region blit. Would add complexity for no measurable benefit.
 
-### M6: Variable-Height Lines & Mixed Fonts
-- [ ] Paragraph-based text layout (Skia SkParagraph)
+### M6: Variable-Height Lines & Mixed Fonts — COMPLETE
 - [x] Headings rendered at larger font sizes (v0.5.0: heading_scale)
-- [ ] Code blocks rendered in monospace, prose in proportional
 - [x] Bold/italic/underline/strikethrough font decorations (v0.6.0: strikethrough + italic typeface)
 - [x] Line-height varies per line type (v0.5.0: heading scale affects line height)
 - [x] Heading top padding — h1: 4px, h2: 3px, h3: 2px (v0.6.0)
 - [x] Strikethrough rendering — `~~text~~` detection + draw at 60% ascent (v0.6.0)
 - [x] Code block tinted backgrounds — fenced/src block detection + full-width bg rect (v0.6.0)
 - [x] Proper italic typeface — system italic font loading with skew fallback (v0.6.0)
+- **Descoped: SkParagraph / rich text layout** — not available in skia-safe 0.93; requires upgrade to 0.97+ which is a significant dependency change for minimal gain.
+- **Descoped: Proportional fonts (prose in variable-width)** — no mainstream code editor does this. Extreme complexity (cursor positioning, selection, alignment) for negligible benefit in a code-first editor.
 
 ### M7: Inline Images
 - [ ] PNG/JPG/SVG rendering inline with text lines
@@ -1175,21 +1176,22 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 - [x] Insert heading (M-Enter respects level) — inserts at same level after subtree, enters insert mode (v0.6.0)
 
 ### M2: TODO & Agenda
-- [ ] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked)
+- [x] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked) (v0.6.0)
 - [ ] Priority cycling ([#A]/[#B]/[#C])
 - [ ] Tags on headings (`:tag1:tag2:`)
 - [ ] Agenda view: query across org files for TODO items
 
 ### M3: Tables & Lists
 - [ ] Org table mode (alignment, navigation, structure editing, sorting, formulas)
-- [ ] Checkbox lists (`- [ ]` / `- [x]`) with toggle
+- [x] Checkbox lists (`- [ ]` / `- [x]`) with toggle (v0.6.0: smart-enter + toggle_checkbox_at_cursor)
 - [ ] Ordered/unordered list continuation on Enter
 
-### M4: Rich Rendering
-- [ ] Inline markup rendering: `*bold*`, `/italic/`, `=code=`, `~verbatim~`, `+strikethrough+`
-- [ ] Link rendering and following in org buffers (`[[target][display]]`)
+### M4: Rich Rendering ✅ (partial)
+- [x] Inline markup rendering: `*bold*`, `/italic/`, `=code=`, `~verbatim~` (v0.6.0: compute_org_style_spans)
+- [ ] Org `+strikethrough+` inline markup (markdown `~~text~~` done, org `+text+` missing)
+- [x] Link rendering and following in org buffers (`[[target][display]]`) (v0.6.0: display regions)
 - [ ] Image preview (terminal: sixel/kitty protocol; future: GUI)
-- [ ] Source block syntax highlighting (```#+begin_src lang```)
+- [x] Source block syntax highlighting (`#+begin_src lang`) (v0.6.0: inject_fenced_code_blocks)
 
 ### M5: Export & Babel
 - [ ] Export to HTML/Markdown (basic)
@@ -1271,11 +1273,11 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │       │
     │       └─→ Phase 6 M5 (magit parity) ← builds on M1 PTY shell + SPC g stubs
     │
-    ├─→ Phase 7 (embedded docs) ← tutor→KB done, Doom init.scm done, module system next
+    ├─→ Phase 7 (embedded docs) ✅ M1-M4 COMPLETE ← module system remaining
     │
-    ├─→ Phase 8 (GUI backend) ✅ M1-M4, M4.5 (display opt) ✅
+    ├─→ Phase 8 (GUI backend) ✅ M1-M6 COMPLETE
     │       │
-    │       └─→ M5 (Emacs display patterns) → M6 (variable-height) → M7+ (images, PDF)
+    │       └─→ M7+ (images, PDF)
     │
     ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
     │
@@ -1283,17 +1285,13 @@ Phase 3e (editor essentials) ✅ COMPLETE
 ```
 
 **Next priority order:**
-1. **Phase 8 M3 remaining** (GUI polish) — vertical line color bug in insert mode
-2. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
-3. **Phase 8 M5** (Emacs display patterns) — glyph matrix hashing, line-level dirty tracking, scroll region blit, idle deferred work
-4. **Phase 8 M6** (Variable-height lines & mixed fonts) — paragraph layout, headings/headers with scaled font sizes (org-mode/markdown), decorations
-5. **Rendering dedup** — extract shared view model between terminal and GUI renderers (groundwork for Phase 8 M6+)
-6. **Phase 8 M7-M9** (GUI) — inline images, PDF, mouse drag-select
-7. **Phase 4c M3 remaining** — variable hover, watch expressions
-8. **LSP packaging review** — multi-language defaults, user-configurable server selection
-9. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
-10. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
-11. **Phase 9** (Org-Mode Editing) — full org-mode environment
+1. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
+2. **Phase 8 M8-M9** (GUI) — PDF preview, advanced image features
+3. **Phase 4c M3 remaining** — variable hover, watch expressions
+4. **LSP packaging review** — multi-language defaults, user-configurable server selection
+5. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
+6. **Phase 10** (Package System ADR) — decide package architecture before more subsystems land
+7. **Phase 9** (Org-Mode Editing) — full org-mode environment
 
 ---
 
@@ -1316,4 +1314,6 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | v0.4.1 modularization | 266 ✅ | 6 file splits, 12 code smell fixes, model-agnostic prompts |
 | v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
 | v0.5.1 vim parity + fixes | 36 ✅ | ghost cursor, status bar, block visual, ignorecase, :g/:v, C-t/C-d, cached theme resolution |
-| **Total** | **1,677** | All passing, 0 failures |
+| v0.6.0 GUI + frameworks | 575 ✅ | display regions, BufferView/BufferMode, keymap overlays, Magit, swap files, variable-height, mouse |
+| v0.7.0 docs + agent | 47 ✅ | help content, contextual help, user help nodes, config health, display policy, mouse focus |
+| **Total** | **2,299** | All passing, 0 failures |

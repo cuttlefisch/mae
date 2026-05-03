@@ -76,6 +76,25 @@ Parent with percentage cookie [33%]:
 - [ ] Beta
 - [ ] Gamma
 
+## Inline Images
+
+Default width (fits to text area):
+
+![Test image](test-image.png)
+
+Explicit width via attribute comment:
+
+<!-- width=200 -->
+![Small test image](test-image.png)
+
+Curly-brace width attribute:
+
+![Sized image](test-image.png){width=100}
+
+Missing image (should show placeholder):
+
+![Missing](does-not-exist.png)
+
 ## Everything Together
 
 This paragraph has **bold**, *italic*, `code`, ~~strikethrough~~, and a

@@ -172,4 +172,73 @@ fn new_commands_registered() {
     }
 }
 
+// --- Buffer switch position preservation ---
+
+#[test]
+fn switch_buffer_preserves_cursor_position() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_rope(ropey::Rope::from_str("line 0\nline 1\nline 2\nline 3\n"));
+    let mut buf1 = Buffer::new();
+    buf1.replace_rope(ropey::Rope::from_str("other file\n"));
+    editor.buffers.push(buf1);
+
+    // Move cursor in buffer 0 to (2, 3)
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 3;
+    win.scroll_offset = 1;
+
+    // Switch to buffer 1
+    editor.switch_to_buffer(1);
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
+
+    // Switch back to buffer 0 — position should be restored
+    editor.switch_to_buffer(0);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_row, 2);
+    assert_eq!(win.cursor_col, 3);
+    assert_eq!(win.scroll_offset, 1);
+}
+
+#[test]
+fn switch_buffer_clamps_to_shrunk_file() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_rope(ropey::Rope::from_str("line 0\nline 1\nline 2\n"));
+    let mut buf1 = Buffer::new();
+    buf1.replace_rope(ropey::Rope::from_str("x\n"));
+    editor.buffers.push(buf1);
+
+    // Position at line 2 in buffer 0
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 3;
+
+    // Switch away, shrink buffer 0
+    editor.switch_to_buffer(1);
+    editor.buffers[0].replace_rope(ropey::Rope::from_str("short\n"));
+
+    // Switch back — should clamp to valid position
+    editor.switch_to_buffer(0);
+    let win = editor.window_mgr.focused_window();
+    assert!(win.cursor_row < editor.buffers[0].line_count());
+}
+
+#[test]
+fn next_prev_buffer_preserves_position() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_rope(ropey::Rope::from_str("aaa\nbbb\nccc\n"));
+    let mut buf1 = Buffer::new();
+    buf1.replace_rope(ropey::Rope::from_str("xxx\n"));
+    editor.buffers.push(buf1);
+
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    // next-buffer saves state + cycles
+    editor.dispatch_builtin("next-buffer");
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
+    // Switch back
+    editor.dispatch_builtin("prev-buffer");
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
+}
+
 // --- New keybindings ---

@@ -533,5 +533,22 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "terminal_at_file".into(),
+            description: "Open a terminal at the directory containing a file. If no path given, uses the current buffer's file. Equivalent to 'cd <dir> && $SHELL'.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "path".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "File path (terminal opens in its parent directory). Omit to use current buffer.".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
     ]
 }

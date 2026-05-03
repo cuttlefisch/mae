@@ -174,6 +174,14 @@ pub(crate) fn render_buffer(
             rope_chars.iter().collect()
         };
 
+        // Check for an image display region on this line. When found, the
+        // replacement text is already set to "[Image: filename]" by
+        // compute_image_regions(). We detect the image region here so we can
+        // apply the `markup.image` style to that replacement span.
+        let image_region_on_line = effective_regions.iter().find(|r| {
+            r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr && r.image.is_some()
+        });
+
         let line_num = gutter_common::format_line_number(
             line_idx,
             win.cursor_row,
@@ -198,7 +206,9 @@ pub(crate) fn render_buffer(
             }
             None => (' ', gutter_style),
         };
-        let line_text_style = if stopped_line == Some(line_idx_u32) {
+        let line_text_style = if image_region_on_line.is_some() {
+            ts(editor, "markup.image")
+        } else if stopped_line == Some(line_idx_u32) {
             stopped_line_style
         } else {
             text_style
@@ -370,6 +380,14 @@ pub(crate) fn render_buffer(
                 }
             }
 
+            // Image region: apply markup.image style to the placeholder text.
+            if image_region_on_line.is_some() {
+                let image_style = ts(editor, "markup.image");
+                for s in styles.iter_mut() {
+                    *s = image_style;
+                }
+            }
+
             // Diagnostic underlines (wavy in GUI, underlined in TUI).
             if editor.lsp_diagnostics_inline {
                 if let Some(path) = buf.file_path() {
@@ -387,6 +405,24 @@ pub(crate) fn render_buffer(
                         let ce = ds.col_end.max(cs + 1).min(full_count);
                         for s in styles[cs..ce].iter_mut() {
                             *s = s.patch(diag_style);
+                        }
+                    }
+                }
+            }
+
+            // Secondary cursors: highlight the cell at each secondary cursor position.
+            if focused && !win.cursor_set.is_single() {
+                let sec_style = ts(editor, "ui.cursor.secondary");
+                for sc in win.cursor_set.secondaries() {
+                    if sc.row == line_idx {
+                        let sc_col = sc.col.saturating_sub(col_offset);
+                        if sc_col < full_count {
+                            styles[sc_col] = styles[sc_col].patch(if let Some(bg) = sec_style.bg {
+                                ratatui::style::Style::default().bg(bg)
+                            } else {
+                                ratatui::style::Style::default()
+                                    .bg(ratatui::style::Color::Rgb(100, 100, 180))
+                            });
                         }
                     }
                 }

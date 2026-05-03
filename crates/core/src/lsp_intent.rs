@@ -70,6 +70,13 @@ pub enum LspIntent {
         line: u32,
         character: u32,
     },
+    /// Request `textDocument/prepareRename` to validate the position is renameable.
+    PrepareRename {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+    },
     /// Request `textDocument/rename`.
     Rename {
         uri: String,
@@ -80,6 +87,15 @@ pub enum LspIntent {
     },
     /// Request `textDocument/formatting`.
     Format { uri: String, language_id: String },
+    /// Request `textDocument/rangeFormatting`.
+    RangeFormat {
+        uri: String,
+        language_id: String,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    },
     /// Request `workspace/symbol`.
     WorkspaceSymbol { language_id: String, query: String },
     /// Request `textDocument/documentSymbol`.

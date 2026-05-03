@@ -60,6 +60,7 @@ pub fn spawn_pending_shells(
 ) {
     let shell_spawns = std::mem::take(&mut editor.pending_shell_spawns);
     let agent_spawns = std::mem::take(&mut editor.pending_agent_spawns);
+    let shell_cwds = std::mem::take(&mut editor.pending_shell_cwds);
     let had_shell_spawns = !shell_spawns.is_empty() || !agent_spawns.is_empty();
 
     // Build theme-aware env vars and color entries once for all spawns.
@@ -83,7 +84,10 @@ pub fn spawn_pending_shells(
     for buf_idx in shell_spawns {
         let (inner_cols, inner_rows) =
             crate::shell_keys::shell_dims_for_buffer(editor, renderer, buf_idx);
-        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
+        let cwd = shell_cwds
+            .get(&buf_idx)
+            .cloned()
+            .or_else(|| editor.active_project_root().map(|p| p.to_path_buf()));
         let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_with_env(inner_cols, inner_rows, cwd, extra_env) {
             Ok(shell) => {
@@ -108,7 +112,10 @@ pub fn spawn_pending_shells(
     for (buf_idx, command) in agent_spawns {
         let (inner_cols, inner_rows) =
             crate::shell_keys::shell_dims_for_buffer(editor, renderer, buf_idx);
-        let cwd = editor.active_project_root().map(|p| p.to_path_buf());
+        let cwd = shell_cwds
+            .get(&buf_idx)
+            .cloned()
+            .or_else(|| editor.active_project_root().map(|p| p.to_path_buf()));
         let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_command(
             inner_cols, inner_rows, &command, cwd, extra_env,

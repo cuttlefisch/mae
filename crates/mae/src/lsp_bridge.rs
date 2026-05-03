@@ -178,8 +178,11 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             generation,
         },
         // Stubs: these intents are queued but the LSP client doesn't
-        // handle them yet.
-        LspIntent::Rename { .. } | LspIntent::Format { .. } => LspCommand::DidClose {
+        // handle them yet. The bridge emits a harmless no-op.
+        LspIntent::PrepareRename { .. }
+        | LspIntent::Rename { .. }
+        | LspIntent::Format { .. }
+        | LspIntent::RangeFormat { .. } => LspCommand::DidClose {
             uri: String::new(),
             language_id: String::new(),
         },

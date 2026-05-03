@@ -298,6 +298,82 @@ pub fn render_cursor(
     }
 }
 
+/// Render thin vertical bars for all secondary cursors in the focused window.
+/// `inner_row`/`inner_col` are the top-left cell coordinates of the buffer content area.
+pub fn render_secondary_cursors(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    frame_layout: Option<&FrameLayout>,
+    inner_row: usize,
+    inner_col: usize,
+    inner_height: usize,
+    gutter_w: usize,
+) {
+    let win = editor.window_mgr.focused_window();
+    if win.cursor_set.is_single() {
+        return;
+    }
+
+    let sec_style = editor.theme.style("ui.cursor.secondary");
+    let sec_color = theme::color_or(sec_style.bg, Color4f::new(0.6, 0.6, 0.9, 0.8));
+
+    let (cw, ch) = canvas.cell_size();
+    let buf = &editor.buffers[win.buffer_idx];
+
+    for cursor in win.cursor_set.secondaries() {
+        // Compute screen position for this secondary cursor.
+        let screen_row = if let Some(layout) = frame_layout {
+            match layout.display_row_of(cursor.row) {
+                Some(r) => r,
+                None => continue, // off-screen or folded
+            }
+        } else {
+            let r = cursor.row.saturating_sub(win.scroll_offset);
+            if r >= inner_height {
+                continue;
+            }
+            r
+        };
+
+        if screen_row >= inner_height {
+            continue;
+        }
+
+        let line_text = if cursor.row < buf.line_count() {
+            let line = buf.rope().line(cursor.row);
+            let s: String = line.chars().collect();
+            s.trim_end_matches('\n').to_string()
+        } else {
+            String::new()
+        };
+
+        let visible_start = win.col_offset;
+        let display_col = mae_core::grapheme::display_width_up_to_grapheme(&line_text, cursor.col)
+            .saturating_sub(mae_core::grapheme::display_width_up_to_grapheme(
+                &line_text,
+                visible_start,
+            ));
+
+        let scale = frame_layout
+            .map(|fl| fl.scale_for_row(cursor.row))
+            .unwrap_or(1.0);
+
+        let pixel_y = if let Some(layout) = frame_layout {
+            layout
+                .pixel_y_for_row(cursor.row)
+                .unwrap_or((inner_row + screen_row) as f32 * ch)
+        } else {
+            (inner_row + screen_row) as f32 * ch
+        };
+
+        let pixel_x = (inner_col + gutter_w + display_col) as f32 * cw;
+        let scaled_ch = ch * scale;
+
+        // Draw thin vertical bar (2px wide).
+        canvas.draw_pixel_rect(pixel_x, pixel_y, 2.0, scaled_ch, sec_color);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

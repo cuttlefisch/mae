@@ -63,7 +63,6 @@ impl Editor {
 
         // Delete from newline through leading whitespace of next line
         let delete_end = newline_pos + 1 + leading_ws;
-        self.buffers[idx].delete_range(newline_pos, delete_end);
 
         // Insert a single space (unless current line was empty or next line was empty after stripping)
         let next_remaining = &next_line_text[next_line_text
@@ -72,9 +71,13 @@ impl Editor {
             .map(|(i, _)| i)
             .unwrap_or(next_line_text.len())..];
         let next_has_content = !next_remaining.is_empty() && next_remaining != "\n";
+
+        self.buffers[idx].begin_undo_group();
+        self.buffers[idx].delete_range(newline_pos, delete_end);
         if next_has_content {
             self.buffers[idx].insert_text_at(newline_pos, " ");
         }
+        self.buffers[idx].end_undo_group();
     }
 
     /// Toggle the case of the character under the cursor and advance.
@@ -94,8 +97,10 @@ impl Editor {
         } else {
             ch.to_uppercase().collect()
         };
+        self.buffers[idx].begin_undo_group();
         self.buffers[idx].delete_range(offset, offset + 1);
         self.buffers[idx].insert_text_at(offset, &toggled);
+        self.buffers[idx].end_undo_group();
         // Advance cursor
         let win = self.window_mgr.focused_window_mut();
         let new_line_len = self.buffers[idx].line_len(row);

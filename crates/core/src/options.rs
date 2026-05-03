@@ -311,6 +311,15 @@ impl OptionRegistry {
                     valid_values: &[],
                 },
                 OptionDef {
+                    name: "inline_images",
+                    aliases: &["inline-images"],
+                    doc: "Display images inline in org/markdown buffers (GUI renders image, TUI shows placeholder). Toggle with SPC t i.",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.inline_images"),
+                    valid_values: &[],
+                },
+                OptionDef {
                     name: "smartcase",
                     aliases: &[],
                     doc: "When ignorecase is on and pattern contains uppercase, search case-sensitively",

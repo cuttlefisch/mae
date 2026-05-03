@@ -616,20 +616,30 @@ fn render_window_area(
                     };
                     // Conversation buffers show streaming indicator in title.
                     let title = if buf.kind == BufferKind::Conversation {
-                        let streaming_indicator = if let Some(conv) = buf.conversation() {
-                            if conv.streaming {
-                                if let Some(start) = conv.streaming_start {
-                                    format!(" [waiting... {}s] ", start.elapsed().as_secs())
+                        let (streaming_indicator, new_content_indicator) =
+                            if let Some(conv) = buf.conversation() {
+                                let si = if conv.streaming {
+                                    if let Some(start) = conv.streaming_start {
+                                        format!(" [waiting... {}s]", start.elapsed().as_secs())
+                                    } else {
+                                        " [waiting...]".to_string()
+                                    }
                                 } else {
-                                    " [waiting...] ".to_string()
-                                }
+                                    String::new()
+                                };
+                                let nci = if conv.has_new_content_below() {
+                                    " ↓ New content below"
+                                } else {
+                                    ""
+                                };
+                                (si, nci)
                             } else {
-                                String::new()
-                            }
-                        } else {
-                            String::new()
-                        };
-                        format!(" {}{} ", buf.name, streaming_indicator)
+                                (String::new(), "")
+                            };
+                        format!(
+                            " {}{}{} ",
+                            buf.name, streaming_indicator, new_content_indicator
+                        )
                     } else {
                         let modified = if buf.modified { " [+]" } else { "" };
                         format!(" {}{} ", buf.name, modified)
@@ -877,6 +887,17 @@ fn render_gui_cursor(
             };
             cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
+
+        // Render secondary cursors (multi-cursor mode).
+        cursor::render_secondary_cursors(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
     }
 }
 

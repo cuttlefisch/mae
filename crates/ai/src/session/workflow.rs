@@ -254,6 +254,8 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
 
         "git_status" | "git_diff" | "git_log" | "github_pr_status" => Some("git"),
 
+        "execute_command" => Some("scrolling"),
+
         _ => None,
     }
 }

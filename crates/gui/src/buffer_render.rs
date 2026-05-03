@@ -583,7 +583,41 @@ pub fn render_buffer_content(
         }
     }
 
-    // Pass 5: Diagnostic inline underlines (wavy) + virtual text.
+    // Pass 5 (image): Render inline images below their line's text.
+    for ll in frame_layout.lines.iter() {
+        if ll.is_wrap_continuation {
+            continue;
+        }
+        if let Some(ref img_layout) = ll.image {
+            let img_y = ll.pixel_y + ll.line_height;
+            // Try to load and draw the image; fall back to placeholder text on failure.
+            let loaded = canvas.load_image(&img_layout.path).cloned();
+            match loaded {
+                Some(img) => {
+                    canvas.draw_image_at(
+                        &img,
+                        img_layout.pixel_x,
+                        img_y,
+                        img_layout.display_width,
+                        img_layout.display_height,
+                    );
+                }
+                None => {
+                    // Render error placeholder in the image area.
+                    let placeholder_fg = theme::ts_fg(editor, "markup.image");
+                    let filename = img_layout
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| img_layout.path.to_string_lossy().to_string());
+                    let placeholder = format!("[Image: {}]", filename);
+                    canvas.draw_text_at_y(img_y, text_col, &placeholder, placeholder_fg, 1.0);
+                }
+            }
+        }
+    }
+
+    // Pass 6: Diagnostic inline underlines (wavy) + virtual text.
     if editor.lsp_diagnostics_inline {
         if let Some(path) = buf.file_path() {
             let uri = mae_core::path_to_uri(path);

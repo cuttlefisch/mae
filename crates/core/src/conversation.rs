@@ -207,6 +207,10 @@ pub struct Conversation {
     pub link_descriptive: bool,
     /// Whether to render inline bold/italic/code spans.
     pub render_markup: bool,
+    /// When true, the user has scrolled up during streaming and we should
+    /// NOT auto-follow new content. Cleared on `scroll_to_bottom()`.
+    /// Emacs lesson: `comint-scroll-to-bottom-on-output`.
+    pub scroll_locked: bool,
 }
 
 impl Default for Conversation {
@@ -237,6 +241,7 @@ impl Conversation {
             rendered_links: Vec::new(),
             link_descriptive: true,
             render_markup: true,
+            scroll_locked: false,
         };
         conv.rebuild_render_cache();
         conv
@@ -829,8 +834,12 @@ impl Conversation {
     // -----------------------------------------------------------------------
 
     /// Scroll conversation history up by `n` lines (toward older content).
+    /// If streaming, locks scroll so auto-follow doesn't yank the view away.
     pub fn scroll_up(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_add(n);
+        if self.streaming {
+            self.scroll_locked = true;
+        }
     }
 
     /// Scroll conversation history down by `n` lines (toward newer content).
@@ -841,6 +850,14 @@ impl Conversation {
     /// Jump to the bottom of the conversation (re-enables auto-scroll).
     pub fn scroll_to_bottom(&mut self) {
         self.scroll = 0;
+        self.scroll_locked = false;
+    }
+
+    /// True when the user scrolled up during streaming and new content
+    /// has arrived below their viewport. Used by renderers to show a
+    /// "↓ New content below" indicator.
+    pub fn has_new_content_below(&self) -> bool {
+        self.scroll_locked && self.scroll > 0
     }
 
     /// Jump to the top of the conversation history.
@@ -1649,5 +1666,56 @@ mod tests {
             !spans.iter().any(|s| s.theme_key == "markup.literal"),
             "expected no markup.literal when render_markup=false"
         );
+    }
+
+    #[test]
+    fn scroll_locked_set_on_scroll_up_during_streaming() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        assert!(!conv.scroll_locked);
+        conv.scroll_up(3);
+        assert!(conv.scroll_locked, "scroll_up during streaming should lock");
+        assert_eq!(conv.scroll, 3);
+    }
+
+    #[test]
+    fn scroll_locked_not_set_when_not_streaming() {
+        let mut conv = Conversation::new();
+        conv.scroll_up(3);
+        assert!(
+            !conv.scroll_locked,
+            "scroll_up without streaming should not lock"
+        );
+    }
+
+    #[test]
+    fn scroll_locked_cleared_on_scroll_to_bottom() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        conv.scroll_up(5);
+        assert!(conv.scroll_locked);
+        conv.scroll_to_bottom();
+        assert!(!conv.scroll_locked);
+        assert_eq!(conv.scroll, 0);
+    }
+
+    #[test]
+    fn has_new_content_below_true_when_locked_and_scrolled() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        conv.scroll_up(5);
+        // Still streaming — has_new_content_below is true (content arriving)
+        assert!(conv.has_new_content_below());
+        // After streaming ends, still true (content arrived while scrolled)
+        conv.end_streaming();
+        assert!(conv.has_new_content_below());
+    }
+
+    #[test]
+    fn has_new_content_below_false_when_at_bottom() {
+        let mut conv = Conversation::new();
+        conv.scroll_locked = true;
+        conv.scroll = 0; // at bottom
+        assert!(!conv.has_new_content_below());
     }
 }

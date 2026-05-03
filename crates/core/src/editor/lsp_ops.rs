@@ -375,6 +375,188 @@ impl Editor {
         self.set_status("LSP format: awaiting server response");
     }
 
+    /// Queue a `textDocument/rangeFormatting` request for the visual selection
+    /// or fall back to full-file formatting if not in visual mode.
+    pub fn lsp_request_range_format(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else {
+            self.set_status("LSP format: buffer has no file path");
+            return;
+        };
+        let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
+            self.set_status("LSP format: unsupported language");
+            return;
+        };
+        let uri = crate::lsp_intent::path_to_uri(path);
+
+        if let crate::Mode::Visual(_) = self.mode {
+            let win = self.window_mgr.focused_window();
+            let start_row = self.visual_anchor_row.min(win.cursor_row);
+            let end_row = self.visual_anchor_row.max(win.cursor_row);
+            let start_col = if start_row == self.visual_anchor_row {
+                self.visual_anchor_col
+            } else {
+                win.cursor_col
+            };
+            let end_col = if end_row == win.cursor_row {
+                win.cursor_col
+            } else {
+                self.visual_anchor_col
+            };
+            self.pending_lsp_requests
+                .push(crate::LspIntent::RangeFormat {
+                    uri,
+                    language_id: lang_id,
+                    start_line: start_row as u32,
+                    start_char: start_col as u32,
+                    end_line: end_row as u32,
+                    end_char: end_col as u32,
+                });
+            self.set_status("LSP range format: awaiting server response");
+        } else {
+            // Fall back to full-file format
+            self.pending_lsp_requests.push(crate::LspIntent::Format {
+                uri,
+                language_id: lang_id,
+            });
+            self.set_status("LSP format: awaiting server response");
+        }
+    }
+
+    /// Open a *Rename Preview* buffer showing the unified diff of all
+    /// affected locations. Called by the binary when a rename workspace edit
+    /// arrives and preview mode is active.
+    pub fn show_rename_preview(&mut self, edits_json: &str, new_name: &str) {
+        let Ok(edits) = serde_json::from_str::<Vec<(String, Vec<TextEditJson>)>>(edits_json) else {
+            self.set_status("[LSP] failed to parse rename preview");
+            return;
+        };
+
+        let mut diff_text = format!("Rename Preview → '{}'\n\n", new_name);
+        let mut total_changes = 0usize;
+
+        for (uri, text_edits) in &edits {
+            let path = uri.strip_prefix("file://").unwrap_or(uri);
+            diff_text.push_str(&format!("--- {}\n+++ {}\n", path, path));
+
+            // Read buffer content for context
+            let buf_idx = self
+                .buffers
+                .iter()
+                .position(|b| b.file_path().map(|p| p.to_string_lossy()) == Some(path.into()));
+
+            if let Some(idx) = buf_idx {
+                let buf = &self.buffers[idx];
+                for edit in text_edits {
+                    let line = edit.start_line as usize;
+                    if line < buf.rope().len_lines() {
+                        let line_text: String = buf.rope().line(line).chars().collect();
+                        let trimmed = line_text.trim_end_matches('\n');
+                        diff_text.push_str(&format!(
+                            "@@ -{},{} +{},{} @@\n",
+                            line + 1,
+                            1,
+                            line + 1,
+                            1
+                        ));
+                        diff_text.push_str(&format!("-{}\n", trimmed));
+                        // Show the line with the edit applied
+                        let start_c = edit.start_character as usize;
+                        let end_c = edit.end_character as usize;
+                        let mut new_line = String::new();
+                        for (i, ch) in trimmed.char_indices() {
+                            let char_idx = trimmed[..i].chars().count();
+                            if char_idx == start_c {
+                                new_line.push_str(&edit.new_text);
+                            }
+                            if char_idx < start_c || char_idx >= end_c {
+                                new_line.push(ch);
+                            }
+                        }
+                        // Handle case where edit is at end of line
+                        if start_c >= trimmed.chars().count() {
+                            new_line.push_str(&edit.new_text);
+                        }
+                        diff_text.push_str(&format!("+{}\n", new_line));
+                        total_changes += 1;
+                    }
+                }
+            } else {
+                diff_text.push_str(&format!("  (file not open: {})\n", path));
+                total_changes += text_edits.len();
+            }
+        }
+
+        diff_text.push_str(&format!(
+            "\n{} change(s) across {} file(s)",
+            total_changes,
+            edits.len()
+        ));
+        diff_text.push_str("\nPress Enter to apply, Esc to abort");
+
+        // Create or reuse the rename preview buffer
+        let preview_name = "*Rename Preview*";
+        let preview_idx = self.buffers.iter().position(|b| b.name == preview_name);
+        let idx = if let Some(idx) = preview_idx {
+            self.buffers[idx].replace_contents(&diff_text);
+            idx
+        } else {
+            let mut buf = crate::buffer::Buffer::new();
+            buf.name = preview_name.to_string();
+            buf.replace_contents(&diff_text);
+            buf.modified = false;
+            self.buffers.push(buf);
+            self.buffers.len() - 1
+        };
+
+        // Store the edits JSON for later application
+        self.pending_rename_edit = Some(edits_json.to_string());
+
+        // Display the preview buffer
+        let win = self.window_mgr.focused_window_mut();
+        win.buffer_idx = idx;
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+        win.scroll_offset = 0;
+
+        self.set_status(format!(
+            "[LSP] Rename preview: {} change(s) — Enter to apply, Esc to abort",
+            total_changes
+        ));
+    }
+
+    /// Apply the pending rename edit and close the preview buffer.
+    pub fn apply_pending_rename(&mut self) {
+        let edits_json = match self.pending_rename_edit.take() {
+            Some(j) => j,
+            None => return,
+        };
+        self.apply_workspace_edit_json(&edits_json);
+        // Remove the preview buffer
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == "*Rename Preview*")
+        {
+            self.kill_buffer_at(idx);
+        }
+        self.set_status("[LSP] Rename applied");
+    }
+
+    /// Abort a pending rename and close the preview buffer.
+    pub fn abort_pending_rename(&mut self) {
+        self.pending_rename_edit = None;
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == "*Rename Preview*")
+        {
+            self.kill_buffer_at(idx);
+        }
+        self.set_status("[LSP] Rename aborted");
+    }
+
     /// Queue a `textDocument/didOpen` notification for the active buffer
     /// (if it has a file path with a known language).
     pub fn lsp_notify_did_open(&mut self) {

@@ -12,12 +12,29 @@
 //! if the renderer sees different spans, line heights will not match.
 
 use std::hash::{Hash, Hasher};
-
-use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
-use mae_core::{Buffer, Editor, HighlightSpan, Window};
+use std::path::PathBuf;
 
 use crate::buffer_render;
 use crate::gutter;
+use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
+use mae_core::{Buffer, Editor, HighlightSpan, Window};
+
+/// Layout information for an inline image on a line.
+///
+/// When a `DisplayRegion` with `image: Some(...)` covers a line, `compute_layout`
+/// computes the display dimensions of the image and stores them here. The GUI
+/// renderer uses this to draw the image below the line's text area.
+#[derive(Debug, Clone)]
+pub struct ImageLayout {
+    /// Resolved absolute path to the image file.
+    pub path: PathBuf,
+    /// Display width in pixels (capped to text area width).
+    pub display_width: f32,
+    /// Display height in pixels (capped to 400px, aspect-ratio preserved).
+    pub display_height: f32,
+    /// Pixel X offset of the image's left edge (= text_col * cell_width).
+    pub pixel_x: f32,
+}
 
 /// Layout for one visible display row.
 ///
@@ -57,6 +74,9 @@ pub struct LineLayout {
     /// Content hash for this line (chars + scale). Used to detect whether a
     /// line changed between frames for the tiered redisplay optimization.
     pub content_hash: u64,
+    /// Inline image layout, if this line contains an image display region.
+    /// Only set on the first (non-continuation) segment of the line.
+    pub image: Option<ImageLayout>,
 }
 
 /// Complete layout for one window's visible content area.
@@ -356,6 +376,48 @@ pub fn compute_layout(
                 .iter()
                 .any(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start);
 
+        // Check for an image display region covering this line.
+        let image_layout = effective_regions
+            .iter()
+            .find(|r| {
+                r.byte_start < line_byte_end && r.byte_end > line_byte_start && r.image.is_some()
+            })
+            .and_then(|r| r.image.as_ref())
+            .map(|attrs| {
+                let text_area_px = (text_width as f32) * cell_width;
+                let max_w = if let Some(explicit_w) = attrs.width {
+                    (explicit_w as f32).min(text_area_px)
+                } else {
+                    text_area_px
+                };
+                const MAX_H: f32 = 400.0;
+                // Use cached dimensions from ImageAttrs (populated at region creation).
+                // Fall back to disk read, then to a square if unreadable.
+                let (img_w, img_h) = if attrs.natural_width > 0 && attrs.natural_height > 0 {
+                    (attrs.natural_width as f32, attrs.natural_height as f32)
+                } else {
+                    image_natural_size(&attrs.path)
+                };
+                let (display_width, display_height) = if img_w > 0.0 && img_h > 0.0 {
+                    let aspect = img_w / img_h;
+                    let w = max_w;
+                    let h = w / aspect;
+                    if h <= MAX_H {
+                        (w, h)
+                    } else {
+                        (MAX_H * aspect, MAX_H)
+                    }
+                } else {
+                    (max_w.min(MAX_H), max_w.min(MAX_H))
+                };
+                ImageLayout {
+                    path: attrs.path.clone(),
+                    display_width,
+                    display_height,
+                    pixel_x: text_col as f32 * cell_width,
+                }
+            });
+
         let (display_chars_vec, display_map_vec) = if has_display_regions {
             mae_core::display_region::apply_display_regions_to_line(
                 &rope_chars,
@@ -461,6 +523,7 @@ pub fn compute_layout(
                         None
                     },
                     content_hash,
+                    image: if is_first { image_layout.clone() } else { None },
                 });
 
                 pixel_y += seg_height;
@@ -469,6 +532,10 @@ pub fn compute_layout(
                 if pos >= full_count {
                     break;
                 }
+            }
+            // Reserve vertical space for inline image below the text line.
+            if let Some(ref img) = image_layout {
+                pixel_y += img.display_height;
             }
         } else {
             // No wrap — single entry per line.
@@ -528,9 +595,14 @@ pub fn compute_layout(
                     None
                 },
                 content_hash,
+                image: image_layout.clone(),
             });
 
             pixel_y += line_height;
+            // Reserve vertical space for inline image below the text line.
+            if let Some(ref img) = image_layout {
+                pixel_y += img.display_height;
+            }
         }
 
         line_idx += 1;
@@ -550,6 +622,55 @@ pub fn compute_layout(
         scrollbar_col,
         total_lines: buf.display_line_count(),
         scroll_offset: win.scroll_offset,
+    }
+}
+
+/// Read the natural (pixel) dimensions of an image file.
+///
+/// Uses Skia's image decoding to avoid an extra dependency. Returns `(0.0, 0.0)`
+/// on any error (file not found, unsupported format, I/O failure).
+fn image_natural_size(path: &std::path::Path) -> (f32, f32) {
+    // Handle SVG via usvg parsing (no full rasterization needed for dimensions).
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false)
+    {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut opts = resvg::usvg::Options::default();
+            let db = opts.fontdb_mut();
+            db.load_system_fonts();
+            for name in &[
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+                "Noto Sans Mono",
+                "monospace",
+            ] {
+                db.set_monospace_family(*name);
+            }
+            for name in &["DejaVu Sans", "Liberation Sans", "Noto Sans", "sans-serif"] {
+                db.set_sans_serif_family(*name);
+            }
+            for name in &["DejaVu Serif", "Liberation Serif", "Noto Serif", "serif"] {
+                db.set_serif_family(*name);
+            }
+            if let Ok(tree) = resvg::usvg::Tree::from_data(&bytes, &opts) {
+                let size = tree.size();
+                return (size.width(), size.height());
+            }
+        }
+        return (0.0, 0.0);
+    }
+    // Raster path: decode with Skia.
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return (0.0, 0.0),
+    };
+    let skia_data = skia_safe::Data::new_copy(&data);
+    match skia_safe::Image::from_encoded(skia_data) {
+        Some(img) => (img.width() as f32, img.height() as f32),
+        None => (0.0, 0.0),
     }
 }
 
