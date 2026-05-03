@@ -3039,51 +3039,88 @@ impl Editor {
             _ => {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
                 let viewport_height = self.viewport_height;
+                let steps = lines * scroll_speed;
 
-                // Phase 1: Fold-aware scroll stepping (needs &mut win + &buf).
+                // Phase 1: Sub-line-aware scroll stepping.
+                // Pre-compute visual rows for the range around scroll_offset.
                 {
+                    let scroll = self.window_mgr.focused_window().scroll_offset;
+                    let range_start = scroll.saturating_sub(2);
+                    let range_end = (scroll + viewport_height + 2).min(buf_line_count);
+                    let row_cache: Vec<(usize, usize)> = (range_start..range_end)
+                        .map(|l| (l, self.line_visual_rows(buf_idx, l)))
+                        .collect();
+                    let lvr = |line: usize| -> usize {
+                        row_cache
+                            .iter()
+                            .find(|(l, _)| *l == line)
+                            .map(|(_, r)| *r)
+                            .unwrap_or(1)
+                    };
+
                     let buf = &self.buffers[buf_idx];
                     let win = self.window_mgr.focused_window_mut();
-                    let steps = lines * scroll_speed;
                     if delta > 0 {
+                        // Scroll up (reveal lines above).
                         for _ in 0..steps {
-                            let prev = buf.prev_visible_line(win.scroll_offset);
-                            if prev >= win.scroll_offset {
-                                break;
+                            if win.scroll_top_skip > 0 {
+                                win.scroll_top_skip -= 1;
+                            } else {
+                                let prev = buf.prev_visible_line(win.scroll_offset);
+                                if prev >= win.scroll_offset {
+                                    break;
+                                }
+                                let prev_rows = lvr(prev);
+                                win.scroll_offset = prev;
+                                win.scroll_top_skip = if prev_rows > 1 { prev_rows - 2 } else { 0 };
                             }
-                            win.scroll_offset = prev;
                         }
                     } else {
+                        // Scroll down (hide lines above).
                         let max_scroll = buf_line_count.saturating_sub(viewport_height);
                         for _ in 0..steps {
                             if win.scroll_offset >= max_scroll {
                                 break;
                             }
-                            let next = buf.next_visible_line(win.scroll_offset);
-                            if next <= win.scroll_offset {
-                                break;
+                            let top_rows = lvr(win.scroll_offset);
+                            let remaining = top_rows.saturating_sub(win.scroll_top_skip);
+                            if remaining > 1 {
+                                win.scroll_top_skip += 1;
+                            } else {
+                                let next = buf.next_visible_line(win.scroll_offset);
+                                if next <= win.scroll_offset {
+                                    break;
+                                }
+                                win.scroll_offset = next.min(max_scroll);
+                                win.scroll_top_skip = 0;
                             }
-                            win.scroll_offset = next.min(max_scroll);
                         }
                     }
                 }
 
                 // Phase 2: Compute bottom visible row using canonical line_visual_rows.
-                // (needs &self for line_visual_rows — no mutable borrow active)
                 let scroll_off = self.window_mgr.focused_window().scroll_offset;
+                let skip = self.window_mgr.focused_window().scroll_top_skip;
                 let bottom = {
                     let buf = &self.buffers[buf_idx];
                     let max_row = buf_line_count.saturating_sub(1);
                     let mut visual = 0;
                     let mut last_fit = scroll_off;
                     let mut line = scroll_off;
+                    let mut first = true;
                     while line <= max_row {
                         let rows = self.line_visual_rows(buf_idx, line);
                         if rows > 0 {
-                            if visual + rows > viewport_height {
+                            let effective = if first {
+                                rows.saturating_sub(skip)
+                            } else {
+                                rows
+                            };
+                            first = false;
+                            if visual + effective > viewport_height {
                                 break;
                             }
-                            visual += rows;
+                            visual += effective;
                             last_fit = line;
                         }
                         line = buf.next_visible_line(line);
@@ -3094,7 +3131,7 @@ impl Editor {
                     last_fit
                 };
 
-                // Phase 3: Clamp cursor (needs &mut win again).
+                // Phase 3: Clamp cursor.
                 let buf = &self.buffers[buf_idx];
                 let win = self.window_mgr.focused_window_mut();
                 if win.cursor_row < scroll_off {

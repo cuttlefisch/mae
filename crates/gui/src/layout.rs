@@ -295,7 +295,9 @@ pub fn compute_layout(
         0
     };
 
-    let mut pixel_y = area_row as f32 * cell_height;
+    // Sub-line scroll: offset pixel_y upward to hide top rows of scroll_offset line.
+    let skip_px = win.scroll_top_skip as f32 * cell_height;
+    let mut pixel_y = area_row as f32 * cell_height - skip_px;
     let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
 
     // Pre-compute effective display regions (org-appear: cursor reveals its region).

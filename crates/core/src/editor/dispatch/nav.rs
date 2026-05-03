@@ -419,12 +419,48 @@ impl Editor {
                         }
                     }
                     _ => {
-                        let buf = &self.buffers[idx];
                         let vh = self.viewport_height;
+                        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
+                        let needs_wrapped = (self.effective_word_wrap()
+                            && self.text_area_width > 0)
+                            || has_folds
+                            || self.heading_scale
+                            || self.buffers[idx]
+                                .local_options
+                                .inline_images
+                                .unwrap_or(false);
                         for _ in 0..n {
-                            self.window_mgr
-                                .focused_window_mut()
-                                .scroll_down_line(buf, vh);
+                            if needs_wrapped {
+                                let buf = &self.buffers[idx];
+                                let max_line = buf.display_line_count();
+                                let scroll = self.window_mgr.focused_window().scroll_offset;
+                                let range_start = scroll;
+                                let range_end = (scroll + vh + 2).min(max_line);
+                                let mut row_cache: Vec<(usize, usize)> =
+                                    Vec::with_capacity(range_end - range_start + 1);
+                                for l in range_start..range_end {
+                                    row_cache.push((l, self.line_visual_rows(idx, l)));
+                                }
+                                let buf = &self.buffers[idx];
+                                self.window_mgr.focused_window_mut().scroll_down_line(
+                                    buf,
+                                    vh,
+                                    |line| {
+                                        row_cache
+                                            .iter()
+                                            .find(|(l, _)| *l == line)
+                                            .map(|(_, r)| *r)
+                                            .unwrap_or(1)
+                                    },
+                                );
+                            } else {
+                                let buf = &self.buffers[idx];
+                                self.window_mgr.focused_window_mut().scroll_down_line(
+                                    buf,
+                                    vh,
+                                    |_| 1,
+                                );
+                            }
                         }
                     }
                 }

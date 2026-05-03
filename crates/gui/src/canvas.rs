@@ -266,6 +266,29 @@ impl SkiaCanvas {
         self.surface.canvas().clip_rect(rect, None, None);
     }
 
+    /// Run a closure with drawing clipped to the given cell rectangle.
+    /// Saves and restores the canvas state so the clip doesn't leak.
+    pub fn with_clip(
+        &mut self,
+        row: usize,
+        col: usize,
+        width: usize,
+        height: usize,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let (cw, ch) = self.cell_size();
+        let rect = skia_safe::Rect::from_xywh(
+            col as f32 * cw,
+            row as f32 * ch,
+            width as f32 * cw,
+            height as f32 * ch,
+        );
+        self.surface.canvas().save();
+        self.surface.canvas().clip_rect(rect, None, None);
+        f(self);
+        self.surface.canvas().restore();
+    }
+
     /// Get a cached scaled font. Avoids clone + set_size on every call.
     fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
         let key = (scale * 1000.0) as u32;

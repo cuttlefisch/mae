@@ -664,9 +664,13 @@ fn render_window_area(
                         spans,
                         Some(&glyph_advance_fn),
                     );
-                    buffer_render::render_buffer_content(
-                        canvas, editor, buf, win, is_focused, &fl, spans,
-                    );
+                    // Clip buffer rendering to the inner window area so images
+                    // don't overflow into borders, status line, or command area.
+                    canvas.with_clip(inner_row, inner_col, inner_width, inner_height, |canvas| {
+                        buffer_render::render_buffer_content(
+                            canvas, editor, buf, win, is_focused, &fl, spans,
+                        );
+                    });
                     scrollbar::render_scrollbar(canvas, editor, &fl);
                     layouts_out.insert(*win_id, fl);
                 }

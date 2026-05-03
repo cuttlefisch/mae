@@ -35,6 +35,10 @@ pub struct Window {
     /// cursor_row when scroll_locked was set. Lock clears when cursor_row
     /// diverges (a non-scroll command moved the cursor).
     pub scroll_locked_cursor: usize,
+    /// Number of visual rows hidden at the top of the `scroll_offset` line.
+    /// Used for smooth sub-line scrolling past tall lines (images, wrapped).
+    /// Range: 0 ..< line_visual_rows(scroll_offset). Reset when scroll_offset changes.
+    pub scroll_top_skip: usize,
 }
 
 impl Window {
@@ -50,6 +54,7 @@ impl Window {
             saved_view_states: HashMap::new(),
             scroll_locked: false,
             scroll_locked_cursor: 0,
+            scroll_top_skip: 0,
         }
     }
 
@@ -321,6 +326,7 @@ impl Window {
         let half = viewport_height / 2;
         self.cursor_row = self.cursor_row.saturating_sub(half);
         self.scroll_offset = self.scroll_offset.saturating_sub(half);
+        self.scroll_top_skip = 0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -331,6 +337,7 @@ impl Window {
         let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + half).min(max_row);
         self.scroll_offset = (self.scroll_offset + half).min(max_row);
+        self.scroll_top_skip = 0;
         self.clamp_cursor(buf);
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
@@ -341,6 +348,7 @@ impl Window {
         let page = viewport_height.saturating_sub(2); // keep 2 lines overlap like vim
         self.cursor_row = self.cursor_row.saturating_sub(page);
         self.scroll_offset = self.scroll_offset.saturating_sub(page);
+        self.scroll_top_skip = 0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -351,6 +359,7 @@ impl Window {
         let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + page).min(max_row);
         self.scroll_offset = (self.scroll_offset + page).min(max_row);
+        self.scroll_top_skip = 0;
         self.clamp_cursor(buf);
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
@@ -360,6 +369,7 @@ impl Window {
     pub fn scroll_center(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         self.scroll_offset = self.cursor_row.saturating_sub(half);
+        self.scroll_top_skip = 0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -367,6 +377,7 @@ impl Window {
     /// Scroll so the cursor line is at the top of the screen (zt).
     pub fn scroll_cursor_top(&mut self) {
         self.scroll_offset = self.cursor_row;
+        self.scroll_top_skip = 0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -376,6 +387,7 @@ impl Window {
         if viewport_height > 0 {
             self.scroll_offset = self.cursor_row.saturating_sub(viewport_height - 1);
         }
+        self.scroll_top_skip = 0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -394,6 +406,10 @@ impl Window {
     /// The cursor is clamped to the last buffer line whose visual rows fit
     /// within the viewport, preventing `ensure_scroll_wrapped` from undoing
     /// the scroll on the next frame.
+    ///
+    /// Sub-line scrolling: if the line above scroll_offset is tall (image,
+    /// heading, wrapped), we first set scroll_top_skip to reveal it one row
+    /// at a time, rather than jumping the entire height.
     pub fn scroll_up_line_wrapped<F>(
         &mut self,
         buf: &crate::buffer::Buffer,
@@ -402,29 +418,54 @@ impl Window {
     ) where
         F: Fn(usize) -> usize,
     {
-        // Move to previous visible line (skip folds).
-        self.scroll_offset = buf.prev_visible_line(self.scroll_offset);
         if viewport_height == 0 {
             return;
         }
-        // Walk forward from scroll_offset, counting visual rows, to find
-        // the last buffer row that fits entirely in the viewport.
+
+        if self.scroll_top_skip > 0 {
+            // Still revealing rows of the current scroll_offset line.
+            self.scroll_top_skip -= 1;
+        } else {
+            // Move to previous visible line.
+            let prev = buf.prev_visible_line(self.scroll_offset);
+            if prev < self.scroll_offset {
+                let prev_rows = line_visual_rows(prev);
+                if prev_rows > 1 {
+                    // Tall line: start sub-line scroll, showing last row first.
+                    self.scroll_offset = prev;
+                    self.scroll_top_skip = prev_rows - 2; // -1 for the row we're about to show, -1 more because skip=0 means show all
+                } else {
+                    self.scroll_offset = prev;
+                    self.scroll_top_skip = 0;
+                }
+            }
+        }
+
+        // Clamp cursor to visible viewport.
         let max_row = buf.display_line_count().saturating_sub(1);
         let mut visual = 0;
         let mut bottom = self.scroll_offset;
         let mut line = self.scroll_offset;
+        let skip = self.scroll_top_skip;
+        let mut first = true;
         while line <= max_row {
             let rows = line_visual_rows(line);
             if rows > 0 {
-                if visual + rows > viewport_height {
+                let effective = if first {
+                    rows.saturating_sub(skip)
+                } else {
+                    rows
+                };
+                first = false;
+                if visual + effective > viewport_height {
                     break;
                 }
-                visual += rows;
+                visual += effective;
                 bottom = line;
             }
             line = buf.next_visible_line(line);
             if line <= bottom {
-                break; // safety: prevent infinite loop
+                break;
             }
         }
         if self.cursor_row > bottom {
@@ -435,19 +476,39 @@ impl Window {
         self.scroll_locked_cursor = self.cursor_row;
     }
 
-    /// Scroll down one line (C-e). Cursor stays on screen.
-    /// Skips over folded lines so each scroll step moves to the next visible line.
-    pub fn scroll_down_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
-        let max_row = buf.display_line_count().saturating_sub(1);
-        // Move to next visible line (skip folds).
-        let next = buf.next_visible_line(self.scroll_offset);
-        self.scroll_offset = next.min(max_row);
-        // If cursor scrolled above the viewport, push it down to the top visible line.
+    /// Scroll down one line (C-e) with sub-line awareness.
+    ///
+    /// If `scroll_top_skip` is partially hiding the top line, we first
+    /// finish hiding it (increment skip) before advancing `scroll_offset`.
+    /// This makes C-e the smooth inverse of C-y for tall lines.
+    pub fn scroll_down_line<F>(
+        &mut self,
+        buf: &crate::buffer::Buffer,
+        viewport_height: usize,
+        line_visual_rows: F,
+    ) where
+        F: Fn(usize) -> usize,
+    {
+        let top_rows = line_visual_rows(self.scroll_offset);
+        let remaining = top_rows.saturating_sub(self.scroll_top_skip);
+
+        if remaining > 1 {
+            // Still rows visible on the current top line — hide one more.
+            self.scroll_top_skip += 1;
+        } else {
+            // Top line fully consumed — advance to next visible line.
+            let max_row = buf.display_line_count().saturating_sub(1);
+            let next = buf.next_visible_line(self.scroll_offset);
+            self.scroll_offset = next.min(max_row);
+            self.scroll_top_skip = 0;
+        }
+
+        // If cursor scrolled above the viewport, push it down.
         if self.cursor_row < self.scroll_offset {
             self.cursor_row = self.scroll_offset;
             self.clamp_cursor(buf);
         }
-        let _ = viewport_height; // used by scroll_up_line for symmetry
+        let _ = viewport_height;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -530,6 +591,8 @@ impl Window {
     ) where
         F: Fn(usize) -> usize,
     {
+        // Cursor-driven scroll resets sub-line offset.
+        self.scroll_top_skip = 0;
         if viewport_height == 0 {
             return;
         }
@@ -1675,7 +1738,7 @@ mod tests {
         win.scroll_offset = 0;
         // Scroll viewport down 5 lines — cursor at row 0 is now above viewport.
         for _ in 0..5 {
-            win.scroll_down_line(&buf, 20);
+            win.scroll_down_line(&buf, 20, |_| 1);
         }
         assert_eq!(win.scroll_offset, 5);
         // Cursor must have been pushed to the top of the viewport.
@@ -1706,7 +1769,7 @@ mod tests {
         win.scroll_offset = 0;
         // Scroll 30 lines — well past the cursor's original position.
         for _ in 0..30 {
-            win.scroll_down_line(&buf, 20);
+            win.scroll_down_line(&buf, 20, |_| 1);
         }
         assert_eq!(win.scroll_offset, 30);
         // Cursor should be at top of viewport.
@@ -2119,7 +2182,7 @@ mod tests {
     fn scroll_down_line_sets_scroll_locked() {
         let buf = make_buffer(100);
         let mut win = Window::new(0, 0);
-        win.scroll_down_line(&buf, 20);
+        win.scroll_down_line(&buf, 20, |_| 1);
         assert!(win.scroll_locked);
     }
 
@@ -2141,7 +2204,7 @@ mod tests {
         win.cursor_row = 15;
         win.scroll_offset = 0;
         for _ in 0..5 {
-            win.scroll_down_line(&buf, 30);
+            win.scroll_down_line(&buf, 30, |_| 1);
         }
         assert_eq!(win.scroll_offset, 5);
         for _ in 0..5 {
@@ -2212,7 +2275,7 @@ mod tests {
         win.scroll_offset = 0;
 
         // C-e sets scroll_locked and records cursor position
-        win.scroll_down_line(&buf, 30);
+        win.scroll_down_line(&buf, 30, |_| 1);
         assert!(win.scroll_locked);
         assert_eq!(win.scroll_locked_cursor, win.cursor_row);
         let locked_cursor = win.scroll_locked_cursor;
