@@ -54,6 +54,34 @@ impl Editor {
                 self.dispatch_builtin("view-messages");
                 true
             }
+            "help-edit" => {
+                // `:help-edit <topic>` → open/create ~/.config/mae/help/<topic>.org
+                let topic = args
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("scratch");
+                let help_dir = std::env::var("XDG_CONFIG_HOME")
+                    .ok()
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        std::env::var("HOME")
+                            .ok()
+                            .map(|h| std::path::PathBuf::from(h).join(".config"))
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(".config"))
+                    .join("mae")
+                    .join("help");
+                let _ = std::fs::create_dir_all(&help_dir);
+                let file_path = help_dir.join(format!("{}.org", topic));
+                if !file_path.exists() {
+                    let template = format!(
+                        ":ID: {topic}\n:END:\n#+title: {topic}\n\nWrite your help content here.\n"
+                    );
+                    let _ = std::fs::write(&file_path, template);
+                }
+                self.open_file(file_path.display().to_string());
+                true
+            }
             "help" => {
                 // `:help`  → index; `:help <topic>` → open KB node `topic`
                 // with the same namespace-fallback the AI uses: first try

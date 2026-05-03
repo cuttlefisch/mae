@@ -41,6 +41,7 @@ pub fn seed_kb(
     install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
     install_category_nodes(&mut kb, registry, &keybinding_map);
     install_option_nodes(&mut kb);
+    install_user_help_nodes(&mut kb);
     kb
 }
 
@@ -1020,6 +1021,33 @@ Inline markup spans intentionally exclude `markup.heading` — heading spans \
 would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform \
 line heights in conversation buffers.\n\n\
 See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]\n";
+
+/// Load user-authored help nodes from `~/.config/mae/help/*.org`.
+fn install_user_help_nodes(kb: &mut KnowledgeBase) {
+    let help_dir = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+        })
+        .map(|p| p.join("mae").join("help"));
+
+    if let Some(dir) = help_dir {
+        if dir.is_dir() {
+            let report = kb.ingest_org_dir(&dir);
+            if report.indexed > 0 {
+                tracing::info!(
+                    dir = %dir.display(),
+                    nodes = report.indexed,
+                    skipped = report.skipped_no_id,
+                    "loaded user help nodes"
+                );
+            }
+        }
+    }
+}
 
 /// Install `scheme:<name>` nodes for all Scheme API functions and variables.
 fn install_scheme_nodes(kb: &mut KnowledgeBase) {
@@ -3414,6 +3442,15 @@ mod tests {
         assert!(
             links.contains(&"tutorial:getting-started".to_string()),
             "index should link to tutorial:getting-started"
+        );
+    }
+
+    #[test]
+    fn help_edit_command_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(
+            reg.get("help-edit").is_some(),
+            "help-edit command should be registered"
         );
     }
 

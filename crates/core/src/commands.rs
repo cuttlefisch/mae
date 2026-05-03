@@ -884,6 +884,10 @@ impl CommandRegistry {
         reg.register_builtin("help-close", "Close help buffer");
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
+        reg.register_builtin(
+            "help-edit",
+            "Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>)",
+        );
 
         // Shell / terminal emulator
         reg.register_builtin("terminal", "Open a terminal emulator buffer (:terminal)");
