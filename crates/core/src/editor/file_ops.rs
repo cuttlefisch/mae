@@ -150,8 +150,12 @@ impl Editor {
     }
 
     pub(crate) fn save_current_buffer(&mut self) {
-        self.fire_hook("before-save");
         let idx = self.active_buffer_idx();
+        if self.buffers[idx].kind == crate::BufferKind::Demo {
+            self.set_status("Demo buffer — changes are not saved");
+            return;
+        }
+        self.fire_hook("before-save");
         match self.buffers[idx].save() {
             Ok(()) => {
                 let name = self.buffers[idx].name.clone();
@@ -375,7 +379,13 @@ impl Editor {
         // 7. Sync the output buffer's rope from conversation entries.
         self.sync_conversation_buffer_rope();
 
-        // 8. Record the pair.
+        // 8. Wrap the conversation windows as a group so splits respect the pair.
+        self.window_mgr.wrap_subtree_as_group(
+            &[output_window_id, input_window_id],
+            "conversation".to_string(),
+        );
+
+        // 9. Record the pair.
         self.conversation_pair = Some(super::ConversationPair {
             output_buffer_idx: output_idx,
             input_buffer_idx: input_idx,
@@ -1160,6 +1170,13 @@ impl Editor {
                     }
                 } else {
                     self.set_status(format!("\"{}\" opened", name));
+                }
+                // Graceful degradation: warn user for extreme files.
+                if self.should_degrade_features(new_idx) {
+                    self.set_status(format!(
+                        "\"{}\" opened — large file mode (some features disabled)",
+                        name
+                    ));
                 }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();

@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config code-map code-map-check help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures help
 
 # Default target: release build
 all: build
@@ -168,6 +168,11 @@ code-map:
 ## code-map-check: verify code map is up to date (for CI)
 code-map-check:
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
+
+## gen-fixtures: generate large test fixtures for perf benchmarking
+gen-fixtures:
+	bash assets/gen-large-org.sh
+	bash assets/gen-long-lines.sh
 
 ## clean: remove all build artefacts
 clean:

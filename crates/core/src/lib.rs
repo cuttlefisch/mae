@@ -1,3 +1,4 @@
+pub mod agenda_view;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -37,6 +38,7 @@ pub mod search;
 pub mod session;
 pub mod swap;
 pub mod syntax;
+pub mod table;
 pub mod theme;
 pub mod visual_buffer;
 pub mod window;
@@ -78,8 +80,8 @@ pub use display_policy::{DisplayAction, DisplayPolicy};
 pub use syntax::{
     compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
     detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,
-    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupFlavor,
-    SyntaxMap, SyntaxSpanMap,
+    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupCache,
+    MarkupFlavor, SyntaxMap, SyntaxSpanMap,
 };
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,

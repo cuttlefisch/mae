@@ -3,6 +3,7 @@
 //! Replaces 6 scattered `Option<T>` fields on `Buffer` with a single tagged enum.
 //! Each variant carries the view struct that only that buffer kind uses.
 
+use crate::agenda_view::AgendaView;
 use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
 use crate::file_tree::FileTree;
@@ -26,6 +27,8 @@ pub enum BufferView {
     Visual(Box<VisualBuffer>),
     /// File tree sidebar state.
     FileTree(Box<FileTree>),
+    /// Agenda view state.
+    Agenda(Box<AgendaView>),
 }
 
 impl BufferView {
@@ -109,6 +112,20 @@ impl BufferView {
     pub fn file_tree_mut(&mut self) -> Option<&mut FileTree> {
         match self {
             BufferView::FileTree(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn agenda_view(&self) -> Option<&AgendaView> {
+        match self {
+            BufferView::Agenda(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn agenda_view_mut(&mut self) -> Option<&mut AgendaView> {
+        match self {
+            BufferView::Agenda(a) => Some(a),
             _ => None,
         }
     }

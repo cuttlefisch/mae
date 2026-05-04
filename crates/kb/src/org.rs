@@ -65,20 +65,21 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
     // Heading nodes. Find heading boundaries; for each heading with an
     // ID drawer, its body runs up to the next heading of equal-or-shallower
     // level (or EOF).
-    let mut headings: Vec<(usize, usize, String, Vec<String>)> = Vec::new();
+    let mut headings: Vec<(usize, usize, HeadingMeta)> = Vec::new();
     for (i, line) in lines.iter().enumerate().skip(header.file_header_end) {
         if let Some(level) = heading_level(line) {
-            let (title, inline_tags) = split_heading(line, level);
-            headings.push((i, level, title, inline_tags));
+            let meta = split_heading_meta(line, level);
+            headings.push((i, level, meta));
         }
     }
 
     for hi in 0..headings.len() {
-        let (start, level, title, inline_tags) = headings[hi].clone();
+        let start = headings[hi].0;
+        let level = headings[hi].1;
         let end = headings[(hi + 1)..]
             .iter()
-            .find(|(_, l, _, _)| *l <= level)
-            .map(|(idx, _, _, _)| *idx)
+            .find(|(_, l, _)| *l <= level)
+            .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
         let Some(id) = scan_heading_id(&lines[start + 1..end]) else {
             continue;
@@ -86,8 +87,12 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
         let body_raw = lines[start..end].join("\n");
         let body = rewrite_links(&body_raw);
         let mut tags = header.file_tags.clone();
-        tags.extend(inline_tags);
-        out.push(Node::new(id, title, NodeKind::Note, body).with_tags(tags));
+        tags.extend(headings[hi].2.tags.clone());
+        let mut node =
+            Node::new(id, headings[hi].2.title.clone(), NodeKind::Note, body).with_tags(tags);
+        node.todo_state = headings[hi].2.todo_state.clone();
+        node.priority = headings[hi].2.priority;
+        out.push(node);
     }
 
     out
@@ -181,6 +186,58 @@ fn heading_level(line: &str) -> Option<usize> {
         Some(stars)
     } else {
         None
+    }
+}
+
+/// Structured heading metadata extracted from an org heading line.
+pub struct HeadingMeta {
+    pub title: String,
+    pub tags: Vec<String>,
+    pub todo_state: Option<String>,
+    pub priority: Option<char>,
+}
+
+const TODO_KEYWORDS: &[&str] = &["TODO", "DONE", "NEXT", "WAIT", "CANCELLED", "DEFERRED"];
+
+/// Split a heading line into structured metadata.
+fn split_heading_meta(line: &str, level: usize) -> HeadingMeta {
+    let (title, tags) = split_heading(line, level);
+
+    // Extract TODO keyword and priority from title.
+    let mut rest = title.as_str();
+    let mut todo_state = None;
+    let mut priority = None;
+
+    // Check for TODO keyword at start.
+    for kw in TODO_KEYWORDS {
+        if rest.starts_with(kw) && rest[kw.len()..].starts_with(' ') {
+            todo_state = Some(kw.to_string());
+            rest = rest[kw.len() + 1..].trim_start();
+            break;
+        }
+    }
+
+    // Check for priority [#A] / [#B] / [#C].
+    if rest.starts_with("[#") && rest.len() >= 4 && rest.as_bytes()[3] == b']' {
+        let ch = rest.as_bytes()[2] as char;
+        if ch.is_ascii_uppercase() {
+            priority = Some(ch);
+            rest = rest[4..].trim_start();
+        }
+    }
+
+    // The clean title is the rest after stripping keyword + priority.
+    let clean_title = if todo_state.is_some() || priority.is_some() {
+        rest.to_string()
+    } else {
+        title
+    };
+
+    HeadingMeta {
+        title: clean_title,
+        tags,
+        todo_state,
+        priority,
     }
 }
 

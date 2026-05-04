@@ -553,6 +553,15 @@ impl OptionRegistry {
                     config_key: Some("editor.heading_scale_h3"),
                     valid_values: &[],
                 },
+                OptionDef {
+                    name: "dashboard_dismiss_on_split",
+                    aliases: &["dashboard-dismiss-on-split"],
+                    doc: "Close dashboard windows when any buffer is displayed via a split. Default false (Doom parity: dashboard stays).",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.dashboard_dismiss_on_split"),
+                    valid_values: &[],
+                },
             ],
         }
     }

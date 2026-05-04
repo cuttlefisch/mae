@@ -241,4 +241,80 @@ fn next_prev_buffer_preserves_position() {
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 2);
 }
 
+// Dashboard dismiss on split tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dashboard_default_stays_on_split() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // Default: dashboard_dismiss_on_split = false
+    assert!(!editor.dashboard_dismiss_on_split);
+
+    // Create a Help buffer and display it (Help uses ReuseOrSplit)
+    let mut help_buf = Buffer::new();
+    help_buf.kind = crate::BufferKind::Help;
+    help_buf.name = "[help]".into();
+    editor.buffers.push(help_buf);
+    let help_idx = editor.buffers.len() - 1;
+
+    // Set layout area large enough for splits
+    editor.last_layout_area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+    };
+    editor.display_buffer(help_idx);
+
+    // Dashboard window should still exist (Doom parity)
+    let has_dashboard_win = editor.window_mgr.iter_windows().any(|w| {
+        w.buffer_idx < editor.buffers.len()
+            && editor.buffers[w.buffer_idx].kind == crate::BufferKind::Dashboard
+    });
+    assert!(
+        has_dashboard_win,
+        "Dashboard should stay when dismiss_on_split=false"
+    );
+}
+
+#[test]
+fn dashboard_dismissed_when_option_set() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    editor.dashboard_dismiss_on_split = true;
+
+    // Create a Help buffer and display it
+    let mut help_buf = Buffer::new();
+    help_buf.kind = crate::BufferKind::Help;
+    help_buf.name = "[help]".into();
+    editor.buffers.push(help_buf);
+    let help_idx = editor.buffers.len() - 1;
+
+    editor.last_layout_area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+    };
+    editor.display_buffer(help_idx);
+
+    // No window should show the dashboard anymore (it was replaced, not split)
+    let has_dashboard_win = editor.window_mgr.iter_windows().any(|w| {
+        w.buffer_idx < editor.buffers.len()
+            && editor.buffers[w.buffer_idx].kind == crate::BufferKind::Dashboard
+    });
+    assert!(
+        !has_dashboard_win,
+        "Dashboard should be replaced when option is set"
+    );
+
+    // The window should now show the help buffer
+    let has_help_win = editor
+        .window_mgr
+        .iter_windows()
+        .any(|w| w.buffer_idx == help_idx);
+    assert!(has_help_win, "Help buffer should be visible");
+}
+
 // --- New keybindings ---

@@ -100,6 +100,50 @@ Missing image (should show placeholder):
 
 [[file:does-not-exist.png][Missing image]]
 
+** Strikethrough
+
+This text has +struck through words+ in the middle.
+
+** Blockquotes
+
+> This is a blockquote.
+> It can span multiple lines.
+>> Nested blockquotes work too.
+
+** Horizontal Rules
+
+A horizontal rule below (5+ dashes):
+
+-----
+
+Text continues after the rule.
+
+** Priority Headings
+
+*** TODO [#A] Critical task — priority A (red)                 :urgent:
+*** TODO [#B] Normal task — priority B (yellow)                :work:
+*** TODO [#C] Low priority task — priority C (green)           :later:
+
+** Tables
+
+| Name    | Age | City       |
+|---------+-----+------------|
+| Alice   |  30 | New York   |
+| Bob     |  25 | London     |
+| Charlie |  35 | Tokyo      |
+
+*** Column Justification
+
+Alignment markers in separator lines: =:---= left, =:---:= center, =---:= right.
+
+|   Item   | Qty | Price | Status   |
+|:--------:|:---:|:-----:| ---------|
+|  Apples  |  12 | 1.50  | In Stock |
+| Bananas  | 200 | 0.30  | In Stock |
+| Cherries |   5 | 12.99 | Sold Out |
+
+Try: Tab/S-Tab to navigate cells, SPC m b a to align.
+
 ** Timestamps and Properties
 
 Meeting: <2026-05-01 Thu 10:00>
@@ -107,6 +151,6 @@ Deadline: [2026-05-15 Thu]
 
 ** Everything Together
 
-This paragraph has *bold*, /italic/, =code=, ~verbatim~, and a
+This paragraph has *bold*, /italic/, =code=, ~verbatim~, +strikethrough+, and a
 [[https://example.com][concealed link]] all in one place. The heading above
 should have extra top padding, and code blocks should have a tinted background.

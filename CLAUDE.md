@@ -218,6 +218,69 @@ Environment variable overrides for adapter/server paths:
 - **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
 - **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`
 
+## Developing MAE Inside MAE (MCP Tools)
+
+All 130+ MAE editor tools are exposed via MCP with full parity — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.
+
+### Connection
+
+Socket path: `$XDG_RUNTIME_DIR/mae-mcp.sock` (typically `/run/user/$UID/mae-mcp.sock`).
+Shim: `mae-mcp-shim` — translates MCP JSON-RPC over stdio to the Unix socket.
+
+### Code Navigation (LSP)
+
+| Tool | Purpose |
+|------|---------|
+| `lsp_definition` | Go to definition (structured file + position) |
+| `lsp_references` | Find all references to symbol at point |
+| `lsp_hover` | Type info / docs for symbol |
+| `lsp_workspace_symbol` | Search symbols across workspace |
+| `lsp_document_symbols` | List all symbols in current buffer |
+| `lsp_diagnostics` | Current errors/warnings from LSP |
+
+### Debugging (DAP)
+
+| Tool | Purpose |
+|------|---------|
+| `dap_start` | Launch or attach debug session |
+| `dap_set_breakpoint` | Set breakpoint (conditional/logpoint) |
+| `dap_continue` / `dap_step` | Control execution |
+| `debug_state` | Inspect stack frames, variables |
+
+### Knowledge Base
+
+| Tool | Purpose |
+|------|---------|
+| `kb_search` | Full-text search across all KB nodes |
+| `kb_get` | Fetch a specific node by ID |
+| `kb_links_from` / `kb_links_to` | Navigate the link graph |
+| `kb_graph` | Neighborhood subgraph around a node |
+
+Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (tutorial), `scheme:*` (Scheme API), `option:*` (editor options).
+
+### Buffer / Editor
+
+| Tool | Purpose |
+|------|---------|
+| `buffer_read` / `buffer_write` | Read/edit buffer contents |
+| `project_search` | Ripgrep across project files |
+| `command_list` | List all registered commands |
+| `execute_command` | Dispatch any editor command |
+| `eval_scheme` | Evaluate Scheme expression |
+| `audit_configuration` | Structured config health report |
+| `introspect` | Diagnostic snapshot of editor state |
+
+### Validation
+
+`self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `help`, `project`, `lsp`, `scrolling`.
+
+### When to Use
+
+- **Navigating MAE's own code**: `lsp_definition` / `lsp_references` over raw grep — structured results, no false positives.
+- **Understanding architecture**: `kb_search "window group"` or `kb_get "concept:window"` — curated docs, not raw source.
+- **Debugging MAE**: `dap_start` with `lldb-dap` for Rust, `debug_state` for stack inspection.
+- **Testing changes**: `execute_command` to trigger commands, `self_test_suite` for structured E2E.
+
 ## Related Resources
 
 - **Full architecture spec:** `README.org` (symlink to org-roam node)

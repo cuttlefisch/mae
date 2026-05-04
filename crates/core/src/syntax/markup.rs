@@ -15,6 +15,15 @@ pub enum MarkupFlavor {
     None,
 }
 
+/// Generation-keyed cache for markup spans. Avoids recomputing 17 regex
+/// patterns every frame for org/markdown buffers.
+#[derive(Debug, Clone, Default)]
+pub struct MarkupCache {
+    pub generation: u64,
+    pub flavor: MarkupFlavor,
+    pub spans: Vec<HighlightSpan>,
+}
+
 /// Single enrichment point -- all callers go through here.
 /// Filters out spans that fall inside code blocks (fenced ``` for markdown,
 /// #+begin_src/#+end_src for org) so regex-based inline markup doesn't
@@ -131,11 +140,23 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
     let timestamp =
         TIMESTAMP.get_or_init(|| Regex::new(r"[<\[]\d{4}-\d{2}-\d{2}[^>\]]*[>\]]").unwrap());
     let link = LINK.get_or_init(|| Regex::new(r"\[\[([^\]]+)\](\[([^\]]+)\])?\]").unwrap());
+    static STRIKETHROUGH: OnceLock<Regex> = OnceLock::new();
+    static BLOCKQUOTE: OnceLock<Regex> = OnceLock::new();
+    static HR: OnceLock<Regex> = OnceLock::new();
+    static PRIORITY: OnceLock<Regex> = OnceLock::new();
+
     let bold = BOLD.get_or_init(|| Regex::new(r"(?:^|[\s(>])\*([^\s*][^*\n]*)\*").unwrap());
     let italic = ITALIC.get_or_init(|| Regex::new(r"(?:^|[\s(>])/([^\s/][^/\n]*)/").unwrap());
     let code = CODE.get_or_init(|| Regex::new(r"(?:^|[\s(>])~([^~\n]+)~").unwrap());
     let verbatim = VERBATIM.get_or_init(|| Regex::new(r"(?:^|[\s(>])=([^=\n]+)=").unwrap());
     let list_marker = LIST_MARKER.get_or_init(|| Regex::new(r"(?m)^\s*([-+]|\d+[.)])\s").unwrap());
+    let strikethrough =
+        STRIKETHROUGH.get_or_init(|| Regex::new(r"(?:^|[\s(>])\+([^\s+][^+\n]*)\+").unwrap());
+    let blockquote = BLOCKQUOTE.get_or_init(|| Regex::new(r"(?m)^(>+)\s?(.*)$").unwrap());
+    let hr = HR.get_or_init(|| Regex::new(r"(?m)^-{5,}\s*$").unwrap());
+    let priority = PRIORITY.get_or_init(|| {
+        Regex::new(r"(?m)(?:TODO|DONE|NEXT|WAIT|CANCELLED|DEFERRED) (\[#[A-C]\])").unwrap()
+    });
 
     let mut spans: Vec<HighlightSpan> = Vec::new();
 
@@ -275,6 +296,72 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         }
     }
 
+    // Org +strikethrough+ (mirrors bold/italic pattern).
+    for cap in strikethrough.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: m.start() - 1,
+                byte_end: m.start(),
+                theme_key: "markup.strikethrough",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
+                theme_key: "markup.strikethrough",
+            });
+            spans.push(HighlightSpan {
+                byte_start: m.end(),
+                byte_end: m.end() + 1,
+                theme_key: "markup.strikethrough",
+            });
+        }
+    }
+
+    // Blockquote: > prefix lines.
+    for cap in blockquote.captures_iter(source) {
+        if let Some(marker) = cap.get(1) {
+            spans.push(HighlightSpan {
+                byte_start: marker.start(),
+                byte_end: marker.end(),
+                theme_key: "punctuation",
+            });
+        }
+        if let Some(content) = cap.get(2) {
+            if !content.as_str().is_empty() {
+                spans.push(HighlightSpan {
+                    byte_start: content.start(),
+                    byte_end: content.end(),
+                    theme_key: "markup.quote",
+                });
+            }
+        }
+    }
+
+    // Horizontal rule: 5+ dashes on a line by themselves.
+    for m in hr.find_iter(source) {
+        spans.push(HighlightSpan {
+            byte_start: m.start(),
+            byte_end: m.end(),
+            theme_key: "markup.hr",
+        });
+    }
+
+    // Priority: [#A], [#B], [#C] after TODO keywords.
+    for cap in priority.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            let theme_key = match m.as_str() {
+                "[#A]" => "markup.priority.a",
+                "[#B]" => "markup.priority.b",
+                _ => "markup.priority.c",
+            };
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
+                theme_key,
+            });
+        }
+    }
+
     // Checkbox highlighting: - [ ] or - [x] or - [-]
     {
         static CHECKBOX: OnceLock<Regex> = OnceLock::new();
@@ -292,6 +379,35 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
                         "markup.checkbox"
                     },
                 });
+            }
+        }
+    }
+
+    // Table highlighting: | delimiters and separator lines.
+    {
+        static TABLE_PIPE: OnceLock<Regex> = OnceLock::new();
+        static TABLE_SEP: OnceLock<Regex> = OnceLock::new();
+        let table_pipe = TABLE_PIPE.get_or_init(|| Regex::new(r"(?m)^(\|.*\|)\s*$").unwrap());
+        let table_sep = TABLE_SEP.get_or_init(|| Regex::new(r"(?m)^\|[-+: |]+\|\s*$").unwrap());
+        for m in table_sep.find_iter(source) {
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
+                theme_key: "comment",
+            });
+        }
+        for cap in table_pipe.captures_iter(source) {
+            let full = cap.get(1).unwrap();
+            let s = full.as_str();
+            // Only highlight the pipe characters.
+            for (i, ch) in s.char_indices() {
+                if ch == '|' {
+                    spans.push(HighlightSpan {
+                        byte_start: full.start() + i,
+                        byte_end: full.start() + i + 1,
+                        theme_key: "punctuation",
+                    });
+                }
             }
         }
     }
@@ -449,6 +565,43 @@ pub fn compute_markdown_style_spans(source: &str) -> Vec<HighlightSpan> {
             byte_end: full.end(),
             theme_key: "markup.strikethrough",
         });
+    }
+
+    // Blockquote: > prefix lines.
+    {
+        static BLOCKQUOTE: OnceLock<Regex> = OnceLock::new();
+        let blockquote = BLOCKQUOTE.get_or_init(|| Regex::new(r"(?m)^(>+)\s?(.*)$").unwrap());
+        for cap in blockquote.captures_iter(source) {
+            if let Some(marker) = cap.get(1) {
+                spans.push(HighlightSpan {
+                    byte_start: marker.start(),
+                    byte_end: marker.end(),
+                    theme_key: "punctuation",
+                });
+            }
+            if let Some(content) = cap.get(2) {
+                if !content.as_str().is_empty() {
+                    spans.push(HighlightSpan {
+                        byte_start: content.start(),
+                        byte_end: content.end(),
+                        theme_key: "markup.quote",
+                    });
+                }
+            }
+        }
+    }
+
+    // Horizontal rule: ---, ***, ___ (3+ chars).
+    {
+        static HR: OnceLock<Regex> = OnceLock::new();
+        let hr = HR.get_or_init(|| Regex::new(r"(?m)^(?:-{3,}|\*{3,}|_{3,})\s*$").unwrap());
+        for m in hr.find_iter(source) {
+            spans.push(HighlightSpan {
+                byte_start: m.start(),
+                byte_end: m.end(),
+                theme_key: "markup.hr",
+            });
+        }
     }
 
     // Checkbox highlighting: - [ ] or - [x]

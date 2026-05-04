@@ -740,6 +740,24 @@ impl CommandRegistry {
         );
         reg.register_builtin("org-narrow-subtree", "Narrow to org subtree");
         reg.register_builtin("org-widen", "Widen from org narrow");
+        reg.register_builtin("org-priority-up", "Cycle org priority up (S-Up)");
+        reg.register_builtin("org-priority-down", "Cycle org priority down (S-Down)");
+        reg.register_builtin("org-set-tags", "Set org heading tags (SPC m t)");
+        reg.register_builtin(
+            "insert-newline-smart",
+            "Insert newline with list continuation",
+        );
+
+        // Table commands
+        reg.register_builtin("table-next-cell", "Move to next table cell (Tab)");
+        reg.register_builtin("table-prev-cell", "Move to previous table cell (S-Tab)");
+        reg.register_builtin("table-align", "Align table columns (SPC m b a)");
+        reg.register_builtin("table-insert-row", "Insert table row below");
+        reg.register_builtin("table-delete-row", "Delete current table row");
+        reg.register_builtin("table-insert-column", "Insert table column after cursor");
+        reg.register_builtin("table-delete-column", "Delete table column at cursor");
+        reg.register_builtin("table-move-row-up", "Move table row up");
+        reg.register_builtin("table-move-row-down", "Move table row down");
 
         // Markdown
         reg.register_builtin("md-cycle", "Cycle markdown heading visibility (Tab)");
@@ -757,6 +775,18 @@ impl CommandRegistry {
         );
         reg.register_builtin("md-narrow-subtree", "Narrow to markdown subtree");
         reg.register_builtin("md-widen", "Widen from markdown narrow");
+
+        // Agenda
+        reg.register_builtin("open-agenda", "Open agenda view (:agenda, SPC o a)");
+        reg.register_builtin("agenda-goto", "Jump to source node from agenda (Enter)");
+        reg.register_builtin("agenda-refresh", "Refresh agenda view (r)");
+        reg.register_builtin("agenda-filter-todo", "Cycle TODO state filter (t)");
+        reg.register_builtin("agenda-filter-priority", "Cycle priority filter (p)");
+
+        // Demo buffers
+        reg.register_builtin("open-demo-tables", "Open interactive tables demo");
+        reg.register_builtin("open-demo-markup", "Open interactive markup demo");
+        reg.register_builtin("open-demo-agenda", "Open interactive agenda demo");
 
         // Narrow/widen (generic)
         reg.register_builtin("narrow-to-subtree", "Narrow buffer to current subtree");

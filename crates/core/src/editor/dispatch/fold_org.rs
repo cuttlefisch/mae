@@ -70,6 +70,52 @@ impl Editor {
             "md-global-cycle" => {
                 self.heading_global_cycle(crate::syntax::Language::Markdown);
             }
+            // Priority cycling
+            "org-priority-up" => {
+                self.org_priority_up();
+            }
+            "org-priority-down" => {
+                self.org_priority_down();
+            }
+            // Tag editing
+            "org-set-tags" => {
+                self.org_set_tags();
+            }
+            // Smart newline (list continuation)
+            "insert-newline-smart" => {
+                if !self.insert_smart_newline() {
+                    // Fall through to normal newline insertion
+                    self.insert_at_cursor("\n");
+                }
+            }
+            // Table commands
+            "table-next-cell" => {
+                self.table_next_cell();
+            }
+            "table-prev-cell" => {
+                self.table_prev_cell();
+            }
+            "table-align" => {
+                self.table_align();
+            }
+            "table-insert-row" => {
+                self.table_insert_row();
+            }
+            "table-delete-row" => {
+                self.table_delete_row();
+            }
+            "table-insert-column" => {
+                self.table_insert_column();
+            }
+            "table-delete-column" => {
+                self.table_delete_column();
+            }
+            "table-move-row-up" => {
+                self.table_move_row_up();
+            }
+            "table-move-row-down" => {
+                self.table_move_row_down();
+            }
             // Display region link navigation
             "text-next-link" => {
                 self.text_next_link();

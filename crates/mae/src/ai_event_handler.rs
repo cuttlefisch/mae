@@ -379,7 +379,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             };
             editor.buffers[buf_idx].replace_contents(&diff_text);
-            editor.switch_to_buffer(buf_idx);
+            editor.display_buffer_and_focus(buf_idx);
 
             if let Some(conv) = find_conversation_buffer_mut(editor) {
                 conv.push_system(format!(

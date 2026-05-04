@@ -130,14 +130,7 @@ pub(crate) fn render_buffer(
             }
         }
         // Skip folded lines
-        let mut is_folded = false;
-        for (start, end) in &buf.folded_ranges {
-            if line_idx > *start && line_idx < *end {
-                is_folded = true;
-                break;
-            }
-        }
-        if is_folded {
+        if buf.is_line_folded(line_idx) {
             line_idx += 1;
             continue;
         }
@@ -154,10 +147,10 @@ pub(crate) fn render_buffer(
         let line_byte_end_dr = buf
             .rope()
             .char_to_byte(line_char_start_dr + rope_chars.len());
-        let has_display_regions = !effective_regions.is_empty()
-            && effective_regions
-                .iter()
-                .any(|r| r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr);
+        let has_display_regions = !effective_regions.is_empty() && {
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start_dr);
+            idx < effective_regions.len() && effective_regions[idx].byte_start < line_byte_end_dr
+        };
         let (display_chars_vec, display_map_vec) = if has_display_regions {
             mae_core::display_region::apply_display_regions_to_line(
                 &rope_chars,
@@ -275,7 +268,7 @@ pub(crate) fn render_buffer(
                 let link_style = ts(editor, "markup.link");
                 let line_byte_start = buf.rope().char_to_byte(line_char_start);
                 let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                for region in &effective_regions {
+                for region in effective_regions.iter() {
                     if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start {
                         continue;
                     }
@@ -518,7 +511,7 @@ pub(crate) fn render_buffer(
                 }
 
                 // Fold indicator
-                if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                if let Some(end) = buf.fold_end_at(line_idx) {
                     let folded_count = end - line_idx - 1;
                     let comment_style = ts(editor, "comment");
                     spans.push(Span::styled(
@@ -594,7 +587,7 @@ pub(crate) fn render_buffer(
                 Span::styled(display, line_text_style),
             ];
             // Fold indicator
-            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+            if let Some(end) = buf.fold_end_at(line_idx) {
                 let folded_count = end - line_idx - 1;
                 let comment_style = ts(editor, "comment");
                 spans.push(Span::styled(

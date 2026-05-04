@@ -43,6 +43,10 @@ pub enum BufferKind {
     FileTree,
     /// AI-generated unified diff view (read-only).
     Diff,
+    /// Agenda view — cross-file TODO list (read-only).
+    Agenda,
+    /// Interactive demo buffer — editable but not saveable.
+    Demo,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -603,6 +607,14 @@ impl Buffer {
         self.folded_ranges
             .iter()
             .any(|(start, end)| line > *start && line < *end)
+    }
+
+    /// Find the fold end if this line is the start of a folded range.
+    pub fn fold_end_at(&self, line: usize) -> Option<usize> {
+        self.folded_ranges
+            .iter()
+            .find(|(s, _)| *s == line)
+            .map(|(_, end)| *end)
     }
 
     /// Toggle fold at a given line. If the line is the start of a fold range,

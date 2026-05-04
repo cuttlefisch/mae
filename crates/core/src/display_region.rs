@@ -8,6 +8,7 @@
 //! Regions are per-buffer, sorted by `byte_start`, and rebuilt when buffer
 //! generation changes (same invalidation pattern as tree-sitter spans).
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::link_detect::is_image_path;
@@ -292,10 +293,12 @@ pub fn apply_display_regions_to_line(
     line_byte_end: usize,
     regions: &[DisplayRegion],
 ) -> (Vec<char>, Vec<usize>) {
-    // Fast path: no regions overlap this line.
-    let overlapping: Vec<&DisplayRegion> = regions
+    // Fast path: use binary search to find overlapping regions.
+    // Regions are sorted by byte_start.
+    let start_idx = regions.partition_point(|r| r.byte_end <= line_byte_start);
+    let overlapping: Vec<&DisplayRegion> = regions[start_idx..]
         .iter()
-        .filter(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start)
+        .take_while(|r| r.byte_start < line_byte_end)
         .collect();
 
     if overlapping.is_empty() {
@@ -394,21 +397,23 @@ pub fn region_at_byte(regions: &[DisplayRegion], cursor_byte: usize) -> Option<u
 /// Return effective display regions with the revealed region removed.
 /// `reveal_cursor_byte`: cursor byte offset for org-appear reveal.
 /// If the cursor is inside a region, that region is suppressed (raw text visible).
-pub fn regions_with_cursor_reveal(
-    regions: &[DisplayRegion],
+/// Returns `Cow::Borrowed` on the fast path (no reveal or cursor outside regions),
+/// avoiding a full clone every frame.
+pub fn regions_with_cursor_reveal<'a>(
+    regions: &'a [DisplayRegion],
     reveal_cursor_byte: Option<usize>,
-) -> Vec<DisplayRegion> {
+) -> Cow<'a, [DisplayRegion]> {
     let Some(cursor_byte) = reveal_cursor_byte else {
-        return regions.to_vec();
+        return Cow::Borrowed(regions);
     };
     match region_at_byte(regions, cursor_byte) {
         Some(idx) => {
             let mut out = Vec::with_capacity(regions.len() - 1);
             out.extend_from_slice(&regions[..idx]);
             out.extend_from_slice(&regions[idx + 1..]);
-            out
+            Cow::Owned(out)
         }
-        None => regions.to_vec(),
+        None => Cow::Borrowed(regions),
     }
 }
 
@@ -1069,5 +1074,47 @@ mod tests {
     #[test]
     fn build_org_link_no_label() {
         assert_eq!(build_org_link("http://x.com", None), "[[http://x.com]]");
+    }
+
+    // --- Cow regions_with_cursor_reveal ---
+
+    #[test]
+    fn regions_with_cursor_reveal_borrows_when_no_reveal() {
+        let text = "[a](https://a.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        let result = regions_with_cursor_reveal(&regions, None);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn regions_with_cursor_reveal_borrows_when_outside() {
+        let text = "[a](https://a.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        let result = regions_with_cursor_reveal(&regions, Some(100));
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn regions_with_cursor_reveal_owns_when_inside() {
+        let text = "[a](https://a.com)";
+        let regions = compute_link_regions(text, true, Some("md"));
+        let result = regions_with_cursor_reveal(&regions, Some(2));
+        assert!(matches!(result, Cow::Owned(_)));
+        assert!(result.is_empty());
+    }
+
+    // --- Binary search in apply_display_regions_to_line ---
+
+    #[test]
+    fn apply_display_regions_binary_search_correctness() {
+        // Multiple regions: verify binary search produces same results as linear scan.
+        let text = "A [x](u1) B [y](u2) C [z](u3) D";
+        let chars: Vec<char> = text.chars().collect();
+        let regions = compute_link_regions(text, true, Some("md"));
+        assert_eq!(regions.len(), 3);
+        let (display, map) = apply_display_regions_to_line(&chars, 0, text.len(), &regions);
+        let display_str: String = display.iter().collect();
+        assert_eq!(display_str, "A x B y C z D");
+        assert_eq!(map.len(), display_str.len());
     }
 }

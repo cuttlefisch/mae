@@ -1020,5 +1020,456 @@ fn line_visual_rows_accounts_for_image() {
     assert_eq!(rows2, 1);
 }
 
+// ---- Window Group + Conversation tests ----
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conversation_creates_group() {
+    let mut ed = Editor::new();
+    ed.open_conversation_buffer();
+    let pair = ed.conversation_pair.as_ref().expect("pair should exist");
+    assert!(
+        ed.window_mgr.is_in_group(pair.output_window_id),
+        "output window should be in a group"
+    );
+    assert!(
+        ed.window_mgr.is_in_group(pair.input_window_id),
+        "input window should be in a group"
+    );
+    assert_eq!(
+        ed.window_mgr.group_label(pair.output_window_id),
+        Some("conversation")
+    );
+}
+
+#[test]
+fn split_from_conversation_wraps_group() {
+    let mut ed = Editor::new();
+    ed.open_conversation_buffer();
+    let pair = ed.conversation_pair.as_ref().unwrap().clone();
+    // Focus the input window and split to open a new buffer.
+    ed.window_mgr.set_focused(pair.input_window_id);
+    let area = ed.default_area();
+    let new_id = ed
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 0, area)
+        .expect("split should succeed");
+    // The new window should be outside the conversation group.
+    assert!(!ed.window_mgr.is_in_group(new_id));
+    // The conversation windows should still be in the group.
+    assert!(ed.window_mgr.is_in_group(pair.output_window_id));
+    assert!(ed.window_mgr.is_in_group(pair.input_window_id));
+}
+
+// Table navigation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn table_next_cell_moves_cursor() {
+    let mut ed = ed_with_text("| abc | def |\n| ghi | jkl |\n");
+    // Position cursor in first cell (col 2 = inside " abc ")
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 2;
+
+    ed.table_next_cell();
+
+    let win = ed.window_mgr.focused_window();
+    // Should be in the second cell of row 0
+    assert_eq!(win.cursor_row, 0);
+    // cursor_col should be inside second cell (past the pipe + space)
+    assert!(
+        win.cursor_col > 4,
+        "cursor should move to second cell, got col={}",
+        win.cursor_col
+    );
+}
+
+#[test]
+fn table_next_cell_wraps_row() {
+    let mut ed = ed_with_text("| a | b |\n|---|---|\n| c | d |\n");
+    // Position cursor in last cell of first row
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 6; // inside second cell
+
+    ed.table_next_cell();
+
+    let win = ed.window_mgr.focused_window();
+    // Should wrap to first cell of next data row (skipping separator at row 1)
+    assert_eq!(
+        win.cursor_row, 2,
+        "should wrap to row 2 (skipping separator)"
+    );
+}
+
+#[test]
+fn table_alignment_idempotent_via_editor() {
+    let mut ed = ed_with_text("| short | x |\n| a | longer |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 2;
+
+    // Align twice via table_next_cell (which aligns internally)
+    ed.table_align();
+    let text1: String = ed.buffers[0].rope().chars().collect();
+    ed.table_align();
+    let text2: String = ed.buffers[0].rope().chars().collect();
+
+    assert_eq!(text1, text2, "Double alignment must be idempotent");
+}
+
+// ---------------------------------------------------------------------------
+// Org table: S-Tab, separator detection, end-of-table insert, alignment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn blank_row_not_separator() {
+    // A row with only spaces and pipes must NOT be classified as a separator.
+    use crate::table;
+    let rope = ropey::Rope::from_str("|     |     |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    assert!(
+        !t.separators.contains(&0),
+        "blank row should not be a separator"
+    );
+}
+
+#[test]
+fn tab_end_of_table_inserts_data_row() {
+    // Tab at last cell should insert a blank data row that survives re-parse.
+    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    win.cursor_col = 8; // last cell of last row
+
+    ed.table_next_cell();
+
+    // Should now have 3 data rows.
+    let text: String = ed.buffers[0].rope().chars().collect();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 3, "should have 3+ lines, got: {text}");
+
+    // Re-parse: the new row must be a data row, not a separator.
+    let t = crate::table::table_at_line(ed.buffers[0].rope(), 0).unwrap();
+    assert!(
+        !t.separators.contains(&2),
+        "new row must not be classified as separator"
+    );
+}
+
+#[test]
+fn tab_end_of_table_double_tap() {
+    // Two Tabs at end: first adds data row, second adds another (no dashes).
+    let mut ed = ed_with_text("| a | b |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 8;
+
+    ed.table_next_cell(); // adds row 1
+    ed.table_next_cell(); // should add row 2
+
+    let text: String = ed.buffers[0].rope().chars().collect();
+    // No line should contain only dashes (no accidental separator creation).
+    for line in text.lines() {
+        if line.trim().starts_with('|') {
+            let inner = &line.trim()[1..line.trim().len() - 1];
+            let has_non_dash_content = inner
+                .chars()
+                .any(|c| c != '-' && c != '+' && c != '|' && c != ' ' && c != ':');
+            let is_all_dashes = !inner.is_empty()
+                && inner.contains('-')
+                && inner
+                    .chars()
+                    .all(|c| c == '-' || c == '+' || c == '|' || c == ' ' || c == ':');
+            if is_all_dashes && !has_non_dash_content {
+                panic!("unexpected separator line created: {line}");
+            }
+        }
+    }
+}
+
+#[test]
+fn tab_inserts_before_trailing_hline() {
+    // If table ends with |---|, new row goes above it.
+    let mut ed = ed_with_text("| a | b |\n|---|---|\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 8; // last cell
+
+    ed.table_next_cell();
+
+    let text: String = ed.buffers[0].rope().chars().collect();
+    let lines: Vec<&str> = text.lines().collect();
+    // The last table line should still be a separator.
+    let last_table_line = lines.last().unwrap();
+    assert!(
+        last_table_line.contains("---"),
+        "trailing hline should be preserved at end, got: {text}"
+    );
+}
+
+#[test]
+fn alignment_parsed_from_separator() {
+    use crate::table::{self, ColumnAlignment};
+    let rope = ropey::Rope::from_str("| L | C | R |\n|:---|:---:|---:|\n| a | b | c |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    assert_eq!(t.alignments[0], ColumnAlignment::Left);
+    assert_eq!(t.alignments[1], ColumnAlignment::Center);
+    assert_eq!(t.alignments[2], ColumnAlignment::Right);
+}
+
+#[test]
+fn format_table_right_aligns() {
+    use crate::table;
+    let rope =
+        ropey::Rope::from_str("| Name | Price |\n|---|---:|\n| Apple | 1 |\n| Banana | 200 |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    // The "Price" column should be right-aligned: "  1" and "200" (right-justified).
+    let price_line = &formatted[2]; // "Apple" row
+                                    // In a right-aligned cell, content is at the right edge.
+    assert!(
+        price_line.contains("   1 |") || price_line.contains("  1 |"),
+        "expected right-aligned '1', got: {price_line}"
+    );
+}
+
+#[test]
+fn format_table_center_aligns() {
+    use crate::table;
+    let rope = ropey::Rope::from_str("| X |\n|:---:|\n| ab |\n| abcdef |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    // "ab" should be centered within a 6-char width column: "  ab  "
+    let ab_line = &formatted[2];
+    // Extract cell content between first pair of pipes
+    let inner = &ab_line[1..ab_line.rfind('|').unwrap()];
+    let trimmed = inner.trim();
+    assert_eq!(trimmed, "ab");
+    // Check padding is roughly balanced (allow off-by-one).
+    let left_spaces = inner.len() - inner.trim_start().len();
+    let right_spaces = inner.len() - inner.trim_end().len();
+    assert!(
+        (left_spaces as i32 - right_spaces as i32).abs() <= 1,
+        "center padding should be balanced: left={left_spaces} right={right_spaces} in '{inner}'"
+    );
+}
+
+#[test]
+fn alignment_markers_preserved_on_format() {
+    use crate::table;
+    let rope = ropey::Rope::from_str("| L | C | R |\n|:---|:---:|---:|\n| a | b | c |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    let sep_line = &formatted[1]; // separator row
+                                  // Should contain alignment markers.
+    assert!(
+        sep_line.contains(":") && sep_line.contains("-"),
+        "separator should preserve alignment markers, got: {sep_line}"
+    );
+}
+
+#[test]
+fn shift_tab_navigates_prev_cell() {
+    // S-Tab on a table line should dispatch table_prev_cell, not global fold.
+    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
+    ed.syntax.set_language(0, crate::syntax::Language::Org);
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 6; // in second cell
+
+    // heading_global_cycle is what S-Tab dispatches.
+    ed.heading_global_cycle(crate::syntax::Language::Org);
+
+    let win = ed.window_mgr.focused_window();
+    // Should have moved to first cell (col ~2), not folded headings.
+    assert_eq!(win.cursor_row, 0, "should stay on row 0");
+    assert!(
+        win.cursor_col < 5,
+        "should be in first cell, got col {}",
+        win.cursor_col
+    );
+}
+
+#[test]
+fn cursor_lands_on_content_right_aligned() {
+    // Tab into a right-aligned cell should place cursor on content, not padding.
+    let mut ed = ed_with_text("| Name | Price |\n|---|---:|\n| Apple | 1 |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 2; // in Name cell
+
+    ed.table_next_cell(); // move to Price cell
+
+    let win = ed.window_mgr.focused_window();
+    // Cursor should be on '1', not on leading padding space.
+    let line: String = ed.buffers[0].rope().line(win.cursor_row).chars().collect();
+    let ch = line.chars().nth(win.cursor_col).unwrap_or(' ');
+    assert_ne!(
+        ch,
+        ' ',
+        "cursor should land on content, not space; col={} line='{}'",
+        win.cursor_col,
+        line.trim()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Large document performance (Phase 8 M9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn should_degrade_features_small_buffer() {
+    let ed = Editor::new();
+    assert!(
+        !ed.should_degrade_features(0),
+        "empty buffer should not degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_large_buffer() {
+    let mut ed = Editor::new();
+    // Insert > 500K chars
+    let text = "a".repeat(600_000);
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        ed.should_degrade_features(0),
+        "600K char buffer should degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_long_line() {
+    let mut ed = Editor::new();
+    // Insert a line > 10K chars (small total chars)
+    let text = "x".repeat(15_000);
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        ed.should_degrade_features(0),
+        "15K char line should degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_normal_file() {
+    let mut ed = Editor::new();
+    // 1000 lines × 80 chars = 80K chars, max line 80 chars
+    let text: String = (0..1000)
+        .map(|i| format!("Line {:04}: {}\n", i, "x".repeat(70)))
+        .collect();
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        !ed.should_degrade_features(0),
+        "80K normal file should not degrade"
+    );
+}
+
+#[test]
+fn fold_end_at_basic() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "a\nb\nc\nd\ne\n");
+    ed.buffers[0].folded_ranges.push((1, 4));
+    assert_eq!(ed.buffers[0].fold_end_at(1), Some(4));
+    assert_eq!(ed.buffers[0].fold_end_at(0), None);
+    assert_eq!(ed.buffers[0].fold_end_at(2), None);
+}
+
+#[test]
+fn code_block_cache_populated_after_set() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "```rust\nfn main() {}\n```\n");
+    ed.buffers[0].set_file_path(std::path::PathBuf::from("test.md"));
+    ed.syntax.set_language(0, crate::syntax::Language::Markdown);
+    let flavor = ed.effective_markup_flavor(0);
+    let gen = ed.buffers[0].generation;
+    let lines = crate::detect_code_block_lines(&ed.buffers[0], flavor);
+    ed.code_block_cache.insert(0, (gen, flavor, lines.clone()));
+    let cached = ed.code_block_cache.get(&0).unwrap();
+    assert_eq!(cached.0, gen);
+    assert_eq!(cached.2, lines);
+}
+
+// --- Heading statistics cookie tests ---
+
+#[test]
+fn todo_cycle_updates_parent_frac_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(
+        0,
+        "* Project [/]\n** TODO Task A\n** TODO Task B\n** TODO Task C\n",
+    );
+    // Cursor on line 1 (Task A), cycle TODO→DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[1/3]"),
+        "Parent cookie should be [1/3], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_updates_parent_pct_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [%]\n** TODO Task A\n** TODO Task B\n");
+    // Cycle Task A → DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[50%]"),
+        "Parent cookie should be [50%], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_all_done_updates_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [/]\n** TODO Task A\n** TODO Task B\n");
+    // Cycle both to DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    editor.window_mgr.focused_window_mut().cursor_row = 2;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[2/2]"),
+        "Parent cookie should be [2/2], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_done_back_to_todo_decrements_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [/]\n** DONE Task A\n** TODO Task B\n");
+    // Cycle Task A DONE→TODO
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[0/2]"),
+        "Parent cookie should be [0/2], got: {parent}"
+    );
+}
+
+#[test]
+fn heading_cookie_ignores_sibling_headings() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(
+        0,
+        "* Project [/]\n** TODO Task A\n* Other heading\n** TODO Task B\n",
+    );
+    // Cycle Task A → DONE (under Project)
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[1/1]"),
+        "Should only count children under Project, got: {parent}"
+    );
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

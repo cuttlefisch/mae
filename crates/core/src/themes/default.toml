@@ -101,6 +101,10 @@ gray = "#a89984"
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.hr" = { fg = "dark_gray" }
+"markup.priority.a" = { fg = "red", bold = true }
+"markup.priority.b" = { fg = "yellow", bold = true }
+"markup.priority.c" = { fg = "green" }
 "markup.code_block" = { bg = "#32302f" }
 
 "diff.added" = { fg = "green" }

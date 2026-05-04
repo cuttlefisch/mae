@@ -13,6 +13,7 @@
 
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::buffer_render;
 use crate::gutter;
@@ -66,11 +67,11 @@ pub struct LineLayout {
     /// Character count in this segment.
     pub char_count: usize,
     /// Maps display char index -> rope char index when display regions are active.
-    /// `None` if no display regions affect this line.
-    pub display_map: Option<Vec<usize>>,
+    /// `None` if no display regions affect this line. Arc-shared across wrap segments.
+    pub display_map: Option<Arc<Vec<usize>>>,
     /// Display chars when display regions are active.
-    /// `None` if no display regions affect this line.
-    pub display_chars: Option<Vec<char>>,
+    /// `None` if no display regions affect this line. Arc-shared across wrap segments.
+    pub display_chars: Option<Arc<Vec<char>>>,
     /// Content hash for this line (chars + scale). Used to detect whether a
     /// line changed between frames for the tiered redisplay optimization.
     pub content_hash: u64,
@@ -328,14 +329,7 @@ pub fn compute_layout(
         }
 
         // Skip folded lines.
-        let mut is_folded = false;
-        for (start, end) in &buf.folded_ranges {
-            if line_idx > *start && line_idx < *end {
-                is_folded = true;
-                break;
-            }
-        }
-        if is_folded {
+        if buf.is_line_folded(line_idx) {
             line_idx += 1;
             continue;
         }
@@ -356,10 +350,8 @@ pub fn compute_layout(
 
         // Check if this line starts a fold.
         let fold_info = buf
-            .folded_ranges
-            .iter()
-            .find(|(s, _)| *s == line_idx)
-            .map(|(_, end)| end - line_idx - 1)
+            .fold_end_at(line_idx)
+            .map(|end| end - line_idx - 1)
             .unwrap_or(0);
         let is_fold_start = fold_info > 0;
 
@@ -373,10 +365,11 @@ pub fn compute_layout(
         let line_char_start = buf.rope().line_to_char(line_idx);
         let line_byte_start = buf.rope().char_to_byte(line_char_start);
         let line_byte_end = buf.rope().char_to_byte(line_char_start + rope_chars.len());
-        let has_display_regions = !effective_regions.is_empty()
-            && effective_regions
-                .iter()
-                .any(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start);
+        let has_display_regions = !effective_regions.is_empty() && {
+            // Binary search: find first region whose byte_end > line_byte_start.
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+            idx < effective_regions.len() && effective_regions[idx].byte_start < line_byte_end
+        };
 
         // Check for an image display region covering this line.
         let image_layout = effective_regions
@@ -420,29 +413,43 @@ pub fn compute_layout(
                 }
             });
 
-        let (display_chars_vec, display_map_vec) = if has_display_regions {
-            mae_core::display_region::apply_display_regions_to_line(
+        let (display_chars_arc, display_map_arc) = if has_display_regions {
+            let (chars_vec, map_vec) = mae_core::display_region::apply_display_regions_to_line(
                 &rope_chars,
                 line_byte_start,
                 line_byte_end,
                 &effective_regions,
-            )
+            );
+            (Some(Arc::new(chars_vec)), Some(Arc::new(map_vec)))
         } else {
-            (Vec::new(), Vec::new())
+            (None, None)
         };
 
-        let full_chars = if has_display_regions {
-            &display_chars_vec
+        let full_chars: &[char] = if let Some(ref arc) = display_chars_arc {
+            arc.as_slice()
         } else {
             &rope_chars
         };
         let full_count = full_chars.len();
 
         // Compute content hash (chars + scale) for tiered redisplay optimization.
+        // For long lines (>500 chars), hash only the visible window + margins
+        // to avoid O(line_length) hashing when only ~80 chars are on screen.
         let content_hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            for &ch in full_chars.iter() {
-                ch.hash(&mut hasher);
+            let hash_limit = 500;
+            if full_chars.len() > hash_limit && !wrap {
+                let col_offset = win.col_offset;
+                let hash_start = col_offset.saturating_sub(20).min(full_chars.len());
+                let hash_end = (col_offset + text_width + 20).min(full_chars.len());
+                col_offset.hash(&mut hasher);
+                for &ch in &full_chars[hash_start..hash_end] {
+                    ch.hash(&mut hasher);
+                }
+            } else {
+                for &ch in full_chars.iter() {
+                    ch.hash(&mut hasher);
+                }
             }
             org_heading_scale.to_bits().hash(&mut hasher);
             hasher.finish()
@@ -514,16 +521,8 @@ pub fn compute_layout(
                     folded_line_count: if is_first { fold_info } else { 0 },
                     char_start: pos,
                     char_count: end - pos,
-                    display_map: if has_display_regions {
-                        Some(display_map_vec.clone())
-                    } else {
-                        None
-                    },
-                    display_chars: if has_display_regions {
-                        Some(display_chars_vec.clone())
-                    } else {
-                        None
-                    },
+                    display_map: display_map_arc.clone(),
+                    display_chars: display_chars_arc.clone(),
                     content_hash,
                     image: if is_first { image_layout.clone() } else { None },
                 });
@@ -586,16 +585,8 @@ pub fn compute_layout(
                 folded_line_count: fold_info,
                 char_start: visible_start,
                 char_count: visible_end - visible_start,
-                display_map: if has_display_regions {
-                    Some(display_map_vec.clone())
-                } else {
-                    None
-                },
-                display_chars: if has_display_regions {
-                    Some(display_chars_vec.clone())
-                } else {
-                    None
-                },
+                display_map: display_map_arc.clone(),
+                display_chars: display_chars_arc.clone(),
                 content_hash,
                 image: image_layout.clone(),
             });

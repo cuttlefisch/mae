@@ -189,7 +189,7 @@ impl Editor {
                 self.buffers.push(buf);
                 let idx = self.buffers.len() - 1;
                 self.pending_shell_spawns.push(idx);
-                self.switch_to_buffer(idx);
+                self.display_buffer_and_focus(idx);
                 self.set_mode(Mode::ShellInsert);
             }
             "terminal-reset" => {
@@ -586,7 +586,7 @@ impl Editor {
                     let shell_idx = self.buffers.len() - 1;
                     self.pending_shell_spawns.push(shell_idx);
                     self.pending_shell_cwds.insert(shell_idx, dir.clone());
-                    self.switch_to_buffer(shell_idx);
+                    self.display_buffer_and_focus(shell_idx);
                     self.set_mode(Mode::ShellInsert);
                     self.set_status(format!("Terminal: {}", dir.display()));
                 } else {
@@ -660,14 +660,40 @@ impl Editor {
                 let shell_name = format!("*AI:{}*", self.ai_editor);
                 let mut buf = Buffer::new_shell(shell_name);
                 buf.agent_shell = true;
-                let prev_idx = self.active_buffer_idx();
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
-                self.alternate_buffer_idx = Some(prev_idx);
-                self.display_buffer(new_idx);
+                self.display_buffer_and_focus(new_idx);
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
+            }
+
+            // Agenda
+            "open-agenda" => {
+                self.open_agenda(crate::agenda_view::AgendaFilter::default());
+            }
+            "agenda-goto" => {
+                self.agenda_goto();
+            }
+            "agenda-refresh" => {
+                self.agenda_refresh();
+            }
+            "agenda-filter-todo" => {
+                self.agenda_filter_todo();
+            }
+            "agenda-filter-priority" => {
+                self.agenda_filter_priority();
+            }
+
+            // Demo buffers
+            "open-demo-tables" => {
+                self.open_demo("Tables", DEMO_TABLES);
+            }
+            "open-demo-markup" => {
+                self.open_demo("Markup", DEMO_MARKUP);
+            }
+            "open-demo-agenda" => {
+                self.open_demo("Agenda", DEMO_AGENDA);
             }
 
             // Edit a link under cursor: open a mini-dialog with URL + Label fields.
@@ -781,4 +807,93 @@ impl Editor {
         }
         Some(true)
     }
+
+    fn open_demo(&mut self, label: &str, content: &str) {
+        let name = format!("*Demo: {}*", label);
+        let buf_idx = if let Some(idx) = self.find_buffer_by_name(&name) {
+            idx
+        } else {
+            let mut buf = Buffer::new();
+            buf.name = name;
+            buf.kind = crate::BufferKind::Demo;
+            buf.read_only = false;
+            self.buffers.push(buf);
+            let idx = self.buffers.len() - 1;
+            self.buffers[idx].insert_text_at(0, content);
+            self.buffers[idx].modified = false;
+            idx
+        };
+        self.display_buffer_and_focus(buf_idx);
+    }
 }
+
+const DEMO_TABLES: &str = "\
+* Demo: Tables
+  This is an interactive demo. Edit freely — changes won't be saved.
+  Press q to close.
+
+** Org Table
+| Name    | Age | City       |
+|---------+-----+------------|
+| Alice   |  30 | New York   |
+| Bob     |  25 | London     |
+| Charlie |  35 | Tokyo      |
+
+  Try: Tab to move between cells, S-Tab to go back.
+  Try: SPC m b a to align columns after editing.
+
+** Markdown Table
+| Language | Typing     | GC   |
+|----------|------------|------|
+| Rust     | Static     | None |
+| Go       | Static     | Yes  |
+| Python   | Dynamic    | Yes  |
+";
+
+const DEMO_MARKUP: &str = "\
+* Demo: Markup
+  This is an interactive demo. Edit freely — changes won't be saved.
+
+** Text Formatting
+  *bold text* and /italic text/ and =verbatim= and ~code~
+  +strikethrough text+
+
+** Blockquotes
+> This is a blockquote.
+> It can span multiple lines.
+>> Nested blockquotes work too.
+
+** Horizontal Rules
+-----
+
+** Headings with TODO and Priority
+*** TODO [#A] Urgent task                                      :work:urgent:
+*** DONE [#C] Completed task                                   :personal:
+
+** Lists
+- Unordered item 1
+- Unordered item 2
+  - Nested item
+- [ ] Checkbox unchecked
+- [x] Checkbox checked
+
+1. Ordered item 1
+2. Ordered item 2
+
+** Links
+  See [[concept:buffer]] for buffer docs.
+  External: https://example.com
+";
+
+const DEMO_AGENDA: &str = "\
+* Demo: Agenda & TODO
+  This is an interactive demo. Edit freely — changes won't be saved.
+  Run :agenda to see these items in the agenda view.
+
+** TODO [#A] Fix critical bug in parser                        :bug:urgent:
+** TODO [#B] Write unit tests for table module                 :testing:
+** NEXT [#B] Review pull request from contributor              :review:
+** WAIT Waiting on upstream API change                         :blocked:
+** DONE [#C] Update documentation for v0.7                     :docs:
+** TODO Implement smart list continuation                      :feature:
+";

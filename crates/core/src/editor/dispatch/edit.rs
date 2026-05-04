@@ -630,10 +630,7 @@ impl Editor {
                         self.save_mode_to_buffer();
                         let current = self.active_buffer_idx();
                         self.alternate_buffer_idx = Some(current);
-                        let win = self.window_mgr.focused_window_mut();
-                        win.buffer_idx = alt_idx;
-                        win.cursor_row = 0;
-                        win.cursor_col = 0;
+                        self.display_buffer_and_focus(alt_idx);
                         let name = self.buffers[alt_idx].name.clone();
                         self.set_status(format!("Buffer: {}", name));
                         self.sync_mode_to_buffer();

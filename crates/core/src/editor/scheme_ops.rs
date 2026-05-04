@@ -77,7 +77,7 @@ impl Editor {
             self.buffers.push(buf);
             self.buffers.len() - 1
         };
-        self.switch_to_buffer(idx);
+        self.display_buffer_and_focus(idx);
     }
 
     /// Find the best shell buffer target for send-to-shell. Prefers the

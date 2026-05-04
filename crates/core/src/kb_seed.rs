@@ -2376,6 +2376,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_DISPLAY_POLICY,
         )
         .with_tags(["core", "window", "conversation"]),
+        Node::new(
+            "concept:mcp-development",
+            "Concept: MCP Development Workflow",
+            NodeKind::Concept,
+            CONCEPT_MCP_DEVELOPMENT,
+        )
+        .with_tags(["mcp", "ai", "tools", "development"]),
     ]
 }
 
@@ -2435,6 +2442,30 @@ Emacs: `display-buffer-alist` (29 action functions, regex matching, order-depend
 Doom: `set-popup-rules!` (simpler but still regex). MAE: enum dispatch by BufferKind — \
 O(1), no order bugs, no regex.\n\n\
 See also: [[concept:buffer]], [[concept:window]], [[concept:buffer-mode]]\n";
+
+const CONCEPT_MCP_DEVELOPMENT: &str = "\
+## MCP Development Workflow\n\n\
+All 130+ MAE tools are exposed via MCP with full parity. When developing MAE \
+inside MAE (e.g. with Claude Code via `mae-mcp-shim`), these tools provide \
+structured access to LSP, DAP, KB, and editor state.\n\n\
+### Tool Categories\n\
+- **Code Navigation (LSP):** `lsp_definition`, `lsp_references`, `lsp_hover`, \
+`lsp_workspace_symbol`, `lsp_document_symbols`, `lsp_diagnostics`\n\
+- **Debugging (DAP):** `dap_start`, `dap_set_breakpoint`, `dap_continue`, \
+`dap_step`, `debug_state`\n\
+- **Knowledge Base:** `kb_search`, `kb_get`, `kb_links_from`, `kb_links_to`, `kb_graph`\n\
+- **Buffer/Editor:** `buffer_read`, `buffer_write`, `project_search`, \
+`command_list`, `execute_command`, `eval_scheme`, `audit_configuration`, `introspect`\n\
+- **Validation:** `self_test_suite` — structured JSON test plan\n\n\
+### Connection\n\
+Socket: `$XDG_RUNTIME_DIR/mae-mcp.sock`\n\
+Shim: `mae-mcp-shim` (stdio ↔ Unix socket bridge)\n\n\
+### When to Use\n\
+- **Navigating MAE code:** `lsp_definition` / `lsp_references` over grep — structured, no false positives\n\
+- **Understanding architecture:** `kb_search` or `kb_get` — curated docs\n\
+- **Debugging MAE:** `dap_start` with `lldb-dap`, `debug_state` for inspection\n\
+- **Testing changes:** `execute_command`, `self_test_suite` for E2E\n\n\
+See also: [[concept:ai-as-peer]], [[concept:agent-bootstrap]], [[concept:self-test]]\n";
 
 const INDEX_BODY: &str = "Welcome to MAE's built-in help. This knowledge base is the same data \
 surface the AI agent queries via its `kb_*` tools — you and the AI read the same pages.

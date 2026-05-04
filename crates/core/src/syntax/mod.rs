@@ -33,7 +33,7 @@ pub use detection::{
 pub use languages::{compute_spans_standalone, parse_once, Language};
 pub use markup::{
     code_block_byte_ranges, compute_markdown_style_spans, compute_markup_spans,
-    compute_org_style_spans, detect_code_block_lines, MarkupFlavor,
+    compute_org_style_spans, detect_code_block_lines, MarkupCache, MarkupFlavor,
 };
 pub use spans::{
     cached_visible_syntax_spans, compute_visible_syntax_spans, drain_pending_reparses,

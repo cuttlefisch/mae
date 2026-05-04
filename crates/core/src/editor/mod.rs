@@ -1,3 +1,4 @@
+mod agenda_ops;
 mod changes;
 mod command;
 mod dap_ops;
@@ -23,6 +24,7 @@ mod scheme_ops;
 mod search_ops;
 mod surround;
 mod syntax_ops;
+mod table_ops;
 mod text_objects;
 mod visual;
 
@@ -491,11 +493,10 @@ pub struct Editor {
     pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
-    /// Pending file deletion: (path, close_buffer_after_delete).
-    /// Set by `file-tree-delete` or `delete-this-file`, consumed by `y`/`n` key handler.
-    pub pending_file_delete: Option<(std::path::PathBuf, bool)>,
     /// Pending file tree action (rename/create). The command-line submit
     /// path checks this after the user types a new name.
+    /// NOTE: Mostly replaced by MiniDialog — retained only for backward compat
+    /// with any remaining callers during migration.
     pub file_tree_action: Option<crate::file_tree::FileTreeAction>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
@@ -657,6 +658,15 @@ pub struct Editor {
     /// GUI cell height in pixels (set by GUI after font init). Default 16.0.
     /// TUI should set to 1.0.
     pub gui_cell_height: f32,
+    /// When true, dashboard windows are closed when any non-dashboard buffer
+    /// is displayed via a split path. Default false (Doom parity: dashboard stays).
+    pub dashboard_dismiss_on_split: bool,
+    /// Per-buffer markup span cache, keyed by buffer index. Avoids recomputing
+    /// regex-based markup spans every frame for org/markdown buffers.
+    pub markup_cache: HashMap<usize, crate::syntax::MarkupCache>,
+    /// Per-buffer code-block-lines cache, keyed by buffer index.
+    /// Value: (generation, flavor, lines_vec). Avoids O(buffer) every frame in GUI.
+    pub code_block_cache: HashMap<usize, (u64, crate::syntax::MarkupFlavor, Vec<bool>)>,
 }
 
 impl Default for Editor {
@@ -799,7 +809,6 @@ impl Editor {
             ai_target_buffer_idx: None,
             conversation_pair: None,
             file_tree_window_id: None,
-            pending_file_delete: None,
             file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
@@ -870,6 +879,9 @@ impl Editor {
             pending_rename_edit: None,
             gui_cell_width: 8.0,
             gui_cell_height: 16.0,
+            dashboard_dismiss_on_split: false,
+            markup_cache: HashMap::new(),
+            code_block_cache: HashMap::new(),
         }
     }
 
@@ -1110,6 +1122,61 @@ impl Editor {
         crate::syntax::MarkupFlavor::None
     }
 
+    /// Detect whether a buffer is too large for full feature rendering.
+    /// Returns true for files with >500K chars or any line >10K chars.
+    /// Callers should skip markup spans, display regions, code block
+    /// detection, and heading scale for such buffers (Emacs `so-long` pattern).
+    pub fn should_degrade_features(&self, buf_idx: usize) -> bool {
+        if buf_idx >= self.buffers.len() {
+            return false;
+        }
+        let buf = &self.buffers[buf_idx];
+        let rope = buf.rope();
+        if rope.len_chars() > 500_000 {
+            return true;
+        }
+        // Sample first 200 lines + last 50 for long-line detection (avoid O(n) full scan).
+        let lc = rope.len_lines();
+        let check_lines = (0..200.min(lc)).chain(lc.saturating_sub(50)..lc);
+        for li in check_lines {
+            let line = rope.line(li);
+            if line.len_chars() > 10_000 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get or compute cached markup spans for a buffer. Returns empty if
+    /// flavor is None. The cache is keyed by buffer generation so editing
+    /// invalidates it but pure scrolling reuses cached spans.
+    pub fn get_or_compute_markup_spans(
+        &mut self,
+        buf_idx: usize,
+        flavor: crate::syntax::MarkupFlavor,
+    ) -> Vec<crate::syntax::HighlightSpan> {
+        if flavor == crate::syntax::MarkupFlavor::None {
+            return Vec::new();
+        }
+        let gen = self.buffers[buf_idx].generation;
+        if let Some(cached) = self.markup_cache.get(&buf_idx) {
+            if cached.generation == gen && cached.flavor == flavor {
+                return cached.spans.clone();
+            }
+        }
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let spans = crate::syntax::compute_markup_spans(&source, flavor);
+        self.markup_cache.insert(
+            buf_idx,
+            crate::syntax::MarkupCache {
+                generation: gen,
+                flavor,
+                spans: spans.clone(),
+            },
+        );
+        spans
+    }
+
     /// Set a buffer-local option on the active buffer (:setlocal).
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -1211,6 +1278,7 @@ impl Editor {
             "heading_scale_h1" => self.heading_scale_h1.to_string(),
             "heading_scale_h2" => self.heading_scale_h2.to_string(),
             "heading_scale_h3" => self.heading_scale_h3.to_string(),
+            "dashboard_dismiss_on_split" => self.dashboard_dismiss_on_split.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1461,6 +1529,9 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h3 = v.clamp(0.5, 3.0);
+            }
+            "dashboard_dismiss_on_split" => {
+                self.dashboard_dismiss_on_split = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -2237,11 +2308,54 @@ impl Editor {
                         win.cursor_row = 0;
                         win.cursor_col = 0;
                     }
+                } else if self.dashboard_dismiss_on_split && kind != crate::BufferKind::Dashboard {
+                    // Replace dashboard windows instead of splitting alongside them.
+                    let dashboard_win = self
+                        .window_mgr
+                        .iter_windows()
+                        .find(|w| {
+                            w.buffer_idx < self.buffers.len()
+                                && self.buffers[w.buffer_idx].kind == crate::BufferKind::Dashboard
+                        })
+                        .map(|w| w.id);
+                    if let Some(dw_id) = dashboard_win {
+                        // Replace the dashboard window's buffer directly.
+                        if let Some(win) = self.window_mgr.window_mut(dw_id) {
+                            win.buffer_idx = buf_idx;
+                            win.cursor_row = 0;
+                            win.cursor_col = 0;
+                        }
+                    } else {
+                        self.display_buffer_split(buf_idx, direction, ratio);
+                    }
                 } else {
                     self.display_buffer_split(buf_idx, direction, ratio);
                 }
             }
             crate::display_policy::DisplayAction::Hidden => {}
+        }
+    }
+
+    /// Like `display_buffer` but also sets focus to the window showing the buffer.
+    /// Use this when opening a buffer that the user wants to interact with immediately
+    /// (e.g. terminal, agenda). Also sets `alternate_buffer_idx`.
+    pub fn display_buffer_and_focus(&mut self, buf_idx: usize) {
+        if buf_idx >= self.buffers.len() {
+            return;
+        }
+        let prev_idx = self.active_buffer_idx();
+        self.display_buffer(buf_idx);
+        // Find the window now showing buf_idx and focus it.
+        let win_id = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == buf_idx)
+            .map(|w| w.id);
+        if let Some(id) = win_id {
+            self.window_mgr.set_focused(id);
+        }
+        if prev_idx != buf_idx {
+            self.alternate_buffer_idx = Some(prev_idx);
         }
     }
 
@@ -2258,44 +2372,27 @@ impl Editor {
         None
     }
 
-    /// Split helper for display_buffer: creates a new split, avoiding conversation windows.
+    /// Split helper for display_buffer: creates a new split.
+    /// Group-aware: if focused inside a conversation group, the split wraps the
+    /// entire group rather than splitting within it.
     fn display_buffer_split(
         &mut self,
         buf_idx: usize,
         direction: crate::window::SplitDirection,
         ratio: f32,
     ) {
-        // Don't split from a conversation window.
-        if self.is_conversation_buffer(self.active_buffer_idx()) {
-            let non_conv = self.find_non_conversation_window();
-            if let Some(win_id) = non_conv {
-                self.window_mgr.set_focused(win_id);
-            }
-        }
         let area = self.default_area();
         match self
             .window_mgr
             .split_with_ratio(direction, buf_idx, area, ratio)
         {
             Ok(new_win_id) => {
-                // Focus the new window showing the buffer.
                 self.window_mgr.set_focused(new_win_id);
             }
             Err(_) => {
-                // Too small to split — fall back to non-conversation switch.
                 self.switch_to_buffer_non_conversation(buf_idx);
             }
         }
-    }
-
-    /// Find any non-conversation window ID.
-    fn find_non_conversation_window(&self) -> Option<crate::window::WindowId> {
-        for w in self.window_mgr.iter_windows() {
-            if !self.is_conversation_buffer(w.buffer_idx) {
-                return Some(w.id);
-            }
-        }
-        None
     }
 
     /// Open a file without stealing focus from a conversation window.

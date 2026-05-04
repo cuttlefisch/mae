@@ -357,6 +357,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC o T"), "terminal-here");
         normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
         normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
+        normal.bind(parse_key_seq_spaced("SPC o a"), "open-agenda");
         // +register
         normal.bind(parse_key_seq_spaced("SPC r r"), "show-registers");
         normal.bind(parse_key_seq_spaced("SPC r y"), "paste-from-yank");
@@ -633,9 +634,19 @@ impl Editor {
         org.bind(parse_key_seq_spaced("SPC m s N"), "org-widen");
         org.bind(parse_key_seq_spaced("SPC m s w"), "org-widen");
         org.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
+        org.bind(parse_key_seq_spaced("SPC m t"), "org-set-tags");
+        // Table commands
+        org.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
+        org.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
+        org.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
+        org.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
+        org.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
         org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
         org.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
+        org.set_group_name(parse_key_seq_spaced("SPC m b"), "+table");
+        org.set_group_name(parse_key_seq_spaced("SPC m b i"), "+insert");
+        org.set_group_name(parse_key_seq_spaced("SPC m b d"), "+delete");
         org.bind(
             vec![KeyPress {
                 key: Key::Up,
@@ -727,9 +738,18 @@ impl Editor {
         markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
+        // Table commands
+        markdown.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
+        markdown.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
+        markdown.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
+        markdown.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
+        markdown.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
         markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
         markdown.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m b"), "+table");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m b i"), "+insert");
+        markdown.set_group_name(parse_key_seq_spaced("SPC m b d"), "+delete");
 
         maps.insert("markdown".to_string(), markdown);
 
@@ -791,6 +811,16 @@ impl Editor {
         debug.bind(parse_key_seq("S"), "debug-step-out");
         debug.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("debug".to_string(), debug);
+
+        // Agenda keymap
+        let mut agenda = Keymap::with_parent("agenda", "normal");
+        agenda.bind(vec![KeyPress::special(Key::Enter)], "agenda-goto");
+        agenda.bind(parse_key_seq("q"), "kill-buffer");
+        agenda.bind(parse_key_seq("r"), "agenda-refresh");
+        agenda.bind(parse_key_seq("t"), "agenda-filter-todo");
+        agenda.bind(parse_key_seq("p"), "agenda-filter-priority");
+        agenda.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("agenda".to_string(), agenda);
 
         maps
     }

@@ -61,6 +61,12 @@ pub struct Node {
     pub body: String,
     /// Freeform tags for filtering (e.g. `["movement", "vi"]`).
     pub tags: Vec<String>,
+    /// TODO state extracted from org heading (e.g. "TODO", "DONE").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub todo_state: Option<String>,
+    /// Priority extracted from org heading (e.g. 'A', 'B', 'C').
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<char>,
 }
 
 impl Node {
@@ -76,11 +82,23 @@ impl Node {
             kind,
             body: body.into(),
             tags: Vec::new(),
+            todo_state: None,
+            priority: None,
         }
     }
 
     pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_todo_state(mut self, state: &str) -> Self {
+        self.todo_state = Some(state.to_string());
+        self
+    }
+
+    pub fn with_priority(mut self, priority: char) -> Self {
+        self.priority = Some(priority);
         self
     }
 
@@ -165,6 +183,12 @@ pub struct KnowledgeBase {
     links_in: HashMap<String, Vec<String>>,
     /// Pre-lowercased searchable fields, keyed by node id.
     lower: HashMap<String, LowerCache>,
+    /// Secondary index: todo_state → set of node ids.
+    todo_index: HashMap<String, HashSet<String>>,
+    /// Secondary index: priority → set of node ids.
+    priority_index: HashMap<char, HashSet<String>>,
+    /// Secondary index: tag → set of node ids.
+    tag_index: HashMap<String, HashSet<String>>,
 }
 
 impl KnowledgeBase {
@@ -192,7 +216,7 @@ impl KnowledgeBase {
     /// Rebuilds the reverse index entries for this node's links.
     pub fn insert(&mut self, node: Node) -> Option<Node> {
         let id = node.id.clone();
-        // Remove old reverse edges (if any) before rebuilding.
+        // Remove old reverse edges and secondary indexes (if any) before rebuilding.
         if let Some(prev) = self.nodes.get(&id) {
             for target in prev.links() {
                 if let Some(sources) = self.links_in.get_mut(&target) {
@@ -202,6 +226,22 @@ impl KnowledgeBase {
                     }
                 }
             }
+            // Remove from secondary indexes.
+            if let Some(ref state) = prev.todo_state {
+                if let Some(set) = self.todo_index.get_mut(state) {
+                    set.remove(&id);
+                }
+            }
+            if let Some(pri) = prev.priority {
+                if let Some(set) = self.priority_index.get_mut(&pri) {
+                    set.remove(&id);
+                }
+            }
+            for tag in &prev.tags {
+                if let Some(set) = self.tag_index.get_mut(tag) {
+                    set.remove(&id);
+                }
+            }
         }
         // Install new reverse edges.
         for target in node.links() {
@@ -209,6 +249,25 @@ impl KnowledgeBase {
             if !entry.contains(&id) {
                 entry.push(id.clone());
             }
+        }
+        // Update secondary indexes.
+        if let Some(ref state) = node.todo_state {
+            self.todo_index
+                .entry(state.clone())
+                .or_default()
+                .insert(id.clone());
+        }
+        if let Some(pri) = node.priority {
+            self.priority_index
+                .entry(pri)
+                .or_default()
+                .insert(id.clone());
+        }
+        for tag in &node.tags {
+            self.tag_index
+                .entry(tag.clone())
+                .or_default()
+                .insert(id.clone());
         }
         self.lower.insert(id.clone(), LowerCache::from_node(&node));
         self.nodes.insert(id, node)
@@ -224,6 +283,22 @@ impl KnowledgeBase {
                 if sources.is_empty() {
                     self.links_in.remove(&target);
                 }
+            }
+        }
+        // Clean secondary indexes.
+        if let Some(ref state) = prev.todo_state {
+            if let Some(set) = self.todo_index.get_mut(state) {
+                set.remove(id);
+            }
+        }
+        if let Some(pri) = prev.priority {
+            if let Some(set) = self.priority_index.get_mut(&pri) {
+                set.remove(id);
+            }
+        }
+        for tag in &prev.tags {
+            if let Some(set) = self.tag_index.get_mut(tag) {
+                set.remove(id);
             }
         }
         Some(prev)
@@ -310,8 +385,58 @@ impl KnowledgeBase {
                 config_body
             ),
             tags: vec!["project".to_string()],
+            todo_state: None,
+            priority: None,
         };
         self.insert(node);
+    }
+
+    /// All nodes with any TODO state (not DONE/CANCELLED/DEFERRED).
+    pub fn todo_nodes(&self) -> Vec<&Node> {
+        let mut out: Vec<&Node> = self
+            .todo_index
+            .iter()
+            .flat_map(|(_, ids)| ids.iter().filter_map(|id| self.nodes.get(id)))
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out.dedup_by(|a, b| a.id == b.id);
+        out
+    }
+
+    /// Nodes with a specific TODO state.
+    pub fn nodes_by_todo_state(&self, state: &str) -> Vec<&Node> {
+        let mut out: Vec<&Node> = self
+            .todo_index
+            .get(state)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)))
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    /// Nodes with a specific priority.
+    pub fn nodes_by_priority(&self, priority: char) -> Vec<&Node> {
+        let mut out: Vec<&Node> = self
+            .priority_index
+            .get(&priority)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)))
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    /// Nodes with a specific tag.
+    pub fn nodes_by_tag(&self, tag: &str) -> Vec<&Node> {
+        let mut out: Vec<&Node> = self
+            .tag_index
+            .get(tag)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)))
+            .collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
     }
 
     /// Incoming links — node ids whose body references `target`.

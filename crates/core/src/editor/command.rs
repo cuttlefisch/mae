@@ -54,6 +54,10 @@ impl Editor {
                 self.dispatch_builtin("view-messages");
                 true
             }
+            "agenda" => {
+                self.dispatch_builtin("open-agenda");
+                true
+            }
             "help-edit" => {
                 // `:help-edit <topic>` → open/create ~/.config/mae/help/<topic>.org
                 let topic = args

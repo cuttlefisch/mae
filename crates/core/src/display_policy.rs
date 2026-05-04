@@ -100,6 +100,10 @@ impl DisplayPolicy {
             BufferKind::Preview => DisplayAction::ReplaceFocused,
             // Managed by open_conversation_buffer()
             BufferKind::Conversation => DisplayAction::Hidden,
+            // Full window (like git-status)
+            BufferKind::Agenda => DisplayAction::ReplaceFocused,
+            // Full window — editable sandbox
+            BufferKind::Demo => DisplayAction::ReplaceFocused,
         }
     }
 
@@ -131,6 +135,8 @@ impl DisplayPolicy {
             BufferKind::Visual,
             BufferKind::Preview,
             BufferKind::Conversation,
+            BufferKind::Agenda,
+            BufferKind::Demo,
         ];
 
         for kind in &kinds {
@@ -226,6 +232,8 @@ pub fn parse_buffer_kind(s: &str) -> Option<BufferKind> {
         "visual" => Some(BufferKind::Visual),
         "filetree" | "file-tree" => Some(BufferKind::FileTree),
         "diff" => Some(BufferKind::Diff),
+        "agenda" => Some(BufferKind::Agenda),
+        "demo" => Some(BufferKind::Demo),
         _ => None,
     }
 }
@@ -250,6 +258,8 @@ mod tests {
             BufferKind::Visual,
             BufferKind::FileTree,
             BufferKind::Diff,
+            BufferKind::Agenda,
+            BufferKind::Demo,
         ];
         for kind in &kinds {
             let _ = policy.action_for(*kind);

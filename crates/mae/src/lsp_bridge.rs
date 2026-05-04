@@ -578,7 +578,7 @@ fn open_location(
 
     match existing {
         Some(idx) => {
-            editor.switch_to_buffer(idx);
+            editor.display_buffer_and_focus(idx);
         }
         None => {
             // open_file queues a didOpen via file_ops

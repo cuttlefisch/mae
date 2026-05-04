@@ -256,6 +256,12 @@ impl Editor {
         if lang != Some(crate::syntax::Language::Org) {
             return;
         }
+        // Tab on a table line → cell navigation instead of heading fold.
+        let row = self.window_mgr.focused_window().cursor_row;
+        if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
+            self.table_next_cell();
+            return;
+        }
         self.heading_cycle(crate::syntax::Language::Org);
     }
 
@@ -395,6 +401,8 @@ impl Editor {
             self.buffers[buf_idx].insert_text_at(start, &new_line);
             self.buffers[buf_idx].end_undo_group();
             self.set_status(status);
+            // Update parent heading's statistics cookies ([/] or [%])
+            self.update_statistics_cookies(row);
         }
     }
 
@@ -445,6 +453,215 @@ impl Editor {
     /// Demote Org heading (thin wrapper).
     pub fn org_demote(&mut self) {
         self.heading_demote(crate::syntax::Language::Org);
+    }
+
+    /// Cycle org heading priority up: none → [#A] → [#B] → [#C] → none.
+    pub fn org_priority_up(&mut self) {
+        self.org_priority_cycle(true);
+    }
+
+    /// Cycle org heading priority down: none → [#C] → [#B] → [#A] → none.
+    pub fn org_priority_down(&mut self) {
+        self.org_priority_cycle(false);
+    }
+
+    fn org_priority_cycle(&mut self, up: bool) {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static HEADING_PRI: OnceLock<Regex> = OnceLock::new();
+        let re = HEADING_PRI.get_or_init(|| {
+            Regex::new(
+                r"^(\*+ )(?:(TODO|DONE|NEXT|WAIT|CANCELLED|DEFERRED) )?(?:\[#([A-C])\] )?(.*)",
+            )
+            .unwrap()
+        });
+
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let Some(cap) = re.captures(&line) else {
+            self.set_status("Not a heading");
+            return;
+        };
+
+        let stars = cap.get(1).unwrap().as_str();
+        let keyword = cap.get(2).map(|m| m.as_str());
+        let current_pri = cap.get(3).map(|m| m.as_str());
+        let rest = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+
+        let new_pri = if up {
+            match current_pri {
+                None => Some("A"),
+                Some("A") => Some("B"),
+                Some("B") => Some("C"),
+                _ => None,
+            }
+        } else {
+            match current_pri {
+                None => Some("C"),
+                Some("C") => Some("B"),
+                Some("B") => Some("A"),
+                _ => None,
+            }
+        };
+
+        let mut new_line = String::from(stars);
+        if let Some(kw) = keyword {
+            new_line.push_str(kw);
+            new_line.push(' ');
+        }
+        if let Some(pri) = new_pri {
+            new_line.push_str(&format!("[#{}] ", pri));
+        }
+        new_line.push_str(rest);
+        // Preserve trailing newline
+        if line.ends_with('\n') && !new_line.ends_with('\n') {
+            new_line.push('\n');
+        }
+
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        let end = start + self.buffers[buf_idx].rope().line(row).len_chars();
+        self.buffers[buf_idx].begin_undo_group();
+        self.buffers[buf_idx].delete_range(start, end);
+        self.buffers[buf_idx].insert_text_at(start, &new_line);
+        self.buffers[buf_idx].end_undo_group();
+        let label = new_pri
+            .map(|p| format!("[#{}]", p))
+            .unwrap_or_else(|| "none".into());
+        self.set_status(format!("Priority: {}", label));
+    }
+
+    /// Open a MiniDialog to set tags on the current org heading.
+    pub fn org_set_tags(&mut self) {
+        use crate::command_palette::{MiniDialogContext, MiniDialogState};
+
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+
+        if !line.trim_start().starts_with('*') {
+            self.set_status("Not a heading");
+            return;
+        }
+
+        // Extract current tags from trailing :tag1:tag2: pattern.
+        let trimmed = line.trim_end_matches('\n').trim_end();
+        let current_tags = if let Some(last_space) = trimmed.rfind(char::is_whitespace) {
+            let tail = &trimmed[last_space + 1..];
+            if tail.starts_with(':') && tail.ends_with(':') && tail.len() >= 3 {
+                tail[1..tail.len() - 1].to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        self.mini_dialog = Some(MiniDialogState::single_input(
+            "Tags (colon-separated)",
+            &current_tags,
+            "tag1:tag2",
+            MiniDialogContext::OrgSetTags { heading_line: row },
+        ));
+        self.set_mode(crate::Mode::CommandPalette);
+    }
+
+    /// Smart newline in insert mode: continues list markers.
+    /// Returns `true` if a smart continuation was inserted, `false` otherwise.
+    pub fn insert_smart_newline(&mut self) -> bool {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static UNORDERED: OnceLock<Regex> = OnceLock::new();
+        static ORDERED: OnceLock<Regex> = OnceLock::new();
+        static CHECKBOX: OnceLock<Regex> = OnceLock::new();
+
+        let unordered = UNORDERED.get_or_init(|| Regex::new(r"^(\s*)([-+*]) (.*)$").unwrap());
+        let ordered = ORDERED.get_or_init(|| Regex::new(r"^(\s*)(\d+)([.)]) (.*)$").unwrap());
+        let checkbox =
+            CHECKBOX.get_or_init(|| Regex::new(r"^(\s*)([-+*]) \[[ xX\-]\] (.*)$").unwrap());
+
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let line_trimmed = line.trim_end_matches('\n');
+
+        // Try checkbox first (more specific).
+        if let Some(cap) = checkbox.captures(line_trimmed) {
+            let indent = cap.get(1).unwrap().as_str();
+            let marker = cap.get(2).unwrap().as_str();
+            let body = cap.get(3).unwrap().as_str();
+            if body.is_empty() {
+                // Empty checkbox item → end list (delete marker, plain newline)
+                return self.smart_newline_end_list(row, &line);
+            }
+            let insert = format!("\n{}{} [ ] ", indent, marker);
+            self.insert_at_cursor(&insert);
+            return true;
+        }
+
+        // Try unordered list.
+        if let Some(cap) = unordered.captures(line_trimmed) {
+            let indent = cap.get(1).unwrap().as_str();
+            let marker = cap.get(2).unwrap().as_str();
+            let body = cap.get(3).unwrap().as_str();
+            if body.is_empty() {
+                return self.smart_newline_end_list(row, &line);
+            }
+            let insert = format!("\n{}{} ", indent, marker);
+            self.insert_at_cursor(&insert);
+            return true;
+        }
+
+        // Try ordered list.
+        if let Some(cap) = ordered.captures(line_trimmed) {
+            let indent = cap.get(1).unwrap().as_str();
+            let num: usize = cap.get(2).unwrap().as_str().parse().unwrap_or(1);
+            let sep = cap.get(3).unwrap().as_str();
+            let body = cap.get(4).unwrap().as_str();
+            if body.is_empty() {
+                return self.smart_newline_end_list(row, &line);
+            }
+            let insert = format!("\n{}{}{} ", indent, num + 1, sep);
+            self.insert_at_cursor(&insert);
+            return true;
+        }
+
+        false
+    }
+
+    /// Helper: end a list by replacing the current marker-only line with a plain newline.
+    fn smart_newline_end_list(&mut self, row: usize, line: &str) -> bool {
+        let buf_idx = self.active_buffer_idx();
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        let end = start + self.buffers[buf_idx].rope().line(row).len_chars();
+        let has_nl = line.ends_with('\n');
+        self.buffers[buf_idx].begin_undo_group();
+        self.buffers[buf_idx].delete_range(start, end);
+        let replacement = if has_nl { "\n" } else { "" };
+        self.buffers[buf_idx].insert_text_at(start, replacement);
+        self.buffers[buf_idx].end_undo_group();
+        // Place cursor at start of the new blank line
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_col = 0;
+        true
+    }
+
+    /// Insert text at the current cursor position (insert mode helper).
+    pub(crate) fn insert_at_cursor(&mut self, text: &str) {
+        let buf_idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window();
+        let pos = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        self.buffers[buf_idx].insert_text_at(pos, text);
+        // Move cursor to end of inserted text
+        let new_pos = pos + text.chars().count();
+        let new_row = self.buffers[buf_idx].rope().char_to_line(new_pos);
+        let line_start = self.buffers[buf_idx].rope().line_to_char(new_row);
+        let new_col = new_pos - line_start;
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = new_row;
+        win.cursor_col = new_col;
     }
 
     /// Calculate the range of lines covered by the subtree rooted at the
@@ -584,6 +801,12 @@ impl Editor {
     pub fn md_cycle(&mut self) {
         let buf_idx = self.active_buffer_idx();
         if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Markdown) {
+            return;
+        }
+        // Tab on a table line → cell navigation instead of heading fold.
+        let row = self.window_mgr.focused_window().cursor_row;
+        if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
+            self.table_next_cell();
             return;
         }
         self.heading_cycle(crate::syntax::Language::Markdown);
@@ -985,29 +1208,46 @@ impl Editor {
         static HEADING_RE: OnceLock<Regex> = OnceLock::new();
         let heading_re = HEADING_RE.get_or_init(|| Regex::new(r"^(\*+|#+)\s").unwrap());
         static COOKIE_FRAC: OnceLock<Regex> = OnceLock::new();
-        let cookie_frac = COOKIE_FRAC.get_or_init(|| Regex::new(r"\[\d+/\d+\]").unwrap());
+        let cookie_frac = COOKIE_FRAC.get_or_init(|| Regex::new(r"\[\d*/\d*\]").unwrap());
         static COOKIE_PCT: OnceLock<Regex> = OnceLock::new();
-        let cookie_pct = COOKIE_PCT.get_or_init(|| Regex::new(r"\[\d+%\]").unwrap());
+        let cookie_pct = COOKIE_PCT.get_or_init(|| Regex::new(r"\[\d*%\]").unwrap());
 
         let buf_idx = self.active_buffer_idx();
 
-        // Find parent: walk upward looking for a heading, a lower-indent list item,
-        // or any line with a statistics cookie (for plain-text cookie lines).
-        let changed_indent = {
-            let l: String = self.buffers[buf_idx]
-                .rope()
-                .line(changed_row)
-                .chars()
-                .collect();
-            l.len() - l.trim_start().len()
-        };
+        // Find parent: walk upward looking for a parent heading (fewer stars),
+        // a lower-indent list item, or any line with a statistics cookie.
+        let changed_line: String = self.buffers[buf_idx]
+            .rope()
+            .line(changed_row)
+            .chars()
+            .collect();
+        let changed_indent = changed_line.len() - changed_line.trim_start().len();
+        let changed_heading_level = heading_re
+            .captures(&changed_line)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().len());
 
         let mut parent_row = None;
         for r in (0..changed_row).rev() {
             let l: String = self.buffers[buf_idx].rope().line(r).chars().collect();
             if heading_re.is_match(&l) {
-                parent_row = Some(r);
-                break;
+                let this_level = heading_re
+                    .captures(&l)
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().len())
+                    .unwrap_or(0);
+                // Only accept a heading with fewer stars as parent
+                if let Some(changed_level) = changed_heading_level {
+                    if this_level < changed_level {
+                        parent_row = Some(r);
+                        break;
+                    }
+                    // Same or deeper level heading — skip, keep looking
+                } else {
+                    // Changed line is not a heading (e.g. list item under heading)
+                    parent_row = Some(r);
+                    break;
+                }
             }
             let indent = l.len() - l.trim_start().len();
             if indent < changed_indent
@@ -1084,6 +1324,14 @@ impl Editor {
                 if state == "x" || state == "X" {
                     checked += 1;
                 }
+            } else if is_heading && heading_re.is_match(&l) {
+                // Count child headings with TODO/DONE keywords
+                if trimmed.contains("TODO ") || trimmed.contains("DONE ") {
+                    total += 1;
+                    if trimmed.contains("DONE ") {
+                        checked += 1;
+                    }
+                }
             }
         }
 
@@ -1124,6 +1372,13 @@ impl Editor {
     /// - OVERVIEW: fold every heading (all levels)
     /// - CONTENTS: show level 1 + 2 headings, fold level 3+
     pub fn heading_global_cycle(&mut self, lang: crate::syntax::Language) {
+        // S-Tab on a table line → prev cell navigation instead of global fold.
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
+            self.table_prev_cell();
+            return;
+        }
         let buf_idx = self.active_buffer_idx();
         let state = self.buffers[buf_idx].global_fold_state;
         let next = (state + 1) % 3;

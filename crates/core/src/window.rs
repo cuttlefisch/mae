@@ -726,6 +726,13 @@ pub enum LayoutNode {
         first: Box<LayoutNode>,
         second: Box<LayoutNode>,
     },
+    /// A named group of windows that acts as a single atomic unit for split
+    /// operations. Rendering is transparent (same as inner). Splits from
+    /// inside a group wrap the group, not the individual leaf.
+    Group {
+        label: String,
+        inner: Box<LayoutNode>,
+    },
 }
 
 /// Minimum window dimensions to prevent unusable splits.
@@ -882,16 +889,14 @@ impl WindowManager {
         let new_window = Window::new(new_id, buffer_idx);
         self.windows.insert(new_id, new_window);
 
-        // Replace the focused leaf with a split
+        // Group-aware split: wraps the entire group if target is inside one.
         let old_focused = self.focused;
-        self.replace_leaf(
+        self.layout = Self::split_for_leaf_recursive(
+            std::mem::replace(&mut self.layout, LayoutNode::Leaf(0)),
             old_focused,
-            LayoutNode::Split {
-                direction,
-                ratio: 0.5,
-                first: Box::new(LayoutNode::Leaf(old_focused)),
-                second: Box::new(LayoutNode::Leaf(new_id)),
-            },
+            new_id,
+            direction,
+            0.5,
         );
 
         Ok(new_id)
@@ -940,18 +945,164 @@ impl WindowManager {
         let new_window = Window::new(new_id, buffer_idx);
         self.windows.insert(new_id, new_window);
 
+        // Group-aware split: wraps the entire group if target is inside one.
         let old_focused = self.focused;
-        self.replace_leaf(
+        self.layout = Self::split_for_leaf_recursive(
+            std::mem::replace(&mut self.layout, LayoutNode::Leaf(0)),
             old_focused,
-            LayoutNode::Split {
-                direction,
-                ratio: ratio.clamp(0.1, 0.9),
-                first: Box::new(LayoutNode::Leaf(old_focused)),
-                second: Box::new(LayoutNode::Leaf(new_id)),
-            },
+            new_id,
+            direction,
+            ratio.clamp(0.1, 0.9),
         );
 
         Ok(new_id)
+    }
+
+    /// Split at the root level: wraps the entire existing layout as the first
+    /// child and creates a new leaf as the second child. This keeps window
+    /// groups (like the conversation pair) intact on one side.
+    pub fn split_root(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        ratio: f32,
+    ) -> Result<WindowId, String> {
+        // Check minimum size.
+        match direction {
+            SplitDirection::Vertical => {
+                let smaller = (available.width as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_WIDTH {
+                    return Err("Cannot split: too narrow".to_string());
+                }
+            }
+            SplitDirection::Horizontal => {
+                let smaller = (available.height as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_HEIGHT {
+                    return Err("Cannot split: too short".to_string());
+                }
+            }
+        }
+
+        let new_id = self.next_id;
+        self.next_id += 1;
+        self.windows.insert(new_id, Window::new(new_id, buffer_idx));
+
+        // Wrap the current layout as the first child, new leaf as the second.
+        let old_layout = std::mem::replace(&mut self.layout, LayoutNode::Leaf(0));
+        self.layout = LayoutNode::Split {
+            direction,
+            ratio,
+            first: Box::new(old_layout),
+            second: Box::new(LayoutNode::Leaf(new_id)),
+        };
+
+        Ok(new_id)
+    }
+
+    /// Wrap the smallest subtree containing all `leaf_ids` in a `Group` node.
+    /// If the leaves span the entire root, the root itself is wrapped.
+    pub fn wrap_subtree_as_group(&mut self, leaf_ids: &[WindowId], label: String) {
+        self.layout = Self::wrap_group_recursive(
+            std::mem::replace(&mut self.layout, LayoutNode::Leaf(0)),
+            leaf_ids,
+            label,
+        );
+    }
+
+    fn wrap_group_recursive(node: LayoutNode, leaf_ids: &[WindowId], label: String) -> LayoutNode {
+        // Count how many target leaves are in this subtree.
+        let count = leaf_ids
+            .iter()
+            .filter(|id| Self::contains_leaf(&node, **id))
+            .count();
+        if count == 0 {
+            return node;
+        }
+        // If this subtree contains ALL target leaves, check children.
+        match node {
+            LayoutNode::Leaf(_) => {
+                // Single leaf that's a target — wrap it.
+                if count > 0 {
+                    LayoutNode::Group {
+                        label,
+                        inner: Box::new(node),
+                    }
+                } else {
+                    node
+                }
+            }
+            LayoutNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                let in_first = leaf_ids
+                    .iter()
+                    .filter(|id| Self::contains_leaf(&first, **id))
+                    .count();
+                let in_second = leaf_ids
+                    .iter()
+                    .filter(|id| Self::contains_leaf(&second, **id))
+                    .count();
+                if in_first > 0 && in_second > 0 {
+                    // Smallest subtree containing all targets — wrap here.
+                    LayoutNode::Group {
+                        label,
+                        inner: Box::new(LayoutNode::Split {
+                            direction,
+                            ratio,
+                            first,
+                            second,
+                        }),
+                    }
+                } else if in_first > 0 {
+                    LayoutNode::Split {
+                        direction,
+                        ratio,
+                        first: Box::new(Self::wrap_group_recursive(*first, leaf_ids, label)),
+                        second,
+                    }
+                } else {
+                    LayoutNode::Split {
+                        direction,
+                        ratio,
+                        first,
+                        second: Box::new(Self::wrap_group_recursive(*second, leaf_ids, label)),
+                    }
+                }
+            }
+            LayoutNode::Group { label: l, inner } => LayoutNode::Group {
+                label: l,
+                inner: Box::new(Self::wrap_group_recursive(*inner, leaf_ids, label)),
+            },
+        }
+    }
+
+    /// Return the group label for a leaf, if it is inside a Group.
+    pub fn group_label(&self, leaf_id: WindowId) -> Option<&str> {
+        Self::group_label_recursive(&self.layout, leaf_id)
+    }
+
+    fn group_label_recursive(node: &LayoutNode, target: WindowId) -> Option<&str> {
+        match node {
+            LayoutNode::Leaf(_) => None,
+            LayoutNode::Split { first, second, .. } => Self::group_label_recursive(first, target)
+                .or_else(|| Self::group_label_recursive(second, target)),
+            LayoutNode::Group { label, inner } => {
+                if Self::contains_leaf(inner, target) {
+                    Some(label.as_str())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Check whether a leaf is inside any Group.
+    pub fn is_in_group(&self, leaf_id: WindowId) -> bool {
+        self.group_label(leaf_id).is_some()
     }
 
     /// Close a window. Cannot close the last window.
@@ -1083,52 +1234,69 @@ impl WindowManager {
                 Self::compute_rects(first, first_area, out);
                 Self::compute_rects(second, second_area, out);
             }
+            LayoutNode::Group { inner, .. } => {
+                Self::compute_rects(inner, area, out);
+            }
         }
     }
 
-    /// Replace a leaf node with a new node in the layout tree.
-    fn replace_leaf(&mut self, target_id: WindowId, replacement: LayoutNode) {
-        self.layout = Self::replace_leaf_recursive(
-            std::mem::replace(&mut self.layout, LayoutNode::Leaf(0)),
-            target_id,
-            replacement,
-        );
-    }
-
-    fn replace_leaf_recursive(
+    /// Group-aware split. When the target leaf is inside a `Group`, wraps the
+    /// entire group in a new `Split` instead of splitting within it.
+    fn split_for_leaf_recursive(
         node: LayoutNode,
         target_id: WindowId,
-        replacement: LayoutNode,
+        new_leaf_id: WindowId,
+        direction: SplitDirection,
+        ratio: f32,
     ) -> LayoutNode {
         match node {
-            LayoutNode::Leaf(id) if id == target_id => replacement,
-            LayoutNode::Leaf(_) => node,
-            LayoutNode::Split {
+            LayoutNode::Leaf(id) if id == target_id => LayoutNode::Split {
                 direction,
                 ratio,
+                first: Box::new(LayoutNode::Leaf(id)),
+                second: Box::new(LayoutNode::Leaf(new_leaf_id)),
+            },
+            LayoutNode::Leaf(_) => node,
+            // Group containing target: wrap ENTIRE group, don't split inside it
+            LayoutNode::Group { .. } if Self::contains_leaf(&node, target_id) => {
+                LayoutNode::Split {
+                    direction,
+                    ratio,
+                    first: Box::new(node),
+                    second: Box::new(LayoutNode::Leaf(new_leaf_id)),
+                }
+            }
+            LayoutNode::Group { .. } => node,
+            LayoutNode::Split {
+                direction: d,
+                ratio: r,
                 first,
                 second,
             } => {
                 if Self::contains_leaf(&first, target_id) {
                     LayoutNode::Split {
-                        direction,
-                        ratio,
-                        first: Box::new(Self::replace_leaf_recursive(
+                        direction: d,
+                        ratio: r,
+                        first: Box::new(Self::split_for_leaf_recursive(
                             *first,
                             target_id,
-                            replacement,
+                            new_leaf_id,
+                            direction,
+                            ratio,
                         )),
                         second,
                     }
                 } else {
                     LayoutNode::Split {
-                        direction,
-                        ratio,
+                        direction: d,
+                        ratio: r,
                         first,
-                        second: Box::new(Self::replace_leaf_recursive(
+                        second: Box::new(Self::split_for_leaf_recursive(
                             *second,
                             target_id,
-                            replacement,
+                            new_leaf_id,
+                            direction,
+                            ratio,
                         )),
                     }
                 }
@@ -1142,6 +1310,7 @@ impl WindowManager {
             LayoutNode::Split { first, second, .. } => {
                 Self::contains_leaf(first, target_id) || Self::contains_leaf(second, target_id)
             }
+            LayoutNode::Group { inner, .. } => Self::contains_leaf(inner, target_id),
         }
     }
 
@@ -1153,6 +1322,15 @@ impl WindowManager {
         );
     }
 
+    /// If the node is a Leaf (possibly wrapped in Groups), return its ID.
+    fn sole_leaf_id(node: &LayoutNode) -> Option<WindowId> {
+        match node {
+            LayoutNode::Leaf(id) => Some(*id),
+            LayoutNode::Group { inner, .. } => Self::sole_leaf_id(inner),
+            LayoutNode::Split { .. } => None,
+        }
+    }
+
     fn remove_leaf_recursive(node: LayoutNode, target_id: WindowId) -> LayoutNode {
         match node {
             LayoutNode::Leaf(_) => node, // Can't remove a root leaf
@@ -1162,11 +1340,11 @@ impl WindowManager {
                 first,
                 second,
             } => {
-                // Check if one of the direct children is the target
-                if matches!(&*first, LayoutNode::Leaf(id) if *id == target_id) {
-                    return *second; // Promote sibling
+                // Check if one of the direct children is (or wraps) the target
+                if Self::sole_leaf_id(&first) == Some(target_id) {
+                    return *second; // Promote sibling, dissolving any Group wrapper
                 }
-                if matches!(&*second, LayoutNode::Leaf(id) if *id == target_id) {
+                if Self::sole_leaf_id(&second) == Some(target_id) {
                     return *first; // Promote sibling
                 }
                 // Recurse into children
@@ -1177,6 +1355,10 @@ impl WindowManager {
                     second: Box::new(Self::remove_leaf_recursive(*second, target_id)),
                 }
             }
+            LayoutNode::Group { label, inner } => LayoutNode::Group {
+                label,
+                inner: Box::new(Self::remove_leaf_recursive(*inner, target_id)),
+            },
         }
     }
 
@@ -1185,6 +1367,7 @@ impl WindowManager {
         match node {
             LayoutNode::Leaf(id) => *id,
             LayoutNode::Split { first, .. } => self.first_leaf_id(first),
+            LayoutNode::Group { inner, .. } => self.first_leaf_id(inner),
         }
     }
 
@@ -1239,6 +1422,9 @@ impl WindowManager {
                     Self::adjust_ratio_recursive(second, target, direction, delta)
                 }
             }
+            LayoutNode::Group { inner, .. } => {
+                Self::adjust_ratio_recursive(inner, target, direction, delta)
+            }
         }
     }
 
@@ -1248,16 +1434,21 @@ impl WindowManager {
     }
 
     fn balance_recursive(node: &mut LayoutNode) {
-        if let LayoutNode::Split {
-            ratio,
-            first,
-            second,
-            ..
-        } = node
-        {
-            *ratio = 0.5;
-            Self::balance_recursive(first);
-            Self::balance_recursive(second);
+        match node {
+            LayoutNode::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                *ratio = 0.5;
+                Self::balance_recursive(first);
+                Self::balance_recursive(second);
+            }
+            LayoutNode::Group { inner, .. } => {
+                Self::balance_recursive(inner);
+            }
+            LayoutNode::Leaf(_) => {}
         }
     }
 
@@ -1336,6 +1527,9 @@ impl WindowManager {
             LayoutNode::Split { first, second, .. } => {
                 Self::swap_leaves(first, a, b);
                 Self::swap_leaves(second, a, b);
+            }
+            LayoutNode::Group { inner, .. } => {
+                Self::swap_leaves(inner, a, b);
             }
         }
     }
@@ -2323,5 +2517,208 @@ mod tests {
         win.scroll_cursor_bottom(30);
         assert!(win.scroll_locked);
         assert_eq!(win.scroll_locked_cursor, win.cursor_row);
+    }
+
+    // --- Window Group tests ---
+
+    #[test]
+    fn group_transparent_in_layout_rects() {
+        // Group(Split(A,B)) should produce the same rects as Split(A,B).
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        let rects_before = wm.layout_rects(default_area());
+        wm.wrap_subtree_as_group(&[0, b_id], "test".to_string());
+        let rects_after = wm.layout_rects(default_area());
+        assert_eq!(rects_before, rects_after);
+    }
+
+    #[test]
+    fn split_respects_group() {
+        // Focus inside Group, split creates Split(Group(...), new_leaf).
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        // Focus window 0 (inside group) and split vertically.
+        wm.set_focused(0);
+        let c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        assert_eq!(wm.window_count(), 3);
+        // The new leaf should be outside the group.
+        assert!(wm.is_in_group(0));
+        assert!(wm.is_in_group(b_id));
+        assert!(!wm.is_in_group(c_id));
+    }
+
+    #[test]
+    fn split_without_group_unchanged() {
+        // Normal split behavior preserved when no groups exist.
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert_eq!(wm.window_count(), 2);
+        assert!(!wm.is_in_group(0));
+        assert!(!wm.is_in_group(b_id));
+    }
+
+    #[test]
+    fn close_within_group_keeps_group() {
+        // Group(Split(A,B)), close B -> Group(Leaf(A)).
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        wm.close(b_id);
+        assert_eq!(wm.window_count(), 1);
+        assert!(wm.is_in_group(0));
+        assert_eq!(wm.group_label(0), Some("conv"));
+    }
+
+    #[test]
+    fn close_sole_group_leaf_dissolves() {
+        // Split(Group(Leaf(A)), Leaf(B)), close A -> Leaf(B).
+        let mut wm = WindowManager::new(0);
+        wm.wrap_subtree_as_group(&[0], "g".to_string());
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // Now layout: Split(Group(Leaf(0)), Leaf(b_id))
+        wm.close(0);
+        assert_eq!(wm.window_count(), 1);
+        // Group should have been dissolved by sole_leaf_id.
+        assert!(!wm.is_in_group(b_id));
+    }
+
+    #[test]
+    fn wrap_subtree_as_group_structure() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "pair".to_string());
+        assert_eq!(wm.group_label(0), Some("pair"));
+        assert_eq!(wm.group_label(b_id), Some("pair"));
+    }
+
+    #[test]
+    fn contains_leaf_through_group() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "g".to_string());
+        assert!(WindowManager::contains_leaf(&wm.layout, 0));
+        assert!(WindowManager::contains_leaf(&wm.layout, b_id));
+    }
+
+    #[test]
+    fn balance_through_group() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "g".to_string());
+        // Add a window outside the group.
+        wm.set_focused(0);
+        let _c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        // Adjust ratio, then balance.
+        wm.adjust_ratio(Direction::Right, 0.2);
+        wm.balance();
+        // After balance all ratios should be 0.5.
+        fn check_ratios(node: &LayoutNode) {
+            match node {
+                LayoutNode::Split {
+                    ratio,
+                    first,
+                    second,
+                    ..
+                } => {
+                    assert!((*ratio - 0.5).abs() < 0.01, "ratio {} != 0.5", ratio);
+                    check_ratios(first);
+                    check_ratios(second);
+                }
+                LayoutNode::Group { inner, .. } => check_ratios(inner),
+                LayoutNode::Leaf(_) => {}
+            }
+        }
+        check_ratios(&wm.layout);
+    }
+
+    #[test]
+    fn swap_leaves_through_group() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0], "g".to_string());
+        // Swap 0 and b_id.
+        WindowManager::swap_leaves(&mut wm.layout, 0, b_id);
+        // b_id should now be inside the group, 0 outside.
+        assert!(wm.is_in_group(b_id));
+        assert!(!wm.is_in_group(0));
+    }
+
+    #[test]
+    fn adjust_ratio_through_group() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        // Focus inside group, adjust the inner split ratio.
+        wm.set_focused(0);
+        wm.adjust_ratio(Direction::Down, 0.1);
+        // The inner split ratio should have changed.
+        fn inner_ratio(node: &LayoutNode) -> Option<f32> {
+            match node {
+                LayoutNode::Group { inner, .. } => inner_ratio(inner),
+                LayoutNode::Split { ratio, .. } => Some(*ratio),
+                _ => None,
+            }
+        }
+        let r = inner_ratio(&wm.layout).unwrap();
+        assert!(
+            (r - 0.6).abs() < 0.01,
+            "inner ratio should be ~0.6, got {}",
+            r
+        );
+    }
+
+    #[test]
+    fn focus_direction_with_groups() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        wm.set_focused(0);
+        let c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        // c_id is outside the group, to the right.
+        wm.set_focused(0);
+        wm.focus_direction(Direction::Right, default_area());
+        assert_eq!(wm.focused_id(), c_id);
+        wm.focus_direction(Direction::Left, default_area());
+        // Should go back into the group.
+        assert!(wm.focused_id() == 0 || wm.focused_id() == b_id);
+    }
+
+    #[test]
+    fn first_leaf_id_with_group() {
+        let mut wm = WindowManager::new(0);
+        let _b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0], "g".to_string());
+        assert_eq!(wm.first_leaf_id(&wm.layout), 0);
     }
 }

@@ -282,6 +282,58 @@ impl Renderer for GuiRenderer {
             mae_core::syntax::compute_visible_syntax_spans(editor)
         };
 
+        // Pre-compute markup spans and code block lines for visible buffers (cache by generation).
+        {
+            let visible: Vec<usize> = editor
+                .window_mgr
+                .iter_windows()
+                .map(|w| w.buffer_idx)
+                .collect();
+            for &bi in &visible {
+                if bi >= editor.buffers.len() {
+                    continue;
+                }
+                // Graceful degradation: skip expensive markup work for extreme files.
+                let degraded = editor.should_degrade_features(bi);
+                let flavor = if degraded {
+                    mae_core::MarkupFlavor::None
+                } else {
+                    editor.effective_markup_flavor(bi)
+                };
+                let gen = editor.buffers[bi].generation;
+
+                // Markup spans cache.
+                if flavor != mae_core::MarkupFlavor::None {
+                    let needs_update = editor
+                        .markup_cache
+                        .get(&bi)
+                        .is_none_or(|c| c.generation != gen || c.flavor != flavor);
+                    if needs_update {
+                        let source: String = editor.buffers[bi].rope().chars().collect();
+                        let spans = mae_core::compute_markup_spans(&source, flavor);
+                        editor.markup_cache.insert(
+                            bi,
+                            mae_core::MarkupCache {
+                                generation: gen,
+                                flavor,
+                                spans,
+                            },
+                        );
+                    }
+                }
+
+                // Code block lines cache (detect_code_block_lines is O(buffer)).
+                let cb_needs_update = editor
+                    .code_block_cache
+                    .get(&bi)
+                    .is_none_or(|&(g, f, _)| g != gen || f != flavor);
+                if cb_needs_update {
+                    let lines = mae_core::detect_code_block_lines(&editor.buffers[bi], flavor);
+                    editor.code_block_cache.insert(bi, (gen, flavor, lines));
+                }
+            }
+        }
+
         let editor: &Editor = editor;
 
         // Layout: window area = rows-2, status bar = 1, command line = 1.
@@ -589,17 +641,28 @@ fn render_window_area(
                         owned_spans = Some(shared);
                         owned_spans.as_deref()
                     } else {
-                        let flavor = editor.effective_markup_flavor(win.buffer_idx);
+                        let degraded = editor.should_degrade_features(win.buffer_idx);
+                        let flavor = if degraded {
+                            mae_core::MarkupFlavor::None
+                        } else {
+                            editor.effective_markup_flavor(win.buffer_idx)
+                        };
                         if flavor != mae_core::MarkupFlavor::None {
                             let mut enriched = syntax_spans
                                 .get(&win.buffer_idx)
                                 .map(|v| v.as_ref().clone())
                                 .unwrap_or_default();
-                            mae_core::render_common::spans::enrich_spans_with_markup(
-                                &mut enriched,
-                                buf,
-                                flavor,
-                            );
+                            let gen = buf.generation;
+                            let cached = editor.markup_cache.get(&win.buffer_idx);
+                            if let Some(c) =
+                                cached.filter(|c| c.generation == gen && c.flavor == flavor)
+                            {
+                                enriched.extend_from_slice(&c.spans);
+                            } else {
+                                let source: String = buf.rope().chars().collect();
+                                enriched.extend(mae_core::compute_markup_spans(&source, flavor));
+                            }
+                            enriched.sort_by_key(|s| s.byte_start);
                             owned_spans = Some(enriched);
                             owned_spans.as_deref()
                         } else {

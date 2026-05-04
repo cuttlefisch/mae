@@ -514,11 +514,8 @@ impl Editor {
         self.pending_rename_edit = Some(edits_json.to_string());
 
         // Display the preview buffer
-        let win = self.window_mgr.focused_window_mut();
-        win.buffer_idx = idx;
-        win.cursor_row = 0;
-        win.cursor_col = 0;
-        win.scroll_offset = 0;
+        self.display_buffer_and_focus(idx);
+        self.window_mgr.focused_window_mut().scroll_offset = 0;
 
         self.set_status(format!(
             "[LSP] Rename preview: {} change(s) — Enter to apply, Esc to abort",

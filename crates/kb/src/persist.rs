@@ -24,7 +24,7 @@ use crate::{KnowledgeBase, Node, NodeKind};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Error type wrapping rusqlite and serde errors for the persistence layer.
 #[derive(Debug)]
@@ -88,11 +88,13 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS nodes (
-            id        TEXT PRIMARY KEY,
-            title     TEXT NOT NULL,
-            kind      TEXT NOT NULL,
-            body      TEXT NOT NULL,
-            tags_json TEXT NOT NULL DEFAULT '[]'
+            id         TEXT PRIMARY KEY,
+            title      TEXT NOT NULL,
+            kind       TEXT NOT NULL,
+            body       TEXT NOT NULL,
+            tags_json  TEXT NOT NULL DEFAULT '[]',
+            todo_state TEXT,
+            priority   TEXT
         );
         CREATE TABLE IF NOT EXISTS links (
             src     TEXT NOT NULL,
@@ -101,6 +103,14 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
             PRIMARY KEY (src, dst)
         );
         CREATE INDEX IF NOT EXISTS idx_links_dst ON links(dst);
+        CREATE INDEX IF NOT EXISTS idx_nodes_todo ON nodes(todo_state);
+        CREATE INDEX IF NOT EXISTS idx_nodes_priority ON nodes(priority);
+        CREATE TABLE IF NOT EXISTS node_tags (
+            node_id TEXT NOT NULL,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (node_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags(tag);
         CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
             id UNINDEXED,
             title,
@@ -116,12 +126,37 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
 
 fn check_schema_version(conn: &Connection) -> Result<(), PersistError> {
     let found: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if found != 0 && found != SCHEMA_VERSION {
-        return Err(PersistError::SchemaMismatch {
-            found,
-            expected: SCHEMA_VERSION,
-        });
+    if found == 0 || found == SCHEMA_VERSION {
+        return Ok(());
     }
+    // Auto-migrate from v1 to v2.
+    if found == 1 {
+        migrate_v1_to_v2(conn)?;
+        return Ok(());
+    }
+    Err(PersistError::SchemaMismatch {
+        found,
+        expected: SCHEMA_VERSION,
+    })
+}
+
+fn migrate_v1_to_v2(conn: &Connection) -> Result<(), PersistError> {
+    // Add todo_state and priority columns.
+    conn.execute_batch(
+        r#"
+        ALTER TABLE nodes ADD COLUMN todo_state TEXT;
+        ALTER TABLE nodes ADD COLUMN priority TEXT;
+        CREATE INDEX IF NOT EXISTS idx_nodes_todo ON nodes(todo_state);
+        CREATE INDEX IF NOT EXISTS idx_nodes_priority ON nodes(priority);
+        CREATE TABLE IF NOT EXISTS node_tags (
+            node_id TEXT NOT NULL,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (node_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags(tag);
+        "#,
+    )?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -136,22 +171,28 @@ impl KnowledgeBase {
         tx.execute("DELETE FROM nodes", [])?;
         tx.execute("DELETE FROM links", [])?;
         tx.execute("DELETE FROM nodes_fts", [])?;
+        tx.execute("DELETE FROM node_tags", [])?;
         {
             let mut ins_node = tx.prepare(
-                "INSERT INTO nodes (id, title, kind, body, tags_json) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority) VALUES (?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_link =
                 tx.prepare("INSERT OR IGNORE INTO links (src, dst, display) VALUES (?, ?, ?)")?;
             let mut ins_fts =
                 tx.prepare("INSERT INTO nodes_fts (id, title, body, tags) VALUES (?, ?, ?, ?)")?;
+            let mut ins_tag =
+                tx.prepare("INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)")?;
             for node in self.nodes_values() {
                 let tags_json = serde_json::to_string(&node.tags)?;
+                let pri_str = node.priority.map(|c| c.to_string());
                 ins_node.execute(params![
                     &node.id,
                     &node.title,
                     kind_to_str(node.kind),
                     &node.body,
                     &tags_json,
+                    &node.todo_state,
+                    &pri_str,
                 ])?;
                 ins_fts.execute(params![
                     &node.id,
@@ -159,6 +200,9 @@ impl KnowledgeBase {
                     &node.body,
                     node.tags.join(" "),
                 ])?;
+                for tag in &node.tags {
+                    ins_tag.execute(params![&node.id, tag])?;
+                }
                 for (dst, display) in crate::parse_links(&node.body) {
                     let disp: Option<&str> = if dst == display {
                         None
@@ -183,21 +227,28 @@ impl KnowledgeBase {
         check_schema_version(&conn)?;
         init_schema(&conn)?; // no-op if already initialized
         *self = KnowledgeBase::new();
-        let mut stmt =
-            conn.prepare("SELECT id, title, kind, body, tags_json FROM nodes ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, kind, body, tags_json, todo_state, priority FROM nodes ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let title: String = row.get(1)?;
             let kind: String = row.get(2)?;
             let body: String = row.get(3)?;
             let tags_json: String = row.get(4)?;
-            Ok((id, title, kind, body, tags_json))
+            let todo_state: Option<String> = row.get(5)?;
+            let priority_str: Option<String> = row.get(6)?;
+            Ok((id, title, kind, body, tags_json, todo_state, priority_str))
         })?;
         let mut count = 0;
         for row in rows {
-            let (id, title, kind, body, tags_json) = row?;
+            let (id, title, kind, body, tags_json, todo_state, priority_str) = row?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            self.insert(Node::new(id, title, kind_from_str(&kind), body).with_tags(tags));
+            let priority = priority_str.and_then(|s| s.chars().next());
+            let mut node = Node::new(id, title, kind_from_str(&kind), body).with_tags(tags);
+            node.todo_state = todo_state;
+            node.priority = priority;
+            self.insert(node);
             count += 1;
         }
         Ok(count)

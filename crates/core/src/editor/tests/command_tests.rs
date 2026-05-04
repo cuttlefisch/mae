@@ -1045,9 +1045,9 @@ fn copy_this_file_enters_command_mode() {
     let mut ed = Editor::with_buffer(buf);
 
     ed.dispatch_builtin("copy-this-file");
-    assert_eq!(ed.mode, Mode::Command);
-    assert!(ed.command_line.starts_with("copy "));
-    assert!(ed.command_line.contains("original.txt"));
+    assert_eq!(ed.mode, Mode::CommandPalette);
+    // Should open a MiniDialog with the source path pre-filled.
+    assert!(ed.mini_dialog.is_some());
 }
 
 #[test]

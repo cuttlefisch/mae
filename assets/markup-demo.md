@@ -95,6 +95,28 @@ Missing image (should show placeholder):
 
 ![Missing](does-not-exist.png)
 
+## Tables
+
+Basic table:
+
+| Name    | Age | City     |
+|---------|-----|----------|
+| Alice   | 30  | New York |
+| Bob     | 25  | London   |
+| Charlie | 35  | Tokyo    |
+
+### Column Justification
+
+Alignment markers in separator: `:---` left, `:---:` center, `---:` right.
+
+| Item     | Qty | Price |  Status  |
+|:---------|----:|:-----:|----------|
+| Apples   |  12 |  1.50 | In Stock |
+| Bananas  | 200 |  0.30 | In Stock |
+| Cherries |   5 | 12.99 | Sold Out |
+
+Try: Tab/S-Tab to navigate cells, `:table-align` to re-align.
+
 ## Everything Together
 
 This paragraph has **bold**, *italic*, `code`, ~~strikethrough~~, and a

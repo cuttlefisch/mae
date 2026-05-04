@@ -134,9 +134,12 @@ pub fn render_buffer_content(
     let (breakpoint_lines, stopped_line) = gutter::collect_breakpoints(buf, editor);
     let stopped_line_fg = theme::ts_fg(editor, "debug.current_line");
 
-    // Code block background detection (markdown/org fenced blocks).
-    let flavor = editor.effective_markup_flavor(win.buffer_idx);
-    let code_block_lines = mae_core::detect_code_block_lines(buf, flavor);
+    // Code block background: use pre-computed cache from render() mutable phase.
+    let code_block_lines: &[bool] = editor
+        .code_block_cache
+        .get(&win.buffer_idx)
+        .map(|(_, _, v)| v.as_slice())
+        .unwrap_or(&[]);
     let code_block_bg = {
         let cb_style = editor.theme.style("markup.code_block");
         cb_style.bg.map(|c| theme::theme_color_to_skia(&c))
@@ -288,7 +291,7 @@ pub fn render_buffer_content(
                         &buf.display_regions,
                         buf.display_reveal_cursor,
                     );
-                    for region in &eff_regions {
+                    for region in eff_regions.iter() {
                         if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start
                         {
                             continue;

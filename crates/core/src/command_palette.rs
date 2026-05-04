@@ -67,6 +67,10 @@ impl PalettePurpose {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MiniDialogKind {
     EditLink,
+    /// y/n confirmation (delete file, kill unsaved buffer, etc.)
+    Confirm,
+    /// One text field (rename, create file, save-as, tags, etc.)
+    SingleInput,
 }
 
 /// One editable field in a mini-dialog.
@@ -89,6 +93,27 @@ pub enum MiniDialogContext {
         byte_end: usize,
         is_org: bool,
     },
+    FileDelete {
+        path: std::path::PathBuf,
+        close_buffer: bool,
+    },
+    FileRename {
+        old_path: std::path::PathBuf,
+    },
+    FileCopy {
+        src_path: std::path::PathBuf,
+    },
+    FileSaveAs,
+    FileTreeRename {
+        path: std::path::PathBuf,
+    },
+    FileTreeCreate {
+        parent: std::path::PathBuf,
+    },
+    OrgSetTags {
+        heading_line: usize,
+    },
+    AgendaFilterTag,
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -109,6 +134,56 @@ impl MiniDialogState {
     pub fn title(&self) -> &'static str {
         match self.kind {
             MiniDialogKind::EditLink => "Edit Link",
+            MiniDialogKind::Confirm => "Confirm",
+            MiniDialogKind::SingleInput => match &self.context {
+                MiniDialogContext::FileRename { .. } | MiniDialogContext::FileTreeRename { .. } => {
+                    "Rename"
+                }
+                MiniDialogContext::FileCopy { .. } => "Copy File",
+                MiniDialogContext::FileSaveAs => "Save As",
+                MiniDialogContext::FileTreeCreate { .. } => "Create",
+                MiniDialogContext::OrgSetTags { .. } => "Set Tags",
+                MiniDialogContext::AgendaFilterTag => "Filter by Tag",
+                _ => "Input",
+            },
+        }
+    }
+
+    /// Whether this dialog is a simple confirmation (no text input).
+    pub fn is_confirm(&self) -> bool {
+        self.kind == MiniDialogKind::Confirm
+    }
+
+    /// Create a confirmation dialog (yes/no).
+    pub fn confirm(question: impl Into<String>, context: MiniDialogContext) -> Self {
+        Self {
+            kind: MiniDialogKind::Confirm,
+            fields: vec![MiniDialogField {
+                label: question.into(),
+                value: String::new(),
+                placeholder: String::new(),
+            }],
+            active_field: 0,
+            context,
+        }
+    }
+
+    /// Create a single-input dialog with an optional pre-filled value.
+    pub fn single_input(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        placeholder: impl Into<String>,
+        context: MiniDialogContext,
+    ) -> Self {
+        Self {
+            kind: MiniDialogKind::SingleInput,
+            fields: vec![MiniDialogField {
+                label: label.into(),
+                value: value.into(),
+                placeholder: placeholder.into(),
+            }],
+            active_field: 0,
+            context,
         }
     }
 }

@@ -860,6 +860,8 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         mae_core::BufferKind::Visual,
         mae_core::BufferKind::Preview,
         mae_core::BufferKind::Conversation,
+        mae_core::BufferKind::Agenda,
+        mae_core::BufferKind::Demo,
     ]
     .iter()
     .map(|kind| {

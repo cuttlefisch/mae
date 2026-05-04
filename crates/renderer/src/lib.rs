@@ -135,6 +135,42 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
     // Pre-compute syntax-highlight spans for every visible text buffer.
     // Uses stale spans during typing; deferred reparse happens in the event loop.
     let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
+
+    // Pre-compute markup spans for visible org/markdown buffers (cache by generation).
+    {
+        let visible: Vec<usize> = editor
+            .window_mgr
+            .iter_windows()
+            .map(|w| w.buffer_idx)
+            .collect();
+        for &bi in &visible {
+            if bi >= editor.buffers.len() {
+                continue;
+            }
+            let flavor = editor.effective_markup_flavor(bi);
+            if flavor == mae_core::MarkupFlavor::None {
+                continue;
+            }
+            let gen = editor.buffers[bi].generation;
+            let needs_update = editor
+                .markup_cache
+                .get(&bi)
+                .is_none_or(|c| c.generation != gen || c.flavor != flavor);
+            if needs_update {
+                let source: String = editor.buffers[bi].rope().chars().collect();
+                let spans = mae_core::compute_markup_spans(&source, flavor);
+                editor.markup_cache.insert(
+                    bi,
+                    mae_core::MarkupCache {
+                        generation: gen,
+                        flavor,
+                        spans,
+                    },
+                );
+            }
+        }
+    }
+
     let editor: &Editor = editor;
 
     if editor.file_picker.is_some() {
@@ -329,11 +365,17 @@ fn render_window_area(
                                 .get(&win.buffer_idx)
                                 .map(|v| v.as_ref().clone())
                                 .unwrap_or_default();
-                            mae_core::render_common::spans::enrich_spans_with_markup(
-                                &mut enriched,
-                                buf,
-                                flavor,
-                            );
+                            let gen = buf.generation;
+                            let cached = editor.markup_cache.get(&win.buffer_idx);
+                            if let Some(c) =
+                                cached.filter(|c| c.generation == gen && c.flavor == flavor)
+                            {
+                                enriched.extend_from_slice(&c.spans);
+                            } else {
+                                let source: String = buf.rope().chars().collect();
+                                enriched.extend(mae_core::compute_markup_spans(&source, flavor));
+                            }
+                            enriched.sort_by_key(|s| s.byte_start);
                             owned_spans = Some(enriched);
                             owned_spans.as_deref()
                         } else {
