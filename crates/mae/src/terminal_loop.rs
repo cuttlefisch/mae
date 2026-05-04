@@ -187,9 +187,11 @@ pub(crate) async fn run_terminal_loop(
             }
         }
 
-        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        // Debounced syntax reparse: drain pending reparses after configured ms idle.
+        let reparse_debounce_ms = editor.syntax_reparse_debounce_ms;
         if !editor.syntax_reparse_pending.is_empty()
-            && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+            && editor.last_edit_time.elapsed()
+                >= std::time::Duration::from_millis(reparse_debounce_ms)
         {
             mae_core::syntax::drain_pending_reparses(editor);
             tui_dirty = true;
@@ -333,10 +335,10 @@ pub(crate) async fn run_terminal_loop(
             }
         };
 
-        // Syntax reparse timer: fires 50ms after last edit when reparses are pending.
+        // Syntax reparse timer: fires after configured ms when reparses are pending.
         let has_pending_reparse = !editor.syntax_reparse_pending.is_empty();
         let reparse_sleep_dur = if has_pending_reparse {
-            let debounce = std::time::Duration::from_millis(50);
+            let debounce = std::time::Duration::from_millis(reparse_debounce_ms);
             debounce.checked_sub(editor.last_edit_time.elapsed())
         } else {
             None

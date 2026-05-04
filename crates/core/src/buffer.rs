@@ -196,6 +196,12 @@ pub struct Buffer {
     pub display_regions_gen: u64,
     /// Set of line indices where images are individually collapsed (Tab toggle).
     pub collapsed_images: HashSet<usize>,
+    /// Cached degradation status. Set on file open; avoids re-scanning every frame.
+    /// `None` = not yet evaluated, `Some(true)` = large file mode.
+    pub degraded: Option<bool>,
+    /// When set, display regions need recomputation but we're debouncing.
+    /// Recomputation happens once 150ms have elapsed since this instant.
+    pub display_regions_dirty_since: Option<std::time::Instant>,
     /// Cursor byte offset for org-appear reveal. When the cursor is inside a
     /// display region, that region is suppressed so raw text is visible.
     /// Set per-frame from the focused window's cursor position. `None` = no reveal.
@@ -238,6 +244,8 @@ impl Buffer {
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
             collapsed_images: HashSet::new(),
+            degraded: None,
+            display_regions_dirty_since: None,
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
         }

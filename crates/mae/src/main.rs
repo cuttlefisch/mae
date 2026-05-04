@@ -270,6 +270,23 @@ fn main() -> io::Result<()> {
         editor.gui_icon_font_family = icon_family.clone();
     }
 
+    // Apply performance thresholds from config.
+    if let Some(v) = app_config.performance.large_file_lines {
+        editor.large_file_lines = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_chars {
+        editor.degrade_threshold_chars = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_line_length {
+        editor.degrade_threshold_line_length = v;
+    }
+    if let Some(v) = app_config.performance.display_region_debounce_ms {
+        editor.display_region_debounce_ms = v;
+    }
+    if let Some(v) = app_config.performance.syntax_reparse_debounce_ms {
+        editor.syntax_reparse_debounce_ms = v;
+    }
+
     // Initialize Scheme runtime
     let mut scheme = match SchemeRuntime::new() {
         Ok(rt) => {
@@ -1395,9 +1412,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.bell_sent = false;
         }
 
-        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        // Debounced syntax reparse: drain pending reparses after configured ms idle.
+        let reparse_debounce =
+            std::time::Duration::from_millis(self.editor.syntax_reparse_debounce_ms);
         if !self.editor.syntax_reparse_pending.is_empty()
-            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+            && self.editor.last_edit_time.elapsed() >= reparse_debounce
         {
             mae_core::syntax::drain_pending_reparses(&mut self.editor);
             self.dirty = true;
@@ -1427,8 +1446,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
         } else if !self.editor.syntax_reparse_pending.is_empty() {
             // Pending reparses but not otherwise dirty — wake up when debounce expires.
-            let debounce = std::time::Duration::from_millis(50);
-            let wake_at = self.editor.last_edit_time + debounce;
+            let wake_at = self.editor.last_edit_time + reparse_debounce;
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake_at));
         } else {
             // Not dirty — sleep until next event (no busy-loop).

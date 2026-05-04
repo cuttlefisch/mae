@@ -661,12 +661,22 @@ pub struct Editor {
     /// When true, dashboard windows are closed when any non-dashboard buffer
     /// is displayed via a split path. Default false (Doom parity: dashboard stays).
     pub dashboard_dismiss_on_split: bool,
+    /// Line count threshold for viewport-local syntax highlighting (default 5000).
+    pub large_file_lines: usize,
+    /// Character count above which all features degrade (default 500_000).
+    pub degrade_threshold_chars: usize,
+    /// Maximum line length before degradation triggers (default 10_000).
+    pub degrade_threshold_line_length: usize,
+    /// Milliseconds to debounce display region recomputation (default 150).
+    pub display_region_debounce_ms: u64,
+    /// Milliseconds to debounce syntax reparse after edits (default 50).
+    pub syntax_reparse_debounce_ms: u64,
     /// Per-buffer markup span cache, keyed by buffer index. Avoids recomputing
     /// regex-based markup spans every frame for org/markdown buffers.
     pub markup_cache: HashMap<usize, crate::syntax::MarkupCache>,
     /// Per-buffer code-block-lines cache, keyed by buffer index.
-    /// Value: (generation, flavor, lines_vec). Avoids O(buffer) every frame in GUI.
-    pub code_block_cache: HashMap<usize, (u64, crate::syntax::MarkupFlavor, Vec<bool>)>,
+    /// Viewport-local for large files, full-buffer for small files.
+    pub code_block_cache: HashMap<usize, crate::syntax::ViewportCodeBlockCache>,
 }
 
 impl Default for Editor {
@@ -880,6 +890,11 @@ impl Editor {
             gui_cell_width: 8.0,
             gui_cell_height: 16.0,
             dashboard_dismiss_on_split: false,
+            large_file_lines: 5_000,
+            degrade_threshold_chars: 500_000,
+            degrade_threshold_line_length: 10_000,
+            display_region_debounce_ms: 150,
+            syntax_reparse_debounce_ms: 50,
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
         }
@@ -1123,16 +1138,24 @@ impl Editor {
     }
 
     /// Detect whether a buffer is too large for full feature rendering.
-    /// Returns true for files with >500K chars or any line >10K chars.
+    /// Returns true for files exceeding `degrade_threshold_chars` or any line
+    /// exceeding `degrade_threshold_line_length` (both user-configurable).
     /// Callers should skip markup spans, display regions, code block
     /// detection, and heading scale for such buffers (Emacs `so-long` pattern).
+    ///
+    /// Result is cached per buffer (`buffer.degraded`). The cache is set on
+    /// first access and on file open — degradation status is monotonic during
+    /// normal editing so re-scanning every frame is unnecessary.
     pub fn should_degrade_features(&self, buf_idx: usize) -> bool {
         if buf_idx >= self.buffers.len() {
             return false;
         }
+        if let Some(cached) = self.buffers[buf_idx].degraded {
+            return cached;
+        }
         let buf = &self.buffers[buf_idx];
         let rope = buf.rope();
-        if rope.len_chars() > 500_000 {
+        if rope.len_chars() > self.degrade_threshold_chars {
             return true;
         }
         // Sample first 200 lines + last 50 for long-line detection (avoid O(n) full scan).
@@ -1140,11 +1163,17 @@ impl Editor {
         let check_lines = (0..200.min(lc)).chain(lc.saturating_sub(50)..lc);
         for li in check_lines {
             let line = rope.line(li);
-            if line.len_chars() > 10_000 {
+            if line.len_chars() > self.degrade_threshold_line_length {
                 return true;
             }
         }
         false
+    }
+
+    /// Compute and cache the degradation status for a buffer.
+    pub fn cache_degraded(&mut self, buf_idx: usize) {
+        let degraded = self.should_degrade_features(buf_idx);
+        self.buffers[buf_idx].degraded = Some(degraded);
     }
 
     /// Get or compute cached markup spans for a buffer. Returns empty if
@@ -1164,13 +1193,18 @@ impl Editor {
                 return cached.spans.clone();
             }
         }
-        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let rope = self.buffers[buf_idx].rope();
+        let line_count = rope.len_lines();
+        let source: String = rope.chars().collect();
         let spans = crate::syntax::compute_markup_spans(&source, flavor);
         self.markup_cache.insert(
             buf_idx,
             crate::syntax::MarkupCache {
                 generation: gen,
                 flavor,
+                line_start: 0,
+                line_end: line_count,
+                byte_offset: 0,
                 spans: spans.clone(),
             },
         );
@@ -1279,6 +1313,11 @@ impl Editor {
             "heading_scale_h2" => self.heading_scale_h2.to_string(),
             "heading_scale_h3" => self.heading_scale_h3.to_string(),
             "dashboard_dismiss_on_split" => self.dashboard_dismiss_on_split.to_string(),
+            "large_file_lines" => self.large_file_lines.to_string(),
+            "degrade_threshold_chars" => self.degrade_threshold_chars.to_string(),
+            "degrade_threshold_line_length" => self.degrade_threshold_line_length.to_string(),
+            "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
+            "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1532,6 +1571,36 @@ impl Editor {
             }
             "dashboard_dismiss_on_split" => {
                 self.dashboard_dismiss_on_split = parse_option_bool(value)?;
+            }
+            "large_file_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.large_file_lines = v.clamp(100, 1_000_000);
+            }
+            "degrade_threshold_chars" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.degrade_threshold_chars = v.clamp(10_000, 100_000_000);
+            }
+            "degrade_threshold_line_length" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.degrade_threshold_line_length = v.clamp(100, 1_000_000);
+            }
+            "display_region_debounce_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.display_region_debounce_ms = v.clamp(0, 5000);
+            }
+            "syntax_reparse_debounce_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

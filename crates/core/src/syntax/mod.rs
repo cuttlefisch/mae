@@ -33,7 +33,8 @@ pub use detection::{
 pub use languages::{compute_spans_standalone, parse_once, Language};
 pub use markup::{
     code_block_byte_ranges, compute_markdown_style_spans, compute_markup_spans,
-    compute_org_style_spans, detect_code_block_lines, MarkupCache, MarkupFlavor,
+    compute_markup_spans_for_range, compute_org_style_spans, detect_code_block_lines,
+    detect_code_block_lines_for_range, MarkupCache, MarkupFlavor, ViewportCodeBlockCache,
 };
 pub use spans::{
     cached_visible_syntax_spans, compute_visible_syntax_spans, drain_pending_reparses,
@@ -126,6 +127,11 @@ struct SyntaxState {
     /// hasn't been reparsed against the current source yet. `tree_for()`
     /// checks this to trigger an incremental reparse.
     tree_dirty: bool,
+    /// Start line of the viewport range for which spans were computed.
+    /// Only meaningful for large-file viewport-local highlighting.
+    viewport_line_start: usize,
+    /// End line of the viewport range for which spans were computed.
+    viewport_line_end: usize,
 }
 
 impl SyntaxMap {
@@ -143,6 +149,8 @@ impl SyntaxMap {
                 spans: None,
                 computed_at: 0,
                 tree_dirty: false,
+                viewport_line_start: 0,
+                viewport_line_end: 0,
             },
         );
     }
@@ -291,6 +299,64 @@ impl SyntaxMap {
         self.entries
             .get(&buf_idx)
             .and_then(|s| s.spans.as_ref().cloned())
+    }
+
+    /// Compute syntax spans for a viewport-sized line range of a large buffer.
+    /// O(viewport) instead of O(buffer). Returns spans with absolute byte offsets.
+    /// Caches the result; only recomputes when generation or viewport range changes.
+    pub fn spans_for_viewport(
+        &mut self,
+        buf_idx: usize,
+        rope: &ropey::Rope,
+        generation: u64,
+        line_start: usize,
+        line_end: usize,
+    ) -> Option<&[HighlightSpan]> {
+        let state = self.entries.get_mut(&buf_idx)?;
+        let needs_recompute = state.computed_at != generation
+            || state.viewport_line_start > line_start
+            || state.viewport_line_end < line_end;
+        if needs_recompute {
+            let lang = state.language;
+            let clamped_end = line_end.min(rope.len_lines());
+            let byte_start = rope.line_to_byte(line_start);
+            let byte_end = rope.line_to_byte(clamped_end);
+            let source: String = rope.byte_slice(byte_start..byte_end).chars().collect();
+            let mut spans = languages::compute_spans_with_cache(lang, &source, &mut self.configs);
+            for span in &mut spans {
+                span.byte_start += byte_start;
+                span.byte_end += byte_start;
+            }
+            state.spans = Some(std::sync::Arc::new(spans));
+            state.computed_at = generation;
+            state.viewport_line_start = line_start;
+            state.viewport_line_end = clamped_end;
+            state.tree_dirty = state.tree.is_some();
+        }
+        state.spans.as_ref().map(|v| &v[..])
+    }
+
+    /// Like `spans_for_viewport` but returns a cheap `Arc` clone.
+    pub fn spans_for_viewport_arc(
+        &mut self,
+        buf_idx: usize,
+        rope: &ropey::Rope,
+        generation: u64,
+        line_start: usize,
+        line_end: usize,
+    ) -> Option<std::sync::Arc<Vec<HighlightSpan>>> {
+        self.spans_for_viewport(buf_idx, rope, generation, line_start, line_end)?;
+        self.entries
+            .get(&buf_idx)
+            .and_then(|s| s.spans.as_ref().cloned())
+    }
+
+    /// Check if the viewport-local span cache covers the requested line range.
+    /// Returns false if spans were computed for a different viewport.
+    pub fn viewport_covers(&self, buf_idx: usize, line_start: usize, line_end: usize) -> bool {
+        self.entries
+            .get(&buf_idx)
+            .is_some_and(|s| s.viewport_line_start <= line_start && s.viewport_line_end >= line_end)
     }
 
     /// Return a cached (or freshly parsed) tree for the buffer.

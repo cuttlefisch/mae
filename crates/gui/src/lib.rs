@@ -283,13 +283,15 @@ impl Renderer for GuiRenderer {
         };
 
         // Pre-compute markup spans and code block lines for visible buffers (cache by generation).
+        // Large files (>5K lines) use viewport-local computation: O(viewport) instead of O(buffer).
         {
-            let visible: Vec<usize> = editor
+            let visible: Vec<(usize, usize)> = editor
                 .window_mgr
                 .iter_windows()
-                .map(|w| w.buffer_idx)
+                .map(|w| (w.buffer_idx, w.scroll_offset))
                 .collect();
-            for &bi in &visible {
+            let area_height = rows.saturating_sub(2);
+            for &(bi, scroll) in &visible {
                 if bi >= editor.buffers.len() {
                     continue;
                 }
@@ -301,35 +303,102 @@ impl Renderer for GuiRenderer {
                     editor.effective_markup_flavor(bi)
                 };
                 let gen = editor.buffers[bi].generation;
+                let line_count = editor.buffers[bi].rope().len_lines();
+                let is_large = line_count > editor.large_file_lines;
+
+                // Compute viewport window for large files.
+                let (vp_start, vp_end) = if is_large {
+                    let vh = area_height;
+                    (
+                        scroll.saturating_sub(vh * 2),
+                        (scroll + vh * 3).min(line_count),
+                    )
+                } else {
+                    (0, line_count)
+                };
 
                 // Markup spans cache.
                 if flavor != mae_core::MarkupFlavor::None {
                     let needs_update = editor
                         .markup_cache
                         .get(&bi)
-                        .is_none_or(|c| c.generation != gen || c.flavor != flavor);
+                        .is_none_or(|c| !c.covers(gen, flavor, vp_start, vp_end));
                     if needs_update {
-                        let source: String = editor.buffers[bi].rope().chars().collect();
-                        let spans = mae_core::compute_markup_spans(&source, flavor);
-                        editor.markup_cache.insert(
-                            bi,
-                            mae_core::MarkupCache {
-                                generation: gen,
-                                flavor,
-                                spans,
-                            },
-                        );
+                        if is_large {
+                            let rope = editor.buffers[bi].rope().clone();
+                            let (byte_offset, spans) = mae_core::compute_markup_spans_for_range(
+                                &rope, flavor, vp_start, vp_end,
+                            );
+                            editor.markup_cache.insert(
+                                bi,
+                                mae_core::MarkupCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: vp_start,
+                                    line_end: vp_end,
+                                    byte_offset,
+                                    spans,
+                                },
+                            );
+                        } else {
+                            let source: String = editor.buffers[bi].rope().chars().collect();
+                            let spans = mae_core::compute_markup_spans(&source, flavor);
+                            editor.markup_cache.insert(
+                                bi,
+                                mae_core::MarkupCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: 0,
+                                    line_end: line_count,
+                                    byte_offset: 0,
+                                    spans,
+                                },
+                            );
+                        }
                     }
                 }
 
-                // Code block lines cache (detect_code_block_lines is O(buffer)).
-                let cb_needs_update = editor
-                    .code_block_cache
-                    .get(&bi)
-                    .is_none_or(|&(g, f, _)| g != gen || f != flavor);
-                if cb_needs_update {
-                    let lines = mae_core::detect_code_block_lines(&editor.buffers[bi], flavor);
-                    editor.code_block_cache.insert(bi, (gen, flavor, lines));
+                // Code block lines cache.
+                if !degraded {
+                    let cb_needs_update = editor.code_block_cache.get(&bi).is_none_or(|c| {
+                        c.generation != gen
+                            || c.flavor != flavor
+                            || c.line_start > vp_start
+                            || c.line_end < vp_end
+                    });
+                    if cb_needs_update {
+                        if is_large {
+                            let lines = mae_core::detect_code_block_lines_for_range(
+                                &editor.buffers[bi],
+                                flavor,
+                                vp_start,
+                                vp_end,
+                            );
+                            editor.code_block_cache.insert(
+                                bi,
+                                mae_core::ViewportCodeBlockCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: vp_start,
+                                    line_end: vp_end,
+                                    lines,
+                                },
+                            );
+                        } else {
+                            let lines =
+                                mae_core::detect_code_block_lines(&editor.buffers[bi], flavor);
+                            editor.code_block_cache.insert(
+                                bi,
+                                mae_core::ViewportCodeBlockCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: 0,
+                                    line_end: line_count,
+                                    lines,
+                                },
+                            );
+                        }
+                    }
                 }
             }
         }

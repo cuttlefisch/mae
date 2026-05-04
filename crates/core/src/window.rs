@@ -596,6 +596,20 @@ impl Window {
         if viewport_height == 0 {
             return;
         }
+
+        // Fast teleport: for extreme jumps (>10× viewport), skip the per-line walk.
+        // Places cursor at `margin` lines from top. Next frame corrects sub-line imprecision.
+        let distance = if self.cursor_row > self.scroll_offset {
+            self.cursor_row.saturating_sub(self.scroll_offset)
+        } else {
+            self.scroll_offset.saturating_sub(self.cursor_row)
+        };
+        if distance > viewport_height * 10 {
+            let margin = scrolloff.min(viewport_height / 2);
+            self.scroll_offset = self.cursor_row.saturating_sub(margin);
+            return;
+        }
+
         let old_offset = self.scroll_offset;
         let margin = scrolloff.min(viewport_height / 2);
 

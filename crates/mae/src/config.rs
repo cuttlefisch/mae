@@ -32,6 +32,8 @@ pub struct Config {
     pub agents: AgentsSection,
     #[serde(default)]
     pub lsp: LspSection,
+    #[serde(default)]
+    pub performance: PerformanceSection,
 }
 
 /// Per-language LSP server configuration.
@@ -122,6 +124,15 @@ pub struct EditorSection {
     pub restore_session: Option<bool>,
     /// Autosave interval in seconds (0 = disabled). Requires 5s idle after last edit.
     pub autosave_interval: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PerformanceSection {
+    pub large_file_lines: Option<usize>,
+    pub degrade_threshold_chars: Option<usize>,
+    pub degrade_threshold_line_length: Option<usize>,
+    pub display_region_debounce_ms: Option<u64>,
+    pub syntax_reparse_debounce_ms: Option<u64>,
 }
 
 fn default_true() -> bool {

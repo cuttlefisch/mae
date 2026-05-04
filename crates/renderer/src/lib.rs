@@ -137,13 +137,15 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
     let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
 
     // Pre-compute markup spans for visible org/markdown buffers (cache by generation).
+    // Large files (>5K lines) use viewport-local computation.
     {
-        let visible: Vec<usize> = editor
+        let visible: Vec<(usize, usize)> = editor
             .window_mgr
             .iter_windows()
-            .map(|w| w.buffer_idx)
+            .map(|w| (w.buffer_idx, w.scroll_offset))
             .collect();
-        for &bi in &visible {
+        let area_height = area.height as usize;
+        for &(bi, scroll) in &visible {
             if bi >= editor.buffers.len() {
                 continue;
             }
@@ -152,21 +154,52 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
                 continue;
             }
             let gen = editor.buffers[bi].generation;
+            let line_count = editor.buffers[bi].rope().len_lines();
+            let is_large = line_count > editor.large_file_lines;
+            let (vp_start, vp_end) = if is_large {
+                let vh = area_height;
+                (
+                    scroll.saturating_sub(vh * 2),
+                    (scroll + vh * 3).min(line_count),
+                )
+            } else {
+                (0, line_count)
+            };
             let needs_update = editor
                 .markup_cache
                 .get(&bi)
-                .is_none_or(|c| c.generation != gen || c.flavor != flavor);
+                .is_none_or(|c| !c.covers(gen, flavor, vp_start, vp_end));
             if needs_update {
-                let source: String = editor.buffers[bi].rope().chars().collect();
-                let spans = mae_core::compute_markup_spans(&source, flavor);
-                editor.markup_cache.insert(
-                    bi,
-                    mae_core::MarkupCache {
-                        generation: gen,
-                        flavor,
-                        spans,
-                    },
-                );
+                if is_large {
+                    let rope = editor.buffers[bi].rope().clone();
+                    let (byte_offset, spans) =
+                        mae_core::compute_markup_spans_for_range(&rope, flavor, vp_start, vp_end);
+                    editor.markup_cache.insert(
+                        bi,
+                        mae_core::MarkupCache {
+                            generation: gen,
+                            flavor,
+                            line_start: vp_start,
+                            line_end: vp_end,
+                            byte_offset,
+                            spans,
+                        },
+                    );
+                } else {
+                    let source: String = editor.buffers[bi].rope().chars().collect();
+                    let spans = mae_core::compute_markup_spans(&source, flavor);
+                    editor.markup_cache.insert(
+                        bi,
+                        mae_core::MarkupCache {
+                            generation: gen,
+                            flavor,
+                            line_start: 0,
+                            line_end: line_count,
+                            byte_offset: 0,
+                            spans,
+                        },
+                    );
+                }
             }
         }
     }

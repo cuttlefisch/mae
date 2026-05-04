@@ -1385,10 +1385,90 @@ fn code_block_cache_populated_after_set() {
     let flavor = ed.effective_markup_flavor(0);
     let gen = ed.buffers[0].generation;
     let lines = crate::detect_code_block_lines(&ed.buffers[0], flavor);
-    ed.code_block_cache.insert(0, (gen, flavor, lines.clone()));
+    ed.code_block_cache.insert(
+        0,
+        crate::syntax::ViewportCodeBlockCache {
+            generation: gen,
+            flavor,
+            line_start: 0,
+            line_end: ed.buffers[0].line_count(),
+            lines: lines.clone(),
+        },
+    );
     let cached = ed.code_block_cache.get(&0).unwrap();
-    assert_eq!(cached.0, gen);
-    assert_eq!(cached.2, lines);
+    assert_eq!(cached.generation, gen);
+    assert_eq!(cached.lines, lines);
+}
+
+#[test]
+fn viewport_local_markup_spans_match_full_buffer() {
+    let mut ed = Editor::new();
+    let text = "* Heading\n\nSome *bold* text.\n\n#+begin_src rust\nfn main() {}\n#+end_src\n\nMore /italic/ text.\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Org;
+    // Full-buffer spans.
+    let source: String = ed.buffers[0].rope().chars().collect();
+    let full_spans = crate::compute_markup_spans(&source, flavor);
+    // Viewport-local spans covering the same range.
+    let rope = ed.buffers[0].rope().clone();
+    let line_count = rope.len_lines();
+    let (_, local_spans) = crate::compute_markup_spans_for_range(&rope, flavor, 0, line_count);
+    assert_eq!(full_spans.len(), local_spans.len());
+    for (f, l) in full_spans.iter().zip(local_spans.iter()) {
+        assert_eq!(f.byte_start, l.byte_start);
+        assert_eq!(f.byte_end, l.byte_end);
+        assert_eq!(f.theme_key, l.theme_key);
+    }
+}
+
+#[test]
+fn viewport_local_code_blocks_match_full_buffer() {
+    let mut ed = Editor::new();
+    let text = "Line 1\n```rust\nfn main() {}\n```\nLine 5\n```\nmore code\n```\nLine 9\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Markdown;
+    let full = crate::detect_code_block_lines(&ed.buffers[0], flavor);
+    // Viewport-local for middle range (lines 2..7).
+    let local = crate::detect_code_block_lines_for_range(&ed.buffers[0], flavor, 2, 7);
+    assert_eq!(local.len(), 5);
+    for (rel_idx, &flag) in local.iter().enumerate() {
+        assert_eq!(flag, full[2 + rel_idx], "mismatch at line {}", 2 + rel_idx);
+    }
+}
+
+#[test]
+fn viewport_local_code_blocks_backward_scan() {
+    let mut ed = Editor::new();
+    // Code block starts at line 1, continues through line 3.
+    let text = "Line 0\n#+begin_src rust\nfn foo() {}\n#+end_src\nLine 4\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Org;
+    // Request only lines 2..4 — backward scan must detect we're inside a code block.
+    let local = crate::detect_code_block_lines_for_range(&ed.buffers[0], flavor, 2, 4);
+    assert_eq!(local.len(), 2);
+    assert!(local[0], "line 2 should be inside code block");
+    assert!(
+        local[1],
+        "line 3 (#+end_src) should be marked as code block"
+    );
+}
+
+#[test]
+fn markup_cache_covers_method() {
+    let cache = crate::syntax::MarkupCache {
+        generation: 5,
+        flavor: crate::syntax::MarkupFlavor::Org,
+        line_start: 100,
+        line_end: 400,
+        byte_offset: 0,
+        spans: vec![],
+    };
+    assert!(cache.covers(5, crate::syntax::MarkupFlavor::Org, 150, 350));
+    assert!(cache.covers(5, crate::syntax::MarkupFlavor::Org, 100, 400));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Org, 50, 200));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Org, 300, 500));
+    assert!(!cache.covers(6, crate::syntax::MarkupFlavor::Org, 150, 350));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Markdown, 150, 350));
 }
 
 // --- Heading statistics cookie tests ---
@@ -1469,6 +1549,118 @@ fn heading_cookie_ignores_sibling_headings() {
         parent.contains("[1/1]"),
         "Should only count children under Project, got: {parent}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Configurable performance thresholds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn configurable_degrade_threshold() {
+    let mut ed = Editor::new();
+    // Insert 200K chars as 2500 lines of 80 chars — below default 500K threshold
+    let text: String = (0..2500).map(|_| "a".repeat(79) + "\n").collect();
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(!ed.should_degrade_features(0), "200K < 500K default");
+
+    // Lower the threshold
+    ed.degrade_threshold_chars = 100_000;
+    ed.buffers[0].degraded = None; // clear cache
+    assert!(
+        ed.should_degrade_features(0),
+        "200K > 100K custom threshold"
+    );
+}
+
+#[test]
+fn configurable_large_file_lines() {
+    let mut ed = Editor::new();
+    assert_eq!(ed.large_file_lines, 5_000);
+    ed.large_file_lines = 100;
+    assert_eq!(ed.large_file_lines, 100);
+}
+
+#[test]
+fn set_option_performance_thresholds() {
+    let mut ed = Editor::new();
+    ed.set_option("large_file_lines", "8000").unwrap();
+    assert_eq!(ed.large_file_lines, 8000);
+
+    ed.set_option("degrade_threshold_chars", "1000000").unwrap();
+    assert_eq!(ed.degrade_threshold_chars, 1_000_000);
+
+    ed.set_option("syntax_reparse_debounce_ms", "100").unwrap();
+    assert_eq!(ed.syntax_reparse_debounce_ms, 100);
+
+    ed.set_option("display_region_debounce_ms", "200").unwrap();
+    assert_eq!(ed.display_region_debounce_ms, 200);
+
+    ed.set_option("degrade_threshold_line_length", "20000")
+        .unwrap();
+    assert_eq!(ed.degrade_threshold_line_length, 20_000);
+}
+
+#[test]
+fn set_option_performance_aliases() {
+    let mut ed = Editor::new();
+    ed.set_option("large-file-lines", "3000").unwrap();
+    assert_eq!(ed.large_file_lines, 3000);
+
+    ed.set_option("syntax-reparse-debounce-ms", "75").unwrap();
+    assert_eq!(ed.syntax_reparse_debounce_ms, 75);
+}
+
+#[test]
+fn get_option_performance() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("large_file_lines").unwrap();
+    assert_eq!(val, "5000");
+    assert_eq!(def.config_key, Some("performance.large_file_lines"));
+}
+
+#[test]
+fn viewport_local_syntax_spans() {
+    use crate::syntax::SyntaxMap;
+    let mut sm = SyntaxMap::new();
+    sm.set_language(0, crate::syntax::Language::Rust);
+
+    let source = "fn main() {\n    let x = 1;\n    let y = 2;\n}\nfn foo() {}\n";
+    let rope = ropey::Rope::from_str(source);
+    let gen = 1;
+
+    // Full-buffer parse
+    let spans_full = sm.spans_for(0, source, gen).map(|s| s.to_vec());
+    assert!(spans_full.is_some());
+
+    // Reset and do viewport-local parse for lines 0..3
+    sm.set_language(0, crate::syntax::Language::Rust);
+    let spans_vp = sm
+        .spans_for_viewport(0, &rope, gen, 0, 3)
+        .map(|s| s.to_vec());
+    assert!(spans_vp.is_some());
+
+    // Viewport spans should cover byte range of lines 0..3 only
+    let byte_end_line3 = rope.line_to_byte(3);
+    let vp_spans = spans_vp.unwrap();
+    assert!(
+        vp_spans.iter().all(|s| s.byte_end <= byte_end_line3),
+        "viewport spans should be within lines 0..3"
+    );
+}
+
+#[test]
+fn viewport_covers_tracks_range() {
+    use crate::syntax::SyntaxMap;
+    let mut sm = SyntaxMap::new();
+    sm.set_language(0, crate::syntax::Language::Rust);
+
+    let source = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n";
+    let rope = ropey::Rope::from_str(source);
+
+    sm.spans_for_viewport(0, &rope, 1, 1, 3);
+    assert!(sm.viewport_covers(0, 1, 3));
+    assert!(!sm.viewport_covers(0, 0, 3)); // 0 < viewport_line_start=1
+    assert!(!sm.viewport_covers(0, 1, 5)); // 5 > viewport_line_end=3
 }
 
 // Shell-insert keymap tests (Part 1: Lisp machine fix)

@@ -135,11 +135,11 @@ pub fn render_buffer_content(
     let stopped_line_fg = theme::ts_fg(editor, "debug.current_line");
 
     // Code block background: use pre-computed cache from render() mutable phase.
-    let code_block_lines: &[bool] = editor
+    let (cb_line_start, code_block_lines): (usize, &[bool]) = editor
         .code_block_cache
         .get(&win.buffer_idx)
-        .map(|(_, _, v)| v.as_slice())
-        .unwrap_or(&[]);
+        .map(|c| (c.line_start, c.lines.as_slice()))
+        .unwrap_or((0, &[]));
     let code_block_bg = {
         let cb_style = editor.theme.style("markup.code_block");
         cb_style.bg.map(|c| theme::theme_color_to_skia(&c))
@@ -418,7 +418,11 @@ pub fn render_buffer_content(
 
         // Code block tinted background (drawn before cursorline so cursorline overlays).
         if let Some(cb_bg) = code_block_bg {
-            let is_code_block = code_block_lines.get(line_idx).copied().unwrap_or(false);
+            let is_code_block = line_idx
+                .checked_sub(cb_line_start)
+                .and_then(|rel| code_block_lines.get(rel))
+                .copied()
+                .unwrap_or(false);
             if is_code_block {
                 canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, cb_bg);
             }

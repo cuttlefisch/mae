@@ -504,8 +504,9 @@ impl Editor {
                 let new_val = !cur;
                 self.buffers[idx].local_options.inline_images = Some(new_val);
                 self.buffers[idx].collapsed_images.clear();
-                // Force display region recompute.
+                // Force display region recompute (bypass debounce).
                 self.buffers[idx].display_regions_gen = u64::MAX;
+                self.buffers[idx].display_regions_dirty_since = None;
                 self.set_status(format!(
                     "Inline images: {}",
                     if new_val { "on" } else { "off" }
@@ -517,8 +518,7 @@ impl Editor {
                 // Check if this line has an image region.
                 let has_image = self.buffers[idx].display_regions.iter().any(|r| {
                     r.image.is_some() && {
-                        let text: String = self.buffers[idx].rope().chars().collect();
-                        let line_num = text[..r.byte_start].chars().filter(|&c| c == '\n').count();
+                        let line_num = self.buffers[idx].rope().byte_to_line(r.byte_start);
                         line_num == row
                     }
                 });
@@ -531,6 +531,7 @@ impl Editor {
                         self.set_status("Image collapsed");
                     }
                     self.buffers[idx].display_regions_gen = u64::MAX;
+                    self.buffers[idx].display_regions_dirty_since = None;
                 } else {
                     self.set_status("No image at cursor line");
                 }

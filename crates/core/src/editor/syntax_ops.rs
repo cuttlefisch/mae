@@ -1228,7 +1228,8 @@ impl Editor {
             .map(|m| m.as_str().len());
 
         let mut parent_row = None;
-        for r in (0..changed_row).rev() {
+        let scan_limit = changed_row.saturating_sub(1000);
+        for r in (scan_limit..changed_row).rev() {
             let l: String = self.buffers[buf_idx].rope().line(r).chars().collect();
             if heading_re.is_match(&l) {
                 let this_level = heading_re
@@ -1374,6 +1375,10 @@ impl Editor {
     pub fn heading_global_cycle(&mut self, lang: crate::syntax::Language) {
         // S-Tab on a table line → prev cell navigation instead of global fold.
         let buf_idx = self.active_buffer_idx();
+        if self.buffers[buf_idx].rope().len_lines() > self.large_file_lines {
+            self.set_status("Global fold cycle disabled for large files");
+            return;
+        }
         let row = self.window_mgr.focused_window().cursor_row;
         if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
             self.table_prev_cell();

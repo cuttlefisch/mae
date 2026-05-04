@@ -78,10 +78,11 @@ pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};
 pub use syntax::{
-    compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
-    detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,
-    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupCache,
-    MarkupFlavor, SyntaxMap, SyntaxSpanMap,
+    compute_markdown_style_spans, compute_markup_spans, compute_markup_spans_for_range,
+    compute_org_style_spans, detect_code_block_lines, detect_code_block_lines_for_range,
+    language_for_buffer, language_for_path, language_from_id, language_from_modeline,
+    language_from_shebang, HighlightSpan, Language, MarkupCache, MarkupFlavor, SyntaxMap,
+    SyntaxSpanMap, ViewportCodeBlockCache,
 };
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,

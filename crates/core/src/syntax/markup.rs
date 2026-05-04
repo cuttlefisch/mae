@@ -21,7 +21,33 @@ pub enum MarkupFlavor {
 pub struct MarkupCache {
     pub generation: u64,
     pub flavor: MarkupFlavor,
+    /// Start line of the cached range (0 for full-buffer in small files).
+    pub line_start: usize,
+    /// End line of the cached range (line_count for full-buffer).
+    pub line_end: usize,
+    /// Byte offset of `line_start` in the rope — spans are absolute byte offsets.
+    pub byte_offset: usize,
     pub spans: Vec<HighlightSpan>,
+}
+
+impl MarkupCache {
+    /// Check if the cache covers the requested viewport range.
+    pub fn covers(&self, gen: u64, flavor: MarkupFlavor, vp_start: usize, vp_end: usize) -> bool {
+        self.generation == gen
+            && self.flavor == flavor
+            && self.line_start <= vp_start
+            && self.line_end >= vp_end
+    }
+}
+
+/// Cache for viewport-local code block detection.
+#[derive(Debug, Clone, Default)]
+pub struct ViewportCodeBlockCache {
+    pub generation: u64,
+    pub flavor: MarkupFlavor,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub lines: Vec<bool>,
 }
 
 /// Single enrichment point -- all callers go through here.
@@ -658,6 +684,102 @@ pub fn detect_code_block_lines(buf: &crate::Buffer, flavor: MarkupFlavor) -> Vec
             }
         } else {
             // Markdown fenced code blocks
+            if trimmed.starts_with("```") {
+                inside = !inside;
+                *flag = true;
+                continue;
+            }
+        }
+        if inside {
+            *flag = true;
+        }
+    }
+    result
+}
+
+/// Compute markup spans for a line range only. O(range) instead of O(buffer).
+/// Spans have absolute byte offsets (adjusted by `byte_start_offset`).
+pub fn compute_markup_spans_for_range(
+    rope: &ropey::Rope,
+    flavor: MarkupFlavor,
+    line_start: usize,
+    line_end: usize,
+) -> (usize, Vec<HighlightSpan>) {
+    if flavor == MarkupFlavor::None || line_start >= line_end {
+        return (0, Vec::new());
+    }
+    let line_count = rope.len_lines();
+    let line_end = line_end.min(line_count);
+    let byte_start = rope.line_to_byte(line_start);
+    let byte_end = rope.line_to_byte(line_end.min(line_count));
+    let slice = rope.byte_slice(byte_start..byte_end);
+    let source: String = slice.chars().collect();
+    let mut spans = compute_markup_spans(&source, flavor);
+    // Adjust spans to absolute byte offsets.
+    for span in &mut spans {
+        span.byte_start += byte_start;
+        span.byte_end += byte_start;
+    }
+    (byte_start, spans)
+}
+
+/// Detect code block lines for a line range. O(range + backward scan) instead of O(buffer).
+/// Returns `(line_start, Vec<bool>)` where Vec is indexed relative to `line_start`.
+pub fn detect_code_block_lines_for_range(
+    buf: &crate::Buffer,
+    flavor: MarkupFlavor,
+    line_start: usize,
+    line_end: usize,
+) -> Vec<bool> {
+    let line_count = buf.line_count();
+    let line_end = line_end.min(line_count);
+    if flavor == MarkupFlavor::None || line_start >= line_end {
+        return vec![false; line_end.saturating_sub(line_start)];
+    }
+
+    // Backward scan to determine initial `inside` state at `line_start`.
+    // Capped at 500 lines to bound cost.
+    let scan_start = line_start.saturating_sub(500);
+    let mut inside = false;
+    for i in scan_start..line_start {
+        let line: String = buf.rope().line(i).chars().collect();
+        let trimmed = line.trim();
+        if flavor == MarkupFlavor::Org {
+            if trimmed.eq_ignore_ascii_case("#+begin_src")
+                || trimmed.to_ascii_lowercase().starts_with("#+begin_src ")
+            {
+                inside = true;
+            } else if trimmed.eq_ignore_ascii_case("#+end_src") {
+                inside = false;
+            }
+        } else {
+            if trimmed.starts_with("```") {
+                inside = !inside;
+            }
+        }
+    }
+
+    // Forward scan for the requested range.
+    let range_len = line_end - line_start;
+    let mut result = vec![false; range_len];
+    for (rel_idx, flag) in result.iter_mut().enumerate() {
+        let i = line_start + rel_idx;
+        let line: String = buf.rope().line(i).chars().collect();
+        let trimmed = line.trim();
+        if flavor == MarkupFlavor::Org {
+            if trimmed.eq_ignore_ascii_case("#+begin_src")
+                || trimmed.to_ascii_lowercase().starts_with("#+begin_src ")
+            {
+                inside = true;
+                *flag = true;
+                continue;
+            }
+            if trimmed.eq_ignore_ascii_case("#+end_src") {
+                *flag = true;
+                inside = false;
+                continue;
+            }
+        } else {
             if trimmed.starts_with("```") {
                 inside = !inside;
                 *flag = true;

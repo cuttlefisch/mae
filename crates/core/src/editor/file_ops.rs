@@ -1171,7 +1171,8 @@ impl Editor {
                 } else {
                     self.set_status(format!("\"{}\" opened", name));
                 }
-                // Graceful degradation: warn user for extreme files.
+                // Cache degradation status on open (avoids re-scanning every frame).
+                self.cache_degraded(new_idx);
                 if self.should_degrade_features(new_idx) {
                     self.set_status(format!(
                         "\"{}\" opened — large file mode (some features disabled)",
