@@ -1065,8 +1065,8 @@ and the foundation for variable-height lines, inline images, and PDF preview.
 | Event loop refactor (run_app) | ✅ Done | M4 |
 | Variable-height lines | ✅ Done | M5 |
 | Mixed fonts (headings, prose) | — descoped | M5 |
-| Inline images (PNG/JPG/SVG) | ❌ Not yet | M6 |
-| Org-mode image preview | ❌ Not yet | M6 |
+| Inline images (PNG/JPG/SVG) | ✅ Done | M7 |
+| Org-mode image preview | ✅ Done | M7 |
 | PDF preview | ❌ Not yet | M7 |
 | Mouse click + scroll | ✅ Done | M3 |
 | Mouse click-drag select | ✅ Done | M8 |
@@ -1129,6 +1129,7 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.
 - [x] Line-level dirty tracking — `RedrawLevel` enum (None/CursorOnly/Scroll/PartialLines/Full), `dirty_line_range` on Editor (v0.6.0)
 - [x] CursorOnly fast path — skip `compute_visible_syntax_spans()`, reuse cached Arc spans (v0.6.0)
 - [x] Idle deferred work — defer syntax highlighting and LSP requests to idle periods; click-to-focus, scroll-under-mouse, focus-follows-mouse (v0.7.0)
+- [x] Smooth sub-line scrolling past images — pixel-precise scroll offset, viewport clipping, scroll guard fixes (v0.7.0)
 - **Descoped: Scroll region blit** — `begin_frame()` does full canvas clear; architectural rework for marginal gain. Not worth pursuing without a compositor-level rewrite.
 - **Descoped: Partial render skip** — content_hash infrastructure exists but is pointless without scroll region blit. Would add complexity for no measurable benefit.
 
@@ -1143,10 +1144,13 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.
 - **Descoped: SkParagraph / rich text layout** — not available in skia-safe 0.93; requires upgrade to 0.97+ which is a significant dependency change for minimal gain.
 - **Descoped: Proportional fonts (prose in variable-width)** — no mainstream code editor does this. Extreme complexity (cursor positioning, selection, alignment) for negligible benefit in a code-first editor.
 
-### M7: Inline Images
-- [ ] PNG/JPG/SVG rendering inline with text lines
-- [ ] Org-mode `[[file:image.png]]` auto-preview
-- [ ] Image scaling to fit viewport width
+### M7: Inline Images — COMPLETE
+- [x] PNG/JPG/SVG rendering inline with text lines (v0.7.0)
+- [x] Org-mode `[[file:image.png]]` auto-preview (v0.7.0)
+- [x] Image scaling to fit viewport width (v0.7.0)
+- [x] Native SVG rendering via skia `svg::Dom` — vector text, perfect scaling, same font stack as editor (v0.7.0)
+- [x] Smooth sub-line scrolling past images + viewport clipping (v0.7.0)
+- [x] Image cache: `CachedImage` enum (Raster/Svg), lazy load on first draw (v0.7.0)
 
 ### M8: PDF Preview
 - [ ] pdfium-render integration for PDF page rendering
@@ -1275,9 +1279,9 @@ Phase 3e (editor essentials) ✅ COMPLETE
     │
     ├─→ Phase 7 (embedded docs) ✅ M1-M4 COMPLETE ← module system remaining
     │
-    ├─→ Phase 8 (GUI backend) ✅ M1-M6 COMPLETE
+    ├─→ Phase 8 (GUI backend) ✅ M1-M7 COMPLETE
     │       │
-    │       └─→ M7+ (images, PDF)
+    │       └─→ M8+ (PDF preview)
     │
     ├─→ Phase 9 (org-mode editing) ← builds on Phase 5 org parser
     │
@@ -1286,7 +1290,7 @@ Phase 3e (editor essentials) ✅ COMPLETE
 
 **Next priority order:**
 1. **Phase 7 M4 remaining** (module system) — `mae/module!` macros, layer system, `after!` hook
-2. **Phase 8 M8-M9** (GUI) — PDF preview, advanced image features
+2. **Phase 8 M8** (GUI) — PDF preview
 3. **Phase 4c M3 remaining** — variable hover, watch expressions
 4. **LSP packaging review** — multi-language defaults, user-configurable server selection
 5. **Packaging readiness audit** — mae-dap, mae-lsp, mae-kb for crates.io publishability
@@ -1315,5 +1319,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | v0.5.0 agent reliability | 51 ✅ | agent reliability, DAP observability, self-test infrastructure |
 | v0.5.1 vim parity + fixes | 36 ✅ | ghost cursor, status bar, block visual, ignorecase, :g/:v, C-t/C-d, cached theme resolution |
 | v0.6.0 GUI + frameworks | 575 ✅ | display regions, BufferView/BufferMode, keymap overlays, Magit, swap files, variable-height, mouse |
-| v0.7.0 docs + agent | 47 ✅ | help content, contextual help, user help nodes, config health, display policy, mouse focus |
-| **Total** | **2,299** | All passing, 0 failures |
+| v0.7.0 docs + agent | 137 ✅ | help content, contextual help, user help nodes, config health, display policy, mouse focus, rich content, sub-line scroll, native SVG |
+| **Total** | **2,389** | All passing, 0 failures |

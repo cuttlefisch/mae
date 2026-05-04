@@ -632,7 +632,7 @@ pub fn compute_layout(
 /// Uses Skia's image decoding to avoid an extra dependency. Returns `(0.0, 0.0)`
 /// on any error (file not found, unsupported format, I/O failure).
 fn image_natural_size(path: &std::path::Path) -> (f32, f32) {
-    // Handle SVG via usvg parsing (no full rasterization needed for dimensions).
+    // Handle SVG via skia's native SVG DOM parser.
     if path
         .extension()
         .and_then(|e| e.to_str())
@@ -640,26 +640,10 @@ fn image_natural_size(path: &std::path::Path) -> (f32, f32) {
         .unwrap_or(false)
     {
         if let Ok(bytes) = std::fs::read(path) {
-            let mut opts = resvg::usvg::Options::default();
-            let db = opts.fontdb_mut();
-            db.load_system_fonts();
-            for name in &[
-                "DejaVu Sans Mono",
-                "Liberation Mono",
-                "Noto Sans Mono",
-                "monospace",
-            ] {
-                db.set_monospace_family(*name);
-            }
-            for name in &["DejaVu Sans", "Liberation Sans", "Noto Sans", "sans-serif"] {
-                db.set_sans_serif_family(*name);
-            }
-            for name in &["DejaVu Serif", "Liberation Serif", "Noto Serif", "serif"] {
-                db.set_serif_family(*name);
-            }
-            if let Ok(tree) = resvg::usvg::Tree::from_data(&bytes, &opts) {
-                let size = tree.size();
-                return (size.width(), size.height());
+            if let Ok(dom) = skia_safe::svg::Dom::from_bytes(&bytes, skia_safe::FontMgr::default())
+            {
+                let size = dom.root().intrinsic_size();
+                return (size.width, size.height);
             }
         }
         return (0.0, 0.0);

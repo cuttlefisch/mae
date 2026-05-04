@@ -17,6 +17,13 @@ use winit::window::Window;
 use crate::text::StyledLine;
 use crate::theme::{self, fill_paint, DEFAULT_BG};
 
+/// A cached image: either a raster bitmap or an SVG DOM for vector rendering.
+#[derive(Clone)]
+pub enum CachedImage {
+    Raster(skia_safe::Image),
+    Svg(skia_safe::svg::Dom),
+}
+
 /// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
     surface: Surface,
@@ -52,7 +59,7 @@ pub struct SkiaCanvas {
     scaled_bold_fonts: HashMap<u32, Font>,
     /// Decoded image cache. Key = absolute path. Value = `None` if the image
     /// failed to load or exceeded the 10MB size limit.
-    image_cache: HashMap<PathBuf, Option<skia_safe::Image>>,
+    image_cache: HashMap<PathBuf, Option<CachedImage>>,
 }
 
 impl SkiaCanvas {
@@ -1186,108 +1193,75 @@ impl SkiaCanvas {
 
     /// Load (and cache) an image from disk.
     ///
-    /// Returns `Some(&Image)` on success, `None` if the file exceeds 10MB,
+    /// Returns `Some(&CachedImage)` on success, `None` if the file exceeds 10MB,
     /// cannot be read, or is in an unsupported format.
     /// The result is cached by path so each file is decoded at most once.
-    pub fn load_image(&mut self, path: &Path) -> Option<&skia_safe::Image> {
+    fn load_cached_image(&mut self, path: &Path) -> Option<&CachedImage> {
         const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
         if !self.image_cache.contains_key(path) {
-            let result = (|| -> Option<skia_safe::Image> {
+            let result = (|| -> Option<CachedImage> {
                 let meta = std::fs::metadata(path).ok()?;
                 if meta.len() > MAX_BYTES {
                     return None;
                 }
                 let bytes = std::fs::read(path).ok()?;
-                // Try SVG first if extension matches
+                // SVG: parse into skia's native SVG DOM for vector rendering.
                 if path
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|e| e.eq_ignore_ascii_case("svg"))
                     .unwrap_or(false)
                 {
-                    return Self::rasterize_svg(&bytes);
+                    let dom = skia_safe::svg::Dom::from_bytes(&bytes, FontMgr::default()).ok()?;
+                    return Some(CachedImage::Svg(dom));
                 }
+                // Raster: decode with Skia.
                 let data = skia_safe::Data::new_copy(&bytes);
-                skia_safe::Image::from_encoded(data)
+                let img = skia_safe::Image::from_encoded(data)?;
+                Some(CachedImage::Raster(img))
             })();
             self.image_cache.insert(path.to_path_buf(), result);
         }
         self.image_cache.get(path).and_then(|v| v.as_ref())
     }
 
-    /// Rasterize an SVG to a Skia Image using resvg.
-    fn rasterize_svg(svg_bytes: &[u8]) -> Option<skia_safe::Image> {
-        let mut opts = resvg::usvg::Options::default();
-        let db = opts.fontdb_mut();
-        db.load_system_fonts();
-        // Set generic CSS family aliases so <text font-family="monospace"> resolves.
-        // fontdb loads font files but doesn't map generic names automatically.
-        for name in &[
-            "DejaVu Sans Mono",
-            "Liberation Mono",
-            "Noto Sans Mono",
-            "monospace",
-        ] {
-            db.set_monospace_family(*name);
-        }
-        for name in &["DejaVu Sans", "Liberation Sans", "Noto Sans", "sans-serif"] {
-            db.set_sans_serif_family(*name);
-        }
-        for name in &["DejaVu Serif", "Liberation Serif", "Noto Serif", "serif"] {
-            db.set_serif_family(*name);
-        }
-        tracing::debug!("SVG rasterize: fontdb loaded {} font faces", db.len());
-        let tree = resvg::usvg::Tree::from_data(svg_bytes, &opts).ok()?;
-        let size = tree.size();
-        tracing::debug!(
-            "SVG rasterize: tree size = {}x{}",
-            size.width(),
-            size.height()
-        );
-        let (mut w, mut h) = (size.width() as u32, size.height() as u32);
-        if w == 0 || h == 0 {
-            return None;
-        }
-        // Cap to reasonable size
-        if w > 2048 || h > 2048 {
-            let scale = 2048.0 / (w.max(h) as f32);
-            w = (w as f32 * scale) as u32;
-            h = (h as f32 * scale) as u32;
-        }
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
-        let transform = resvg::tiny_skia::Transform::from_scale(
-            w as f32 / size.width(),
-            h as f32 / size.height(),
-        );
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
-        // Convert RGBA pixmap to Skia Image.
-        // resvg outputs premultiplied RGBA; Skia N32 is BGRA on little-endian — swizzle R<->B.
-        let mut bgra = pixmap.data().to_vec();
-        for chunk in bgra.chunks_exact_mut(4) {
-            chunk.swap(0, 2);
-        }
-        let info = skia_safe::ImageInfo::new_n32_premul((w as i32, h as i32), None);
-        let row_bytes = w as usize * 4;
-        let data = skia_safe::Data::new_copy(&bgra);
-        skia_safe::images::raster_from_data(&info, data, row_bytes)
-    }
-
-    /// Draw a decoded Skia image scaled to the given pixel rectangle.
+    /// Draw an image from the cache at the given pixel rectangle.
     ///
-    /// Uses Mitchell cubic resampling for high-quality scaling.
-    pub fn draw_image_at(&mut self, image: &skia_safe::Image, x: f32, y: f32, w: f32, h: f32) {
-        let dst = skia_safe::Rect::from_xywh(x, y, w, h);
-        let src = skia_safe::Rect::from_iwh(image.width(), image.height());
-        let sampling = skia_safe::SamplingOptions::from(skia_safe::CubicResampler::mitchell());
-        let paint = skia_safe::Paint::default();
-        self.surface.canvas().draw_image_rect_with_sampling_options(
-            image,
-            Some((&src, skia_safe::canvas::SrcRectConstraint::Fast)),
-            dst,
-            sampling,
-            &paint,
-        );
+    /// Loads (and caches) the image if not already loaded. Uses a single method
+    /// to avoid double-borrowing `self` (load returns `&CachedImage`, draw needs `&mut`).
+    pub fn draw_image_from_cache(&mut self, path: &Path, x: f32, y: f32, w: f32, h: f32) -> bool {
+        // Load into cache first, then clone the ref-counted handle to avoid borrow conflict.
+        self.load_cached_image(path);
+        let cached = match self.image_cache.get(path).and_then(|v| v.as_ref()) {
+            Some(c) => c.clone(),
+            None => return false,
+        };
+        match cached {
+            CachedImage::Raster(ref img) => {
+                let dst = skia_safe::Rect::from_xywh(x, y, w, h);
+                let src = skia_safe::Rect::from_iwh(img.width(), img.height());
+                let sampling =
+                    skia_safe::SamplingOptions::from(skia_safe::CubicResampler::mitchell());
+                let paint = skia_safe::Paint::default();
+                self.surface.canvas().draw_image_rect_with_sampling_options(
+                    img,
+                    Some((&src, skia_safe::canvas::SrcRectConstraint::Fast)),
+                    dst,
+                    sampling,
+                    &paint,
+                );
+            }
+            CachedImage::Svg(mut dom) => {
+                let canvas = self.surface.canvas();
+                canvas.save();
+                canvas.translate((x, y));
+                dom.set_container_size((w, h));
+                dom.render(canvas);
+                canvas.restore();
+            }
+        }
+        true
     }
 
     /// End the frame: blit the Skia raster pixels to the OS window via softbuffer.

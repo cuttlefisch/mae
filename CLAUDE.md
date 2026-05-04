@@ -26,7 +26,7 @@ The project README is an org-roam node symlinked from `~/RoamNotes/2026041514235
 |---|---|---|
 | `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam` |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
-| `mae-gui` | GUI rendering backend — winit window + Skia 2D | `winit`, `skia-safe` |
+| `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG | `winit`, `skia-safe` (features: `svg`) |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | `steel` (or purpose-built) |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
@@ -135,7 +135,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - `audit_configuration` MCP tool (structured JSON) ✅
 - `--check-config --report` CLI extension ✅
 
-### Phase 8: GUI Rendering Backend — M1-M4.5 COMPLETE (2,252 tests at v0.6.0)
+### Phase 8: GUI Rendering Backend — M1-M7 COMPLETE (2,389 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -173,7 +173,12 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Tutor KB: 12 lessons (added Debugging + Observability), 4 new concept nodes ✅
 - `--check-config` CLI flag + CI E2E validation step ✅
 - Magit-style status buffer, swap files, display optimization, variable-height polish ✅
-- **Next: Org core interactivity (9 M1), Emacs display patterns (8 M5)**
+- Mouse focus: click-to-focus, scroll-under-mouse, idle deferred work ✅
+- Inline images: PNG/JPG/SVG rendering below text lines, org-mode `[[file:...]]` auto-preview ✅
+- Native SVG rendering via skia `svg::Dom` — vector text, perfect scaling, same font stack as editor ✅
+- Smooth sub-line scrolling past images, viewport clipping, scroll guard fixes ✅
+- Rich content: multi-cursor edits, TUI shift normalization ✅
+- **Next: Org core interactivity (9 M1), PDF preview (8 M8)**
 
 ## Key Design Decisions Already Made
 
