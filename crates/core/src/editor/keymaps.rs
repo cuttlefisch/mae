@@ -518,6 +518,7 @@ impl Editor {
         // Users can add custom bindings via (define-key "shell-insert" ...).
         let mut shell_insert = Keymap::new("shell-insert");
         shell_insert.bind(parse_key_seq_spaced("C-\\ C-n"), "shell-normal-mode");
+        shell_insert.bind(parse_key_seq("C-y"), "paste-after");
 
         // Git status keymap (Magit-parity)
         let mut git_status = Keymap::with_parent("git-status", "normal");

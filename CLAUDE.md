@@ -281,6 +281,17 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 - **Debugging MAE**: `dap_start` with `lldb-dap` for Rust, `debug_state` for stack inspection.
 - **Testing changes**: `execute_command` to trigger commands, `self_test_suite` for structured E2E.
 
+### Tool Selection: LSP vs Grep
+
+When developing **inside MAE** (connected via `mae-mcp-shim`):
+- **Prefer LSP tools** (`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`) for navigating Rust code — they give precise file+line+column with no false positives
+- **Use `project_search`** (ripgrep) for cross-language text patterns, string literals, config values
+- **Use `kb_search`/`kb_get`** for architectural concepts and documented workflows
+
+When developing **outside MAE** (Claude Code directly on filesystem):
+- Use built-in Grep/Glob/Read tools (faster, no event loop round-trip)
+- LSP tools require the editor to be running with rust-analyzer connected
+
 ## Related Resources
 
 - **Full architecture spec:** `README.org` (symlink to org-roam node)

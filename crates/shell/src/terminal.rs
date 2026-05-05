@@ -305,6 +305,18 @@ impl ShellTerminal {
         self.write_input(s.as_bytes());
     }
 
+    /// Send pasted text to the PTY wrapped in bracketed paste escape sequences.
+    pub fn write_paste(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut payload = Vec::with_capacity(text.len() + 12);
+        payload.extend_from_slice(b"\x1b[200~");
+        payload.extend_from_slice(text.as_bytes());
+        payload.extend_from_slice(b"\x1b[201~");
+        self.write_input(&payload);
+    }
+
     /// Resize the terminal.
     pub fn resize(&self, cols: u16, rows: u16) {
         let window_size = WindowSize {

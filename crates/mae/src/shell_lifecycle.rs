@@ -260,7 +260,8 @@ pub fn manage_shell_lifecycle(
     // Drain pending shell inputs.
     for (buf_idx, text) in std::mem::take(&mut editor.pending_shell_inputs) {
         if let Some(shell) = shell_terminals.get(&buf_idx) {
-            shell.write_str(&text);
+            shell.write_paste(&text);
+            shell.scroll_to_bottom();
         }
     }
 
@@ -288,7 +289,7 @@ pub fn manage_shell_lifecycle(
                 mae_core::input::MouseButton::Middle => {
                     // Paste from default register into shell.
                     if let Some(text) = editor.registers.get(&'"').cloned() {
-                        shell.write_str(&text);
+                        shell.write_paste(&text);
                     }
                 }
                 mae_core::input::MouseButton::Right => {}
