@@ -69,10 +69,13 @@ pub fn render_completion_popup(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
     area_row: usize,
-    _area_col: usize,
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
@@ -100,12 +103,23 @@ pub fn render_completion_popup(
         .min(50);
     let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
-    let popup_top = if cursor_screen_row + 1 + popup_height < area_height {
-        area_row + cursor_screen_row + 1
+    // Position relative to the focused window's screen rect.
+    let abs_row = win_row_offset + cursor_screen_row;
+    let popup_top = if cursor_screen_row + 1 + popup_height < win_height {
+        abs_row + 1
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_row.saturating_sub(popup_height)
     };
-    let popup_left = cursor_screen_col.min(area_width.saturating_sub(popup_width));
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+    let abs_col = win_col_offset + cursor_screen_col;
+    let popup_left = if abs_col + popup_width <= area_width {
+        abs_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let normal_fg = theme::ts_fg(editor, "ui.popup.text");
@@ -571,6 +585,10 @@ pub fn render_hover_popup(
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let popup = match &editor.hover_popup {
         Some(p) => p,
@@ -578,36 +596,61 @@ pub fn render_hover_popup(
     };
 
     let win = editor.window_mgr.focused_window();
-    let cursor_screen_row = frame_layout
-        .and_then(|fl| fl.display_row_of(win.cursor_row))
-        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+    // Use the saved anchor position, not the live cursor, so the popup
+    // stays where the hover was requested.
+    let anchor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(popup.anchor_row))
+        .unwrap_or_else(|| popup.anchor_row.saturating_sub(win.scroll_offset));
 
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 78);
+    // Dynamic max width: up to full screen width minus 4 cols margin, at least 40 cols.
+    // This matches VS Code / Emacs lsp-ui-doc behavior — wide enough for type sigs.
+    // Popup may overflow the focused window bounds (intentional — content visibility
+    // takes priority over window containment).
+    let max_popup_cols = area_width.saturating_sub(4).max(40);
+    // Wrap width for content: leave 2 cols for border.
+    let wrap_width = max_popup_cols.saturating_sub(2);
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, wrap_width);
     if lines.is_empty() {
         return;
     }
 
     let max_visible = editor.hover_max_lines;
     let visible_count = lines.len().min(max_visible);
+    // Size popup to content, capped at available space (not a fixed 78).
     let popup_width = lines
         .iter()
         .take(visible_count)
         .map(|l| l.len())
         .max()
         .unwrap_or(20)
-        .min(78)
+        .min(max_popup_cols)
         + 2; // border
     let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
-    // Position below cursor with a 1-line gap so the trigger line stays visible.
-    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
-        area_row + cursor_screen_row + 2
-    } else if cursor_screen_row > popup_height {
-        area_row + cursor_screen_row.saturating_sub(popup_height + 1)
+    // Position below the anchor, offset by the focused window's screen position.
+    let abs_anchor_row = win_row_offset + anchor_screen_row;
+    let popup_top = if anchor_screen_row + 2 + popup_height < win_height {
+        abs_anchor_row + 2
+    } else if anchor_screen_row > popup_height {
+        abs_anchor_row.saturating_sub(popup_height + 1)
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_anchor_row.saturating_sub(popup_height)
     };
-    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+    // Clamp top to visible area.
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+
+    // Horizontal: position at anchor col within the window, clamped to screen.
+    let abs_anchor_col = win_col_offset + popup.anchor_col;
+    let popup_left = if abs_anchor_col + popup_width <= area_width {
+        abs_anchor_col
+    } else {
+        // Shift left to fit, but don't go past column 0.
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let text_fg = theme::ts_fg(editor, "ui.popup.text");
@@ -658,6 +701,10 @@ pub fn render_code_action_popup(
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let menu = match &editor.code_action_menu {
         Some(m) => m,
@@ -689,12 +736,23 @@ pub fn render_code_action_popup(
         + 4; // padding + border
     let popup_height = visible_count + 2;
 
-    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
-        area_row + cursor_screen_row + 1
+    // Position relative to the focused window's screen rect.
+    let abs_row = win_row_offset + cursor_screen_row;
+    let popup_top = if cursor_screen_row + 2 + popup_height < win_height {
+        abs_row + 1
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_row.saturating_sub(popup_height)
     };
-    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+    let abs_col = win_col_offset + win.cursor_col;
+    let popup_left = if abs_col + popup_width <= area_width {
+        abs_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let normal_fg = theme::ts_fg(editor, "ui.popup.text");

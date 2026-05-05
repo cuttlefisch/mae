@@ -639,6 +639,7 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             self.hover_popup = Some(HoverPopup {
                 contents,
+                buffer_idx: win.buffer_idx,
                 anchor_row: win.cursor_row,
                 anchor_col: win.cursor_col,
                 scroll_offset: 0,

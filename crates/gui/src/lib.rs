@@ -635,16 +635,42 @@ impl Renderer for GuiRenderer {
                 );
             }
 
+            // Compute focused window's screen rect for proper popup positioning
+            // in split layouts.
+            let win_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: cols as u16,
+                height: window_height as u16,
+            };
+            let rects = editor.window_mgr.layout_rects(win_area);
+            let focused_rect = rects
+                .iter()
+                .find(|(id, _)| *id == editor.window_mgr.focused_id())
+                .map(|(_, r)| *r);
+            let (win_col_off, win_row_off, win_w, win_h) = match focused_rect {
+                Some(r) => (
+                    r.x as usize,
+                    r.y as usize,
+                    r.width as usize,
+                    r.height as usize,
+                ),
+                None => (0, 0, cols, window_height),
+            };
+
             // Completion popup.
             if !editor.completion_items.is_empty() {
                 popup_render::render_completion_popup(
                     canvas,
                     editor,
                     0,
-                    0,
                     cols,
                     window_height,
                     focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
                 );
             }
 
@@ -657,6 +683,10 @@ impl Renderer for GuiRenderer {
                     cols,
                     window_height,
                     focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
                 );
             }
 
@@ -669,6 +699,10 @@ impl Renderer for GuiRenderer {
                     cols,
                     window_height,
                     focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
                 );
             }
         }

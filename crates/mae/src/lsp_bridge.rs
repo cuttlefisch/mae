@@ -292,7 +292,17 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::HoverResult { uri, contents, .. } => {
             mark_connected_from_uri(editor, &uri);
-            editor.apply_hover_result(contents);
+            // Only show hover if the active buffer still matches the request URI.
+            // Prevents stale async responses from popping up after buffer switch/kill.
+            let active_path = editor
+                .active_buffer()
+                .file_path()
+                .map(|p| p.to_string_lossy().into_owned());
+            let uri_path = uri.strip_prefix("file://").unwrap_or(&uri);
+            let matches = active_path.as_deref() == Some(uri_path);
+            if matches {
+                editor.apply_hover_result(contents);
+            }
             true
         }
         LspTaskEvent::DiagnosticsPublished { uri, diagnostics } => {

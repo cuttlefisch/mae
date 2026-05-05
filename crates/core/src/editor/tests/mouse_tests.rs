@@ -340,6 +340,7 @@ fn mouse_click_dismisses_hover_popup() {
     let mut editor = Editor::new();
     editor.hover_popup = Some(crate::editor::HoverPopup {
         contents: "test hover".into(),
+        buffer_idx: 0,
         anchor_row: 0,
         anchor_col: 0,
         scroll_offset: 0,

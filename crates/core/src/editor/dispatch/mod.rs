@@ -181,6 +181,14 @@ impl Editor {
         }
 
         self.fire_hook("buffer-close");
+        // Dismiss hover popup if it belongs to the buffer being killed.
+        if self
+            .hover_popup
+            .as_ref()
+            .is_some_and(|p| p.buffer_idx == idx)
+        {
+            self.hover_popup = None;
+        }
         if self.buffers.len() <= 1 {
             self.lsp_notify_did_close_for_buffer(0);
             self.buffers[0] = Buffer::new();

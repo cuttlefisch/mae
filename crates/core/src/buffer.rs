@@ -150,6 +150,10 @@ pub struct Buffer {
     /// When non-None, edits accumulate here instead of the undo stack directly.
     /// `end_undo_group()` flushes them as a single `EditAction::Group`.
     undo_group_acc: Option<Vec<EditAction>>,
+    /// Undo stack depth at last save. When undo/redo brings the stack back to
+    /// this depth, the buffer is considered unmodified (Vim/Emacs behavior).
+    /// `None` means never saved (new buffer) — only explicit save clears modified.
+    saved_undo_depth: Option<usize>,
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
@@ -247,6 +251,7 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_group_acc: None,
+            saved_undo_depth: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
@@ -410,6 +415,7 @@ impl Buffer {
             file_path: Some(path.to_path_buf()),
             file_mtime: mtime,
             project_root,
+            saved_undo_depth: Some(0),
             ..Self::new()
         })
     }
@@ -428,6 +434,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
+            self.saved_undo_depth = Some(self.undo_stack.len());
             // changed_lines persist across saves — cleared on revert/reload.
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
@@ -489,6 +496,7 @@ impl Buffer {
         self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.undo_stack.clear();
+        self.saved_undo_depth = Some(0);
         self.redo_stack.clear();
         Ok(())
     }
@@ -1083,7 +1091,8 @@ impl Buffer {
         };
         Self::apply_undo_action(&mut self.rope, win, &action);
         self.redo_stack.push(action);
-        self.modified = true;
+        // Check if undo brought us back to the saved state.
+        self.modified = self.saved_undo_depth != Some(self.undo_stack.len());
         self.bump_generation();
         win.clamp_cursor(self);
     }
@@ -1095,7 +1104,8 @@ impl Buffer {
         };
         Self::apply_redo_action(&mut self.rope, win, &action);
         self.push_undo(action);
-        self.modified = true;
+        // Check if redo brought us back to the saved state.
+        self.modified = self.saved_undo_depth != Some(self.undo_stack.len());
         self.bump_generation();
         win.clamp_cursor(self);
     }

@@ -549,6 +549,41 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             permission: Some(PermissionTier::Write),
         },
         ToolDefinition {
+            name: "set_ai_target".into(),
+            description: "Set the target buffer/window for subsequent AI tool calls. Avoids changing user focus. Use this before operating on a non-focused buffer (e.g. in split layouts where the MCP shim runs in a terminal window).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "buffer_name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Target buffer by name".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "window_id".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Target window by ID (from window_layout)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "clear".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "Clear targeting (revert to focused window)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "trigger_hook".into(),
             description: "Manually fire a lifecycle hook by name. This triggers all Scheme functions registered for that hook point.".into(),
             parameters: ToolParameters {

@@ -41,6 +41,52 @@ fn execute_command_dispatch(
     }
 }
 
+/// Set the AI's target buffer/window for subsequent tool calls.
+fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    // Clear targeting if requested.
+    if args.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+        editor.ai_target_buffer_idx = None;
+        editor.ai_target_window_id = None;
+        return Ok("AI target cleared (using focused window)".into());
+    }
+
+    // Target by buffer name.
+    if let Some(name) = args.get("buffer_name").and_then(|v| v.as_str()) {
+        let idx = editor
+            .find_buffer_by_name(name)
+            .ok_or_else(|| format!("No buffer named '{}'", name))?;
+        editor.ai_target_buffer_idx = Some(idx);
+        // Also set window target if a window shows this buffer.
+        if let Some(win) = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+        {
+            editor.ai_target_window_id = Some(win.id);
+        }
+        return Ok(format!("AI target set to buffer '{}'", name));
+    }
+
+    // Target by window ID.
+    if let Some(wid) = args.get("window_id").and_then(|v| v.as_u64()) {
+        let wid = wid as u32;
+        let win = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id == wid)
+            .ok_or_else(|| format!("No window with id {}", wid))?;
+        let buf_idx = win.buffer_idx;
+        editor.ai_target_window_id = Some(wid);
+        editor.ai_target_buffer_idx = Some(buf_idx);
+        return Ok(format!(
+            "AI target set to window {} (buffer '{}')",
+            wid, editor.buffers[buf_idx].name
+        ));
+    }
+
+    Err("Provide 'buffer_name', 'window_id', or 'clear: true'".into())
+}
+
 /// Dispatch core editor tools: buffer, cursor, file, project, editor state, options.
 /// Returns `Some(result)` if the tool was handled, `None` otherwise.
 pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<String, String>> {
@@ -78,6 +124,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         }
         "image_info" => execute_image_info(&call.arguments),
         "image_list" => execute_image_list(editor),
+        "set_ai_target" => execute_set_ai_target(editor, &call.arguments),
         _ => return None,
     };
     Some(result)

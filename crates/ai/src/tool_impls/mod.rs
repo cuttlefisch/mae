@@ -60,7 +60,15 @@ pub use shell::{
 };
 pub use syntax::execute_syntax_tree;
 
+use mae_core::window::WindowId;
 use mae_core::Editor;
+
+/// Resolve the window to operate on: explicit AI target > focused window.
+pub fn resolve_active_window_id(editor: &Editor) -> WindowId {
+    editor
+        .ai_target_window_id
+        .unwrap_or_else(|| editor.window_mgr.focused_id())
+}
 
 /// Resolve a buffer reference: if `buffer_name` is provided, find that buffer;
 /// otherwise return the AI target buffer index (if set) or the active buffer index.

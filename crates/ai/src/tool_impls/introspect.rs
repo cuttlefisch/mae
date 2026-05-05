@@ -136,12 +136,24 @@ fn build_buffers_section(editor: &Editor) -> serde_json::Value {
 
         buffers.push(b_info);
     }
+    let hover_info = editor.hover_popup.as_ref().map(|p| {
+        json!({
+            "buffer_idx": p.buffer_idx,
+            "anchor_row": p.anchor_row,
+            "anchor_col": p.anchor_col,
+            "content_len": p.contents.len(),
+        })
+    });
+
     json!({
         "total": editor.buffers.len(),
         "by_kind": by_kind,
         "total_rope_bytes": total_bytes,
         "shell_buffers": shell_count,
         "buffer_details": buffers,
+        "hover_popup": hover_info,
+        "code_action_menu": editor.code_action_menu.is_some(),
+        "completion_items": editor.completion_items.len(),
     })
 }
 

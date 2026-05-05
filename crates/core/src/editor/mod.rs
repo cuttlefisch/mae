@@ -106,6 +106,8 @@ pub struct CompletionItem {
 pub struct HoverPopup {
     /// Raw markdown from LSP.
     pub contents: String,
+    /// Buffer index where hover was requested.
+    pub buffer_idx: usize,
     /// Buffer row where K was pressed.
     pub anchor_row: usize,
     /// Buffer col where K was pressed.
@@ -2432,6 +2434,7 @@ impl Editor {
             }
             crate::display_policy::DisplayAction::Hidden => {}
         }
+        self.mark_full_redraw();
     }
 
     /// Like `display_buffer` but also sets focus to the window showing the buffer.
