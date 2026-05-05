@@ -867,7 +867,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "perf_benchmark".into(),
-            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source).".into(),
+            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source), 'scroll_stress' (scroll N times in current buffer, returns min/max/p50/p95/mean frame times).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -876,7 +876,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Benchmark type".into(),
-                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into()]),
+                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into(), "scroll_stress".into()]),
                         },
                     ),
                     (
@@ -889,6 +889,27 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                     ),
                 ]),
                 required: vec!["benchmark".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "perf_profile".into(),
+            description: "Frame-level profiling session. Actions: 'start' (begin recording frames), 'stop' (stop recording), 'report' (analyze recorded frames: timing stats, redraw level distribution, cache hit rates, slow frames, auto-diagnosis).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "action".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Action to perform".into(),
+                        enum_values: Some(vec![
+                            "start".into(),
+                            "stop".into(),
+                            "report".into(),
+                        ]),
+                    },
+                )]),
+                required: vec!["action".into()],
             },
             permission: Some(PermissionTier::ReadOnly),
         },
@@ -990,7 +1011,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "introspect".into(),
-            description: "Comprehensive diagnostic introspection of MAE's internal state. Returns structured JSON covering threads, performance, locks, buffers, shell, and AI state.".into(),
+            description: "Comprehensive diagnostic introspection of MAE's internal state. Returns structured JSON covering threads, performance, locks, buffers, shell, AI state, and per-frame render profiling.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: {
@@ -999,7 +1020,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         "section".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "Section to inspect: 'all', 'threads', 'locks', 'perf', 'buffers', 'shell', 'ai'".into(),
+                            description: "Section to inspect: 'all', 'threads', 'locks', 'perf', 'buffers', 'shell', 'ai', 'frame' (per-frame render profiling with phase timing and cache stats)".into(),
                             enum_values: Some(vec![
                                 "all".into(),
                                 "threads".into(),
@@ -1008,6 +1029,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                                 "buffers".into(),
                                 "shell".into(),
                                 "ai".into(),
+                                "frame".into(),
                             ]),
                         },
                     );

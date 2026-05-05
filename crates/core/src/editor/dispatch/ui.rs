@@ -490,6 +490,7 @@ impl Editor {
                 let new_val = !self.effective_word_wrap();
                 let idx = self.active_buffer_idx();
                 self.buffers[idx].local_options.word_wrap = Some(new_val);
+                self.buffers[idx].visual_rows_cache = None;
                 self.set_status(format!(
                     "Word wrap: {} (buffer-local)",
                     if new_val { "on" } else { "off" }
@@ -806,6 +807,7 @@ impl Editor {
 
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 

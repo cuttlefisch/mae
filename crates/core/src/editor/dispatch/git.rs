@@ -97,6 +97,7 @@ impl Editor {
             "git-diff" => self.git_diff(),
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

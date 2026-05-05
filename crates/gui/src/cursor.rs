@@ -160,6 +160,15 @@ pub fn compute_cursor_position(
 
                     let actual_pixel_y = layout.pixel_y_for_display_row(screen_row);
 
+                    // Viewport pixel clip: if scroll_pixel_offset pushes
+                    // this row above the content area, hide the cursor.
+                    let content_top = layout.area_row as f32 * layout.cell_height;
+                    if let Some(py) = actual_pixel_y {
+                        if py < content_top - 0.5 {
+                            return None;
+                        }
+                    }
+
                     if screen_row < win_inner.height {
                         Some(CursorPos {
                             row: screen_row,

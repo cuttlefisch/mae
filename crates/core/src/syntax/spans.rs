@@ -47,7 +47,13 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
                     let vp_end = (scroll + vh * 3).min(buf.rope().len_lines());
                     if !editor.syntax.viewport_covers(idx, vp_start, vp_end) {
                         editor.syntax_reparse_pending.insert(idx);
+                        editor.perf_stats.cache_miss_count += 1;
+                        editor.perf_stats.syntax_cache_misses += 1;
+                    } else {
+                        editor.perf_stats.syntax_cache_hits += 1;
                     }
+                } else {
+                    editor.perf_stats.syntax_cache_hits += 1;
                 }
                 out.insert(idx, arc);
             }
@@ -55,6 +61,8 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
                 // Stale cache — use stale spans for this frame, queue reparse.
                 out.insert(idx, arc);
                 editor.syntax_reparse_pending.insert(idx);
+                editor.perf_stats.cache_miss_count += 1;
+                editor.perf_stats.syntax_cache_misses += 1;
             }
             None => {
                 need_first_parse.push((idx, gen));
@@ -161,6 +169,7 @@ pub fn cached_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Syntax
         }
         if let Some((arc, _)) = editor.syntax.cached_spans_arc(idx, buf.generation) {
             out.insert(idx, arc);
+            editor.perf_stats.syntax_cache_hits += 1;
         }
     }
 

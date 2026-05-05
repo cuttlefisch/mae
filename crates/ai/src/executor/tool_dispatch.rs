@@ -185,6 +185,7 @@ fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String>
     match call.name.as_str() {
         "perf_stats" => return super::perf::execute_perf_stats(editor),
         "perf_benchmark" => return super::perf::execute_perf_benchmark(editor, &call.arguments),
+        "perf_profile" => return super::perf::execute_perf_profile(editor, &call.arguments),
         _ => {}
     }
 

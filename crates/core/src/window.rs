@@ -35,10 +35,9 @@ pub struct Window {
     /// cursor_row when scroll_locked was set. Lock clears when cursor_row
     /// diverges (a non-scroll command moved the cursor).
     pub scroll_locked_cursor: usize,
-    /// Number of visual rows hidden at the top of the `scroll_offset` line.
-    /// Used for smooth sub-line scrolling past tall lines (images, wrapped).
-    /// Range: 0 ..< line_visual_rows(scroll_offset). Reset when scroll_offset changes.
-    pub scroll_top_skip: usize,
+    /// Pixel offset within the top visible line. Range: [0, line_height).
+    /// Used for smooth sub-line scrolling. Reset to 0 when scroll_offset changes.
+    pub scroll_pixel_offset: f32,
 }
 
 impl Window {
@@ -54,7 +53,17 @@ impl Window {
             saved_view_states: HashMap::new(),
             scroll_locked: false,
             scroll_locked_cursor: 0,
-            scroll_top_skip: 0,
+            scroll_pixel_offset: 0.0,
+        }
+    }
+
+    /// Convert pixel offset to whole-row skip count for integer viewport calculations.
+    /// ceil() ensures partially-hidden rows are counted as hidden.
+    pub fn scroll_skip_rows(&self, cell_height: f32) -> usize {
+        if cell_height > 0.0 {
+            (self.scroll_pixel_offset / cell_height).ceil() as usize
+        } else {
+            0
         }
     }
 
@@ -326,7 +335,7 @@ impl Window {
         let half = viewport_height / 2;
         self.cursor_row = self.cursor_row.saturating_sub(half);
         self.scroll_offset = self.scroll_offset.saturating_sub(half);
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -337,7 +346,7 @@ impl Window {
         let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + half).min(max_row);
         self.scroll_offset = (self.scroll_offset + half).min(max_row);
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.clamp_cursor(buf);
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
@@ -348,7 +357,7 @@ impl Window {
         let page = viewport_height.saturating_sub(2); // keep 2 lines overlap like vim
         self.cursor_row = self.cursor_row.saturating_sub(page);
         self.scroll_offset = self.scroll_offset.saturating_sub(page);
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -359,7 +368,7 @@ impl Window {
         let max_row = buf.display_line_count().saturating_sub(1);
         self.cursor_row = (self.cursor_row + page).min(max_row);
         self.scroll_offset = (self.scroll_offset + page).min(max_row);
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.clamp_cursor(buf);
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
@@ -369,7 +378,7 @@ impl Window {
     pub fn scroll_center(&mut self, viewport_height: usize) {
         let half = viewport_height / 2;
         self.scroll_offset = self.cursor_row.saturating_sub(half);
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -377,7 +386,7 @@ impl Window {
     /// Scroll so the cursor line is at the top of the screen (zt).
     pub fn scroll_cursor_top(&mut self) {
         self.scroll_offset = self.cursor_row;
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -387,7 +396,7 @@ impl Window {
         if viewport_height > 0 {
             self.scroll_offset = self.cursor_row.saturating_sub(viewport_height - 1);
         }
-        self.scroll_top_skip = 0;
+        self.scroll_pixel_offset = 0.0;
         self.scroll_locked = true;
         self.scroll_locked_cursor = self.cursor_row;
     }
@@ -395,7 +404,7 @@ impl Window {
     /// Scroll up one line (C-y). Cursor stays on screen.
     /// Skips over folded lines so each scroll step moves to the next visible line.
     pub fn scroll_up_line(&mut self, buf: &crate::buffer::Buffer, viewport_height: usize) {
-        self.scroll_up_line_wrapped(buf, viewport_height, |_| 1);
+        self.scroll_up_line_wrapped(buf, viewport_height, 1.0, |_| 1);
         self.scroll_locked = true;
     }
 
@@ -407,13 +416,14 @@ impl Window {
     /// within the viewport, preventing `ensure_scroll_wrapped` from undoing
     /// the scroll on the next frame.
     ///
-    /// Sub-line scrolling: if the line above scroll_offset is tall (image,
-    /// heading, wrapped), we first set scroll_top_skip to reveal it one row
-    /// at a time, rather than jumping the entire height.
+    /// Sub-line scrolling: scrolls by `cell_height` pixels at a time.
+    /// When crossing a line boundary upward, sets pixel offset to reveal
+    /// the last row of the previous line.
     pub fn scroll_up_line_wrapped<F>(
         &mut self,
         buf: &crate::buffer::Buffer,
         viewport_height: usize,
+        cell_height: f32,
         line_visual_rows: F,
     ) where
         F: Fn(usize) -> usize,
@@ -422,21 +432,24 @@ impl Window {
             return;
         }
 
-        if self.scroll_top_skip > 0 {
+        if self.scroll_pixel_offset >= cell_height {
             // Still revealing rows of the current scroll_offset line.
-            self.scroll_top_skip -= 1;
+            self.scroll_pixel_offset -= cell_height;
         } else {
             // Move to previous visible line.
             let prev = buf.prev_visible_line(self.scroll_offset);
             if prev < self.scroll_offset {
                 let prev_rows = line_visual_rows(prev);
+                self.scroll_offset = prev;
                 if prev_rows > 1 {
-                    // Tall line: start sub-line scroll, showing last row first.
-                    self.scroll_offset = prev;
-                    self.scroll_top_skip = prev_rows - 2; // -1 for the row we're about to show, -1 more because skip=0 means show all
+                    // Tall line: set pixel offset to show last row.
+                    // (prev_rows - 1) rows hidden, minus 1 more for the step we're taking.
+                    self.scroll_pixel_offset = (prev_rows as f32 - 2.0) * cell_height;
+                    if self.scroll_pixel_offset < 0.0 {
+                        self.scroll_pixel_offset = 0.0;
+                    }
                 } else {
-                    self.scroll_offset = prev;
-                    self.scroll_top_skip = 0;
+                    self.scroll_pixel_offset = 0.0;
                 }
             }
         }
@@ -446,7 +459,7 @@ impl Window {
         let mut visual = 0;
         let mut bottom = self.scroll_offset;
         let mut line = self.scroll_offset;
-        let skip = self.scroll_top_skip;
+        let skip = self.scroll_skip_rows(cell_height);
         let mut first = true;
         while line <= max_row {
             let rows = line_visual_rows(line);
@@ -476,37 +489,47 @@ impl Window {
         self.scroll_locked_cursor = self.cursor_row;
     }
 
-    /// Scroll down one line (C-e) with sub-line awareness.
+    /// Scroll down one line (C-e) with pixel-based sub-line scrolling.
     ///
-    /// If `scroll_top_skip` is partially hiding the top line, we first
-    /// finish hiding it (increment skip) before advancing `scroll_offset`.
-    /// This makes C-e the smooth inverse of C-y for tall lines.
+    /// Scrolls by `cell_height` pixels. When the top line is fully consumed,
+    /// advances `scroll_offset` to the next visible line.
+    /// Also pushes cursor down if it becomes clipped by the pixel offset.
     pub fn scroll_down_line<F>(
         &mut self,
         buf: &crate::buffer::Buffer,
         viewport_height: usize,
+        cell_height: f32,
         line_visual_rows: F,
     ) where
         F: Fn(usize) -> usize,
     {
         let top_rows = line_visual_rows(self.scroll_offset);
-        let remaining = top_rows.saturating_sub(self.scroll_top_skip);
+        let line_height = top_rows as f32 * cell_height;
 
-        if remaining > 1 {
-            // Still rows visible on the current top line — hide one more.
-            self.scroll_top_skip += 1;
-        } else {
-            // Top line fully consumed — advance to next visible line.
+        // Step by one cell_height.
+        self.scroll_pixel_offset += cell_height;
+
+        // If we've consumed the entire top line, advance to next.
+        if self.scroll_pixel_offset >= line_height {
             let max_row = buf.display_line_count().saturating_sub(1);
             let next = buf.next_visible_line(self.scroll_offset);
             self.scroll_offset = next.min(max_row);
-            self.scroll_top_skip = 0;
+            self.scroll_pixel_offset = 0.0;
         }
 
-        // If cursor scrolled above the viewport, push it down.
+        // Push cursor down if it's above the visible region.
+        // With pixel offset > 0 on scroll_offset line, cursor on that line
+        // may be clipped — push to next line.
         if self.cursor_row < self.scroll_offset {
             self.cursor_row = self.scroll_offset;
             self.clamp_cursor(buf);
+        } else if self.cursor_row == self.scroll_offset && self.scroll_pixel_offset > 0.0 {
+            // Cursor's first wrap row is clipped. Push to next visible line.
+            let next = buf.next_visible_line(self.cursor_row);
+            if next > self.cursor_row {
+                self.cursor_row = next;
+                self.clamp_cursor(buf);
+            }
         }
         let _ = viewport_height;
         self.scroll_locked = true;
@@ -591,8 +614,6 @@ impl Window {
     ) where
         F: Fn(usize) -> usize,
     {
-        // Cursor-driven scroll resets sub-line offset.
-        self.scroll_top_skip = 0;
         if viewport_height == 0 {
             return;
         }
@@ -607,6 +628,7 @@ impl Window {
         if distance > viewport_height * 10 {
             let margin = scrolloff.min(viewport_height / 2);
             self.scroll_offset = self.cursor_row.saturating_sub(margin);
+            self.scroll_pixel_offset = 0.0;
             return;
         }
 
@@ -633,6 +655,7 @@ impl Window {
         let top_target = self.cursor_row.saturating_sub(margin_above_lines);
         if top_target < self.scroll_offset {
             self.scroll_offset = top_target;
+            self.scroll_pixel_offset = 0.0;
             tracing::trace!(
                 cursor = self.cursor_row,
                 old = old_offset,
@@ -683,6 +706,7 @@ impl Window {
         }
         self.scroll_offset = new_offset;
         if self.scroll_offset != old_offset {
+            self.scroll_pixel_offset = 0.0;
             tracing::trace!(
                 cursor = self.cursor_row,
                 old = old_offset,
@@ -1945,8 +1969,9 @@ mod tests {
         win.cursor_row = 0;
         win.scroll_offset = 0;
         // Scroll viewport down 5 lines — cursor at row 0 is now above viewport.
+        // cell_height=1.0: each step = 1 row (TUI-equivalent).
         for _ in 0..5 {
-            win.scroll_down_line(&buf, 20, |_| 1);
+            win.scroll_down_line(&buf, 20, 1.0, |_| 1);
         }
         assert_eq!(win.scroll_offset, 5);
         // Cursor must have been pushed to the top of the viewport.
@@ -1977,7 +2002,7 @@ mod tests {
         win.scroll_offset = 0;
         // Scroll 30 lines — well past the cursor's original position.
         for _ in 0..30 {
-            win.scroll_down_line(&buf, 20, |_| 1);
+            win.scroll_down_line(&buf, 20, 1.0, |_| 1);
         }
         assert_eq!(win.scroll_offset, 30);
         // Cursor should be at top of viewport.
@@ -1995,7 +2020,7 @@ mod tests {
         win.scroll_offset = 40;
         // Scroll up 15 with a closure that reports line 44 as 3 visual rows.
         for _ in 0..15 {
-            win.scroll_up_line_wrapped(&buf, 20, |line| if line == 44 { 3 } else { 1 });
+            win.scroll_up_line_wrapped(&buf, 20, 1.0, |line| if line == 44 { 3 } else { 1 });
         }
         assert_eq!(win.scroll_offset, 25);
         // With line 44 being 3 rows, the viewport from 25 fits:
@@ -2390,7 +2415,7 @@ mod tests {
     fn scroll_down_line_sets_scroll_locked() {
         let buf = make_buffer(100);
         let mut win = Window::new(0, 0);
-        win.scroll_down_line(&buf, 20, |_| 1);
+        win.scroll_down_line(&buf, 20, 1.0, |_| 1);
         assert!(win.scroll_locked);
     }
 
@@ -2412,7 +2437,7 @@ mod tests {
         win.cursor_row = 15;
         win.scroll_offset = 0;
         for _ in 0..5 {
-            win.scroll_down_line(&buf, 30, |_| 1);
+            win.scroll_down_line(&buf, 30, 1.0, |_| 1);
         }
         assert_eq!(win.scroll_offset, 5);
         for _ in 0..5 {
@@ -2483,7 +2508,7 @@ mod tests {
         win.scroll_offset = 0;
 
         // C-e sets scroll_locked and records cursor position
-        win.scroll_down_line(&buf, 30, |_| 1);
+        win.scroll_down_line(&buf, 30, 1.0, |_| 1);
         assert!(win.scroll_locked);
         assert_eq!(win.scroll_locked_cursor, win.cursor_row);
         let locked_cursor = win.scroll_locked_cursor;
@@ -2734,5 +2759,124 @@ mod tests {
             .unwrap();
         wm.wrap_subtree_as_group(&[0], "g".to_string());
         assert_eq!(wm.first_leaf_id(&wm.layout), 0);
+    }
+
+    // --- Pixel scrolling tests ---
+
+    #[test]
+    fn scroll_skip_rows_derivation() {
+        let mut win = Window::new(0, 0);
+        win.scroll_pixel_offset = 0.0;
+        assert_eq!(win.scroll_skip_rows(16.0), 0);
+        win.scroll_pixel_offset = 1.0;
+        assert_eq!(win.scroll_skip_rows(16.0), 1); // ceil
+        win.scroll_pixel_offset = 16.0;
+        assert_eq!(win.scroll_skip_rows(16.0), 1);
+        win.scroll_pixel_offset = 32.0;
+        assert_eq!(win.scroll_skip_rows(16.0), 2);
+        // TUI case
+        win.scroll_pixel_offset = 0.0;
+        assert_eq!(win.scroll_skip_rows(1.0), 0);
+        // Zero cell_height safety
+        assert_eq!(win.scroll_skip_rows(0.0), 0);
+    }
+
+    #[test]
+    fn scroll_down_line_pixel_single_row() {
+        let buf = make_buffer(10);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 5;
+        // cell_height=16.0, all lines 1 visual row → single step advances line.
+        win.scroll_down_line(&buf, 20, 16.0, |_| 1);
+        assert_eq!(win.scroll_offset, 1);
+        assert_eq!(win.scroll_pixel_offset, 0.0);
+    }
+
+    #[test]
+    fn scroll_down_line_pixel_multirow() {
+        let buf = make_buffer(10);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 5;
+        // Line 0 has 3 visual rows. cell_height=16.0.
+        let lvr = |line: usize| if line == 0 { 3 } else { 1 };
+        // Step 1: pixel_offset = 16 (1 row hidden)
+        win.scroll_down_line(&buf, 20, 16.0, lvr);
+        assert_eq!(win.scroll_offset, 0);
+        assert_eq!(win.scroll_pixel_offset, 16.0);
+        // Step 2: pixel_offset = 32 (2 rows hidden)
+        win.scroll_down_line(&buf, 20, 16.0, lvr);
+        assert_eq!(win.scroll_offset, 0);
+        assert_eq!(win.scroll_pixel_offset, 32.0);
+        // Step 3: pixel_offset = 48 >= line_height (3*16=48) → advance line
+        win.scroll_down_line(&buf, 20, 16.0, lvr);
+        assert_eq!(win.scroll_offset, 1);
+        assert_eq!(win.scroll_pixel_offset, 0.0);
+    }
+
+    #[test]
+    fn scroll_down_line_pushes_cursor_when_clipped() {
+        let buf = make_buffer(10);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 0;
+        win.scroll_offset = 0;
+        // Line 0 = 3 rows. After first step, pixel_offset > 0 → cursor pushed.
+        win.scroll_down_line(&buf, 20, 16.0, |line| if line == 0 { 3 } else { 1 });
+        assert!(
+            win.cursor_row > 0,
+            "cursor should be pushed past clipped line"
+        );
+    }
+
+    #[test]
+    fn scroll_up_line_pixel_inverse() {
+        let buf = make_buffer(10);
+        let mut win = Window::new(0, 0);
+        win.cursor_row = 5;
+        win.scroll_offset = 1;
+        win.scroll_pixel_offset = 0.0;
+        // Line 0 = 3 rows. Scroll up → reveal last row of line 0.
+        let lvr = |line: usize| if line == 0 { 3 } else { 1 };
+        win.scroll_up_line_wrapped(&buf, 20, 16.0, lvr);
+        assert_eq!(win.scroll_offset, 0);
+        // Should show last row: pixel_offset = (3-2)*16 = 16
+        assert_eq!(win.scroll_pixel_offset, 16.0);
+        // Step again → reveal one more row
+        win.scroll_up_line_wrapped(&buf, 20, 16.0, lvr);
+        assert_eq!(win.scroll_offset, 0);
+        assert_eq!(win.scroll_pixel_offset, 0.0);
+    }
+
+    #[test]
+    fn ensure_scroll_preserves_pixel_offset() {
+        let _buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 5;
+        win.scroll_pixel_offset = 8.0;
+        win.cursor_row = 6; // visible within viewport
+                            // Cursor is on screen — pixel_offset should be preserved.
+        win.ensure_scroll_wrapped_with_margin(50, 0, 100, |_| 1);
+        assert_eq!(win.scroll_pixel_offset, 8.0);
+    }
+
+    #[test]
+    fn ensure_scroll_resets_pixel_offset_on_change() {
+        let _buf = make_buffer(200);
+        let mut win = Window::new(0, 0);
+        win.scroll_offset = 0;
+        win.scroll_pixel_offset = 8.0;
+        win.cursor_row = 100; // far offscreen
+        win.ensure_scroll_wrapped_with_margin(50, 0, 200, |_| 1);
+        // scroll_offset must have changed → pixel_offset reset
+        assert_ne!(win.scroll_offset, 0);
+        assert_eq!(win.scroll_pixel_offset, 0.0);
+    }
+
+    #[test]
+    fn scroll_page_down_resets_pixel_offset() {
+        let buf = make_buffer(100);
+        let mut win = Window::new(0, 0);
+        win.scroll_pixel_offset = 10.0;
+        win.scroll_page_down(&buf, 30);
+        assert_eq!(win.scroll_pixel_offset, 0.0);
     }
 }

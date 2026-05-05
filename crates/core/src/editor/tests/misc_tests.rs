@@ -1639,12 +1639,14 @@ fn viewport_local_syntax_spans() {
         .map(|s| s.to_vec());
     assert!(spans_vp.is_some());
 
-    // Viewport spans should cover byte range of lines 0..3 only
-    let byte_end_line3 = rope.line_to_byte(3);
+    // Viewport spans should cover byte range of lines 0..padded_end.
+    // With padding (range_size/3 = 1), padded_end = min(3+1, 5) = 4.
+    let padded_end = (3 + (3 / 3)).min(rope.len_lines());
+    let byte_end_padded = rope.line_to_byte(padded_end);
     let vp_spans = spans_vp.unwrap();
     assert!(
-        vp_spans.iter().all(|s| s.byte_end <= byte_end_line3),
-        "viewport spans should be within lines 0..3"
+        vp_spans.iter().all(|s| s.byte_end <= byte_end_padded),
+        "viewport spans should be within padded range 0..{padded_end}"
     );
 }
 
@@ -1661,6 +1663,82 @@ fn viewport_covers_tracks_range() {
     assert!(sm.viewport_covers(0, 1, 3));
     assert!(!sm.viewport_covers(0, 0, 3)); // 0 < viewport_line_start=1
     assert!(!sm.viewport_covers(0, 1, 5)); // 5 > viewport_line_end=3
+}
+
+// --- Visual rows cache separation tests ---
+
+#[test]
+fn visual_rows_cache_survives_scroll_shift() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    // Insert 200 lines.
+    let content: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    // Initial populate.
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    assert!(editor.buffers[idx].visual_rows_cache.is_some());
+    let gen1 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .line_start;
+    // Shift by 1 — should NOT recompute (padding absorbs it).
+    editor.populate_visual_rows_cache(idx, 11, 61);
+    let gen2 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .line_start;
+    assert_eq!(gen1, gen2, "cache should survive single-line shift");
+}
+
+#[test]
+fn visual_rows_cache_recomputes_on_large_shift() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let content: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    // Jump 100 lines — must recompute.
+    editor.populate_visual_rows_cache(idx, 110, 160);
+    let cache = editor.buffers[idx].visual_rows_cache.as_ref().unwrap();
+    assert!(cache.line_start <= 110, "cache must cover needed_start=110");
+    assert!(
+        cache.line_start + cache.rows.len() >= 160,
+        "cache must cover needed_end=160"
+    );
+}
+
+#[test]
+fn visual_rows_cache_invalidates_on_width_change() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let content: String = (0..100).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    let w1 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .text_width;
+    // Change width and repopulate.
+    editor.text_area_width = 60;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    let w2 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .text_width;
+    assert_ne!(w1, w2, "cache must recompute on width change");
 }
 
 // Shell-insert keymap tests (Part 1: Lisp machine fix)

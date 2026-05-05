@@ -688,7 +688,8 @@ state. It is the AI's equivalent of a doctor's checkup.\n\n\
 | **locks** | FairMutex contention stats, wait times, holder info |\n\
 | **buffers** | Buffer count, sizes, kinds, modification state |\n\
 | **shell** | Shell process count, PIDs, CWDs, exit status |\n\
-| **ai** | Session state, message count, token usage, model |\n\n\
+| **ai** | Session state, message count, token usage, model |\n\
+| **frame** | Per-frame render profiling: phase timing, cache hit/miss, visible buffers |\n\n\
 ## Usage\n\
 Ask the AI: \"introspect\" or \"show me editor diagnostics.\"\n\
 The AI calls the `introspect` tool and receives a structured JSON report.\n\n\
@@ -697,6 +698,28 @@ The AI calls the `introspect` tool and receives a structured JSON report.\n\n\
 - Shell not responding → check shell section for process status.\n\
 - AI behaving oddly → check AI section for session state.\n\n\
 See also: [[concept:watchdog]], [[concept:event-recording]], [[concept:ai-as-peer]], [[index]]\n";
+
+const CONCEPT_RENDER_PROFILING: &str = "\
+**Render profiling** lets you diagnose GUI frame time issues using built-in \
+MCP tools — no external profiler needed.\n\n\
+## Quick Diagnosis Workflow\n\
+1. **Snapshot frame state:** `introspect(section: \"frame\")` → identify hot phase (syntax/layout/draw)\n\
+2. **Scroll stress test:** `perf_benchmark(benchmark: \"scroll_stress\")` → find position-dependent spikes\n\
+3. **Cache analysis:** Check `caches` section in the frame snapshot → which cache is thrashing?\n\n\
+## Frame Snapshot Fields\n\
+| Field | Meaning |\n\
+|-------|---------|\n\
+| `render_phase_us.syntax` | Time computing syntax highlight spans |\n\
+| `render_phase_us.layout` | Time computing line positions + wrap |\n\
+| `render_phase_us.draw` | Time drawing text + backgrounds |\n\
+| `caches.syntax` | Tree-sitter parse cache hit/miss |\n\
+| `caches.markup` | Org/Markdown markup span cache |\n\
+| `caches.visual_rows` | Word-wrap row count cache |\n\n\
+## Deep Debugging with DAP\n\
+- Attach to MAE: `dap_start(adapter: \"lldb\", mode: \"attach\", pid: <PID>)`\n\
+- Set conditional breakpoint: `dap_set_breakpoint(source: \"...\", line: N, condition: \"scale > 1.0\")`\n\
+- Step through the hot path, inspect variables\n\n\
+See also: [[concept:introspect]], [[concept:debugging]], [[concept:event-recording]], [[index]]\n";
 
 const CONCEPT_GIT_STATUS: &str = "\
 The **Git Status** buffer (`*git-status*`) is a high-fidelity \"porcelain\" UI \
@@ -2243,6 +2266,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_INTROSPECT,
         )
         .with_tags(["debugging", "ai", "observability"]),
+        Node::new(
+            "concept:render-profiling",
+            "Concept: Render Profiling",
+            NodeKind::Concept,
+            CONCEPT_RENDER_PROFILING,
+        )
+        .with_tags(["performance", "rendering", "observability"]),
         Node::new(
             "concept:git-status",
             "Concept: Git Status (Magit-lite)",

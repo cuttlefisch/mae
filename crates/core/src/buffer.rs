@@ -208,6 +208,24 @@ pub struct Buffer {
     pub display_reveal_cursor: Option<usize>,
     /// Swap file state for crash recovery (Emacs-style autosave).
     pub swap: crate::swap::SwapState,
+    /// Cached visual row counts for scroll computation.
+    /// Invalidated automatically by generation/display_regions_gen changes
+    /// and explicitly when wrap-affecting options change.
+    pub visual_rows_cache: Option<VisualRowsCache>,
+}
+
+/// Cached visual-row counts for a contiguous range of buffer lines.
+/// Used by scroll pre-computation to avoid recomputing wrap rows every frame.
+pub struct VisualRowsCache {
+    pub generation: u64,
+    pub display_regions_gen: u64,
+    pub text_width: usize,
+    pub break_indent: bool,
+    pub show_break_width: usize,
+    pub heading_scale: bool,
+    pub line_start: usize,
+    /// Visual text rows per line (capped at 255). Does NOT include image rows.
+    pub rows: Vec<u8>,
 }
 
 impl Default for Buffer {
@@ -248,6 +266,7 @@ impl Buffer {
             display_regions_dirty_since: None,
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
+            visual_rows_cache: None,
         }
     }
 

@@ -82,6 +82,7 @@ pub struct LineLayout {
 
 /// Complete layout for one window's visible content area.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct FrameLayout {
     /// One entry per visible display row (including wrap continuations).
     pub lines: Vec<LineLayout>,
@@ -297,7 +298,7 @@ pub fn compute_layout(
     };
 
     // Sub-line scroll: offset pixel_y upward to hide top rows of scroll_offset line.
-    let skip_px = win.scroll_top_skip as f32 * cell_height;
+    let skip_px = win.scroll_pixel_offset;
     let mut pixel_y = area_row as f32 * cell_height - skip_px;
     let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
 
@@ -335,7 +336,8 @@ pub fn compute_layout(
         }
 
         // Compute heading scale using editor-configured values.
-        let org_heading_scale = if editor.heading_scale {
+        // Skip for degraded files — syntax spans may be empty or huge.
+        let org_heading_scale = if editor.heading_scale && !buf.degraded.unwrap_or(false) {
             buffer_render::line_heading_scale_with(
                 buf,
                 syntax_spans,
@@ -371,47 +373,49 @@ pub fn compute_layout(
             idx < effective_regions.len() && effective_regions[idx].byte_start < line_byte_end
         };
 
-        // Check for an image display region covering this line.
-        let image_layout = effective_regions
-            .iter()
-            .find(|r| {
-                r.byte_start < line_byte_end && r.byte_end > line_byte_start && r.image.is_some()
-            })
-            .and_then(|r| r.image.as_ref())
-            .map(|attrs| {
-                let text_area_px = (text_width as f32) * cell_width;
-                let max_w = if let Some(explicit_w) = attrs.width {
-                    (explicit_w as f32).min(text_area_px)
+        // Check for an image display region covering this line (binary search).
+        let image_layout = {
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+            effective_regions[idx..]
+                .iter()
+                .take_while(|r| r.byte_start < line_byte_end)
+                .find(|r| r.image.is_some())
+        }
+        .and_then(|r| r.image.as_ref())
+        .map(|attrs| {
+            let text_area_px = (text_width as f32) * cell_width;
+            let max_w = if let Some(explicit_w) = attrs.width {
+                (explicit_w as f32).min(text_area_px)
+            } else {
+                text_area_px
+            };
+            const MAX_H: f32 = 400.0;
+            // Use cached dimensions from ImageAttrs (populated at region creation).
+            // Fall back to disk read, then to a square if unreadable.
+            let (img_w, img_h) = if attrs.natural_width > 0 && attrs.natural_height > 0 {
+                (attrs.natural_width as f32, attrs.natural_height as f32)
+            } else {
+                image_natural_size(&attrs.path)
+            };
+            let (display_width, display_height) = if img_w > 0.0 && img_h > 0.0 {
+                let aspect = img_w / img_h;
+                let w = max_w;
+                let h = w / aspect;
+                if h <= MAX_H {
+                    (w, h)
                 } else {
-                    text_area_px
-                };
-                const MAX_H: f32 = 400.0;
-                // Use cached dimensions from ImageAttrs (populated at region creation).
-                // Fall back to disk read, then to a square if unreadable.
-                let (img_w, img_h) = if attrs.natural_width > 0 && attrs.natural_height > 0 {
-                    (attrs.natural_width as f32, attrs.natural_height as f32)
-                } else {
-                    image_natural_size(&attrs.path)
-                };
-                let (display_width, display_height) = if img_w > 0.0 && img_h > 0.0 {
-                    let aspect = img_w / img_h;
-                    let w = max_w;
-                    let h = w / aspect;
-                    if h <= MAX_H {
-                        (w, h)
-                    } else {
-                        (MAX_H * aspect, MAX_H)
-                    }
-                } else {
-                    (max_w.min(MAX_H), max_w.min(MAX_H))
-                };
-                ImageLayout {
-                    path: attrs.path.clone(),
-                    display_width,
-                    display_height,
-                    pixel_x: text_col as f32 * cell_width,
+                    (MAX_H * aspect, MAX_H)
                 }
-            });
+            } else {
+                (max_w.min(MAX_H), max_w.min(MAX_H))
+            };
+            ImageLayout {
+                path: attrs.path.clone(),
+                display_width,
+                display_height,
+                pixel_x: text_col as f32 * cell_width,
+            }
+        });
 
         let (display_chars_arc, display_map_arc) = if has_display_regions {
             let (chars_vec, map_vec) = mae_core::display_region::apply_display_regions_to_line(

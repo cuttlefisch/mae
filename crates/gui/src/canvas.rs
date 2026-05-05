@@ -57,6 +57,9 @@ pub struct SkiaCanvas {
     /// Avoids cloning + `set_size()` on every bold/scaled character at 60fps.
     scaled_fonts: HashMap<u32, Font>,
     scaled_bold_fonts: HashMap<u32, Font>,
+    /// Cached glyph advance widths for scaled fonts. Key = `(scale * 1000.0) as u32`.
+    /// Avoids cloning the Skia Font and calling `measure_str("M")` every frame.
+    scaled_advance_cache: HashMap<u32, f32>,
     /// Decoded image cache. Key = absolute path. Value = `None` if the image
     /// failed to load or exceeded the 10MB size limit.
     image_cache: HashMap<PathBuf, Option<CachedImage>>,
@@ -196,6 +199,7 @@ impl SkiaCanvas {
             fallback_cache: HashMap::new(),
             scaled_fonts: HashMap::new(),
             scaled_bold_fonts: HashMap::new(),
+            scaled_advance_cache: HashMap::new(),
             image_cache: HashMap::new(),
         })
     }
@@ -228,6 +232,7 @@ impl SkiaCanvas {
         self.fallback_cache.clear();
         self.scaled_fonts.clear();
         self.scaled_bold_fonts.clear();
+        self.scaled_advance_cache.clear();
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -296,6 +301,16 @@ impl SkiaCanvas {
         self.surface.canvas().restore();
     }
 
+    /// Snapshot a pixel rectangle from the surface as a cacheable Image.
+    pub fn snapshot_region(&mut self, rect: skia_safe::IRect) -> Option<skia_safe::Image> {
+        self.surface.image_snapshot_with_bounds(rect)
+    }
+
+    /// Blit a cached image at the given pixel position.
+    pub fn draw_cached_image(&mut self, image: &skia_safe::Image, x: f32, y: f32) {
+        self.surface.canvas().draw_image(image, (x, y), None);
+    }
+
     /// Get a cached scaled font. Avoids clone + set_size on every call.
     fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
         let key = (scale * 1000.0) as u32;
@@ -328,9 +343,14 @@ impl SkiaCanvas {
         if scale == 1.0 {
             return self.cell_width;
         }
+        let key = (scale * 1000.0) as u32;
+        if let Some(&cached) = self.scaled_advance_cache.get(&key) {
+            return cached;
+        }
         // Measure bold advance since headings are rendered bold.
         let font = self.get_scaled_font(true, scale).clone();
         let (advance, _) = font.measure_str("M", None);
+        self.scaled_advance_cache.insert(key, advance);
         advance
     }
 

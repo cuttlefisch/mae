@@ -934,11 +934,17 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
-                for (idx, term) in &self.shell_terminals {
-                    let gen = term.generation();
-                    if self.shell_generations.get(idx) != Some(&gen) {
-                        self.shell_generations.insert(*idx, gen);
-                        self.dirty = true;
+                // Only check generations if we're not already waiting to render.
+                // This prevents redraw stacking when shell output streams faster
+                // than the frame budget allows.
+                if !self.dirty {
+                    for (idx, term) in &self.shell_terminals {
+                        let gen = term.generation();
+                        if self.shell_generations.get(idx) != Some(&gen) {
+                            self.shell_generations.insert(*idx, gen);
+                            self.dirty = true;
+                            break; // One dirty is enough
+                        }
                     }
                 }
             }
@@ -1045,9 +1051,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.last_input_time = std::time::Instant::now();
                 self.editor.last_edit_time = std::time::Instant::now();
                 self.editor.clear_highlights();
-                // Default to full redraw for keyboard input. Commands that only
-                // move the cursor can downgrade this via mark_cursor_moved().
-                self.editor.mark_full_redraw();
+                // Default to CursorOnly redraw for keyboard input. Commands that
+                // modify text or change mode escalate via mark_full_redraw() or
+                // mark_scrolled() internally. This avoids full syntax recomputation
+                // on every keypress (scroll, cursor move).
+                self.editor.mark_cursor_moved();
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1287,6 +1295,24 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
                 }
+                // Record frame snapshot for perf_profile tool.
+                if self.editor.event_recorder.is_recording() {
+                    let ps = &self.editor.perf_stats;
+                    let snapshot = mae_core::event_record::FrameSnapshot {
+                        offset_us: self.editor.event_recorder.duration_us(),
+                        frame_time_us: frame_elapsed,
+                        total_render_us: ps.total_render_us,
+                        render_syntax_us: ps.render_syntax_us,
+                        render_layout_us: ps.render_layout_us,
+                        render_draw_us: ps.render_draw_us,
+                        redraw_level: format!("{:?}", self.editor.redraw_level),
+                        scroll_offset: self.editor.window_mgr.focused_window().scroll_offset,
+                        syntax_cache_hit: ps.syntax_cache_hits > 0 && ps.syntax_cache_misses == 0,
+                        visual_rows_cache_hit: ps.visual_rows_cache_hits > 0
+                            && ps.visual_rows_cache_misses == 0,
+                    };
+                    self.editor.event_recorder.record_frame_snapshot(snapshot);
+                }
                 self.dirty = false;
                 self.editor.clear_redraw();
             }
@@ -1364,13 +1390,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
                 let scroll = self.editor.window_mgr.focused_window().scroll_offset;
                 let so = self.editor.scrolloff;
-                // Extend range backward to cover ensure_scroll_wrapped backward walk
-                let range_start = scroll.min(cursor_row).saturating_sub(vh);
-                let range_end = (scroll.max(cursor_row) + vh + 2)
+                // Pass tight needed range — populate_visual_rows_cache adds padding internally.
+                let cache_start = scroll.min(cursor_row).saturating_sub(1);
+                let cache_end = (scroll.max(cursor_row) + vh + 2)
                     .min(self.editor.buffers[buf_idx].display_line_count());
-                let row_cache: Vec<(usize, usize)> = (range_start..range_end)
-                    .map(|l| (l, self.editor.line_visual_rows(buf_idx, l)))
-                    .collect();
+                self.editor
+                    .populate_visual_rows_cache(buf_idx, cache_start, cache_end);
+
+                // Snapshot cache Vec<u8> to avoid borrow conflict with window_mgr.
+                let (cache_rows, cache_line_start) = {
+                    let buf = &self.editor.buffers[buf_idx];
+                    match &buf.visual_rows_cache {
+                        Some(c) => (c.rows.clone(), c.line_start),
+                        None => (Vec::new(), 0),
+                    }
+                };
 
                 let line_count = self.editor.buffers[buf_idx].display_line_count();
                 let win = self.editor.window_mgr.focused_window_mut();
@@ -1379,11 +1413,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 } else {
                     win.scroll_locked = false;
                     win.ensure_scroll_wrapped_with_margin(vh, so, line_count, |line| {
-                        row_cache
-                            .iter()
-                            .find(|(l, _)| *l == line)
-                            .map(|(_, r)| *r)
-                            .unwrap_or(1)
+                        if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                            let v = cache_rows[line - cache_line_start] as usize;
+                            if v > 0 {
+                                v
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
                     });
                 }
             }

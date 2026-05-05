@@ -94,6 +94,7 @@ impl Editor {
             "visual-lowercase" => self.visual_lowercase(),
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

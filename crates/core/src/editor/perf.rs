@@ -39,6 +39,28 @@ pub struct PerfStats {
     pub stall_count: u64,
     /// Count of frames exceeding 33ms (jank).
     pub jank_count: u64,
+    /// Last dispatched command duration in microseconds.
+    pub last_command_us: u64,
+    /// Name of the last dispatched command.
+    pub last_command_name: String,
+    /// Count of cache misses (syntax/markup/code block) in the current frame.
+    pub cache_miss_count: u64,
+    // --- Per-phase render timing (microseconds) ---
+    /// Duration of `compute_visible_syntax_spans` in the current frame.
+    pub render_syntax_us: u64,
+    /// Accumulated `compute_layout` duration across windows in the current frame.
+    pub render_layout_us: u64,
+    /// Accumulated `render_buffer_content` duration across windows in the current frame.
+    pub render_draw_us: u64,
+    /// Total GPU/render time for the entire frame (microseconds).
+    pub total_render_us: u64,
+    // --- Per-cache hit/miss counters ---
+    pub syntax_cache_hits: u64,
+    pub syntax_cache_misses: u64,
+    pub markup_cache_hits: u64,
+    pub markup_cache_misses: u64,
+    pub visual_rows_cache_hits: u64,
+    pub visual_rows_cache_misses: u64,
     /// Ring buffer of recent anomalies, capped at 100 entries.
     pub anomaly_log: VecDeque<PerfAnomaly>,
     /// Ring buffer of recent frame times.
@@ -65,6 +87,19 @@ impl Default for PerfStats {
             avg_frame_time_us: 0,
             stall_count: 0,
             jank_count: 0,
+            last_command_us: 0,
+            last_command_name: String::new(),
+            cache_miss_count: 0,
+            render_syntax_us: 0,
+            render_layout_us: 0,
+            render_draw_us: 0,
+            total_render_us: 0,
+            syntax_cache_hits: 0,
+            syntax_cache_misses: 0,
+            markup_cache_hits: 0,
+            markup_cache_misses: 0,
+            visual_rows_cache_hits: 0,
+            visual_rows_cache_misses: 0,
             anomaly_log: VecDeque::new(),
             frame_times: vec![0u64; 60],
             frame_idx: 0,
@@ -78,6 +113,17 @@ impl Default for PerfStats {
 impl PerfStats {
     /// Record a frame's duration in microseconds.
     pub fn record_frame(&mut self, duration_us: u64) {
+        self.cache_miss_count = 0;
+        // Note: render_syntax_us, render_layout_us, render_draw_us, and
+        // total_render_us are NOT reset here — they are managed by the
+        // renderer (pending copy at frame start + direct assignment).
+        // Resetting them here would zero them before snapshot recording.
+        self.syntax_cache_hits = 0;
+        self.syntax_cache_misses = 0;
+        self.markup_cache_hits = 0;
+        self.markup_cache_misses = 0;
+        self.visual_rows_cache_hits = 0;
+        self.visual_rows_cache_misses = 0;
         self.frame_time_us = duration_us;
         self.frame_times[self.frame_idx] = duration_us;
         self.frame_idx = (self.frame_idx + 1) % self.frame_times.len();
@@ -125,6 +171,13 @@ impl PerfStats {
         } else {
             1_000_000.0 / self.avg_frame_time_us as f64
         }
+    }
+
+    /// Record the latency of a dispatched command.
+    pub fn record_command(&mut self, name: &str, duration_us: u64) {
+        self.last_command_name.clear();
+        self.last_command_name.push_str(name);
+        self.last_command_us = duration_us;
     }
 
     /// Sample process-level stats (RSS, CPU). Rate-limited: only queries

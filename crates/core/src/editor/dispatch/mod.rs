@@ -21,6 +21,15 @@ impl Editor {
     /// This is the shared dispatch point for human keybindings and the AI agent.
     /// Scheme-defined commands are handled by the binary (which has the SchemeRuntime).
     pub fn dispatch_builtin(&mut self, name: &str) -> bool {
+        let _cmd_start = std::time::Instant::now();
+        let _cmd_name = name;
+        let result = self.dispatch_builtin_inner(name);
+        let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
+        self.perf_stats.record_command(_cmd_name, elapsed_us);
+        result
+    }
+
+    fn dispatch_builtin_inner(&mut self, name: &str) -> bool {
         // Auto-dismiss hover popup on any command that isn't hover-related.
         if self.hover_popup.is_some()
             && !matches!(name, "lsp-hover" | "hover-scroll-down" | "hover-scroll-up")
@@ -78,30 +87,37 @@ impl Editor {
         match name {
             "mc-add-cursor-below" => {
                 super::multicursor::mc_add_cursor_below(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-add-cursor-above" => {
                 super::multicursor::mc_add_cursor_above(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-add-at-next-word" => {
                 super::multicursor::mc_add_at_next_word(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-add-all-word" => {
                 super::multicursor::mc_add_all_word(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-skip-next" => {
                 super::multicursor::mc_skip_next(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-clear" => {
                 super::multicursor::mc_clear(self);
+                self.mark_full_redraw();
                 return true;
             }
             "mc-align" => {
                 super::multicursor::mc_align(self);
+                self.mark_full_redraw();
                 return true;
             }
             _ => {}
@@ -116,6 +132,7 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_file_tree(name) {
+            self.mark_full_redraw();
             return v;
         }
 

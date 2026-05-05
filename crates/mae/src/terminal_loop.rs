@@ -163,13 +163,20 @@ pub(crate) async fn run_terminal_loop(
             let cursor_row = editor.window_mgr.focused_window().cursor_row;
             let scroll = editor.window_mgr.focused_window().scroll_offset;
             let so = editor.scrolloff;
-            // Extend range backward to cover ensure_scroll_wrapped backward walk
-            let range_start = scroll.min(cursor_row).saturating_sub(viewport_height);
-            let range_end = (scroll.max(cursor_row) + viewport_height + 2)
+            // Pass tight needed range — populate_visual_rows_cache adds padding internally.
+            let cache_start = scroll.min(cursor_row).saturating_sub(1);
+            let cache_end = (scroll.max(cursor_row) + viewport_height + 2)
                 .min(editor.buffers[buf_idx].display_line_count());
-            let row_cache: Vec<(usize, usize)> = (range_start..range_end)
-                .map(|l| (l, editor.line_visual_rows(buf_idx, l)))
-                .collect();
+            editor.populate_visual_rows_cache(buf_idx, cache_start, cache_end);
+
+            // Snapshot cache Vec<u8> to avoid borrow conflict with window_mgr.
+            let (cache_rows, cache_line_start) = {
+                let buf = &editor.buffers[buf_idx];
+                match &buf.visual_rows_cache {
+                    Some(c) => (c.rows.clone(), c.line_start),
+                    None => (Vec::new(), 0),
+                }
+            };
 
             let line_count = editor.buffers[buf_idx].display_line_count();
             let win = editor.window_mgr.focused_window_mut();
@@ -178,11 +185,16 @@ pub(crate) async fn run_terminal_loop(
             } else {
                 win.scroll_locked = false;
                 win.ensure_scroll_wrapped_with_margin(viewport_height, so, line_count, |line| {
-                    row_cache
-                        .iter()
-                        .find(|(l, _)| *l == line)
-                        .map(|(_, r)| *r)
-                        .unwrap_or(1)
+                    if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                        let v = cache_rows[line - cache_line_start] as usize;
+                        if v > 0 {
+                            v
+                        } else {
+                            1
+                        }
+                    } else {
+                        1
+                    }
                 });
             }
         }
@@ -215,6 +227,25 @@ pub(crate) async fn run_terminal_loop(
                 if editor.debug_mode {
                     editor.perf_stats.sample_process_stats();
                 }
+                // Record frame snapshot for perf_profile tool.
+                if editor.event_recorder.is_recording() {
+                    let ps = &editor.perf_stats;
+                    let snapshot = mae_core::event_record::FrameSnapshot {
+                        offset_us: editor.event_recorder.duration_us(),
+                        frame_time_us: frame_elapsed,
+                        total_render_us: 0, // TUI: no separate render timing
+                        render_syntax_us: ps.render_syntax_us,
+                        render_layout_us: ps.render_layout_us,
+                        render_draw_us: ps.render_draw_us,
+                        redraw_level: format!("{:?}", editor.redraw_level),
+                        scroll_offset: editor.window_mgr.focused_window().scroll_offset,
+                        syntax_cache_hit: ps.syntax_cache_hits > 0 && ps.syntax_cache_misses == 0,
+                        visual_rows_cache_hit: ps.visual_rows_cache_hits > 0
+                            && ps.visual_rows_cache_misses == 0,
+                    };
+                    editor.event_recorder.record_frame_snapshot(snapshot);
+                }
+                editor.clear_redraw();
                 last_render = std::time::Instant::now();
                 tui_dirty = false;
                 render_pending = false;
@@ -390,6 +421,7 @@ pub(crate) async fn run_terminal_loop(
                             handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
+                            editor.mark_cursor_moved();
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
 
                             // Handle cancellation requested via command (e.g. SPC a c)

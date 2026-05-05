@@ -59,14 +59,12 @@ pub fn line_heading_scale_with(
         .take_while(|s| s.byte_start < line_byte_end)
         .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
     if has_heading {
-        let line_chars: Vec<char> = rope.line(line_idx).chars().collect();
-        // Detect heading level: org uses `*`, markdown uses `#`
-        let level = if line_chars.first() == Some(&'*') {
-            line_chars.iter().take_while(|&&c| c == '*').count()
-        } else if line_chars.first() == Some(&'#') {
-            line_chars.iter().take_while(|&&c| c == '#').count()
-        } else {
-            0
+        // Detect heading level directly from rope iterator — no allocation.
+        let mut chars = rope.line(line_idx).chars();
+        let level = match chars.next() {
+            Some('*') => 1 + chars.take_while(|&c| c == '*').count(),
+            Some('#') => 1 + chars.take_while(|&c| c == '#').count(),
+            _ => 0,
         };
         org_heading_scale_for_level_with(level.min(255) as u8, h1, h2, h3)
     } else {
@@ -157,6 +155,9 @@ pub fn render_buffer_content(
     // Hoisted allocations — reused across lines to avoid ~160 allocs/frame.
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
+    // Reusable draw buffers for draw_styled_at — avoids per-line Vec allocation.
+    let mut pixel_buf: Vec<f32> = Vec::with_capacity(256);
+    let mut col_buf: Vec<usize> = Vec::with_capacity(256);
 
     // Pre-compute cursor's display row for fold-aware relative line numbers.
     let cursor_display_row = frame_layout.display_row_of(win.cursor_row);
@@ -473,6 +474,8 @@ pub fn render_buffer_content(
                 1.0,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
         } else if wrap {
             // First segment of a wrapped line.
@@ -516,6 +519,8 @@ pub fn render_buffer_content(
                 org_heading_scale,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
         } else {
             // No wrap: single segment per line.
@@ -560,6 +565,8 @@ pub fn render_buffer_content(
                 org_heading_scale,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
 
             // Fold indicator: show "... N lines" after fold start lines.
@@ -705,6 +712,8 @@ fn draw_styled_at(
     scale: f32,
     line_height: f32,
     glyph_advance: f32,
+    pixel_buf: &mut Vec<f32>,
+    col_buf: &mut Vec<usize>,
 ) {
     if chars.is_empty() {
         return;
@@ -715,27 +724,27 @@ fn draw_styled_at(
     // Pre-compute cumulative PIXEL offset for each char position.
     // For scale != 1.0, uses the font's actual glyph advance directly.
     let base_x = col as f32 * cw;
-    let mut pixel_offsets: Vec<f32> = Vec::with_capacity(chars.len() + 1);
+    pixel_buf.clear();
     if scale != 1.0 {
         let mut acc = 0.0f32;
         for &ch in chars {
-            pixel_offsets.push(acc);
+            pixel_buf.push(acc);
             acc += char_width(ch) as f32 * glyph_advance;
         }
-        pixel_offsets.push(acc);
+        pixel_buf.push(acc);
     } else {
         let mut acc = 0.0f32;
         for &ch in chars {
-            pixel_offsets.push(acc);
+            pixel_buf.push(acc);
             acc += char_width(ch) as f32 * cw;
         }
-        pixel_offsets.push(acc);
+        pixel_buf.push(acc);
     }
     // Integer col_offsets for scale==1.0 path (draw_text_run_at_y).
-    let col_offsets: Vec<usize> = pixel_offsets
-        .iter()
-        .map(|px| (px / cw).round() as usize)
-        .collect();
+    col_buf.clear();
+    col_buf.extend(pixel_buf.iter().map(|px| (px / cw).round() as usize));
+    let pixel_offsets = &*pixel_buf;
+    let col_offsets = &*col_buf;
     // Use pixel-precise rendering for scaled lines to avoid multi-run drift.
     let use_pixel = scale != 1.0;
 

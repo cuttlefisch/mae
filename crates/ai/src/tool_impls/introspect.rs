@@ -32,6 +32,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "ai" {
         result.insert("ai".into(), build_ai_section(editor));
     }
+    if section == "frame" {
+        result.insert("frame".into(), build_frame_section(editor));
+    }
 
     serde_json::to_string_pretty(&result).map_err(|e| format!("JSON serialization error: {}", e))
 }
@@ -62,6 +65,18 @@ fn build_perf_section(editor: &Editor) -> serde_json::Value {
         "cpu_percent": ps.cpu_percent,
         "stall_count": ps.stall_count,
         "jank_count": ps.jank_count,
+        "last_command_us": ps.last_command_us,
+        "last_command_name": ps.last_command_name,
+        "cache_miss_count": ps.cache_miss_count,
+        "render_syntax_us": ps.render_syntax_us,
+        "render_layout_us": ps.render_layout_us,
+        "render_draw_us": ps.render_draw_us,
+        "syntax_cache_hits": ps.syntax_cache_hits,
+        "syntax_cache_misses": ps.syntax_cache_misses,
+        "markup_cache_hits": ps.markup_cache_hits,
+        "markup_cache_misses": ps.markup_cache_misses,
+        "visual_rows_cache_hits": ps.visual_rows_cache_hits,
+        "visual_rows_cache_misses": ps.visual_rows_cache_misses,
         "recent_anomalies": ps.anomaly_log.iter().map(|a| {
             json!({
                 "frame": a.frame_number,
@@ -134,6 +149,42 @@ fn build_shell_section(editor: &Editor) -> serde_json::Value {
     json!({
         "viewport_count": editor.shell_viewports.len(),
         "cwd_count": editor.shell_cwds.len(),
+    })
+}
+
+fn build_frame_section(editor: &Editor) -> serde_json::Value {
+    let ps = &editor.perf_stats;
+    let mut visible_buffers = Vec::new();
+    for win in editor.window_mgr.iter_windows() {
+        if let Some(buf) = editor.buffers.get(win.buffer_idx) {
+            visible_buffers.push(json!({
+                "idx": win.buffer_idx,
+                "name": buf.name,
+                "lines": buf.line_count(),
+                "degraded": editor.should_degrade_features(win.buffer_idx),
+                "scroll_offset": win.scroll_offset,
+                "viewport_height": editor.viewport_height,
+            }));
+        }
+    }
+    json!({
+        "frame_time_us": ps.frame_time_us,
+        "total_render_us": ps.total_render_us,
+        "render_phase_us": {
+            "syntax": ps.render_syntax_us,
+            "layout": ps.render_layout_us,
+            "draw": ps.render_draw_us,
+        },
+        "caches": {
+            "syntax": { "hits": ps.syntax_cache_hits, "misses": ps.syntax_cache_misses },
+            "markup": { "hits": ps.markup_cache_hits, "misses": ps.markup_cache_misses },
+            "visual_rows": { "hits": ps.visual_rows_cache_hits, "misses": ps.visual_rows_cache_misses },
+        },
+        "last_command": {
+            "name": ps.last_command_name,
+            "us": ps.last_command_us,
+        },
+        "visible_buffers": visible_buffers,
     })
 }
 

@@ -125,6 +125,7 @@ impl Editor {
             }
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

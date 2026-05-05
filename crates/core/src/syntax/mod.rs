@@ -318,9 +318,14 @@ impl SyntaxMap {
             || state.viewport_line_end < line_end;
         if needs_recompute {
             let lang = state.language;
-            let clamped_end = line_end.min(rope.len_lines());
-            let byte_start = rope.line_to_byte(line_start);
-            let byte_end = rope.line_to_byte(clamped_end);
+            // Pad compute range to absorb future scroll shifts (same pattern
+            // as visual rows cache Fix A from Round 2).
+            let range_size = line_end.saturating_sub(line_start);
+            let pad = range_size / 3; // ~vh/3 lines per side
+            let padded_start = line_start.saturating_sub(pad);
+            let padded_end = (line_end + pad).min(rope.len_lines());
+            let byte_start = rope.line_to_byte(padded_start);
+            let byte_end = rope.line_to_byte(padded_end);
             let source: String = rope.byte_slice(byte_start..byte_end).chars().collect();
             let mut spans = languages::compute_spans_with_cache(lang, &source, &mut self.configs);
             for span in &mut spans {
@@ -329,8 +334,8 @@ impl SyntaxMap {
             }
             state.spans = Some(std::sync::Arc::new(spans));
             state.computed_at = generation;
-            state.viewport_line_start = line_start;
-            state.viewport_line_end = clamped_end;
+            state.viewport_line_start = padded_start;
+            state.viewport_line_end = padded_end;
             state.tree_dirty = state.tree.is_some();
         }
         state.spans.as_ref().map(|v| &v[..])

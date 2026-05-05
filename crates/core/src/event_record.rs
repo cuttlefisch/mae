@@ -10,6 +10,7 @@ use crate::input::InputEvent;
 use crate::keymap::KeyPress;
 
 const EVENT_CAP: usize = 10_000;
+const FRAME_CAP: usize = 10_000;
 
 /// A timestamped input event.
 #[derive(Debug, Clone)]
@@ -20,11 +21,37 @@ pub struct TimestampedEvent {
     pub event: InputEvent,
 }
 
-/// Records input events with timing information.
+/// A snapshot of one rendered frame's performance data.
+#[derive(Debug, Clone)]
+pub struct FrameSnapshot {
+    /// Microseconds since recording started.
+    pub offset_us: u64,
+    /// Total frame render time in microseconds (event loop level).
+    pub frame_time_us: u64,
+    /// Actual GPU render time in microseconds (renderer only).
+    pub total_render_us: u64,
+    /// Time spent computing syntax spans.
+    pub render_syntax_us: u64,
+    /// Time spent in layout computation.
+    pub render_layout_us: u64,
+    /// Time spent drawing.
+    pub render_draw_us: u64,
+    /// Redraw level that triggered this frame.
+    pub redraw_level: String,
+    /// Current scroll offset of focused window.
+    pub scroll_offset: usize,
+    /// Whether syntax cache was hit this frame.
+    pub syntax_cache_hit: bool,
+    /// Whether visual rows cache was hit this frame.
+    pub visual_rows_cache_hit: bool,
+}
+
+/// Records input events and frame snapshots with timing information.
 #[derive(Debug, Default)]
 pub struct EventRecorder {
     recording: bool,
     events: VecDeque<TimestampedEvent>,
+    frames: VecDeque<FrameSnapshot>,
     start_time: Option<Instant>,
 }
 
@@ -33,10 +60,11 @@ impl EventRecorder {
         Self::default()
     }
 
-    /// Start recording events. Clears any existing recording.
+    /// Start recording events and frames. Clears any existing recording.
     pub fn start_recording(&mut self) {
         self.recording = true;
         self.events.clear();
+        self.frames.clear();
         self.start_time = Some(Instant::now());
     }
 
@@ -76,6 +104,27 @@ impl EventRecorder {
             self.events.pop_front();
         }
         self.events.push_back(TimestampedEvent { offset_us, event });
+    }
+
+    /// Record a frame snapshot (only if recording is active).
+    pub fn record_frame_snapshot(&mut self, snapshot: FrameSnapshot) {
+        if !self.recording {
+            return;
+        }
+        if self.frames.len() >= FRAME_CAP {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(snapshot);
+    }
+
+    /// Get all recorded frame snapshots.
+    pub fn frames(&self) -> &VecDeque<FrameSnapshot> {
+        &self.frames
+    }
+
+    /// Number of recorded frames.
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
     }
 
     /// Get the last N events as a slice-like view.

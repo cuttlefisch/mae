@@ -165,10 +165,20 @@ impl Editor {
             "paste-after" => {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
-                            let win = self.window_mgr.focused_window();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             let line_len =
                                 self.buffers[idx].rope().line(win.cursor_row).len_chars();
@@ -198,10 +208,20 @@ impl Editor {
             "paste-before" => {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
-                            let win = self.window_mgr.focused_window();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             self.buffers[idx].insert_text_at(line_start, &text);
                             let win = self.window_mgr.focused_window_mut();
@@ -576,10 +596,20 @@ impl Editor {
             "paste-from-yank" => {
                 if let Some(text) = self.registers.get(&'0').cloned() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
                             let win = self.window_mgr.focused_window_mut();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             let line_len =
                                 self.buffers[idx].rope().line(win.cursor_row).len_chars();
@@ -689,6 +719,9 @@ impl Editor {
 
             _ => return None,
         }
+        // All edit commands potentially modify buffer content or change mode;
+        // escalate to full redraw so syntax/markup gets recomputed.
+        self.mark_full_redraw();
         Some(true)
     }
 }

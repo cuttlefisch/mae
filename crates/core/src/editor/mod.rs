@@ -1223,6 +1223,7 @@ impl Editor {
         match def_name {
             "word_wrap" => {
                 opts.word_wrap = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "line_numbers" => {
                 opts.line_numbers = Some(crate::options::parse_option_bool(value)?);
@@ -1232,12 +1233,15 @@ impl Editor {
             }
             "break_indent" => {
                 opts.break_indent = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "show_break" => {
                 opts.show_break = Some(value.to_string());
+                self.buffers[idx].visual_rows_cache = None;
             }
             "heading_scale" => {
                 opts.heading_scale = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "link_descriptive" => {
                 opts.link_descriptive = Some(crate::options::parse_option_bool(value)?);
@@ -1339,12 +1343,21 @@ impl Editor {
             }
             "word_wrap" => {
                 self.word_wrap = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "break_indent" => {
                 self.break_indent = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "show_break" => {
                 self.show_break = value.to_string();
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "org_hide_emphasis_markers" => {
                 self.org_hide_emphasis_markers = parse_option_bool(value)?;
@@ -1445,6 +1458,9 @@ impl Editor {
             }
             "heading_scale" => {
                 self.heading_scale = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "ignorecase" => {
                 self.ignorecase = parse_option_bool(value)?;
@@ -1556,18 +1572,27 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h1 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "heading_scale_h2" => {
                 let v: f32 = value
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h2 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "heading_scale_h3" => {
                 let v: f32 = value
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h3 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "dashboard_dismiss_on_split" => {
                 self.dashboard_dismiss_on_split = parse_option_bool(value)?;
@@ -2594,31 +2619,35 @@ impl Editor {
         if buf.is_line_folded(line) {
             return 0;
         }
-        let rope = buf.rope();
-        if line >= rope.len_lines() {
+        if line >= buf.rope().len_lines() {
             return 1;
         }
-        let chars: Vec<char> = rope
-            .line(line)
-            .chars()
-            .filter(|c| *c != '\n' && *c != '\r')
-            .collect();
 
-        let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
-
-        let text_rows = if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
-            let text: String = chars.iter().collect();
-            let sb_w = self.show_break.chars().count();
-            crate::wrap::wrap_line_display_rows(
-                &text,
-                self.text_area_width,
-                self.break_indent,
-                sb_w,
-            )
-            .max(heading_rows)
+        // Check visual rows cache for text rows.
+        let text_rows = if let Some(ref cache) = buf.visual_rows_cache {
+            if cache.generation == buf.generation
+                && cache.display_regions_gen == buf.display_regions_gen
+                && cache.text_width == self.text_area_width
+                && cache.break_indent == self.break_indent
+                && cache.show_break_width == self.show_break.chars().count()
+                && cache.heading_scale == self.heading_scale
+                && line >= cache.line_start
+                && line < cache.line_start + cache.rows.len()
+            {
+                let v = cache.rows[line - cache.line_start] as usize;
+                if v > 0 {
+                    Some(v)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         } else {
-            heading_rows
+            None
         };
+
+        let text_rows = text_rows.unwrap_or_else(|| self.line_text_visual_rows(buf_idx, line));
 
         // Account for inline image display height.
         let image_rows = if buf.local_options.inline_images.unwrap_or(false) {
@@ -2628,6 +2657,195 @@ impl Editor {
         };
 
         text_rows + image_rows
+    }
+
+    /// Compute the text-only visual rows for a line, applying display regions
+    /// (link concealment) before wrapping — matching what `compute_layout()` does.
+    fn line_text_visual_rows(&self, buf_idx: usize, line: usize) -> usize {
+        let buf = &self.buffers[buf_idx];
+        let rope = buf.rope();
+        if line >= rope.len_lines() {
+            return 1;
+        }
+
+        let line_slice = rope.line(line);
+        let line_char_count = line_slice.len_chars();
+        let line_byte_count = line_slice.len_bytes();
+        // Content length excluding trailing newline.
+        let content_len = if line_char_count > 0 && line_slice.char(line_char_count - 1) == '\n' {
+            line_char_count - 1
+        } else {
+            line_char_count
+        };
+
+        // Fast path: no wrap, no heading scale, no display regions — skip char collection.
+        // byte_len == char_count implies all single-byte (ASCII) chars, so
+        // content_len == display_width.
+        let is_ascii = line_byte_count == line_char_count;
+        let has_display_regions = !buf.display_regions.is_empty();
+
+        if !self.word_wrap_for(buf_idx) || self.text_area_width == 0 {
+            // Still need heading rows for non-wrapped headings.
+            if !self.heading_scale {
+                return 1;
+            }
+            // Only collect chars for heading detection.
+            let rope_chars: Vec<char> = line_slice
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .collect();
+            let heading_level = crate::heading::heading_level_from_chars(&rope_chars);
+            if heading_level == 0 {
+                return 1;
+            }
+            return crate::heading::heading_scale_for_level_with(
+                heading_level,
+                self.heading_scale_h1,
+                self.heading_scale_h2,
+                self.heading_scale_h3,
+            )
+            .ceil() as usize;
+        }
+
+        // Fast path: short ASCII line, no heading scale, no display regions →
+        // guaranteed to fit in one row, skip all allocation.
+        if is_ascii
+            && content_len <= self.text_area_width
+            && !self.heading_scale
+            && !has_display_regions
+        {
+            return 1;
+        }
+
+        let rope_chars: Vec<char> = line_slice
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+
+        let heading_level = crate::heading::heading_level_from_chars(&rope_chars);
+        let heading_scale_factor = if self.heading_scale && heading_level > 0 {
+            crate::heading::heading_scale_for_level_with(
+                heading_level,
+                self.heading_scale_h1,
+                self.heading_scale_h2,
+                self.heading_scale_h3,
+            )
+        } else {
+            1.0
+        };
+        let heading_rows = heading_scale_factor.ceil() as usize;
+
+        // Apply display regions (link concealment) to match compute_layout() behavior.
+        let effective_regions = crate::display_region::regions_with_cursor_reveal(
+            &buf.display_regions,
+            buf.display_reveal_cursor,
+        );
+
+        let line_byte_start = rope.line_to_byte(line);
+        let next_line_byte = if line + 1 < rope.len_lines() {
+            rope.line_to_byte(line + 1)
+        } else {
+            rope.len_bytes()
+        };
+
+        // Check if any display regions overlap this line (binary search).
+        let start_idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+        let has_regions = effective_regions
+            .get(start_idx)
+            .is_some_and(|r| r.byte_start < next_line_byte);
+
+        let chars_for_wrap = if has_regions {
+            let (display_chars, _) = crate::display_region::apply_display_regions_to_line(
+                &rope_chars,
+                line_byte_start,
+                next_line_byte,
+                &effective_regions,
+            );
+            display_chars
+        } else {
+            rope_chars
+        };
+
+        // For headings with scale > 1, reduce wrap width to match GUI layout.
+        // compute_layout() does: (text_area_width / scale).floor()
+        let wrap_width = if heading_scale_factor > 1.0 {
+            (self.text_area_width as f32 / heading_scale_factor).floor() as usize
+        } else {
+            self.text_area_width
+        };
+
+        let text: String = chars_for_wrap.iter().collect();
+        let sb_w = self.show_break.chars().count();
+        let wrap_rows =
+            crate::wrap::wrap_line_display_rows(&text, wrap_width, self.break_indent, sb_w);
+
+        // Heading wrap correctness: first wrap segment gets heading scale,
+        // continuation rows are normal height. Total cell rows =
+        // heading_rows (ceil of scale) + (wrap_count - 1) continuation rows.
+        (wrap_rows - 1) + heading_rows
+    }
+
+    /// Pre-compute visual row counts for a contiguous line range and store in the
+    /// buffer's cache. Subsequent `line_visual_rows()` calls hit the cache.
+    /// Pre-compute visual row counts for a contiguous needed range and store
+    /// in the buffer's cache.
+    ///
+    /// **Fix A**: The cache is checked against the `needed_start..needed_end`
+    /// range, but on miss it computes a wider padded range to absorb future
+    /// scroll shifts without re-computation.
+    pub fn populate_visual_rows_cache(
+        &mut self,
+        buf_idx: usize,
+        needed_start: usize,
+        needed_end: usize,
+    ) {
+        let buf = &self.buffers[buf_idx];
+        let gen = buf.generation;
+        let dr_gen = buf.display_regions_gen;
+        let text_width = self.text_area_width;
+        let break_indent = self.break_indent;
+        let sb_w = self.show_break.chars().count();
+        let hs = self.heading_scale;
+
+        // Check if existing cache covers the NEEDED range (not padded).
+        if let Some(ref cache) = buf.visual_rows_cache {
+            if cache.generation == gen
+                && cache.display_regions_gen == dr_gen
+                && cache.text_width == text_width
+                && cache.break_indent == break_indent
+                && cache.show_break_width == sb_w
+                && cache.heading_scale == hs
+                && cache.line_start <= needed_start
+                && cache.line_start + cache.rows.len() >= needed_end
+            {
+                self.perf_stats.visual_rows_cache_hits += 1;
+                return;
+            }
+        }
+        self.perf_stats.visual_rows_cache_misses += 1;
+
+        // Miss — compute with padding to absorb future scroll shifts.
+        let total = buf.display_line_count();
+        let pad = self.viewport_height;
+        let compute_start = needed_start.saturating_sub(pad);
+        let compute_end = (needed_end + pad).min(total);
+
+        let mut rows = Vec::with_capacity(compute_end.saturating_sub(compute_start));
+        for line in compute_start..compute_end {
+            let r = self.line_text_visual_rows(buf_idx, line);
+            rows.push(r.min(255) as u8);
+        }
+
+        self.buffers[buf_idx].visual_rows_cache = Some(crate::buffer::VisualRowsCache {
+            generation: gen,
+            display_regions_gen: dr_gen,
+            text_width,
+            break_indent,
+            show_break_width: sb_w,
+            heading_scale: hs,
+            line_start: compute_start,
+            rows,
+        });
     }
 
     /// Estimate extra visual rows consumed by an inline image on this line.
@@ -3213,24 +3431,33 @@ impl Editor {
                     let scroll = self.window_mgr.focused_window().scroll_offset;
                     let range_start = scroll.saturating_sub(2);
                     let range_end = (scroll + viewport_height + 2).min(buf_line_count);
-                    let row_cache: Vec<(usize, usize)> = (range_start..range_end)
-                        .map(|l| (l, self.line_visual_rows(buf_idx, l)))
-                        .collect();
+                    self.populate_visual_rows_cache(buf_idx, range_start, range_end);
+                    let (cache_rows, cache_line_start) =
+                        match &self.buffers[buf_idx].visual_rows_cache {
+                            Some(c) => (c.rows.clone(), c.line_start),
+                            None => (Vec::new(), 0),
+                        };
                     let lvr = |line: usize| -> usize {
-                        row_cache
-                            .iter()
-                            .find(|(l, _)| *l == line)
-                            .map(|(_, r)| *r)
-                            .unwrap_or(1)
+                        if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                            let v = cache_rows[line - cache_line_start] as usize;
+                            if v > 0 {
+                                v
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
                     };
 
+                    let cell_h = self.gui_cell_height;
                     let buf = &self.buffers[buf_idx];
                     let win = self.window_mgr.focused_window_mut();
                     if delta > 0 {
                         // Scroll up (reveal lines above).
                         for _ in 0..steps {
-                            if win.scroll_top_skip > 0 {
-                                win.scroll_top_skip -= 1;
+                            if win.scroll_pixel_offset >= cell_h {
+                                win.scroll_pixel_offset -= cell_h;
                             } else {
                                 let prev = buf.prev_visible_line(win.scroll_offset);
                                 if prev >= win.scroll_offset {
@@ -3238,7 +3465,14 @@ impl Editor {
                                 }
                                 let prev_rows = lvr(prev);
                                 win.scroll_offset = prev;
-                                win.scroll_top_skip = if prev_rows > 1 { prev_rows - 2 } else { 0 };
+                                win.scroll_pixel_offset = if prev_rows > 1 {
+                                    (prev_rows as f32 - 2.0) * cell_h
+                                } else {
+                                    0.0
+                                };
+                                if win.scroll_pixel_offset < 0.0 {
+                                    win.scroll_pixel_offset = 0.0;
+                                }
                             }
                         }
                     } else {
@@ -3249,16 +3483,16 @@ impl Editor {
                                 break;
                             }
                             let top_rows = lvr(win.scroll_offset);
-                            let remaining = top_rows.saturating_sub(win.scroll_top_skip);
-                            if remaining > 1 {
-                                win.scroll_top_skip += 1;
+                            let line_height = top_rows as f32 * cell_h;
+                            if win.scroll_pixel_offset + cell_h < line_height {
+                                win.scroll_pixel_offset += cell_h;
                             } else {
                                 let next = buf.next_visible_line(win.scroll_offset);
                                 if next <= win.scroll_offset {
                                     break;
                                 }
                                 win.scroll_offset = next.min(max_scroll);
-                                win.scroll_top_skip = 0;
+                                win.scroll_pixel_offset = 0.0;
                             }
                         }
                     }
@@ -3266,7 +3500,10 @@ impl Editor {
 
                 // Phase 2: Compute bottom visible row using canonical line_visual_rows.
                 let scroll_off = self.window_mgr.focused_window().scroll_offset;
-                let skip = self.window_mgr.focused_window().scroll_top_skip;
+                let skip = self
+                    .window_mgr
+                    .focused_window()
+                    .scroll_skip_rows(self.gui_cell_height);
                 let bottom = {
                     let buf = &self.buffers[buf_idx];
                     let max_row = buf_line_count.saturating_sub(1);

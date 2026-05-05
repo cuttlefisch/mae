@@ -234,7 +234,7 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "lsp_document_symbols"
         | "lsp_diagnostics" => Some("lsp"),
 
-        "perf_stats" | "perf_benchmark" => Some("performance"),
+        "perf_stats" | "perf_benchmark" | "perf_profile" => Some("performance"),
 
         // All actual DAP tools from dap_exec.rs
         "dap_start"

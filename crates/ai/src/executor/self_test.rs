@@ -262,6 +262,31 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "perf_benchmark",
                     "args": {"benchmark": "syntax_parse", "size": 1000},
                     "assert": "duration_us < 100000"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "scroll_stress", "size": 50},
+                    "assert": "p95_us < 50000 (no frame > 50ms during scroll)"
+                },
+                {
+                    "tool": "introspect",
+                    "args": {"section": "frame"},
+                    "assert": "Returns JSON with render_phase_us containing syntax, layout, draw fields"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "start"},
+                    "assert": "Returns JSON with status 'recording_started'"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "stop"},
+                    "assert": "Returns JSON with status 'recording_stopped'"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "report"},
+                    "assert": "Returns JSON with total_frames, frame_stats, redraw_level_distribution, cache_stats, diagnosis fields"
                 }
             ]
         }));
@@ -393,6 +418,11 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "cursor_info",
                     "args": {},
                     "assert": "scroll_offset back to 0 or close"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "scroll_stress", "size": 50},
+                    "assert": "p95_us < 50000 (no frame > 50ms during scroll)"
                 }
             ],
             "cleanup": [
