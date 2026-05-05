@@ -428,6 +428,15 @@ impl OptionRegistry {
                     valid_values: &[],
                 },
                 OptionDef {
+                    name: "auto_complete",
+                    aliases: &["auto-complete", "autocomplete"],
+                    doc: "Auto-trigger LSP completion on trigger characters (e.g. `.`, `::`)",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("editor.auto_complete"),
+                    valid_values: &[],
+                },
+                OptionDef {
                     name: "show_breadcrumbs",
                     aliases: &["show-breadcrumbs", "breadcrumbs"],
                     doc: "Show breadcrumb bar (file > symbol ancestry) above buffer",

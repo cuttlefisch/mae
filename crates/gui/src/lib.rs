@@ -616,6 +616,39 @@ impl Renderer for GuiRenderer {
                 &mut draw_time_us,
                 wrc,
             );
+            // Breadcrumb bar: overlay on focused window top row.
+            if editor.show_breadcrumbs {
+                if let Some(crumbs) = &editor.breadcrumbs {
+                    if !crumbs.is_empty() {
+                        let win_area = mae_core::WinRect {
+                            x: 0,
+                            y: 0,
+                            width: cols as u16,
+                            height: window_height as u16,
+                        };
+                        let rects = editor.window_mgr.layout_rects(win_area);
+                        if let Some((_, r)) = rects
+                            .iter()
+                            .find(|(id, _)| *id == editor.window_mgr.focused_id())
+                        {
+                            let text = crumbs.join(" > ");
+                            let display: String = text.chars().take(r.width as usize).collect();
+                            let bg =
+                                theme::ts_bg(editor, "ui.statusline").unwrap_or(theme::DEFAULT_BG);
+                            let fg = theme::ts_fg(editor, "comment");
+                            canvas.draw_rect_fill(
+                                r.y as usize,
+                                r.x as usize,
+                                r.width as usize,
+                                1,
+                                bg,
+                            );
+                            canvas.draw_text_at(r.y as usize, r.x as usize, &display, fg);
+                        }
+                    }
+                }
+            }
+
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
 
@@ -732,6 +765,11 @@ impl Renderer for GuiRenderer {
                     win_row_off,
                     win_h,
                 );
+            }
+
+            // Symbol outline popup.
+            if editor.symbol_outline.is_some() {
+                popup_render::render_symbol_outline_popup(canvas, editor, cols, window_height);
             }
 
             // Blame gutter overlay.

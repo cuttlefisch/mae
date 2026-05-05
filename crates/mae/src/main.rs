@@ -1517,6 +1517,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.editor.lsp_request_document_highlight();
         }
 
+        // Breadcrumbs: request/refresh on cursor idle.
+        if self.editor.show_breadcrumbs {
+            self.editor.request_breadcrumb_symbols();
+        }
+
         // Per-window inertial scrolling.
         // Phase 1: Activate inertia after 50ms gap since last real scroll event.
         const MAX_INERTIA_VELOCITY: f32 = 3000.0;

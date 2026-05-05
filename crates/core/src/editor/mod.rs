@@ -200,6 +200,53 @@ pub struct CodeActionMenu {
     pub selected: usize,
 }
 
+/// A single entry in the symbol outline popup.
+#[derive(Debug, Clone)]
+pub struct SymbolOutlineEntry {
+    pub name: String,
+    /// Human-readable kind (e.g. "function", "struct").
+    pub kind: String,
+    /// Single-char icon for the kind.
+    pub kind_icon: char,
+    /// Line number (0-based) of the symbol.
+    pub line: usize,
+    /// Nesting depth (0 = top-level).
+    pub depth: usize,
+    /// Optional detail (e.g. type signature).
+    pub detail: Option<String>,
+}
+
+/// Symbol outline popup state (SPC c o).
+#[derive(Debug, Clone)]
+pub struct SymbolOutlineState {
+    pub entries: Vec<SymbolOutlineEntry>,
+    pub selected: usize,
+    pub filter: String,
+    pub filtered_indices: Vec<usize>,
+}
+
+/// Peek references state — cycling through reference locations inline.
+#[derive(Debug, Clone)]
+pub struct PeekReferencesState {
+    /// All reference locations.
+    pub locations: Vec<PeekReferenceLocation>,
+    /// Currently shown index.
+    pub current: usize,
+}
+
+/// A single reference location for peek.
+#[derive(Debug, Clone)]
+pub struct PeekReferenceLocation {
+    /// File path.
+    pub path: String,
+    /// Line number (0-indexed).
+    pub line: usize,
+    /// Column (0-indexed).
+    pub col: usize,
+    /// Context lines around the reference.
+    pub context: Vec<String>,
+}
+
 /// Record of a repeatable edit for dot-repeat (`.`).
 #[derive(Clone, Debug)]
 pub struct EditRecord {
@@ -367,6 +414,8 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// LSP trigger characters per language (populated from server capabilities).
+    pub lsp_trigger_characters: std::collections::HashMap<String, Vec<String>>,
     /// Signal for the binary to send `workspace/didChangeWorkspaceFolders`
     /// when a project root is first detected after LSP has already started
     /// (e.g. launched from app launcher with `cwd = $HOME`).
@@ -666,6 +715,10 @@ pub struct Editor {
     pub peek_state: Option<PeekState>,
     /// When true, the next GotoDefinition result goes to peek_state instead of jumping.
     pub peek_definition_pending: bool,
+    /// Peek references state (SPC l r) — cycle through reference locations in a preview.
+    pub peek_references: Option<PeekReferencesState>,
+    /// When true, the next FindReferences result populates peek_references.
+    pub peek_references_pending: bool,
     /// Git blame overlay for current buffer.
     pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
@@ -674,10 +727,22 @@ pub struct Editor {
     pub lsp_diagnostics_virtual_text: bool,
     /// Enable LSP auto-completion popup in insert mode. Default true.
     pub lsp_completion: bool,
+    /// Auto-trigger completion on trigger characters (e.g. `.`, `::`). Default true.
+    pub auto_complete: bool,
+    /// Symbol outline popup state (SPC c o).
+    pub symbol_outline: Option<SymbolOutlineState>,
+    /// Whether a document symbol request is pending for the outline popup.
+    pub symbol_outline_pending: bool,
     /// Show breadcrumb bar (file > symbol ancestry). Default false.
     pub show_breadcrumbs: bool,
     /// Current breadcrumb path (file > module > fn).
     pub breadcrumbs: Option<Vec<String>>,
+    /// Cached document symbols for breadcrumb computation (from last symbol request).
+    pub cached_doc_symbols: Vec<SymbolOutlineEntry>,
+    /// Buffer index the cached symbols belong to.
+    pub cached_doc_symbols_buf: Option<usize>,
+    /// Whether a document symbol request is pending for breadcrumbs (not outline popup).
+    pub breadcrumb_symbols_pending: bool,
     /// Active code action menu (shown via SPC c a).
     pub code_action_menu: Option<CodeActionMenu>,
     /// Symbol occurrence highlights from `textDocument/documentHighlight`.
@@ -833,6 +898,7 @@ impl Editor {
             command_history_idx: None,
             command_cursor: 0,
             pending_lsp_requests: Vec::new(),
+            lsp_trigger_characters: std::collections::HashMap::new(),
             pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
@@ -953,12 +1019,20 @@ impl Editor {
             signature_help: None,
             peek_state: None,
             peek_definition_pending: false,
+            peek_references: None,
+            peek_references_pending: false,
             blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,
             lsp_completion: true,
+            auto_complete: true,
+            symbol_outline: None,
+            symbol_outline_pending: false,
             show_breadcrumbs: false,
             breadcrumbs: None,
+            cached_doc_symbols: Vec::new(),
+            cached_doc_symbols_buf: None,
+            breadcrumb_symbols_pending: false,
             code_action_menu: None,
             highlight_ranges: Vec::new(),
             highlight_generation: 0,
@@ -1137,6 +1211,27 @@ impl Editor {
             return Some(root.as_path());
         }
         self.project.as_ref().map(|p| p.root.as_path())
+    }
+
+    /// Returns the git repository root, falling back to the project root.
+    /// Walks up from the current project root looking for `.git`.
+    /// This gives the VCS-level root rather than a subcrate Cargo.toml directory.
+    pub fn git_or_project_root(&self) -> Option<std::path::PathBuf> {
+        let start = self
+            .project
+            .as_ref()
+            .map(|p| p.root.as_path())
+            .or_else(|| self.active_buffer().project_root.as_deref())?;
+        let mut dir = start.to_path_buf();
+        loop {
+            if dir.join(".git").exists() {
+                return Some(dir);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        Some(start.to_path_buf())
     }
 
     // -- Per-buffer option accessors (Emacs buffer-local / Vim setlocal) ------
@@ -1396,6 +1491,7 @@ impl Editor {
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
             "lsp_completion" => self.lsp_completion.to_string(),
+            "auto_complete" => self.auto_complete.to_string(),
             "show_breadcrumbs" => self.show_breadcrumbs.to_string(),
             "mouse_autoselect_window" => self.mouse_autoselect_window.to_string(),
             "mouse_wheel_follow_mouse" => self.mouse_wheel_follow_mouse.to_string(),
@@ -1605,6 +1701,9 @@ impl Editor {
             }
             "lsp_completion" => {
                 self.lsp_completion = parse_option_bool(value)?;
+            }
+            "auto_complete" => {
+                self.auto_complete = parse_option_bool(value)?;
             }
             "show_breadcrumbs" => {
                 self.show_breadcrumbs = parse_option_bool(value)?;
@@ -2441,6 +2540,7 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
+            self.mark_full_redraw();
             return true;
         }
 
@@ -2466,7 +2566,10 @@ impl Editor {
             .window_mgr
             .split(crate::window::SplitDirection::Vertical, idx, area)
         {
-            Ok(_new_id) => true,
+            Ok(_new_id) => {
+                self.mark_full_redraw();
+                true
+            }
             Err(_) => {
                 // Too small to split — if we are in conversation, we HAVE to steal focus
                 // but we try to avoid it.

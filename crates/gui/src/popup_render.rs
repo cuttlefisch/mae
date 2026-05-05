@@ -1142,6 +1142,97 @@ pub fn render_peek_definition_popup(
 }
 
 // ---------------------------------------------------------------------------
+// Symbol outline popup (SPC c o)
+// ---------------------------------------------------------------------------
+
+pub fn render_symbol_outline_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_width: usize,
+    area_height: usize,
+) {
+    let state = match &editor.symbol_outline {
+        Some(s) => s,
+        None => return,
+    };
+
+    let rect = centered_popup_rect_from(area_width, area_height, 60, 60);
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let dim_fg = theme::ts_fg(editor, "comment");
+    let selected_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selected_bg = theme::ts_bg(editor, "ui.popup.key");
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(rect.row, rect.col, rect.width, rect.height, bg);
+
+    let title = if state.filter.is_empty() {
+        " Symbol Outline ".to_string()
+    } else {
+        format!(" Outline: {} ", state.filter)
+    };
+    draw_border_titled(
+        canvas,
+        rect.row,
+        rect.col,
+        rect.width,
+        rect.height,
+        border_fg,
+        &title,
+    );
+
+    let inner_top = rect.row + 1;
+    let inner_left = rect.col + 1;
+    let inner_width = rect.width.saturating_sub(2);
+    let visible = rect.height.saturating_sub(2);
+
+    let indices = &state.filtered_indices;
+    if indices.is_empty() {
+        canvas.draw_text_at(inner_top, inner_left, "(no symbols)", dim_fg);
+        return;
+    }
+
+    // Scroll so selected is visible.
+    let scroll = if state.selected >= visible {
+        state.selected + 1 - visible
+    } else {
+        0
+    };
+
+    for (vi, &idx) in indices.iter().skip(scroll).take(visible).enumerate() {
+        let entry = &state.entries[idx];
+        let is_selected = scroll + vi == state.selected;
+
+        if is_selected {
+            if let Some(sbg) = selected_bg {
+                canvas.draw_rect_fill(inner_top + vi, inner_left, inner_width, 1, sbg);
+            }
+        }
+
+        let indent: String = "  ".repeat(entry.depth.min(4));
+        let line_num = format!(":{}", entry.line + 1);
+        let available = inner_width.saturating_sub(indent.len() + 2 + line_num.len());
+        let name: String = entry.name.chars().take(available).collect();
+        let text = format!("{}{} {}{}", indent, entry.kind_icon, name, line_num);
+
+        let fg = if is_selected { selected_fg } else { text_fg };
+        canvas.draw_text_at(inner_top + vi, inner_left, &text, fg);
+    }
+
+    // Footer.
+    let footer = format!(
+        "[{}/{}] Enter:jump  Esc:close",
+        state.selected + 1,
+        indices.len()
+    );
+    let fx = rect.col + rect.width.saturating_sub(footer.len() + 1);
+    canvas.draw_text_at(rect.row + rect.height - 1, fx, &footer, border_fg);
+}
+
+// ---------------------------------------------------------------------------
 // Blame gutter overlay
 // ---------------------------------------------------------------------------
 

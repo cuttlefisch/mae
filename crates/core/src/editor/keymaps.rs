@@ -287,6 +287,9 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC d b"), "debug-toggle-breakpoint");
         normal.bind(parse_key_seq_spaced("SPC d v"), "debug-inspect");
         normal.bind(parse_key_seq_spaced("SPC d p"), "debug-panel");
+        normal.bind(parse_key_seq_spaced("SPC d w"), "debug-add-watch");
+        normal.bind(parse_key_seq_spaced("SPC d W"), "debug-remove-watch");
+        normal.bind(parse_key_seq_spaced("SPC d e"), "debug-exceptions");
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
@@ -374,7 +377,9 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
         normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
         normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
+        normal.bind(parse_key_seq_spaced("SPC c o"), "lsp-symbol-outline");
         normal.bind(parse_key_seq_spaced("SPC l p"), "lsp-peek-definition");
+        normal.bind(parse_key_seq_spaced("SPC l r"), "lsp-peek-references");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");

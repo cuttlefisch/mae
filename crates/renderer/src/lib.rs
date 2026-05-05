@@ -308,6 +308,9 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.peek_state.is_some() {
             popup_render::render_peek_definition_popup(frame, chunks[0], editor);
         }
+        if editor.symbol_outline.is_some() {
+            popup_render::render_symbol_outline_popup(frame, chunks[0], editor);
+        }
     }
 }
 
@@ -436,6 +439,30 @@ fn render_window_area(
             }
         }
     }
+
+    // Breadcrumb bar: overlay on top of the focused window.
+    if editor.show_breadcrumbs && editor.breadcrumbs.is_some() {
+        if let Some(focused_rect) = rects
+            .iter()
+            .find(|(id, _)| *id == focused_id)
+            .map(|(_, r)| r)
+        {
+            let bar_rect = Rect::new(focused_rect.x, focused_rect.y, focused_rect.width, 1);
+            render_breadcrumb_bar(frame, bar_rect, editor);
+        }
+    }
+}
+
+fn render_breadcrumb_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let crumbs = match &editor.breadcrumbs {
+        Some(c) if !c.is_empty() => c,
+        _ => return,
+    };
+    let text = crumbs.join(" > ");
+    let display: String = text.chars().take(area.width as usize).collect();
+    let style = Style::default().fg(Color::DarkGray).bg(Color::Black);
+    let bar = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(Paragraph::new(display).style(style), bar);
 }
 
 fn render_visual_buffer(frame: &mut Frame, area: Rect, vb: &mae_core::visual_buffer::VisualBuffer) {

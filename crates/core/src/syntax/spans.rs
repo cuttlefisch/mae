@@ -58,9 +58,17 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
                 out.insert(idx, arc);
             }
             Some((arc, false)) => {
-                // Stale cache — use stale spans for this frame, queue reparse.
-                out.insert(idx, arc);
-                editor.syntax_reparse_pending.insert(idx);
+                // Stale cache. For non-large files, reparse immediately to avoid
+                // rendering with shifted byte offsets (causes highlight sliding).
+                let line_count = buf.rope().len_lines();
+                if line_count <= editor.large_file_lines {
+                    // Immediate reparse — same as first-parse path.
+                    need_first_parse.push((idx, gen));
+                } else {
+                    // Large file: use stale spans, queue deferred reparse.
+                    out.insert(idx, arc);
+                    editor.syntax_reparse_pending.insert(idx);
+                }
                 editor.perf_stats.cache_miss_count += 1;
                 editor.perf_stats.syntax_cache_misses += 1;
             }

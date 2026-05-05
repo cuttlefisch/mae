@@ -477,6 +477,7 @@ impl Editor {
         };
         self.set_status(msg);
         self.dap_refresh();
+        self.debug_eval_watches();
         self.debug_panel_refresh_if_open();
     }
 
@@ -649,6 +650,95 @@ impl Editor {
     /// Handle a DAP error — surface in status line.
     pub fn apply_dap_error(&mut self, message: String) {
         self.set_status(format!("[DAP] {}", message));
+    }
+
+    // ------------------------------------------------------------------
+    // Exception breakpoints
+    // ------------------------------------------------------------------
+
+    /// Set exception breakpoints. Common filters: "caught", "uncaught".
+    pub fn dap_set_exception_breakpoints(&mut self, filters: Vec<String>) {
+        self.pending_dap_intents
+            .push(DapIntent::SetExceptionBreakpoints {
+                filters: filters.clone(),
+            });
+        if filters.is_empty() {
+            self.set_status("[DAP] exception breakpoints cleared");
+        } else {
+            self.set_status(format!(
+                "[DAP] exception breakpoints: {}",
+                filters.join(", ")
+            ));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Watch expressions
+    // ------------------------------------------------------------------
+
+    /// Add a watch expression to be evaluated on each stop event.
+    pub fn debug_add_watch(&mut self, expression: String) {
+        let state = self
+            .debug_state
+            .get_or_insert_with(DebugState::new_self_debug);
+        state.watch_expressions.push(crate::debug::WatchExpression {
+            expression: expression.clone(),
+            last_value: None,
+            error: None,
+        });
+        self.set_status(format!("[DAP] watch added: {}", expression));
+    }
+
+    /// Remove a watch expression by index.
+    pub fn debug_remove_watch(&mut self, index: usize) {
+        if let Some(state) = &mut self.debug_state {
+            if index < state.watch_expressions.len() {
+                let removed = state.watch_expressions.remove(index);
+                self.set_status(format!("[DAP] watch removed: {}", removed.expression));
+            } else {
+                self.set_status(format!("[DAP] watch index {} out of range", index));
+            }
+        }
+    }
+
+    /// Queue evaluation of all watch expressions (called after stop events).
+    pub fn debug_eval_watches(&mut self) {
+        let exprs: Vec<String> = match &self.debug_state {
+            Some(state) => state
+                .watch_expressions
+                .iter()
+                .map(|w| w.expression.clone())
+                .collect(),
+            None => return,
+        };
+        for expr in &exprs {
+            self.pending_dap_intents.push(DapIntent::Evaluate {
+                expression: expr.clone(),
+                frame_id: self
+                    .debug_state
+                    .as_ref()
+                    .and_then(|s| s.stack_frames.first().map(|f| f.id)),
+                context: Some("watch".into()),
+            });
+        }
+    }
+
+    /// Apply an evaluate result to the matching watch expression.
+    pub fn apply_watch_result(&mut self, expression: &str, result: &str, success: bool) {
+        if let Some(state) = &mut self.debug_state {
+            for watch in &mut state.watch_expressions {
+                if watch.expression == expression {
+                    if success {
+                        watch.last_value = Some(result.to_string());
+                        watch.error = None;
+                    } else {
+                        watch.last_value = None;
+                        watch.error = Some(result.to_string());
+                    }
+                    break;
+                }
+            }
+        }
     }
 }
 

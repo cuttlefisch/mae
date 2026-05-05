@@ -768,3 +768,104 @@ pub(crate) fn render_peek_definition_popup(frame: &mut Frame, area: Rect, editor
         frame.render_widget(Paragraph::new(Line::styled(display, style)), row_area);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Symbol outline popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_symbol_outline_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let state = match &editor.symbol_outline {
+        Some(s) => s,
+        None => return,
+    };
+    if state.entries.is_empty() {
+        return;
+    }
+
+    const MAX_ITEMS: usize = 20;
+    let filtered_count = state.filtered_indices.len();
+    let visible_count = filtered_count.min(MAX_ITEMS) as u16;
+    // +2 for border, +1 for filter line
+    let popup_height = visible_count + 3;
+    let popup_width = (editor_area.width * 3 / 4).clamp(30, 60);
+    let popup_left = editor_area.x + (editor_area.width.saturating_sub(popup_width)) / 2;
+    let popup_top = editor_area.y + (editor_area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let normal_style = ts(editor, "ui.popup.text");
+    let selected_style = ts(editor, "ui.popup.key");
+
+    let title = format!(" Outline [{}/{}] ", filtered_count, state.entries.len());
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Filter line
+    if inner.height > 0 {
+        let filter_text = if state.filter.is_empty() {
+            "Type to filter...".to_string()
+        } else {
+            state.filter.clone()
+        };
+        let filter_style = if state.filter.is_empty() {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            normal_style
+        };
+        let filter_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::styled(filter_text, filter_style)),
+            filter_area,
+        );
+    }
+
+    // Entries
+    let entries_start = inner.y + 1;
+    let entries_height = inner.height.saturating_sub(1) as usize;
+    // Scroll if selected is beyond visible window
+    let scroll = if state.selected >= entries_height {
+        state.selected - entries_height + 1
+    } else {
+        0
+    };
+
+    for (i, &idx) in state
+        .filtered_indices
+        .iter()
+        .skip(scroll)
+        .take(entries_height)
+        .enumerate()
+    {
+        let entry = &state.entries[idx];
+        let row_area = Rect::new(inner.x, entries_start + i as u16, inner.width, 1);
+        let indent = "  ".repeat(entry.depth);
+        let line_num = format!("{:>4}", entry.line + 1);
+        let display = format!(
+            "{} {}{} {} {}",
+            entry.kind_icon,
+            indent,
+            entry.name,
+            line_num,
+            entry.detail.as_deref().unwrap_or("")
+        );
+        let display: String = display.chars().take(inner.width as usize).collect();
+        let style = if scroll + i == state.selected {
+            selected_style
+        } else {
+            normal_style
+        };
+        frame.render_widget(Paragraph::new(Line::styled(display, style)), row_area);
+    }
+}

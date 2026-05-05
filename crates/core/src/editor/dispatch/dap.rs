@@ -106,6 +106,18 @@ impl Editor {
                 self.dap_refresh();
                 self.debug_panel_refresh_if_open();
             }
+            "debug-exceptions" => {
+                // Default: toggle all exceptions
+                self.dap_set_exception_breakpoints(vec!["caught".into(), "uncaught".into()]);
+            }
+            "debug-add-watch" => {
+                // Handled by ex-command parser with args
+                self.set_status("Usage: :debug-add-watch <expression>");
+            }
+            "debug-remove-watch" => {
+                // Handled by ex-command parser with args
+                self.set_status("Usage: :debug-remove-watch <index>");
+            }
             _ => return None,
         }
         self.mark_full_redraw();

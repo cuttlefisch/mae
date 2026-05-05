@@ -187,14 +187,47 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             language_id,
             position: Position { line, character },
         },
-        // Stubs: these intents are queued but the LSP client doesn't
-        // handle them yet. The bridge emits a harmless no-op.
-        LspIntent::PrepareRename { .. }
-        | LspIntent::Rename { .. }
-        | LspIntent::Format { .. }
-        | LspIntent::RangeFormat { .. } => LspCommand::DidClose {
-            uri: String::new(),
-            language_id: String::new(),
+        LspIntent::PrepareRename {
+            uri,
+            language_id,
+            line,
+            character,
+        } => LspCommand::PrepareRename {
+            uri,
+            language_id,
+            position: Position { line, character },
+        },
+        LspIntent::Rename {
+            uri,
+            language_id,
+            line,
+            character,
+            new_name,
+        } => LspCommand::Rename {
+            uri,
+            language_id,
+            position: Position { line, character },
+            new_name,
+        },
+        LspIntent::Format { uri, language_id } => LspCommand::Format { uri, language_id },
+        LspIntent::RangeFormat {
+            uri,
+            language_id,
+            start_line,
+            start_char,
+            end_line,
+            end_char,
+        } => LspCommand::RangeFormat {
+            uri,
+            language_id,
+            start: Position {
+                line: start_line,
+                character: start_char,
+            },
+            end: Position {
+                line: end_line,
+                character: end_char,
+            },
         },
     }
 }
@@ -302,6 +335,52 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::ReferencesResult { uri, locations } => {
             mark_connected_from_uri(editor, &uri);
+            if editor.peek_references_pending {
+                editor.peek_references_pending = false;
+                // Build peek reference locations with context lines from open buffers.
+                let peek_locs: Vec<mae_core::PeekReferenceLocation> = locations
+                    .iter()
+                    .map(|l| {
+                        let path = l.uri.strip_prefix("file://").unwrap_or(&l.uri).to_string();
+                        let line = l.range.start.line as usize;
+                        let col = l.range.start.character as usize;
+                        // Try to read context from open buffers.
+                        let context: Vec<String> = editor
+                            .buffers
+                            .iter()
+                            .find(|b| {
+                                b.file_path()
+                                    .map(|p| p.to_string_lossy().into_owned())
+                                    .as_deref()
+                                    == Some(path.as_str())
+                            })
+                            .map(|buf| {
+                                let start = line.saturating_sub(3);
+                                let end = (line + 4).min(buf.display_line_count());
+                                (start..end).map(|i| buf.line_text(i)).collect()
+                            })
+                            .unwrap_or_default();
+                        mae_core::PeekReferenceLocation {
+                            path,
+                            line,
+                            col,
+                            context,
+                        }
+                    })
+                    .collect();
+                if peek_locs.is_empty() {
+                    editor.set_status("[LSP] no references found");
+                } else {
+                    let total = peek_locs.len();
+                    editor.peek_references = Some(mae_core::PeekReferencesState {
+                        locations: peek_locs,
+                        current: 0,
+                    });
+                    editor.update_peek_references_preview();
+                    editor.set_status(format!("[LSP] {} reference(s) — SPC l r n/p cycle", total));
+                }
+                return true;
+            }
             let core_locs: Vec<LspLocation> = locations
                 .into_iter()
                 .map(|l| LspLocation {
@@ -426,8 +505,138 @@ pub(crate) fn handle_lsp_event(
             editor.apply_signature_help_result(infos, active_signature, active_parameter);
             true
         }
+        LspTaskEvent::RenameResult { edits } => {
+            // Convert WorkspaceEdit to the JSON format expected by show_rename_preview.
+            let entries: Vec<(String, Vec<serde_json::Value>)> = edits
+                .changes
+                .iter()
+                .map(|(uri, text_edits)| {
+                    let edits_json: Vec<serde_json::Value> = text_edits
+                        .iter()
+                        .map(|e| {
+                            serde_json::json!({
+                                "start_line": e.range.start.line,
+                                "start_character": e.range.start.character,
+                                "end_line": e.range.end.line,
+                                "end_character": e.range.end.character,
+                                "new_text": e.new_text,
+                            })
+                        })
+                        .collect();
+                    (uri.clone(), edits_json)
+                })
+                .collect();
+            let edits_json = serde_json::to_string(&entries).unwrap_or_default();
+            // Count total edits for status message
+            let total: usize = edits.changes.iter().map(|(_, e)| e.len()).sum();
+            let file_count = edits.changes.len();
+            editor.show_rename_preview(
+                &edits_json,
+                &format!("{} edits in {} files", total, file_count),
+            );
+            true
+        }
+        LspTaskEvent::FormatResult { uri, edits } => {
+            if edits.is_empty() {
+                editor.set_status("[LSP] no formatting changes");
+                return true;
+            }
+            // Convert to the JSON format the core apply_workspace_edit_json expects.
+            let edits_json: Vec<serde_json::Value> = edits
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "start_line": e.range.start.line,
+                        "start_character": e.range.start.character,
+                        "end_line": e.range.end.line,
+                        "end_character": e.range.end.character,
+                        "new_text": e.new_text,
+                    })
+                })
+                .collect();
+            let count = edits.len();
+            let ws_edit =
+                serde_json::to_string(&vec![(uri.clone(), edits_json)]).unwrap_or_default();
+            editor.apply_format_edits_json(&ws_edit, count);
+            true
+        }
+        LspTaskEvent::PrepareRenameResult { placeholder, .. } => {
+            // Pre-fill the rename prompt with the placeholder text.
+            if let Some(name) = placeholder {
+                editor.set_mode(mae_core::Mode::Command);
+                editor.command_line = format!("lsp-rename {}", name);
+                editor.command_cursor = editor.command_line.len();
+                editor.set_status("Edit name and press Enter to rename");
+            } else {
+                editor.set_mode(mae_core::Mode::Command);
+                editor.command_line = "lsp-rename ".to_string();
+                editor.command_cursor = editor.command_line.len();
+                editor.set_status("Enter new name for symbol");
+            }
+            true
+        }
+        LspTaskEvent::TriggerCharacters {
+            language_id,
+            characters,
+        } => {
+            editor
+                .lsp_trigger_characters
+                .insert(language_id, characters);
+            false
+        }
         LspTaskEvent::WorkspaceSymbolResult { .. } => false,
-        LspTaskEvent::DocumentSymbolResult { .. } => false,
+        LspTaskEvent::DocumentSymbolResult { uri: _, symbols } => {
+            // Flatten hierarchical DocumentSymbol tree into outline entries.
+            fn flatten_symbols(
+                symbols: &[mae_lsp::protocol::DocumentSymbol],
+                depth: usize,
+                out: &mut Vec<mae_core::SymbolOutlineEntry>,
+            ) {
+                for s in symbols {
+                    let kind_label = s.kind.label();
+                    let kind_icon = match s.kind {
+                        mae_lsp::protocol::SymbolKind::Function
+                        | mae_lsp::protocol::SymbolKind::Method
+                        | mae_lsp::protocol::SymbolKind::Constructor => 'f',
+                        mae_lsp::protocol::SymbolKind::Struct
+                        | mae_lsp::protocol::SymbolKind::Class
+                        | mae_lsp::protocol::SymbolKind::Interface => 's',
+                        mae_lsp::protocol::SymbolKind::Enum => 'e',
+                        mae_lsp::protocol::SymbolKind::Module
+                        | mae_lsp::protocol::SymbolKind::Namespace
+                        | mae_lsp::protocol::SymbolKind::Package => 'm',
+                        mae_lsp::protocol::SymbolKind::Variable
+                        | mae_lsp::protocol::SymbolKind::Constant => 'v',
+                        mae_lsp::protocol::SymbolKind::Field
+                        | mae_lsp::protocol::SymbolKind::Property => 'p',
+                        mae_lsp::protocol::SymbolKind::TypeParameter => 't',
+                        _ => ' ',
+                    };
+                    out.push(mae_core::SymbolOutlineEntry {
+                        name: s.name.clone(),
+                        kind: kind_label.to_string(),
+                        kind_icon,
+                        line: s.range.start.line as usize,
+                        depth,
+                        detail: s.detail.clone(),
+                    });
+                    flatten_symbols(&s.children, depth + 1, out);
+                }
+            }
+            if editor.symbol_outline_pending {
+                let mut entries = Vec::new();
+                flatten_symbols(&symbols, 0, &mut entries);
+                editor.apply_symbol_outline_result(&entries);
+                true
+            } else if editor.breadcrumb_symbols_pending {
+                let mut entries = Vec::new();
+                flatten_symbols(&symbols, 0, &mut entries);
+                editor.apply_breadcrumb_symbols(&entries);
+                true
+            } else {
+                false
+            }
+        }
         LspTaskEvent::Error { message } => {
             warn!(error = %message, "LSP error");
             editor.set_status(format!("[LSP] {}", message));

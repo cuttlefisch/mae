@@ -216,6 +216,11 @@ pub(crate) async fn run_terminal_loop(
             editor.lsp_request_document_highlight();
         }
 
+        // Breadcrumbs: request/refresh on cursor idle.
+        if editor.show_breadcrumbs {
+            editor.request_breadcrumb_symbols();
+        }
+
         if tui_dirty {
             let since_last = last_render.elapsed();
             if since_last >= MIN_FRAME_INTERVAL {

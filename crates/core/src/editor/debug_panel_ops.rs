@@ -258,6 +258,26 @@ impl Editor {
             }
         }
 
+        // --- Watch Expressions section ---
+        if !state.watch_expressions.is_empty() {
+            text.push('\n');
+            line_map.push(DebugLineItem::Blank);
+            text.push_str(" Watch ─────────────────────────\n");
+            line_map.push(DebugLineItem::SectionHeader("Watch".into()));
+
+            for (i, watch) in state.watch_expressions.iter().enumerate() {
+                let value = if let Some(v) = &watch.last_value {
+                    v.as_str()
+                } else if let Some(e) = &watch.error {
+                    e.as_str()
+                } else {
+                    "<not evaluated>"
+                };
+                text.push_str(&format!("   [{}] {} = {}\n", i, watch.expression, value));
+                line_map.push(DebugLineItem::Blank);
+            }
+        }
+
         // --- Footer ---
         text.push('\n');
         line_map.push(DebugLineItem::Blank);

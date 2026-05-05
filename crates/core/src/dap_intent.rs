@@ -122,6 +122,8 @@ pub enum DapIntent {
         frame_id: Option<i64>,
         context: Option<String>,
     },
+    /// Set exception breakpoints (filters: "caught", "uncaught", etc.).
+    SetExceptionBreakpoints { filters: Vec<String> },
     /// Soft terminate the debuggee (if the adapter supports it).
     Terminate,
     /// Hard disconnect (ends the adapter subprocess).

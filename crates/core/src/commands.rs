@@ -629,6 +629,19 @@ impl CommandRegistry {
             "Evaluate expression in debug context (:debug-eval <expression>)",
         );
 
+        reg.register_builtin(
+            "debug-exceptions",
+            "Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none])",
+        );
+        reg.register_builtin(
+            "debug-add-watch",
+            "Add a watch expression (:debug-add-watch <expr>)",
+        );
+        reg.register_builtin(
+            "debug-remove-watch",
+            "Remove a watch expression by index (:debug-remove-watch <index>)",
+        );
+
         // LSP (Phase 4a)
         reg.register_builtin(
             "lsp-goto-definition",
@@ -696,6 +709,17 @@ impl CommandRegistry {
             "toggle-lsp-diagnostics-inline",
             "Toggle inline diagnostic underlines (SPC t d)",
         );
+        reg.register_builtin("lsp-symbol-outline", "Show symbol outline popup (SPC c o)");
+        reg.register_builtin("lsp-symbol-outline-next", "Select next outline symbol");
+        reg.register_builtin("lsp-symbol-outline-prev", "Select previous outline symbol");
+        reg.register_builtin("lsp-symbol-outline-select", "Jump to selected symbol");
+        reg.register_builtin("lsp-symbol-outline-dismiss", "Dismiss symbol outline");
+        reg.register_builtin(
+            "lsp-peek-references",
+            "Peek references in floating preview (SPC l r)",
+        );
+        reg.register_builtin("lsp-peek-references-next", "Next peek reference");
+        reg.register_builtin("lsp-peek-references-prev", "Previous peek reference");
 
         // Folding
         reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");

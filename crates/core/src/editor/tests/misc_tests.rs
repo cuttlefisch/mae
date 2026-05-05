@@ -1741,5 +1741,68 @@ fn visual_rows_cache_invalidates_on_width_change() {
     assert_ne!(w1, w2, "cache must recompute on width change");
 }
 
+// --- Bug regression: AI-opened buffer triggers full redraw (syntax highlighting)
+#[test]
+fn switch_to_buffer_non_conversation_triggers_full_redraw() {
+    let mut editor = Editor::new();
+    // Create a second buffer to switch to.
+    editor.buffers.push(Buffer::new());
+    let new_idx = editor.buffers.len() - 1;
+
+    // Reset redraw level to None.
+    editor.clear_redraw();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::None);
+
+    // Simulate AI opening a buffer.
+    editor.switch_to_buffer_non_conversation(new_idx);
+
+    // Must escalate to Full so syntax spans are computed for the new buffer.
+    assert_eq!(
+        editor.redraw_level,
+        crate::redraw::RedrawLevel::Full,
+        "switch_to_buffer_non_conversation must trigger Full redraw for syntax highlighting"
+    );
+}
+
+// git_or_project_root tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn git_or_project_root_finds_git_above_subcrate() {
+    // Create a temp dir structure: root/.git + root/crates/core/Cargo.toml
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("crates/core")).unwrap();
+    fs::write(root.join("crates/core/Cargo.toml"), "[package]").unwrap();
+
+    let mut editor = Editor::new();
+    editor.project = Some(crate::project::Project {
+        name: "test".to_string(),
+        root: root.join("crates/core"),
+        config: None,
+    });
+
+    let result = editor.git_or_project_root().unwrap();
+    assert_eq!(result, root.to_path_buf());
+}
+
+#[test]
+fn git_or_project_root_falls_back_to_project_root_without_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("crates/core")).unwrap();
+
+    let mut editor = Editor::new();
+    editor.project = Some(crate::project::Project {
+        name: "test".to_string(),
+        root: root.join("crates/core"),
+        config: None,
+    });
+
+    let result = editor.git_or_project_root().unwrap();
+    assert_eq!(result, root.join("crates/core"));
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

@@ -195,6 +195,20 @@ pub struct ServerCapabilities {
     pub references_provider: bool,
     #[serde(default)]
     pub document_highlight_provider: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_formatting_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_range_formatting_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_action_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_symbol_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_help_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inlay_hint_provider: Option<serde_json::Value>,
 }
 
 /// Initialize response result.
@@ -1195,6 +1209,134 @@ impl DocumentHighlightResponse {
             return DocumentHighlightResponse { highlights };
         }
         DocumentHighlightResponse { highlights: vec![] }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rename (textDocument/rename, textDocument/prepareRename)
+// ---------------------------------------------------------------------------
+
+/// Params for `textDocument/rename`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+    pub new_name: String,
+}
+
+/// Params for `textDocument/prepareRename`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareRenameParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+}
+
+/// Response from `textDocument/prepareRename` — range + placeholder text.
+#[derive(Debug, Clone)]
+pub struct PrepareRenameResponse {
+    pub range: Option<Range>,
+    pub placeholder: Option<String>,
+}
+
+impl PrepareRenameResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return PrepareRenameResponse {
+                range: None,
+                placeholder: None,
+            };
+        }
+        // Shape 1: { range, placeholder }
+        if let Some(obj) = v.as_object() {
+            let range = obj.get("range").and_then(parse_range);
+            let placeholder = obj
+                .get("placeholder")
+                .and_then(|s| s.as_str())
+                .map(String::from);
+            if range.is_some() || placeholder.is_some() {
+                return PrepareRenameResponse { range, placeholder };
+            }
+            // Shape 2: just a Range object
+            if let Some(r) = parse_range(&v) {
+                return PrepareRenameResponse {
+                    range: Some(r),
+                    placeholder: None,
+                };
+            }
+        }
+        PrepareRenameResponse {
+            range: None,
+            placeholder: None,
+        }
+    }
+}
+
+/// Response from `textDocument/rename` — a workspace edit.
+#[derive(Debug, Clone)]
+pub struct RenameResponse {
+    pub edit: Option<WorkspaceEdit>,
+}
+
+impl RenameResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return RenameResponse { edit: None };
+        }
+        let edit = parse_workspace_edit(&v);
+        RenameResponse { edit }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Formatting (textDocument/formatting, textDocument/rangeFormatting)
+// ---------------------------------------------------------------------------
+
+/// Formatting options.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattingOptions {
+    pub tab_size: u32,
+    pub insert_spaces: bool,
+}
+
+/// Params for `textDocument/formatting`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentFormattingParams {
+    pub text_document: TextDocumentIdentifier,
+    pub options: FormattingOptions,
+}
+
+/// Params for `textDocument/rangeFormatting`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentRangeFormattingParams {
+    pub text_document: TextDocumentIdentifier,
+    pub range: Range,
+    pub options: FormattingOptions,
+}
+
+/// Response from formatting — an array of TextEdits or null.
+#[derive(Debug, Clone)]
+pub struct FormattingResponse {
+    pub edits: Vec<TextEdit>,
+}
+
+impl FormattingResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return FormattingResponse { edits: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            let edits = arr
+                .iter()
+                .filter_map(|e| serde_json::from_value(e.clone()).ok())
+                .collect();
+            return FormattingResponse { edits };
+        }
+        FormattingResponse { edits: vec![] }
     }
 }
 

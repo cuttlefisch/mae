@@ -790,6 +790,39 @@ impl Editor {
                 }
                 true
             }
+            "debug-exceptions" => {
+                let arg = args.unwrap_or("").trim();
+                let filters = match arg {
+                    "caught" => vec!["caught".to_string()],
+                    "uncaught" => vec!["uncaught".to_string()],
+                    "all" | "" => vec!["caught".to_string(), "uncaught".to_string()],
+                    "none" | "clear" => vec![],
+                    other => other.split(',').map(|s| s.trim().to_string()).collect(),
+                };
+                self.dap_set_exception_breakpoints(filters);
+                true
+            }
+            "debug-add-watch" => {
+                let expression = args.unwrap_or("").trim();
+                if expression.is_empty() {
+                    self.set_status("Usage: :debug-add-watch <expression>");
+                } else {
+                    self.debug_add_watch(expression.to_string());
+                    self.debug_panel_refresh_if_open();
+                }
+                true
+            }
+            "debug-remove-watch" => {
+                let idx_str = args.unwrap_or("").trim();
+                match idx_str.parse::<usize>() {
+                    Ok(idx) => {
+                        self.debug_remove_watch(idx);
+                        self.debug_panel_refresh_if_open();
+                    }
+                    Err(_) => self.set_status("Usage: :debug-remove-watch <index>"),
+                }
+                true
+            }
             "session-save" => {
                 let root = self
                     .active_project_root()

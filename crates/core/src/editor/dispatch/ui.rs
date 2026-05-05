@@ -659,11 +659,17 @@ impl Editor {
 
             // AI agent launcher
             "open-ai-agent" => {
+                // Prefer git root so agents operate at the repository level,
+                // not a subcrate Cargo.toml directory.
+                let agent_cwd = self.git_or_project_root();
                 let shell_name = format!("*AI:{}*", self.ai_editor);
                 let mut buf = Buffer::new_shell(shell_name);
                 buf.agent_shell = true;
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
+                if let Some(cwd) = agent_cwd {
+                    self.pending_shell_cwds.insert(new_idx, cwd);
+                }
                 self.display_buffer_and_focus(new_idx);
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));

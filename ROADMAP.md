@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M7 COMPLETE, Phase 9 M1-M3 COMPLETE, v0.7.0-dev (2,475 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.7.0: cursor_set primary sync fix (multi-cursor rendering bug), inline image display (org/md image link detection, GUI Skia rendering with aspect-ratio scaling, TUI placeholder, #+attr_html/:width directives, per-image fold, buffer-wide toggle), image metadata AI tooling (image_info/image_list tools, EXIF extraction, imagesize dimensions), terminal-at-file AI tool + terminal-here command, graceful image error handling (missing/corrupt/oversized). v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
+Current state: Phases 1-6 complete, Phase 8 M1-M7 COMPLETE, Phase 9 M1-M3 COMPLETE, v0.7.0-dev (2,475 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.7.0: cursor_set primary sync fix (multi-cursor rendering bug), inline image display (org/md image link detection, GUI Skia rendering with aspect-ratio scaling, TUI placeholder, #+attr_html/:width directives, per-image fold, buffer-wide toggle), image metadata AI tooling (image_info/image_list tools, EXIF extraction, imagesize dimensions), terminal-at-file AI tool + terminal-here command, graceful image error handling (missing/corrupt/oversized). v0.7.0 scroll: per-window inertia (sample-ring velocity, wrong-window fix), shell scroll accumulator, terminal normal-mode scroll keys, per-window viewport height. v0.7.0 fix: AI agent shell CWD uses git root (not subcrate Cargo.toml) via `git_or_project_root()`. v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
 
 ---
 
@@ -651,26 +651,31 @@ Rich presentation of LSP results — currently we show hover in the status
 bar and references in a scratch buffer. This milestone brings the UX up to
 lsp-ui-mode (Emacs) / VSCode inline standards, with evil-style navigation.
 
-- [ ] Floating hover popup: multi-line type signature + docs in a bordered
+- [x] Floating hover popup: multi-line type signature + docs in a bordered
       overlay near the cursor. Dismiss on motion, `q`, or Escape.
-- [ ] Peek definition: inline split showing the target file's context without
+- [x] Peek definition: inline split showing the target file's context without
       leaving the current buffer. `gd` with peek prefix (e.g. `gpd`), navigate
       with `j`/`k`, Enter to jump, `q` to dismiss.
-- [ ] Peek references: same inline split UX for `gr`, cycling through
-      locations with `]r`/`[r` or `j`/`k` inside the peek window.
-- [ ] Inline diagnostics: underline/highlight the diagnostic range in the
+- [x] Peek references: same inline split UX for `gr`, cycling through
+      locations with `]r`/`[r` or `j`/`k` inside the peek window. `SPC l r`.
+- [x] Inline diagnostics: underline/highlight the diagnostic range in the
       buffer with severity-colored markers. Show the message on the same line
       (sideline) or on hover. Toggle with `SPC t d`.
-- [ ] Code action menu: `SPC c a` opens a popup list of available actions
+- [x] Code action menu: `SPC c a` opens a popup list of available actions
       (quickfix, refactor, etc.). `j`/`k` to navigate, Enter to apply.
-- [ ] Symbol outline / imenu: `SPC c o` opens a sidebar or popup with
-      `textDocument/documentSymbol` results. Jump on Enter.
-- [ ] Breadcrumbs: optional header line showing the symbol path at cursor
+- [x] Symbol outline / imenu: `SPC c o` opens a sidebar or popup with
+      `textDocument/documentSymbol` results. Filter + jump on Enter.
+- [x] Breadcrumbs: optional header line showing the symbol path at cursor
       (function > struct > field). Uses `textDocument/documentSymbol`.
-- [ ] Signature help: `textDocument/signatureHelp` shown as a floating tooltip
+      Enable with `:set show_breadcrumbs=true`.
+- [x] Signature help: `textDocument/signatureHelp` shown as a floating tooltip
       when typing function arguments in insert mode.
-- [ ] Rename preview: `SPC c R` shows a diff of all affected locations before
+- [x] Rename preview: `SPC c R` shows a diff of all affected locations before
       applying the rename. Confirm with `y`, cancel with `n`.
+- [x] Rename/Format pipeline: full LSP wire-up (no longer stubbed). Capabilities
+      advertised to servers. Auto-trigger completion on server trigger characters.
+- [x] Exception breakpoints: `SPC d e` / `:debug-exceptions` — setExceptionBreakpoints.
+- [x] DAP watch expressions: `SPC d w` / `:debug-add-watch` — auto-evaluated on stop.
 
 ---
 
@@ -756,7 +761,8 @@ Also the substrate for AI-agent driven E2E testing of the editor itself.
 - [x] Auto-refresh on DAP events (`debug_panel_refresh_if_open`)
 - [x] GUI + terminal debug panel renderers
 - [ ] Variable hover (show value at cursor in source) — deferred
-- [ ] Watch expressions — deferred
+- [x] Watch expressions: `SPC d w` add, `SPC d W` remove, auto-eval on stop
+- [x] Exception breakpoints: `SPC d e` / `:debug-exceptions`
 
 ### M4: AI Debug Tools ✅
 - [x] AI tools: `dap_start`, `dap_set_breakpoint`, `dap_continue`, `dap_step`, `dap_inspect_variable`
@@ -1163,7 +1169,7 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.
 - [x] Scrollbar (vertical) — pixel-precise track+thumb in `scrollbar.rs`, theme-aware colors, allocates 1 col from text area (v0.6.0)
 - [x] Mouse wheel scroll (done in M3)
 - [x] Selection highlighting (done in M3 — visual mode bg/fg in buffer_render.rs)
-- [ ] Refine inertial (kinetic) scrolling in shell/terminal buffers — mouse scroll feels wonky since inertial scroll was enabled; shell buffers need different scroll physics or pass-through
+- [x] Refine inertial (kinetic) scrolling — per-window inertia state (fixes wrong-window bug in splits), sample-ring velocity model (fixes 2-page jump on gentle scroll release), shell scroll accumulator fix (immediate response to small scrolls), terminal normal-mode keys (j/k/C-e/C-y/C-u/C-d scroll shell scrollback after C-\ C-n), per-window viewport height (fixes scroll-past-end in small split panes) (v0.7.0)
 
 ---
 
@@ -1325,4 +1331,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | v0.6.0 GUI + frameworks | 575 ✅ | display regions, BufferView/BufferMode, keymap overlays, Magit, swap files, variable-height, mouse |
 | v0.7.0 docs + agent | 137 ✅ | help content, contextual help, user help nodes, config health, display policy, mouse focus, rich content, sub-line scroll, native SVG |
 | v0.7.0 agenda tests | 9 ✅ | integration tests (org→parser→agenda), perf benchmark (1000 nodes <50ms), agenda file CRUD |
+| v0.7.0 scroll fixes | 0 | per-window inertia + velocity model, shell scroll accumulator, terminal normal-mode keys, per-window viewport height |
 | **Total** | **2,561** | All passing, 0 failures |

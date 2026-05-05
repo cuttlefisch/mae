@@ -201,6 +201,18 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 .map(|s| s.as_str())
                 .collect();
 
+            let watches: Vec<serde_json::Value> = state
+                .watch_expressions
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "expression": w.expression,
+                        "value": w.last_value,
+                        "error": w.error,
+                    })
+                })
+                .collect();
+
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
                 "active_thread_id": state.active_thread_id,
@@ -212,6 +224,7 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 "breakpoints": breakpoints,
                 "stopped_location": state.stopped_location,
                 "output_log": recent_output,
+                "watch_expressions": watches,
             });
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }
