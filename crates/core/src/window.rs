@@ -1512,9 +1512,21 @@ impl WindowManager {
         }
     }
 
-    /// Move the focused window in the given direction by swapping it with its
-    /// neighbor. Returns true if a swap occurred.
+    /// Move the focused window in the given direction using i3wm semantics:
+    /// - Perpendicular to split + 2-leaf: flip split direction, reorder children
+    /// - Parallel to split: swap first/second children
+    /// - Boundary / complex: fall back to spatial swap
     pub fn move_window(&mut self, dir: Direction, total: Rect) -> bool {
+        // Try structural (i3-style) movement first.
+        if Self::move_window_structural(&mut self.layout, self.focused, dir) {
+            return true;
+        }
+        // Fall back to spatial swap for complex layouts.
+        self.move_window_spatial(dir, total)
+    }
+
+    /// Spatial fallback: find nearest neighbor in direction, swap leaf IDs.
+    fn move_window_spatial(&mut self, dir: Direction, total: Rect) -> bool {
         let rects = self.layout_rects(total);
         let focused_rect = match rects.iter().find(|(id, _)| *id == self.focused) {
             Some((_, r)) => *r,
@@ -1545,11 +1557,102 @@ impl WindowManager {
         }
 
         if let Some((neighbor_id, _)) = best {
-            // Swap the two window IDs in the layout tree.
             Self::swap_leaves(&mut self.layout, self.focused, neighbor_id);
             true
         } else {
             false
+        }
+    }
+
+    /// i3-style structural window movement. Returns true if handled.
+    ///
+    /// Walks the layout tree to find the immediate parent Split of the focused
+    /// leaf, then:
+    /// - Perpendicular move + sibling is a leaf: flip SplitDirection, reorder
+    ///   so focused is on the correct side (Left/Up → first, Right/Down → second)
+    /// - Parallel move: swap first/second if focused is moving toward the other
+    /// - Otherwise: try ancestor splits recursively
+    fn move_window_structural(node: &mut LayoutNode, focused: WindowId, dir: Direction) -> bool {
+        match node {
+            LayoutNode::Leaf(_) => false,
+            LayoutNode::Group { inner, .. } => Self::move_window_structural(inner, focused, dir),
+            LayoutNode::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => {
+                let in_first = Self::contains_leaf(first, focused);
+                let in_second = Self::contains_leaf(second, focused);
+                if !in_first && !in_second {
+                    return false;
+                }
+
+                // Check if focused is a direct child (leaf, possibly group-wrapped).
+                let first_is_focused = Self::sole_leaf_id(first) == Some(focused);
+                let second_is_focused = Self::sole_leaf_id(second) == Some(focused);
+                let sibling_is_leaf = if first_is_focused {
+                    Self::sole_leaf_id(second).is_some()
+                } else if second_is_focused {
+                    Self::sole_leaf_id(first).is_some()
+                } else {
+                    false
+                };
+
+                let is_perpendicular = matches!(
+                    (*direction, dir),
+                    (
+                        SplitDirection::Horizontal,
+                        Direction::Left | Direction::Right
+                    ) | (SplitDirection::Vertical, Direction::Up | Direction::Down)
+                );
+                let is_parallel = matches!(
+                    (*direction, dir),
+                    (SplitDirection::Horizontal, Direction::Up | Direction::Down)
+                        | (SplitDirection::Vertical, Direction::Left | Direction::Right)
+                );
+
+                if (first_is_focused || second_is_focused) && sibling_is_leaf {
+                    if is_perpendicular {
+                        // Flip split direction and reorder children.
+                        *direction = match *direction {
+                            SplitDirection::Horizontal => SplitDirection::Vertical,
+                            SplitDirection::Vertical => SplitDirection::Horizontal,
+                        };
+                        // Left/Up → focused goes to first; Right/Down → focused goes to second.
+                        let focused_should_be_first =
+                            matches!(dir, Direction::Left | Direction::Up);
+                        let focused_is_first = first_is_focused;
+                        if focused_should_be_first != focused_is_first {
+                            std::mem::swap(first, second);
+                        }
+                        return true;
+                    }
+                    if is_parallel {
+                        // Moving toward first (Up in H, Left in V) and focused is second → swap.
+                        let toward_first = matches!(
+                            (*direction, dir),
+                            (SplitDirection::Horizontal, Direction::Up)
+                                | (SplitDirection::Vertical, Direction::Left)
+                        );
+                        if (toward_first && second_is_focused)
+                            || (!toward_first && first_is_focused)
+                        {
+                            std::mem::swap(first, second);
+                            return true;
+                        }
+                        // Already at the edge of this split — try ancestor.
+                        return false;
+                    }
+                }
+
+                // Focused is deeper in a subtree — recurse.
+                if in_first {
+                    Self::move_window_structural(first, focused, dir)
+                } else {
+                    Self::move_window_structural(second, focused, dir)
+                }
+            }
         }
     }
 
@@ -2878,5 +2981,191 @@ mod tests {
         win.scroll_pixel_offset = 10.0;
         win.scroll_page_down(&buf, 30);
         assert_eq!(win.scroll_pixel_offset, 0.0);
+    }
+
+    // --- i3-style window movement tests ---
+
+    #[test]
+    fn move_perpendicular_horizontal_to_vertical_left() {
+        // Two windows in horizontal split (top/bottom) → move-left → vertical split, focused on left.
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        // Focus window 0 (top), move left (perpendicular to horizontal).
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Left, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            assert_eq!(*direction, SplitDirection::Vertical);
+            // Focused (0) should be first (left).
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == 0));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == b_id));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_perpendicular_horizontal_to_vertical_right() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Right, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            assert_eq!(*direction, SplitDirection::Vertical);
+            // Focused (0) should be second (right).
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == b_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_perpendicular_vertical_to_horizontal_up() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Up, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            assert_eq!(*direction, SplitDirection::Horizontal);
+            // Focused (0) should be first (top).
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == 0));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == b_id));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_perpendicular_vertical_to_horizontal_down() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Down, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            assert_eq!(*direction, SplitDirection::Horizontal);
+            // Focused (0) should be second (bottom).
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == b_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_parallel_horizontal_swaps() {
+        // Two windows horizontal split → move-up swaps (parallel).
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        // 0 is first (top), b_id is second (bottom). Focus bottom, move up.
+        wm.set_focused(b_id);
+        let moved = wm.move_window(Direction::Up, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            // Direction should remain Horizontal.
+            assert_eq!(*direction, SplitDirection::Horizontal);
+            // b_id should now be first (top), 0 second (bottom).
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == b_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_parallel_horizontal_down_swaps() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        // 0 is first (top), move down.
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Down, default_area());
+        assert!(moved);
+        if let LayoutNode::Split { first, second, .. } = &wm.layout {
+            assert!(matches!(**first, LayoutNode::Leaf(id) if id == b_id));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == 0));
+        } else {
+            panic!("expected split layout");
+        }
+    }
+
+    #[test]
+    fn move_single_window_is_noop() {
+        let mut wm = WindowManager::new(0);
+        let moved = wm.move_window(Direction::Left, default_area());
+        assert!(!moved);
+        assert!(matches!(wm.layout, LayoutNode::Leaf(0)));
+    }
+
+    #[test]
+    fn move_group_wrapped_window_flips() {
+        // Group(Leaf(0)) + Leaf(b_id) vertical split → move up → horizontal, group preserved.
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0], "g".to_string());
+        wm.set_focused(0);
+        let moved = wm.move_window(Direction::Up, default_area());
+        assert!(moved);
+        if let LayoutNode::Split {
+            direction,
+            first,
+            second,
+            ..
+        } = &wm.layout
+        {
+            assert_eq!(*direction, SplitDirection::Horizontal);
+            // Group-wrapped focused should be first (top).
+            assert_eq!(WindowManager::sole_leaf_id(first), Some(0));
+            assert!(wm.is_in_group(0));
+            assert!(matches!(**second, LayoutNode::Leaf(id) if id == b_id));
+        } else {
+            panic!("expected split layout");
+        }
     }
 }
