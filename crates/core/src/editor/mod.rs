@@ -488,6 +488,9 @@ pub struct Editor {
     /// instead of the human-focused active buffer. This allows the AI to
     /// edit files while the human watches the *AI* conversation.
     pub ai_target_buffer_idx: Option<usize>,
+    /// AI's target window context. When set, cursor/scroll tools operate on
+    /// this window instead of the focused window. Set via `set_ai_target` tool.
+    pub ai_target_window_id: Option<crate::window::WindowId>,
     /// Linked output+input buffer pair for the split-view conversation UI.
     /// `None` until the user opens the conversation buffer.
     pub conversation_pair: Option<ConversationPair>,
@@ -817,6 +820,7 @@ impl Editor {
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
+            ai_target_window_id: None,
             conversation_pair: None,
             file_tree_window_id: None,
             file_tree_action: None,
@@ -3548,5 +3552,191 @@ impl Editor {
                 win.scroll_locked_cursor = win.cursor_row;
             }
         }
+    }
+
+    /// Pixel-precise scroll: directly adjusts `scroll_pixel_offset` by a
+    /// floating-point pixel amount, crossing line boundaries as needed.
+    /// Returns `true` if the scroll position actually changed (for inertia cancellation at bounds).
+    pub fn handle_mouse_scroll_pixels(&mut self, delta_px: f32) -> bool {
+        if delta_px.abs() < 0.01 {
+            return false;
+        }
+        let buf_idx = self.active_buffer_idx();
+        let kind = self.buffers[buf_idx].kind;
+
+        // Non-text buffers: convert to line delta, delegate to existing method.
+        match kind {
+            crate::BufferKind::Shell
+            | crate::BufferKind::Conversation
+            | crate::BufferKind::Messages => {
+                let cell_h = self.gui_cell_height;
+                let lines = (delta_px.abs() / cell_h).round() as i16;
+                if lines == 0 {
+                    return false;
+                }
+                let sign: i16 = if delta_px > 0.0 { 1 } else { -1 };
+                self.handle_mouse_scroll(sign * lines);
+                return true;
+            }
+            _ => {}
+        }
+
+        let buf_line_count = self.buffers[buf_idx].display_line_count();
+        let viewport_height = self.viewport_height;
+        let cell_h = self.gui_cell_height;
+        if cell_h <= 0.0 {
+            return false;
+        }
+
+        // Pre-compute visual rows cache around scroll region.
+        {
+            let scroll = self.window_mgr.focused_window().scroll_offset;
+            let range_start = scroll.saturating_sub(viewport_height);
+            let range_end = (scroll + viewport_height * 2).min(buf_line_count);
+            self.populate_visual_rows_cache(buf_idx, range_start, range_end);
+        }
+
+        let (cache_rows, cache_line_start) = match &self.buffers[buf_idx].visual_rows_cache {
+            Some(c) => (c.rows.clone(), c.line_start),
+            None => (Vec::new(), 0),
+        };
+        let lvr = |line: usize| -> usize {
+            if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                let v = cache_rows[line - cache_line_start] as usize;
+                if v > 0 {
+                    v
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        };
+
+        let old_scroll = self.window_mgr.focused_window().scroll_offset;
+        let old_pixel = self.window_mgr.focused_window().scroll_pixel_offset;
+
+        if delta_px > 0.0 {
+            // Scroll up (reveal content above).
+            let mut remaining = delta_px;
+            let win = self.window_mgr.focused_window_mut();
+            while remaining > 0.0 {
+                if win.scroll_pixel_offset >= remaining {
+                    win.scroll_pixel_offset -= remaining;
+                    remaining = 0.0;
+                } else {
+                    remaining -= win.scroll_pixel_offset;
+                    win.scroll_pixel_offset = 0.0;
+                    // Move to previous line.
+                    let prev = self.buffers[buf_idx].prev_visible_line(win.scroll_offset);
+                    if prev >= win.scroll_offset {
+                        // At top.
+                        win.scroll_pixel_offset = 0.0;
+                        break;
+                    }
+                    win.scroll_offset = prev;
+                    let prev_rows = lvr(prev);
+                    let line_height = prev_rows as f32 * cell_h;
+                    win.scroll_pixel_offset = line_height - 0.01; // position at bottom of prev line
+                }
+            }
+            // Ensure pixel offset is non-negative.
+            let win = self.window_mgr.focused_window_mut();
+            if win.scroll_pixel_offset < 0.0 {
+                win.scroll_pixel_offset = 0.0;
+            }
+        } else {
+            // Scroll down (reveal content below).
+            let max_scroll = buf_line_count.saturating_sub(viewport_height);
+            let mut remaining = -delta_px; // positive magnitude
+            let win = self.window_mgr.focused_window_mut();
+            while remaining > 0.0 && win.scroll_offset < max_scroll {
+                let top_rows = lvr(win.scroll_offset);
+                let line_height = top_rows as f32 * cell_h;
+                let space_in_line = line_height - win.scroll_pixel_offset;
+                if remaining < space_in_line {
+                    win.scroll_pixel_offset += remaining;
+                    remaining = 0.0;
+                } else {
+                    remaining -= space_in_line;
+                    let next = self.buffers[buf_idx].next_visible_line(win.scroll_offset);
+                    if next <= win.scroll_offset {
+                        break;
+                    }
+                    win.scroll_offset = next.min(max_scroll);
+                    win.scroll_pixel_offset = 0.0;
+                }
+            }
+            // Clamp at max.
+            let win = self.window_mgr.focused_window_mut();
+            if win.scroll_offset >= max_scroll {
+                win.scroll_offset = max_scroll;
+                // Allow sub-line offset within last visible range but don't exceed.
+            }
+        }
+
+        // Phase 2: Compute bottom visible line for cursor clamping.
+        let scroll_off = self.window_mgr.focused_window().scroll_offset;
+        let skip = self.window_mgr.focused_window().scroll_skip_rows(cell_h);
+        let bottom = {
+            let buf = &self.buffers[buf_idx];
+            let max_row = buf_line_count.saturating_sub(1);
+            let mut visual = 0;
+            let mut last_fit = scroll_off;
+            let mut line = scroll_off;
+            let mut first = true;
+            while line <= max_row {
+                let rows = self.line_visual_rows(buf_idx, line);
+                if rows > 0 {
+                    let effective = if first {
+                        rows.saturating_sub(skip)
+                    } else {
+                        rows
+                    };
+                    first = false;
+                    if visual + effective > viewport_height {
+                        break;
+                    }
+                    visual += effective;
+                    last_fit = line;
+                }
+                line = buf.next_visible_line(line);
+                if line <= last_fit {
+                    break;
+                }
+            }
+            last_fit
+        };
+
+        // Phase 3: Clamp cursor.
+        let buf = &self.buffers[buf_idx];
+        let win = self.window_mgr.focused_window_mut();
+        if win.cursor_row < scroll_off {
+            win.cursor_row = scroll_off;
+        }
+        if win.cursor_row > bottom {
+            win.cursor_row = bottom;
+        }
+        win.clamp_cursor(buf);
+        win.scroll_locked = true;
+        win.scroll_locked_cursor = win.cursor_row;
+
+        // Return whether scroll actually moved.
+        let new_scroll = self.window_mgr.focused_window().scroll_offset;
+        let new_pixel = self.window_mgr.focused_window().scroll_pixel_offset;
+        new_scroll != old_scroll || (new_pixel - old_pixel).abs() > 0.01
+    }
+
+    /// Pixel-scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_pixels_in_window(
+        &mut self,
+        target_id: WindowId,
+        delta_px: f32,
+    ) -> bool {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        let moved = self.handle_mouse_scroll_pixels(delta_px);
+        self.window_mgr.set_focused(original);
+        moved
     }
 }

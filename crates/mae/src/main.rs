@@ -608,8 +608,10 @@ fn run_gui(
         dirty: true,
         cursor_x: 0.0,
         cursor_y: 0.0,
-        scroll_accumulator: 0.0,
         scroll_accumulator_x: 0.0,
+        scroll_velocity: 0.0,
+        last_scroll_event: None,
+        inertia_active: false,
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
@@ -746,8 +748,11 @@ struct GuiApp {
     dirty: bool,
     cursor_x: f64,
     cursor_y: f64,
-    scroll_accumulator: f64,
     scroll_accumulator_x: f64,
+    // Inertial scrolling state
+    scroll_velocity: f32,
+    last_scroll_event: Option<std::time::Instant>,
+    inertia_active: bool,
     mouse_pressed: bool,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
@@ -1051,6 +1056,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.last_input_time = std::time::Instant::now();
                 self.editor.last_edit_time = std::time::Instant::now();
                 self.editor.clear_highlights();
+                // Cancel inertial scrolling on any key input.
+                self.inertia_active = false;
+                self.scroll_velocity = 0.0;
+                self.last_scroll_event = None;
                 // Default to CursorOnly redraw for keyboard input. Commands that
                 // modify text or change mode escalate via mark_full_redraw() or
                 // mark_scrolled() internally. This avoids full syntax recomputation
@@ -1149,6 +1158,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                         self.mouse_pressed = true;
                     }
                     self.last_input_time = std::time::Instant::now();
+                    // Cancel inertial scrolling on mouse click.
+                    self.inertia_active = false;
+                    self.scroll_velocity = 0.0;
+                    self.last_scroll_event = None;
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
                         let col = (self.cursor_x / cell_w as f64) as u16;
@@ -1209,52 +1222,74 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                self.last_input_time = std::time::Instant::now();
+                let now = std::time::Instant::now();
+                self.last_input_time = now;
                 use tracing::debug;
-                let (h_delta, v_delta) = match delta {
+
+                let cell_h = self.editor.gui_cell_height;
+                let (h_px, v_px): (f32, f32) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
                         debug!(x, y, "MouseWheel: LineDelta");
-                        (x as i16, y as i16)
+                        // Convert line deltas to pixel amounts (3 lines per notch).
+                        (x * cell_h * 3.0, y * cell_h * 3.0)
                     }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        self.scroll_accumulator += pos.y;
-                        self.scroll_accumulator_x += pos.x;
-                        let whole_lines = (self.scroll_accumulator / 20.0) as i16;
-                        let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
                         debug!(pos_x = pos.x, pos_y = pos.y, "MouseWheel: PixelDelta");
-                        if whole_lines != 0 {
-                            self.scroll_accumulator -= whole_lines as f64 * 20.0;
-                        }
-                        if whole_cols != 0 {
-                            self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
-                        }
-                        (whole_cols, whole_lines)
+                        (pos.x as f32, pos.y as f32)
                     }
                 };
-                if v_delta != 0 {
+
+                if v_px.abs() > 0.01 {
+                    // Track velocity (EMA blending) for inertia.
+                    if let Some(last) = self.last_scroll_event {
+                        let dt = now.duration_since(last).as_secs_f32();
+                        if dt > 0.0 && dt < 0.1 {
+                            let measured = v_px / dt;
+                            self.scroll_velocity = 0.7 * measured + 0.3 * self.scroll_velocity;
+                        }
+                    } else {
+                        self.scroll_velocity = v_px * 60.0;
+                    }
+                    // Cap velocity at ±20,000 px/s.
+                    self.scroll_velocity = self.scroll_velocity.clamp(-20_000.0, 20_000.0);
+                    self.last_scroll_event = Some(now);
+                    self.inertia_active = false; // Real input overrides inertia.
+
+                    // Apply pixel delta directly.
                     if self.editor.mouse_wheel_follow_mouse {
-                        let (cell_w, cell_h) = self.renderer.cell_dimensions();
-                        if cell_w > 0.0 && cell_h > 0.0 {
+                        let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
+                        if cell_w > 0.0 && cell_h_dim > 0.0 {
                             let col = (self.cursor_x / cell_w as f64) as u16;
-                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            let row = (self.cursor_y / cell_h_dim as f64) as u16;
                             if let Some(target) = self.editor.window_mgr.window_at_cell(
                                 col,
                                 row,
                                 self.editor.last_layout_area,
                             ) {
-                                self.editor.handle_mouse_scroll_in_window(target, v_delta);
+                                self.editor
+                                    .handle_mouse_scroll_pixels_in_window(target, v_px);
                             } else {
-                                self.editor.handle_mouse_scroll(v_delta);
+                                self.editor.handle_mouse_scroll_pixels(v_px);
                             }
                         } else {
-                            self.editor.handle_mouse_scroll(v_delta);
+                            self.editor.handle_mouse_scroll_pixels(v_px);
                         }
                     } else {
-                        self.editor.handle_mouse_scroll(v_delta);
+                        self.editor.handle_mouse_scroll_pixels(v_px);
                     }
                     self.dirty = true;
                     self.input_dirty = true;
                 }
+
+                // Horizontal scroll: keep simple accumulator (no inertia).
+                let h_delta = {
+                    self.scroll_accumulator_x += h_px as f64;
+                    let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
+                    if whole_cols != 0 {
+                        self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
+                    }
+                    whole_cols
+                };
                 if h_delta != 0 {
                     if self.editor.mouse_wheel_follow_mouse {
                         let (cell_w, cell_h) = self.renderer.cell_dimensions();
@@ -1468,6 +1503,27 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.editor.lsp_request_document_highlight();
         }
 
+        // Inertial scrolling: activate after 50ms gap with significant velocity.
+        if let Some(last) = self.last_scroll_event {
+            if last.elapsed().as_secs_f32() > 0.05 && self.scroll_velocity.abs() > 50.0 {
+                self.inertia_active = true;
+                self.last_scroll_event = None;
+            }
+        }
+        if self.inertia_active {
+            let dt = 1.0 / 60.0_f32;
+            let delta_px = self.scroll_velocity * dt;
+            let moved = self.editor.handle_mouse_scroll_pixels(delta_px);
+            // Exponential decay: half-life ~8 frames (~133ms at 60fps).
+            self.scroll_velocity *= 0.92;
+            if self.scroll_velocity.abs() < 5.0 || !moved {
+                self.scroll_velocity = 0.0;
+                self.inertia_active = false;
+            } else {
+                self.dirty = true;
+            }
+        }
+
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
         // so keyboard/scroll never waits for the next frame boundary.
@@ -1483,6 +1539,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
+        } else if self.inertia_active || self.last_scroll_event.is_some() {
+            // Inertia pending or about to activate — keep 60fps cadence.
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                std::time::Instant::now() + frame_budget,
+            ));
         } else if !self.editor.syntax_reparse_pending.is_empty() {
             // Pending reparses but not otherwise dirty — wake up when debounce expires.
             let wake_at = self.editor.last_edit_time + reparse_debounce;
