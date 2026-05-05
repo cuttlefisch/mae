@@ -311,6 +311,10 @@ pub fn compute_layout(
     let mut lines: Vec<LineLayout> = Vec::with_capacity(area_height + 1);
     let mut line_idx = win.scroll_offset;
 
+    // Sequential rope offset cache: avoids O(log n) B-tree traversals per line.
+    // Stores (line_idx, char_start_of_next_line, byte_start_of_next_line).
+    let mut seq_cache: Option<(usize, usize, usize)> = None;
+
     // Narrow range: clamp to visible lines.
     let narrow = buf.narrowed_range;
     if let Some((ns, _)) = narrow {
@@ -357,16 +361,64 @@ pub fn compute_layout(
             .unwrap_or(0);
         let is_fold_start = fold_info > 0;
 
-        let line_text = buf.rope().line(line_idx);
-        let rope_chars: Vec<char> = line_text
-            .chars()
-            .filter(|c| *c != '\n' && *c != '\r')
-            .collect();
+        // --- Sequential rope offset cache + chunk-based line extraction ---
+        // Avoids rope.line() (2 walks) by using chunk_at_byte (1 walk) + string scan.
+        let (line_char_start, line_byte_start) = match seq_cache {
+            Some((prev, ch, by)) if line_idx == prev + 1 => (ch, by),
+            _ => {
+                let ch = buf.rope().line_to_char(line_idx);
+                (ch, buf.rope().char_to_byte(ch))
+            }
+        };
 
-        // Apply display regions (link concealment) if any overlap this line.
-        let line_char_start = buf.rope().line_to_char(line_idx);
-        let line_byte_start = buf.rope().char_to_byte(line_char_start);
-        let line_byte_end = buf.rope().char_to_byte(line_char_start + rope_chars.len());
+        // Get chunk containing this line's start byte (1 tree walk, or 0 if same chunk).
+        let (chunk_str, chunk_byte_start, _, _) = buf.rope().chunk_at_byte(line_byte_start);
+        let offset_in_chunk = line_byte_start - chunk_byte_start;
+        let from_line_start = &chunk_str[offset_in_chunk..];
+
+        // Extract line content from chunk. Fast path: line fits in single chunk (>99%).
+        let (rope_chars, line_len_chars, line_len_bytes) =
+            if let Some(nl_pos) = from_line_start.find('\n') {
+                // Line ends within this chunk. Strip trailing \r for CRLF.
+                let has_cr = nl_pos > 0 && from_line_start.as_bytes()[nl_pos - 1] == b'\r';
+                let line_str = if has_cr {
+                    &from_line_start[..nl_pos - 1]
+                } else {
+                    &from_line_start[..nl_pos]
+                };
+                let chars: Vec<char> = line_str.chars().collect();
+                let eol_chars = if has_cr { 2 } else { 1 }; // \r\n = 2, \n = 1
+                let len_chars = chars.len() + eol_chars;
+                let len_bytes = nl_pos + 1; // +1 for \n byte
+                (chars, len_chars, len_bytes)
+            } else if line_idx + 1 >= total_lines {
+                // Last line of file (no trailing newline).
+                let chars: Vec<char> = from_line_start.chars().collect();
+                let len_chars = chars.len();
+                let len_bytes = from_line_start.len();
+                (chars, len_chars, len_bytes)
+            } else {
+                // Line spans chunks — fall back to rope.line() (rare: <1% of lines).
+                let line_text = buf.rope().line(line_idx);
+                let chars: Vec<char> = line_text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect();
+                let len_chars = line_text.len_chars();
+                let len_bytes = line_text.len_bytes();
+                (chars, len_chars, len_bytes)
+            };
+
+        // Cache next line's start offsets.
+        seq_cache = Some((
+            line_idx,
+            line_char_start + line_len_chars,
+            line_byte_start + line_len_bytes,
+        ));
+
+        // Byte end for display region overlap checks.
+        let line_byte_end =
+            line_byte_start + rope_chars.iter().map(|c| c.len_utf8()).sum::<usize>();
         let has_display_regions = !effective_regions.is_empty() && {
             // Binary search: find first region whose byte_end > line_byte_start.
             let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
