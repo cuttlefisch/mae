@@ -38,6 +38,17 @@ pub struct Window {
     /// Pixel offset within the top visible line. Range: [0, line_height).
     /// Used for smooth sub-line scrolling. Reset to 0 when scroll_offset changes.
     pub scroll_pixel_offset: f32,
+    /// Fractional line accumulator for shell/conversation/messages scrolling.
+    /// Sub-cell-height pixel deltas accumulate here until a full line is reached.
+    /// Reset on buffer switch and when inertia is overridden by real input.
+    pub shell_scroll_accumulator: f32,
+    /// Recent scroll delta samples for velocity computation: (timestamp, delta_px).
+    /// Pruned to only contain samples within the last 100ms.
+    pub scroll_samples: Vec<(std::time::Instant, f32)>,
+    /// Computed scroll velocity in px/s at inertia activation.
+    pub scroll_velocity: f32,
+    /// True during the inertia coast phase.
+    pub inertia_active: bool,
 }
 
 impl Window {
@@ -54,6 +65,10 @@ impl Window {
             scroll_locked: false,
             scroll_locked_cursor: 0,
             scroll_pixel_offset: 0.0,
+            shell_scroll_accumulator: 0.0,
+            scroll_samples: Vec::new(),
+            scroll_velocity: 0.0,
+            inertia_active: false,
         }
     }
 
@@ -83,6 +98,10 @@ impl Window {
     /// Restore saved state for a buffer, or reset to (0,0) if none.
     pub fn restore_view_state(&mut self, buf_idx: usize) {
         self.buffer_idx = buf_idx;
+        self.shell_scroll_accumulator = 0.0;
+        self.scroll_samples.clear();
+        self.scroll_velocity = 0.0;
+        self.inertia_active = false;
         if let Some(state) = self.saved_view_states.get(&buf_idx) {
             self.cursor_row = state.cursor_row;
             self.cursor_col = state.cursor_col;
@@ -3167,5 +3186,19 @@ mod tests {
         } else {
             panic!("expected split layout");
         }
+    }
+
+    #[test]
+    fn shell_scroll_accumulator_resets_on_buffer_switch() {
+        let mut win = Window::new(0, 0);
+        win.shell_scroll_accumulator = 5.5;
+        win.restore_view_state(1);
+        assert_eq!(win.shell_scroll_accumulator, 0.0);
+    }
+
+    #[test]
+    fn shell_scroll_accumulator_defaults_to_zero() {
+        let win = Window::new(0, 0);
+        assert_eq!(win.shell_scroll_accumulator, 0.0);
     }
 }

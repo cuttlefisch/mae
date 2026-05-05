@@ -36,6 +36,14 @@ impl Editor {
         {
             self.hover_popup = None;
         }
+        // Auto-dismiss signature help on non-related commands.
+        if self.signature_help.is_some() && !matches!(name, "lsp-signature-help") {
+            self.signature_help = None;
+        }
+        // Auto-dismiss peek definition on non-peek commands.
+        if self.peek_state.is_some() && !matches!(name, "lsp-peek-definition") {
+            self.peek_state = None;
+        }
         // Auto-dismiss code action menu on non-code-action commands.
         if self.code_action_menu.is_some()
             && !matches!(
@@ -252,13 +260,14 @@ impl Editor {
         let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::buffer::BufferKind::Conversation {
             let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
+            let vh = self.focused_viewport_height();
             let win = self.window_mgr.focused_window_mut();
             if win.cursor_row == 0 && last_line > 0 {
                 win.cursor_row = last_line;
                 win.cursor_col = 0;
                 // scroll_offset is now a rope line index (same as all other buffers).
                 // Set it high; the renderer clamps to total-viewport_height.
-                win.scroll_offset = last_line.saturating_sub(self.viewport_height);
+                win.scroll_offset = last_line.saturating_sub(vh);
             }
         }
         self.fire_hook("focus-in");

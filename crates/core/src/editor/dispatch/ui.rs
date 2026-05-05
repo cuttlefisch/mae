@@ -215,10 +215,10 @@ impl Editor {
                 }
             }
             "shell-scroll-page-up" => {
-                self.pending_shell_scroll = Some(self.viewport_height as i32);
+                self.pending_shell_scroll = Some(self.focused_viewport_height() as i32);
             }
             "shell-scroll-page-down" => {
-                self.pending_shell_scroll = Some(-(self.viewport_height as i32));
+                self.pending_shell_scroll = Some(-(self.focused_viewport_height() as i32));
             }
             "shell-scroll-to-bottom" => {
                 self.pending_shell_scroll = Some(0);
@@ -685,6 +685,21 @@ impl Editor {
             }
             "agenda-filter-priority" => {
                 self.agenda_filter_priority();
+            }
+            "agenda-add" => {
+                // When dispatched as a builtin (not ex-command), prompt not available.
+                // Users should use :agenda-add <path> instead.
+                self.set_status("Use :agenda-add <path> to add agenda files");
+            }
+            "agenda-remove" => {
+                self.set_status("Use :agenda-remove <path> to remove agenda files");
+            }
+            "agenda-list" => {
+                self.agenda_list_paths();
+            }
+            "agenda-ingest" => {
+                self.ingest_agenda_files();
+                self.set_status("Agenda files re-ingested");
             }
 
             // Demo buffers

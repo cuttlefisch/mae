@@ -705,6 +705,47 @@ impl Renderer for GuiRenderer {
                     win_h,
                 );
             }
+
+            // Signature help popup.
+            if editor.signature_help.is_some() {
+                popup_render::render_signature_help_popup(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_h,
+                );
+            }
+
+            // Peek definition popup.
+            if editor.peek_state.is_some() {
+                popup_render::render_peek_definition_popup(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_h,
+                );
+            }
+
+            // Blame gutter overlay.
+            if editor.blame_overlay.is_some() {
+                let visible_start = editor.window_mgr.focused_window().scroll_offset;
+                popup_render::render_blame_gutter(
+                    canvas,
+                    editor,
+                    win_row_off,
+                    win_col_off,
+                    win_h,
+                    visible_start,
+                );
+            }
         }
 
         // Cache all window layouts for mouse click positioning.

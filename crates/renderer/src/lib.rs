@@ -302,6 +302,12 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.code_action_menu.is_some() {
             popup_render::render_code_action_popup(frame, chunks[0], editor);
         }
+        if editor.signature_help.is_some() {
+            popup_render::render_signature_help_popup(frame, chunks[0], editor);
+        }
+        if editor.peek_state.is_some() {
+            popup_render::render_peek_definition_popup(frame, chunks[0], editor);
+        }
     }
 }
 

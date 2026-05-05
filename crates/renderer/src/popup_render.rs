@@ -3,7 +3,7 @@
 
 use mae_core::Editor;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::theme_convert::ts;
 
@@ -651,5 +651,120 @@ fn render_mini_dialog(
         let hint = "Tab: next  Enter: apply  Esc: cancel";
         let hint_area = Rect::new(inner.x, inner.y + footer_row, inner.width, 1);
         frame.render_widget(Paragraph::new(Line::styled(hint, prompt_style)), hint_area);
+    }
+}
+
+/// Render signature help popup (TUI).
+pub(crate) fn render_signature_help_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let state = match &editor.signature_help {
+        Some(s) => s,
+        None => return,
+    };
+    if state.signatures.is_empty() {
+        return;
+    }
+
+    let sig = &state.signatures[state.active_signature.min(state.signatures.len() - 1)];
+    let width = (sig.label.len() as u16 + 4).min(area.width).max(20);
+    let height = if sig.documentation.is_some() { 4 } else { 3 };
+
+    let win = editor.window_mgr.focused_window();
+    let anchor_row = state.anchor_line.saturating_sub(win.scroll_offset) as u16;
+
+    let top = if anchor_row > height {
+        area.y + anchor_row.saturating_sub(height)
+    } else {
+        area.y + anchor_row + 1
+    };
+    let top = top.min(area.y + area.height.saturating_sub(height));
+    let left = area.x + (state.anchor_col as u16).min(area.width.saturating_sub(width));
+
+    let popup_area = Rect::new(left, top, width, height);
+    let block = Block::default().title(" Signature ").borders(Borders::ALL);
+    let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height > 0 {
+        let label_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        let display: String = sig.label.chars().take(inner.width as usize).collect();
+        frame.render_widget(Paragraph::new(display), label_area);
+    }
+    if let Some(doc) = &sig.documentation {
+        if inner.height > 1 {
+            let doc_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
+            let doc_line: String = doc
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(inner.width as usize)
+                .collect();
+            frame.render_widget(Paragraph::new(doc_line), doc_area);
+        }
+    }
+}
+
+/// Render peek definition popup (TUI).
+pub(crate) fn render_peek_definition_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let state = match &editor.peek_state {
+        Some(s) => s,
+        None => return,
+    };
+    if state.context_lines.is_empty() {
+        return;
+    }
+
+    let max_width = state
+        .context_lines
+        .iter()
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(40);
+    let width = ((max_width + 4) as u16).min(area.width).max(40);
+    let height = ((state.context_lines.len() + 2) as u16).min(area.height.saturating_sub(2));
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    let top = if cursor_row + 2 + height < area.height {
+        area.y + cursor_row + 1
+    } else if cursor_row > height {
+        area.y + cursor_row.saturating_sub(height)
+    } else {
+        area.y
+    };
+    let top = top.min(area.y + area.height.saturating_sub(height));
+
+    let short_path = state
+        .file_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&state.file_path);
+    let title = format!(" {}:{} ", short_path, state.line + 1);
+
+    let popup_area = Rect::new(area.x, top, width, height);
+    let block = Block::default().title(title).borders(Borders::ALL);
+    let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
+
+    let visible = inner.height as usize;
+    let scroll = state.scroll_offset;
+    for (i, line) in state
+        .context_lines
+        .iter()
+        .skip(scroll)
+        .take(visible)
+        .enumerate()
+    {
+        let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let display: String = line.chars().take(inner.width as usize).collect();
+        let style = if scroll + i == state.highlight_line {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        frame.render_widget(Paragraph::new(Line::styled(display, style)), row_area);
     }
 }

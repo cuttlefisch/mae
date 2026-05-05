@@ -140,6 +140,90 @@ impl Editor {
         }
     }
 
+    /// Queue a `textDocument/signatureHelp` request at the cursor.
+    pub fn lsp_request_signature_help(&mut self) {
+        if let Some((uri, language_id, line, character)) = self.lsp_context_at_cursor() {
+            self.pending_lsp_requests.push(LspIntent::SignatureHelp {
+                uri,
+                language_id,
+                line,
+                character,
+            });
+        }
+    }
+
+    /// Queue a `textDocument/definition` request for peek preview (no jump).
+    pub fn lsp_request_peek_definition(&mut self) {
+        match self.lsp_context_at_cursor() {
+            Some((uri, language_id, line, character)) => {
+                let suffix = self.lsp_starting_suffix(&language_id);
+                self.pending_lsp_requests.push(LspIntent::GotoDefinition {
+                    uri,
+                    language_id,
+                    line,
+                    character,
+                });
+                // Mark that we want peek, not jump. We reuse GotoDefinition intent
+                // and set a flag so the binary dispatches the result to peek_state.
+                self.peek_definition_pending = true;
+                self.set_status(format!("[LSP] peek definition...{}", suffix));
+            }
+            None => self.set_status("[LSP] no language server for this buffer"),
+        }
+    }
+
+    /// Store a signature help result from the LSP server.
+    pub fn apply_signature_help_result(
+        &mut self,
+        signatures: Vec<super::SignatureHelpInfo>,
+        active_signature: usize,
+        active_parameter: usize,
+    ) {
+        if signatures.is_empty() {
+            self.signature_help = None;
+            return;
+        }
+        let win = self.window_mgr.focused_window();
+        self.signature_help = Some(super::SignatureHelpState {
+            signatures,
+            active_signature,
+            active_parameter,
+            anchor_line: win.cursor_row,
+            anchor_col: win.cursor_col,
+        });
+    }
+
+    /// Store a peek definition result from the LSP server.
+    pub fn apply_peek_definition_result(&mut self, file_path: String, line: usize, col: usize) {
+        // Read context lines around the definition from the file.
+        let context_before = 5;
+        let context_after = 5;
+        let start_line = line.saturating_sub(context_before);
+        let mut context_lines = Vec::new();
+        let highlight_line;
+
+        if let Ok(content) = std::fs::read_to_string(&file_path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let end_line = (line + context_after + 1).min(lines.len());
+            for item in lines.iter().take(end_line).skip(start_line) {
+                context_lines.push(item.to_string());
+            }
+            highlight_line = line - start_line;
+        } else {
+            context_lines.push(format!("(cannot read {})", file_path));
+            highlight_line = 0;
+        }
+
+        self.peek_state = Some(super::PeekState {
+            file_path,
+            line,
+            col,
+            context_lines,
+            highlight_line,
+            scroll_offset: 0,
+        });
+    }
+
     /// Queue a `textDocument/completion` request at the cursor position.
     /// Silently ignored if the buffer has no known language.
     pub fn lsp_request_completion(&mut self) {
@@ -707,7 +791,7 @@ impl Editor {
             let line_count = self.buffers[idx].display_line_count();
             let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
             let target_col = loc.range.start_character as usize;
-            let vh = self.viewport_height;
+            let vh = self.focused_viewport_height();
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = target_row;
             win.cursor_col = target_col;
@@ -1509,6 +1593,13 @@ mod tests {
         let text: String = (0..100).map(|i| format!("line{}\n", i)).collect();
         let mut ed = editor_with_file("/tmp/a.rs", &text);
         ed.viewport_height = 20;
+        // Match layout area so focused_viewport_height() uses fallback.
+        ed.last_layout_area = crate::window::Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
         let loc = LspLocation {
             uri: "file:///tmp/a.rs".into(),
             range: LspRange {

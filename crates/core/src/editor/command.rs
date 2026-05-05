@@ -58,6 +58,31 @@ impl Editor {
                 self.dispatch_builtin("open-agenda");
                 true
             }
+            "agenda-add" => {
+                if let Some(path) = args {
+                    self.agenda_add_path(path);
+                } else {
+                    self.set_status("Usage: :agenda-add <path>");
+                }
+                true
+            }
+            "agenda-remove" => {
+                if let Some(path) = args {
+                    self.agenda_remove_path(path);
+                } else {
+                    self.set_status("Usage: :agenda-remove <path>");
+                }
+                true
+            }
+            "agenda-list" => {
+                self.agenda_list_paths();
+                true
+            }
+            "agenda-ingest" => {
+                self.ingest_agenda_files();
+                self.set_status("Agenda files re-ingested");
+                true
+            }
             "help-edit" => {
                 // `:help-edit <topic>` → open/create ~/.config/mae/help/<topic>.org
                 let topic = args

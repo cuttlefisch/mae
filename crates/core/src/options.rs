@@ -428,6 +428,15 @@ impl OptionRegistry {
                     valid_values: &[],
                 },
                 OptionDef {
+                    name: "show_breadcrumbs",
+                    aliases: &["show-breadcrumbs", "breadcrumbs"],
+                    doc: "Show breadcrumb bar (file > symbol ancestry) above buffer",
+                    kind: OptionKind::Bool,
+                    default_value: "false",
+                    config_key: Some("editor.show_breadcrumbs"),
+                    valid_values: &[],
+                },
+                OptionDef {
                     name: "scroll_speed",
                     aliases: &["scroll-speed"],
                     doc: "Mouse scroll speed multiplier (lines per scroll tick)",
@@ -560,6 +569,15 @@ impl OptionRegistry {
                     kind: OptionKind::Bool,
                     default_value: "false",
                     config_key: Some("editor.dashboard_dismiss_on_split"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "org_agenda_files",
+                    aliases: &["org-agenda-files"],
+                    doc: "Directories/files to ingest into KB for agenda. Use :agenda-add/:agenda-remove to manage.",
+                    kind: OptionKind::String, // display-only; actual storage is Vec<String>
+                    default_value: "",
+                    config_key: Some("org.agenda_files"),
                     valid_values: &[],
                 },
                 OptionDef {

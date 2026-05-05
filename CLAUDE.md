@@ -117,7 +117,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - MCP bridge: Unix socket server, JSON-RPC, stdio shim, tool re-export ✅
 - File auto-reload: mtime tracking, clean buffer reload, dirty buffer warning, `file-changed-on-disk` hook ✅
 
-### Phase 7: Embedded Documentation — IN PROGRESS (M1-M3)
+### Phase 7: Embedded Documentation — COMPLETE (M1-M4)
 - Scheme primitive KB nodes (scheme:*) for ~45 functions + 18 variables ✅
 - Progressive getting-started tutorial (3 tracks: vim, beginner, AI) ✅
 - `:help` fuzzy completion with expanded namespace fallback ✅
@@ -178,7 +178,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Native SVG rendering via skia `svg::Dom` — vector text, perfect scaling, same font stack as editor ✅
 - Smooth sub-line scrolling past images, viewport clipping, scroll guard fixes ✅
 - Rich content: multi-cursor edits, TUI shift normalization ✅
-- **Next: Org core interactivity (9 M1), PDF preview (8 M8)**
+- **Next: Org export & babel (9 M5), PDF preview (8 M8), module system (7 M4)**
 
 ## Key Design Decisions Already Made
 

@@ -34,6 +34,8 @@ pub struct Config {
     pub lsp: LspSection,
     #[serde(default)]
     pub performance: PerformanceSection,
+    #[serde(default)]
+    pub org: OrgSection,
 }
 
 /// Per-language LSP server configuration.
@@ -124,6 +126,14 @@ pub struct EditorSection {
     pub restore_session: Option<bool>,
     /// Autosave interval in seconds (0 = disabled). Requires 5s idle after last edit.
     pub autosave_interval: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OrgSection {
+    /// Directories and files to include in the agenda view.
+    /// Use `:agenda-add <path>` / `:agenda-remove <path>` to manage.
+    #[serde(default)]
+    pub agenda_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

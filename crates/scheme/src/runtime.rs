@@ -81,6 +81,12 @@ struct SharedState {
     pending_autoloads: Vec<(String, String, String)>,
     /// Pending display-rule overrides: (kind_name, action_string).
     pending_display_rules: Vec<(String, String)>,
+    /// Paths to add to org agenda files via `(agenda-add! PATH)`.
+    pending_agenda_adds: Vec<String>,
+    /// Paths to remove from org agenda files via `(agenda-remove! PATH)`.
+    pending_agenda_removes: Vec<String>,
+    /// Request to display agenda file list via `(agenda-list)`.
+    pending_agenda_list: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +341,26 @@ impl SchemeRuntime {
         let s = shared.clone();
         engine.register_fn("recent-projects-add!", move |path: String| {
             s.lock().unwrap().pending_recent_projects.push(path);
+            SteelVal::Void
+        });
+
+        // --- Agenda file management ---
+
+        let s = shared.clone();
+        engine.register_fn("agenda-add!", move |path: String| {
+            s.lock().unwrap().pending_agenda_adds.push(path);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("agenda-remove!", move |path: String| {
+            s.lock().unwrap().pending_agenda_removes.push(path);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("agenda-list", move || {
+            s.lock().unwrap().pending_agenda_list = true;
             SteelVal::Void
         });
 
@@ -1176,6 +1202,18 @@ impl SchemeRuntime {
         }
         for path in state.pending_recent_projects.drain(..) {
             editor.recent_projects.push(std::path::PathBuf::from(path));
+        }
+
+        // Agenda file management
+        for path in state.pending_agenda_adds.drain(..) {
+            editor.agenda_add_path(&path);
+        }
+        for path in state.pending_agenda_removes.drain(..) {
+            editor.agenda_remove_path(&path);
+        }
+        if state.pending_agenda_list {
+            state.pending_agenda_list = false;
+            editor.agenda_list_paths();
         }
 
         // Visual buffer operations

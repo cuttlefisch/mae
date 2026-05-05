@@ -949,16 +949,84 @@ impl Editor {
     }
 
     pub(crate) fn git_blame(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        // Toggle: if blame overlay is already showing for this buffer, dismiss it.
+        if let Some(ref overlay) = self.blame_overlay {
+            if overlay.buffer_idx == buf_idx {
+                self.blame_overlay = None;
+                self.set_status("Blame overlay dismissed");
+                return;
+            }
+        }
+
         let file = self
             .active_buffer()
             .file_path()
             .map(|p| p.display().to_string());
         if let Some(path) = file {
-            info!(path, "showing git blame");
-            self.git_command_to_buffer(&["blame", &path], "*git-blame*");
+            info!(path, "showing git blame overlay");
+            let (ok, stdout, stderr) = self.run_git_porcelain(&["blame", "--porcelain", &path]);
+            if !ok {
+                self.set_status(format!("git blame failed: {}", stderr));
+                return;
+            }
+            let entries = Self::parse_blame_porcelain(&stdout);
+            self.blame_overlay = Some(super::BlameOverlay {
+                buffer_idx: buf_idx,
+                entries,
+            });
+            self.set_status("Blame overlay active (SPC g b to toggle)");
         } else {
             self.set_status("git blame: buffer has no file path");
         }
+    }
+
+    /// Parse `git blame --porcelain` output into BlameEntry list.
+    fn parse_blame_porcelain(output: &str) -> Vec<super::BlameEntry> {
+        let mut entries = Vec::new();
+        let mut current_hash = String::new();
+        let mut current_author = String::new();
+        let mut current_timestamp: i64 = 0;
+        let mut current_summary = String::new();
+        let mut current_line: usize = 0;
+
+        for line in output.lines() {
+            if let Some(rest) = line.strip_prefix("author ") {
+                current_author = rest.to_string();
+            } else if let Some(rest) = line.strip_prefix("author-time ") {
+                current_timestamp = rest.parse().unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("summary ") {
+                current_summary = rest.to_string();
+            } else if line.starts_with('\t') {
+                // Content line — this ends the current entry
+                entries.push(super::BlameEntry {
+                    commit_hash: if current_hash.len() >= 8 {
+                        current_hash[..8].to_string()
+                    } else {
+                        current_hash.clone()
+                    },
+                    author: current_author.clone(),
+                    timestamp: current_timestamp,
+                    summary: current_summary.clone(),
+                    final_line: current_line.saturating_sub(1), // 0-indexed
+                });
+            } else if let Some(first_space) = line.find(' ') {
+                let hash_candidate = &line[..first_space];
+                // Porcelain format: <40-hex-hash> <orig-line> <final-line> [<group-count>]
+                if hash_candidate.len() == 40
+                    && hash_candidate.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    current_hash = hash_candidate.to_string();
+                    // Parse final line number (second number after orig-line)
+                    let rest = &line[first_space + 1..];
+                    let parts: Vec<&str> = rest.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        current_line = parts[1].parse().unwrap_or(0);
+                    }
+                }
+            }
+        }
+        entries
     }
 
     pub(crate) fn git_diff(&mut self) {
@@ -981,7 +1049,18 @@ impl Editor {
 
     pub(crate) fn git_log(&mut self) {
         info!("showing git log");
-        self.git_command_to_buffer(&["log", "--oneline", "-50"], "*git-log*");
+        self.git_command_to_buffer(
+            &[
+                "log",
+                "--oneline",
+                "--graph",
+                "--decorate",
+                "--date=relative",
+                "--format=%h %ad %an  %s%d",
+                "-100",
+            ],
+            "*git-log*",
+        );
     }
 
     /// Parse `git diff HEAD --unified=0` output for a buffer and populate
@@ -1125,5 +1204,47 @@ mod tests {
         );
         assert_eq!(map[&9], crate::render_common::gutter::GitLineStatus::Added);
         assert_eq!(map[&10], crate::render_common::gutter::GitLineStatus::Added);
+    }
+
+    #[test]
+    fn parse_blame_porcelain_basic() {
+        let output = "\
+abcdef1234567890abcdef1234567890abcdef12 1 1 1\n\
+author John Doe\n\
+author-mail <john@example.com>\n\
+author-time 1700000000\n\
+author-tz +0000\n\
+committer John Doe\n\
+committer-mail <john@example.com>\n\
+committer-time 1700000000\n\
+committer-tz +0000\n\
+summary Initial commit\n\
+filename src/main.rs\n\
+\tuse std::io;\n\
+abcdef1234567890abcdef1234567890abcdef12 2 2\n\
+author Jane Smith\n\
+author-mail <jane@example.com>\n\
+author-time 1700100000\n\
+author-tz +0000\n\
+committer Jane Smith\n\
+committer-mail <jane@example.com>\n\
+committer-time 1700100000\n\
+committer-tz +0000\n\
+summary Second commit\n\
+filename src/main.rs\n\
+\tfn main() {}\n";
+
+        let entries = super::Editor::parse_blame_porcelain(output);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].commit_hash, "abcdef12");
+        assert_eq!(entries[0].author, "John Doe");
+        assert_eq!(entries[0].timestamp, 1700000000);
+        assert_eq!(entries[0].summary, "Initial commit");
+        assert_eq!(entries[0].final_line, 0); // 0-indexed
+
+        assert_eq!(entries[1].author, "Jane Smith");
+        assert_eq!(entries[1].timestamp, 1700100000);
+        assert_eq!(entries[1].summary, "Second commit");
+        assert_eq!(entries[1].final_line, 1);
     }
 }

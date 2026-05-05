@@ -687,6 +687,11 @@ impl CommandRegistry {
         reg.register_builtin("lsp-rename-apply", "Apply pending rename preview");
         reg.register_builtin("lsp-rename-abort", "Abort pending rename preview");
         reg.register_builtin("lsp-status", "Show LSP server status buffer (SPC c s)");
+        reg.register_builtin("lsp-signature-help", "Show function signature help");
+        reg.register_builtin(
+            "lsp-peek-definition",
+            "Peek definition in floating preview (SPC l p)",
+        );
         reg.register_builtin(
             "toggle-lsp-diagnostics-inline",
             "Toggle inline diagnostic underlines (SPC t d)",
@@ -782,6 +787,16 @@ impl CommandRegistry {
         reg.register_builtin("agenda-refresh", "Refresh agenda view (r)");
         reg.register_builtin("agenda-filter-todo", "Cycle TODO state filter (t)");
         reg.register_builtin("agenda-filter-priority", "Cycle priority filter (p)");
+        reg.register_builtin(
+            "agenda-add",
+            "Add path to agenda files (:agenda-add <path>)",
+        );
+        reg.register_builtin(
+            "agenda-remove",
+            "Remove path from agenda files (:agenda-remove <path>)",
+        );
+        reg.register_builtin("agenda-list", "Show configured agenda file paths");
+        reg.register_builtin("agenda-ingest", "Re-ingest all agenda file paths");
 
         // Demo buffers
         reg.register_builtin("open-demo-tables", "Open interactive tables demo");

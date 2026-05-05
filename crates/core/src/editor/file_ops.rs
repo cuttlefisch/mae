@@ -229,7 +229,7 @@ impl Editor {
         self.sync_messages_rope();
         // Scroll to bottom so newest entries are visible.
         let total = self.message_log.len();
-        let vh = self.viewport_height;
+        let vh = self.focused_viewport_height();
         // Find the window now showing messages and position it.
         if let Some(win_id) = self.find_window_with_kind(crate::buffer::BufferKind::Messages) {
             if let Some(win) = self.window_mgr.window_mut(win_id) {

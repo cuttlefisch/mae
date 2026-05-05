@@ -717,4 +717,72 @@ fn double_click_empty_line() {
     assert!(win.cursor_row < 3); // within buffer bounds
 }
 
+// --- Shell scroll accumulator tests ---
+
+fn make_editor_with_conversation_buffer() -> Editor {
+    let mut editor = Editor::new();
+    // Create a conversation buffer (uses the same scroll path as Shell).
+    let mut buf = crate::buffer::Buffer::new();
+    buf.kind = crate::BufferKind::Conversation;
+    buf.name = "*test-conv*".to_string();
+    // Add some content so scrolling is possible.
+    for i in 0..50 {
+        buf.insert_text_at(buf.rope().len_chars(), &format!("line {}\n", i));
+    }
+    editor.buffers.push(buf);
+    let new_idx = editor.buffers.len() - 1;
+    editor.switch_to_buffer(new_idx);
+    editor.gui_cell_height = 20.0;
+    editor
+}
+
+#[test]
+fn shell_scroll_accumulates_fractional_lines() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Sub-cell-height delta: 5px < 20px cell height → no lines emitted, but returns true.
+    let moved = editor.handle_mouse_scroll_pixels(5.0);
+    assert!(moved, "should return true while accumulating");
+
+    // Accumulate more: 5+10=15 < 20 → still no lines, still true.
+    let moved = editor.handle_mouse_scroll_pixels(10.0);
+    assert!(moved, "should return true while accumulating");
+
+    // Push over threshold: 15+8=23 → 1 full line (23/20 = 1.trunc), residual 3px.
+    let moved = editor.handle_mouse_scroll_pixels(8.0);
+    assert!(moved, "should return true when emitting lines");
+
+    // Check residual is approximately 3.0.
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert!(
+        (acc - 3.0).abs() < 0.01,
+        "residual should be ~3.0, got {}",
+        acc
+    );
+}
+
+#[test]
+fn shell_scroll_returns_true_while_accumulating() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Single 1px delta — way below cell_height, but returns true to keep inertia alive.
+    let moved = editor.handle_mouse_scroll_pixels(1.0);
+    assert!(moved, "must return true to keep inertia alive");
+}
+
+#[test]
+fn shell_scroll_accumulator_resets_on_buffer_switch() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Accumulate some fractional scroll.
+    editor.handle_mouse_scroll_pixels(5.0);
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert!(acc.abs() > 0.01, "should have accumulated");
+
+    // Switch to original buffer (index 0).
+    editor.switch_to_buffer(0);
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert_eq!(acc, 0.0, "should be reset after buffer switch");
+}
+
 // --- Debug mode tests ---

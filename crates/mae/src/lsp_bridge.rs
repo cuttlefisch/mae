@@ -177,6 +177,16 @@ fn intent_to_lsp_command(intent: LspIntent) -> LspCommand {
             position: Position { line, character },
             generation,
         },
+        LspIntent::SignatureHelp {
+            uri,
+            language_id,
+            line,
+            character,
+        } => LspCommand::SignatureHelp {
+            uri,
+            language_id,
+            position: Position { line, character },
+        },
         // Stubs: these intents are queued but the LSP client doesn't
         // handle them yet. The bridge emits a harmless no-op.
         LspIntent::PrepareRename { .. }
@@ -256,6 +266,23 @@ pub(crate) fn handle_lsp_event(
         }
         LspTaskEvent::DefinitionResult { uri, locations } => {
             mark_connected_from_uri(editor, &uri);
+            // Check if this was a peek request rather than a jump.
+            if editor.peek_definition_pending {
+                editor.peek_definition_pending = false;
+                if let Some(loc) = locations.first() {
+                    let file_path = loc
+                        .uri
+                        .strip_prefix("file://")
+                        .unwrap_or(&loc.uri)
+                        .to_string();
+                    let line = loc.range.start.line as usize;
+                    let col = loc.range.start.character as usize;
+                    editor.apply_peek_definition_result(file_path, line, col);
+                } else {
+                    editor.set_status("[LSP] no definition found");
+                }
+                return true;
+            }
             let core_locs: Vec<LspLocation> = locations
                 .into_iter()
                 .map(|l| LspLocation {
@@ -377,6 +404,26 @@ pub(crate) fn handle_lsp_event(
                 })
                 .collect();
             editor.apply_document_highlight_result(core_highlights, generation);
+            true
+        }
+        LspTaskEvent::SignatureHelpResult {
+            signatures,
+            active_signature,
+            active_parameter,
+        } => {
+            let infos: Vec<mae_core::SignatureHelpInfo> = signatures
+                .into_iter()
+                .map(|s| mae_core::SignatureHelpInfo {
+                    label: s.label,
+                    parameters: s
+                        .parameters
+                        .iter()
+                        .map(|p| (p.label_start, p.label_end))
+                        .collect(),
+                    documentation: s.documentation,
+                })
+                .collect();
+            editor.apply_signature_help_result(infos, active_signature, active_parameter);
             true
         }
         LspTaskEvent::WorkspaceSymbolResult { .. } => false,

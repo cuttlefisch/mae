@@ -183,6 +183,57 @@ impl Editor {
         self.set_status(format!("Agenda filter: {}", label));
     }
 
+    // --- Agenda file CRUD ---
+
+    /// Add a directory or file to the agenda file list, ingest it, and refresh
+    /// the agenda buffer if it's open.
+    pub fn agenda_add_path(&mut self, path: &str) {
+        let expanded = crate::file_picker::expand_tilde(path);
+        if !self.org_agenda_files.contains(&expanded) {
+            self.org_agenda_files.push(expanded.clone());
+        }
+        self.ingest_single_agenda_path(&expanded);
+        if self.find_buffer_by_name("*Agenda*").is_some() {
+            self.agenda_refresh();
+        }
+        self.set_status(format!("Agenda: added {}", expanded));
+    }
+
+    /// Remove a path from the agenda file list.
+    pub fn agenda_remove_path(&mut self, path: &str) {
+        let expanded = crate::file_picker::expand_tilde(path);
+        self.org_agenda_files.retain(|p| p != &expanded);
+        self.set_status(format!("Agenda: removed {}", expanded));
+    }
+
+    /// Show current agenda file paths in the status bar.
+    pub fn agenda_list_paths(&mut self) {
+        if self.org_agenda_files.is_empty() {
+            self.set_status("No agenda files configured");
+        } else {
+            self.set_status(format!(
+                "Agenda files: {}",
+                self.org_agenda_files.join(", ")
+            ));
+        }
+    }
+
+    /// Re-ingest all configured agenda paths into the KB.
+    pub fn ingest_agenda_files(&mut self) {
+        for path in self.org_agenda_files.clone() {
+            self.ingest_single_agenda_path(&path);
+        }
+    }
+
+    fn ingest_single_agenda_path(&mut self, path: &str) {
+        let p = std::path::Path::new(path);
+        if p.is_dir() {
+            self.kb.ingest_org_dir(p);
+        } else if p.is_file() {
+            self.kb.ingest_org_file(p);
+        }
+    }
+
     /// Cycle the priority filter on the agenda.
     pub fn agenda_filter_priority(&mut self) {
         let idx = self.active_buffer_idx();
@@ -360,5 +411,225 @@ mod tests {
         let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
         let text = ed.buffers[idx].rope().to_string();
         assert!(text.contains("No matching TODO items"));
+    }
+
+    // ---- Integration tests: org file → parser → agenda ----
+
+    const AGENDA_ORG: &str = "\
+:PROPERTIES:
+:ID: agenda-test-file
+:END:
+#+title: Test Agenda
+#+filetags: :project:
+
+* TODO [#A] Fix critical bug :backend:urgent:
+:PROPERTIES:
+:ID: agenda-fix-bug
+:END:
+Critical bug in the backend.
+
+* DONE [#B] Write documentation :docs:
+:PROPERTIES:
+:ID: agenda-write-docs
+:END:
+Documentation is complete.
+
+* TODO [#C] Refactor module :backend:
+:PROPERTIES:
+:ID: agenda-refactor
+:END:
+Needs cleanup.
+
+* NEXT [#A] Deploy to staging :ops:urgent:
+:PROPERTIES:
+:ID: agenda-deploy
+:END:
+Deploy the latest build.
+";
+
+    fn ingest_org_fixture(ed: &mut Editor, content: &str) {
+        for node in mae_kb::org::parse_org_multi(content) {
+            ed.kb.insert(node);
+        }
+    }
+
+    #[test]
+    fn agenda_from_org_file_shows_all_todos() {
+        let mut ed = Editor::new();
+        ingest_org_fixture(&mut ed, AGENDA_ORG);
+        ed.open_agenda(AgendaFilter::default());
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let text = ed.buffers[idx].rope().to_string();
+        assert!(
+            text.contains("Fix critical bug"),
+            "missing Fix critical bug"
+        );
+        assert!(
+            text.contains("Write documentation"),
+            "missing Write documentation"
+        );
+        assert!(text.contains("Refactor module"), "missing Refactor module");
+        assert!(
+            text.contains("Deploy to staging"),
+            "missing Deploy to staging"
+        );
+        assert!(text.contains("4 items"), "expected 4 items count");
+    }
+
+    #[test]
+    fn agenda_from_org_file_filters_by_state() {
+        let mut ed = Editor::new();
+        ingest_org_fixture(&mut ed, AGENDA_ORG);
+        ed.open_agenda(AgendaFilter {
+            todo_states: Some(vec!["TODO".to_string()]),
+            ..Default::default()
+        });
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let text = ed.buffers[idx].rope().to_string();
+        assert!(text.contains("Fix critical bug"));
+        assert!(text.contains("Refactor module"));
+        assert!(!text.contains("Write documentation")); // DONE
+        assert!(!text.contains("Deploy to staging")); // NEXT
+    }
+
+    #[test]
+    fn agenda_from_org_file_filters_by_priority() {
+        let mut ed = Editor::new();
+        ingest_org_fixture(&mut ed, AGENDA_ORG);
+        ed.open_agenda(AgendaFilter {
+            priority: Some('A'),
+            ..Default::default()
+        });
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let text = ed.buffers[idx].rope().to_string();
+        assert!(text.contains("Fix critical bug"));
+        assert!(text.contains("Deploy to staging"));
+        assert!(!text.contains("Write documentation"));
+        assert!(!text.contains("Refactor module"));
+    }
+
+    #[test]
+    fn agenda_from_org_file_filters_by_tag() {
+        let mut ed = Editor::new();
+        ingest_org_fixture(&mut ed, AGENDA_ORG);
+        ed.open_agenda(AgendaFilter {
+            tag: Some("urgent".to_string()),
+            ..Default::default()
+        });
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let text = ed.buffers[idx].rope().to_string();
+        assert!(text.contains("Fix critical bug"));
+        assert!(text.contains("Deploy to staging"));
+        assert!(!text.contains("Write documentation"));
+        assert!(!text.contains("Refactor module"));
+    }
+
+    #[test]
+    fn agenda_from_org_file_view_structure() {
+        let mut ed = Editor::new();
+        ingest_org_fixture(&mut ed, AGENDA_ORG);
+        ed.open_agenda(AgendaFilter::default());
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let view = match &ed.buffers[idx].view {
+            BufferView::Agenda(v) => v.as_ref(),
+            _ => panic!("expected Agenda view"),
+        };
+        // Structure: Header, Blank, 4×TodoItem, Blank, count
+        assert!(matches!(view.lines[0].kind, AgendaLineKind::Header));
+        assert!(matches!(view.lines[1].kind, AgendaLineKind::Blank));
+        let todo_items: Vec<_> = view
+            .lines
+            .iter()
+            .filter(|l| matches!(l.kind, AgendaLineKind::TodoItem { .. }))
+            .collect();
+        assert_eq!(todo_items.len(), 4, "expected 4 TodoItem lines");
+        // Verify state and priority on individual items
+        for item in &todo_items {
+            if let AgendaLineKind::TodoItem { state, priority } = &item.kind {
+                if item.text.contains("Fix critical bug") {
+                    assert_eq!(state, "TODO");
+                    assert_eq!(*priority, Some('A'));
+                } else if item.text.contains("Deploy to staging") {
+                    assert_eq!(state, "NEXT");
+                    assert_eq!(*priority, Some('A'));
+                }
+            }
+        }
+    }
+
+    // ---- Performance benchmark ----
+
+    #[test]
+    fn agenda_scales_to_1000_todos() {
+        let mut ed = Editor::new();
+        for i in 0..1000 {
+            let pri = match i % 3 {
+                0 => 'A',
+                1 => 'B',
+                _ => 'C',
+            };
+            ed.kb.insert(
+                mae_kb::Node::new(
+                    format!("perf:{}", i),
+                    format!("Task {}", i),
+                    mae_kb::NodeKind::Note,
+                    "",
+                )
+                .with_todo_state("TODO")
+                .with_priority(pri),
+            );
+        }
+        let start = std::time::Instant::now();
+        ed.open_agenda(AgendaFilter::default());
+        let elapsed = start.elapsed();
+        let idx = ed.find_buffer_by_name("*Agenda*").unwrap();
+        let text = ed.buffers[idx].rope().to_string();
+        assert!(text.contains("1000 items"), "expected 1000 items");
+        assert!(
+            elapsed.as_millis() < 50,
+            "agenda with 1000 items took {}ms (> 50ms budget)",
+            elapsed.as_millis()
+        );
+    }
+
+    // ---- Agenda file CRUD tests ----
+
+    #[test]
+    fn agenda_add_path_ingests_and_persists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let org_path = tmp.path().join("test.org");
+        std::fs::write(
+            &org_path,
+            ":PROPERTIES:\n:ID: tmp-node-1\n:END:\n#+title: Tmp\n* TODO Task one\n:PROPERTIES:\n:ID: tmp-task-1\n:END:\n",
+        )
+        .unwrap();
+        let mut ed = Editor::new();
+        ed.agenda_add_path(&tmp.path().to_string_lossy());
+        assert!(ed.kb.contains("tmp-task-1"), "node should be ingested");
+        assert_eq!(ed.org_agenda_files.len(), 1);
+    }
+
+    #[test]
+    fn agenda_remove_path_removes_from_list() {
+        let mut ed = Editor::new();
+        ed.org_agenda_files.push("/tmp/test".to_string());
+        ed.agenda_remove_path("/tmp/test");
+        assert!(ed.org_agenda_files.is_empty());
+    }
+
+    #[test]
+    fn agenda_ingest_rescans_all_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let org_path = tmp.path().join("rescan.org");
+        std::fs::write(
+            &org_path,
+            ":PROPERTIES:\n:ID: rescan-file\n:END:\n#+title: Rescan\n* TODO Rescan task\n:PROPERTIES:\n:ID: rescan-task-1\n:END:\n",
+        )
+        .unwrap();
+        let mut ed = Editor::new();
+        ed.org_agenda_files
+            .push(tmp.path().to_string_lossy().to_string());
+        ed.ingest_agenda_files();
+        assert!(ed.kb.contains("rescan-task-1"), "node should be ingested");
     }
 }

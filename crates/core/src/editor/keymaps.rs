@@ -358,6 +358,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
         normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
         normal.bind(parse_key_seq_spaced("SPC o a"), "open-agenda");
+        normal.bind(parse_key_seq_spaced("SPC o A"), "agenda-add");
         // +register
         normal.bind(parse_key_seq_spaced("SPC r r"), "show-registers");
         normal.bind(parse_key_seq_spaced("SPC r y"), "paste-from-yank");
@@ -373,6 +374,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC c f"), "lsp-format");
         normal.bind(parse_key_seq_spaced("SPC c F"), "lsp-range-format");
         normal.bind(parse_key_seq_spaced("SPC c s"), "lsp-status");
+        normal.bind(parse_key_seq_spaced("SPC l p"), "lsp-peek-definition");
 
         // Group labels for which-key popup
         normal.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
@@ -390,6 +392,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC g"), "+git");
         normal.set_group_name(parse_key_seq_spaced("SPC n"), "+notes");
         normal.set_group_name(parse_key_seq_spaced("SPC o"), "+open");
+        normal.set_group_name(parse_key_seq_spaced("SPC l"), "+lsp");
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
         normal.set_group_name(parse_key_seq_spaced("SPC m"), "+multicursor");
 

@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-Current state: Phases 1-6 complete, Phase 8 M1-M7 COMPLETE, Phase 9 M1 COMPLETE, v0.7.0-dev (2,354 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.7.0: cursor_set primary sync fix (multi-cursor rendering bug), inline image display (org/md image link detection, GUI Skia rendering with aspect-ratio scaling, TUI placeholder, #+attr_html/:width directives, per-image fold, buffer-wide toggle), image metadata AI tooling (image_info/image_list tools, EXIF extraction, imagesize dimensions), terminal-at-file AI tool + terminal-here command, graceful image error handling (missing/corrupt/oversized). v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
+Current state: Phases 1-6 complete, Phase 8 M1-M7 COMPLETE, Phase 9 M1-M3 COMPLETE, v0.7.0-dev (2,475 tests). GUI renders and accepts input. All Tier 1 self-hosting blockers done. v0.7.0: cursor_set primary sync fix (multi-cursor rendering bug), inline image display (org/md image link detection, GUI Skia rendering with aspect-ratio scaling, TUI placeholder, #+attr_html/:width directives, per-image fold, buffer-wide toggle), image metadata AI tooling (image_info/image_list tools, EXIF extraction, imagesize dimensions), terminal-at-file AI tool + terminal-here command, graceful image error handling (missing/corrupt/oversized). v0.6.0: code folding, incremental reparse, dispatch modularization, org/md structural editing (three-state cycle, promote/demote, move subtree, narrow/widen, insert heading), FrameLayout unified text positioning, ex-command tokenizer, `:set` vim-style parsing, pixel-precise mouse clicks, vertical scrollbar, nyan mode, autosave + swap files + crash recovery, diff syntax highlighting, file tree sidebar (NERDTree-style), inline markup rendering (bold/code/italic/strikethrough), display overlays (link concealment), `BufferView` enum + `BufferMode` trait, keymap overlay architecture, Magit parity (multi-level fold, hunk ops, push/pull/fetch/branch/stash), file-type mode hooks (shebang/modeline), RedrawLevel display optimization, variable-height polish (heading spacing, code block backgrounds, italic typeface), unified code block syntax highlighting (shared per-block tree-sitter for md+org), help buffer code block highlighting, rendering dedup (render_common), code map tool.
 
 ---
 
@@ -83,13 +83,13 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 
 ### Org Mode
 - [ ] **Org ↔ Markdown Conversion**: Bidirectional conversion between org-mode and markdown formats.
-- [ ] **Org Table Mode** (Emacs `org-table-mode` parity): Full table editing and formatting.
-  - **Styling**: Column alignment with `|` delimiters, auto-align on type, horizontal rules (`|---|---|`), cell highlighting, column width detection
-  - **Navigation**: Tab to next cell, S-Tab to previous cell, RET to next row, auto-create new row at end
-  - **Structure editing**: `M-Left`/`M-Right` move column, `M-Up`/`M-Down` move row, `M-S-Left` delete column, `M-S-Right` insert column, `M-S-Up` delete row, `M-S-Down` insert row
-  - **Sorting**: Sort by column (alphabetic, numeric, time)
-  - **Formulas**: `#+TBLFM:` field/column formulas with Calc-like syntax, recalculation
-  - **Import/Export**: Convert region to table, export to CSV/TSV, org table → markdown table
+- [x] **Org Table Mode** (partial Emacs `org-table-mode` parity): Core table editing implemented (v0.7.0).
+  - **Styling**: Column alignment with `|` delimiters, auto-align, horizontal rules (`|---|---|`), alignment markers (`:---:`, `---:`) ✅
+  - **Navigation**: Tab to next cell, S-Tab to previous cell, auto-create new row at end ✅
+  - **Structure editing**: insert/delete row, insert/delete column, move row up/down ✅
+  - **Sorting**: Sort by column (alphabetic, numeric, time) — not yet
+  - **Formulas**: `#+TBLFM:` field/column formulas with Calc-like syntax, recalculation — not yet
+  - **Import/Export**: Convert region to table, export to CSV/TSV, org table → markdown table — not yet
 - [x] **Help Buffer Heading Scaling**: Apply org heading tiered scaling (1.5x/1.3x/1.15x) to help/tutor buffers. KB nodes use org format — headings should render at scaled sizes for readability, same as standalone `.org` files. (v0.6.0)
 - [x] **Org Heading Depth Manipulation**: `M-h`/`M-l` and `M-Left`/`M-Right` to promote/demote heading depth. Evil-org parity. (v0.6.0)
 - [x] **Org Heading Movement**: `M-j`/`M-k` and `M-Up`/`M-Down` to move heading subtree up/down. Fold-aware (clears folds in affected range). (v0.6.0)
@@ -195,7 +195,7 @@ User-facing AI interaction quality — from org-roam exploration notes (2026-04-
 | 28 | Debug stats show FPS instead of frame timing | v0.3.0 ✅ |
 | 29 | Autosave: timer-based auto-save for dirty buffers (idle debounce, configurable interval, `:set autosave`) | future |
 | 30 | LSP code map: generate visual symbol map (JSON/SVG/Mermaid) from `documentSymbols` + cross-references, publish to git on minor/major releases | future |
-| 31 | Org table mode: alignment, Tab-to-cell, structure editing, sorting, formulas, import/export | future |
+| 31 | Org table mode: alignment, Tab-to-cell, structure editing, sorting, formulas, import/export | v0.7.0 ✅ (core: align/nav/structure/move; remaining: sorting, formulas, import/export) |
 | 32 | Help buffer heading scaling: org heading tiered scale (1.5x/1.3x/1.15x) in help/tutor buffers | v0.6.0 ✅ |
 | 33 | Pixel-based variable-height lines: replace `extra_rows_for_scale` with pixel-Y accumulator for exact heading heights | v0.5.1 ✅ |
 | 34 | Chained ex command abbreviations: `:wqa`, `:xa`, `:wa`, `:qa!` — ex-command tokenizer framework | v0.6.0 ✅ |
@@ -1163,6 +1163,7 @@ Advanced display optimizations from Emacs `dispnew.c` / `xdisp.c` analysis. (v0.
 - [x] Scrollbar (vertical) — pixel-precise track+thumb in `scrollbar.rs`, theme-aware colors, allocates 1 col from text area (v0.6.0)
 - [x] Mouse wheel scroll (done in M3)
 - [x] Selection highlighting (done in M3 — visual mode bg/fg in buffer_render.rs)
+- [ ] Refine inertial (kinetic) scrolling in shell/terminal buffers — mouse scroll feels wonky since inertial scroll was enabled; shell buffers need different scroll physics or pass-through
 
 ---
 
@@ -1179,20 +1180,23 @@ Builds on the existing org parser (Phase 5 M2) and KB infrastructure.
 - [x] zM/zR fold-all/unfold-all for org headings
 - [x] Insert heading (M-Enter respects level) — inserts at same level after subtree, enters insert mode (v0.6.0)
 
-### M2: TODO & Agenda
+### M2: TODO & Agenda ✅ (v0.7.0)
 - [x] TODO state cycling (S-Left/S-Right: TODO → DONE → unmarked) (v0.6.0)
-- [ ] Priority cycling ([#A]/[#B]/[#C])
-- [ ] Tags on headings (`:tag1:tag2:`)
-- [ ] Agenda view: query across org files for TODO items
+- [x] Priority cycling (S-Up/S-Down: [#A]/[#B]/[#C]/none) — `org_priority_up/down()` in syntax_ops.rs (v0.7.0)
+- [x] Tags on headings (`:tag1:tag2:`) — `org_set_tags()` + MiniDialog, `SPC m t`, KB parser integration (v0.7.0)
+- [x] Agenda view: query across org files for TODO items — `agenda_view.rs` + `agenda_ops.rs`, filters by state/priority/tag, `SPC o a` / `:agenda` (v0.7.0)
+- [x] Integration tests: org content → `parse_org_multi()` → KB → agenda view (5 tests: all-todos, filter-by-state/priority/tag, view structure) (v0.7.0)
+- [x] Performance benchmark: 1000-node agenda in <50ms — validates O(1) index + O(n) collect vs Emacs O(files×lines) (v0.7.0)
+- [x] Persistent agenda files: `[org] agenda_files` in config.toml, `:agenda-add`/`:agenda-remove`/`:agenda-list`/`:agenda-ingest` commands, `SPC o A`, Scheme API (`agenda-add!`/`agenda-remove!`/`agenda-list`), auto-ingest on startup (v0.7.0)
 
-### M3: Tables & Lists
-- [ ] Org table mode (alignment, navigation, structure editing, sorting, formulas)
+### M3: Tables & Lists ✅ (v0.7.0)
+- [x] Org table mode — `table_ops.rs` (350+ lines): alignment (`:---:` center, `---:` right), Tab/S-Tab cell navigation, insert/delete row/column, move row up/down, auto-insert row at end, 13 tests (v0.7.0)
 - [x] Checkbox lists (`- [ ]` / `- [x]`) with toggle (v0.6.0: smart-enter + toggle_checkbox_at_cursor)
-- [ ] Ordered/unordered list continuation on Enter
+- [x] Ordered/unordered list continuation on Enter — `insert_smart_newline()`: detects `-/+/*` markers, `1.`/`1)` with auto-increment, checkbox continuation, empty item ends list (v0.7.0)
 
 ### M4: Rich Rendering ✅ (partial)
 - [x] Inline markup rendering: `*bold*`, `/italic/`, `=code=`, `~verbatim~` (v0.6.0: compute_org_style_spans)
-- [ ] Org `+strikethrough+` inline markup (markdown `~~text~~` done, org `+text+` missing)
+- [x] Org `+strikethrough+` inline markup (v0.6.0: markup.rs compute_org_style_spans)
 - [x] Link rendering and following in org buffers (`[[target][display]]`) (v0.6.0: display regions)
 - [ ] Image preview (terminal: sixel/kitty protocol; future: GUI)
 - [x] Source block syntax highlighting (`#+begin_src lang`) (v0.6.0: inject_fenced_code_blocks)
@@ -1320,4 +1324,5 @@ Phase 3e (editor essentials) ✅ COMPLETE
 | v0.5.1 vim parity + fixes | 36 ✅ | ghost cursor, status bar, block visual, ignorecase, :g/:v, C-t/C-d, cached theme resolution |
 | v0.6.0 GUI + frameworks | 575 ✅ | display regions, BufferView/BufferMode, keymap overlays, Magit, swap files, variable-height, mouse |
 | v0.7.0 docs + agent | 137 ✅ | help content, contextual help, user help nodes, config health, display policy, mouse focus, rich content, sub-line scroll, native SVG |
-| **Total** | **2,389** | All passing, 0 failures |
+| v0.7.0 agenda tests | 9 ✅ | integration tests (org→parser→agenda), perf benchmark (1000 nodes <50ms), agenda file CRUD |
+| **Total** | **2,561** | All passing, 0 failures |

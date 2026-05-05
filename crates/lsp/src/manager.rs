@@ -84,6 +84,12 @@ pub enum LspCommand {
         position: Position,
         generation: u64,
     },
+    /// Request signature help at a position.
+    SignatureHelp {
+        uri: String,
+        language_id: String,
+        position: Position,
+    },
     /// Update workspace folders (late project detection).
     DidChangeWorkspaceFolders {
         added: Vec<String>, // URIs
@@ -152,6 +158,12 @@ pub enum LspTaskEvent {
     DocumentHighlightResult {
         highlights: Vec<crate::protocol::DocumentHighlight>,
         generation: u64,
+    },
+    /// Signature help response.
+    SignatureHelpResult {
+        signatures: Vec<crate::protocol::SignatureInformation>,
+        active_signature: usize,
+        active_parameter: usize,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -327,6 +339,21 @@ impl LspManager {
         let client = self.ensure_client(language_id).await?;
         let resp = client.request_code_action(uri, range, diagnostics).await?;
         Ok(resp.actions)
+    }
+
+    pub async fn signature_help(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<(Vec<crate::protocol::SignatureInformation>, usize, usize), String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_signature_help(uri, position).await?;
+        Ok((
+            resp.signatures,
+            resp.active_signature,
+            resp.active_parameter,
+        ))
     }
 
     pub async fn document_highlight(
@@ -623,6 +650,24 @@ async fn handle_command(
             }
             Err(_) => {
                 // Silently ignore highlight errors — they're not user-initiated.
+            }
+        },
+        LspCommand::SignatureHelp {
+            uri,
+            language_id,
+            position,
+        } => match manager.signature_help(&language_id, &uri, position).await {
+            Ok((signatures, active_sig, active_param)) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::SignatureHelpResult {
+                        signatures,
+                        active_signature: active_sig,
+                        active_parameter: active_param,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
             }
         },
         LspCommand::DidChangeWorkspaceFolders { added } => {

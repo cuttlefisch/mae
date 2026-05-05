@@ -108,6 +108,13 @@ pub enum LspIntent {
         character: u32,
         generation: u64,
     },
+    /// Request `textDocument/signatureHelp`.
+    SignatureHelp {
+        uri: String,
+        language_id: String,
+        line: u32,
+        character: u32,
+    },
 }
 
 /// Convert a filesystem path to a `file://` URI, matching `mae-lsp`'s

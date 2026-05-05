@@ -98,6 +98,13 @@ impl Editor {
             "lsp-rename-abort" => {
                 self.abort_pending_rename();
             }
+            "lsp-signature-help" => {
+                self.lsp_request_signature_help();
+            }
+            "lsp-peek-definition" => {
+                self.record_jump();
+                self.lsp_request_peek_definition();
+            }
             "syntax-select-node" => {
                 self.syntax_select_node();
             }

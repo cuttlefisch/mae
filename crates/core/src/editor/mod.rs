@@ -116,6 +116,72 @@ pub struct HoverPopup {
     pub scroll_offset: usize,
 }
 
+/// Floating popup showing LSP signature help near the cursor.
+#[derive(Debug, Clone)]
+pub struct SignatureHelpState {
+    /// Signatures from LSP.
+    pub signatures: Vec<SignatureHelpInfo>,
+    /// Which signature is active.
+    pub active_signature: usize,
+    /// Which parameter is active (highlighted).
+    pub active_parameter: usize,
+    /// Anchor position where the call started.
+    pub anchor_line: usize,
+    pub anchor_col: usize,
+}
+
+/// A single signature for display.
+#[derive(Debug, Clone)]
+pub struct SignatureHelpInfo {
+    /// Full signature label (e.g. "fn foo(x: i32, y: &str) -> bool").
+    pub label: String,
+    /// Parameter byte offset ranges in `label`.
+    pub parameters: Vec<(usize, usize)>,
+    /// Documentation for this signature.
+    pub documentation: Option<String>,
+}
+
+/// Inline preview of a definition without navigating away.
+#[derive(Debug, Clone)]
+pub struct PeekState {
+    /// File path of the definition.
+    pub file_path: String,
+    /// Line number of the definition (0-indexed).
+    pub line: usize,
+    /// Column of the definition.
+    pub col: usize,
+    /// Context lines around the definition.
+    pub context_lines: Vec<String>,
+    /// Which line in context_lines is the definition itself.
+    pub highlight_line: usize,
+    /// Scroll offset within the peek window.
+    pub scroll_offset: usize,
+}
+
+/// Per-line blame annotation from `git blame`.
+#[derive(Debug, Clone)]
+pub struct BlameEntry {
+    /// Short commit hash (8 chars).
+    pub commit_hash: String,
+    /// Author name.
+    pub author: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+    /// First line of commit message.
+    pub summary: String,
+    /// 0-indexed line in buffer.
+    pub final_line: usize,
+}
+
+/// Blame overlay for the active buffer.
+#[derive(Debug, Clone)]
+pub struct BlameOverlay {
+    /// Which buffer this blame is for.
+    pub buffer_idx: usize,
+    /// Blame entries, one per line.
+    pub entries: Vec<BlameEntry>,
+}
+
 /// A single item in the LSP code action popup menu.
 #[derive(Debug, Clone)]
 pub struct CodeActionItem {
@@ -594,12 +660,24 @@ pub struct Editor {
     pub lsp_hover_popup: bool,
     /// Active hover popup (shown via K when lsp_hover_popup=true).
     pub hover_popup: Option<HoverPopup>,
+    /// Active signature help popup (triggered on `(` and `,` in insert mode).
+    pub signature_help: Option<SignatureHelpState>,
+    /// Peek definition preview (shown via SPC l p).
+    pub peek_state: Option<PeekState>,
+    /// When true, the next GotoDefinition result goes to peek_state instead of jumping.
+    pub peek_definition_pending: bool,
+    /// Git blame overlay for current buffer.
+    pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
     pub lsp_diagnostics_inline: bool,
     /// Show diagnostic messages as virtual text at end of line. Default true.
     pub lsp_diagnostics_virtual_text: bool,
     /// Enable LSP auto-completion popup in insert mode. Default true.
     pub lsp_completion: bool,
+    /// Show breadcrumb bar (file > symbol ancestry). Default false.
+    pub show_breadcrumbs: bool,
+    /// Current breadcrumb path (file > module > fn).
+    pub breadcrumbs: Option<Vec<String>>,
     /// Active code action menu (shown via SPC c a).
     pub code_action_menu: Option<CodeActionMenu>,
     /// Symbol occurrence highlights from `textDocument/documentHighlight`.
@@ -682,6 +760,9 @@ pub struct Editor {
     /// Per-buffer code-block-lines cache, keyed by buffer index.
     /// Viewport-local for large files, full-buffer for small files.
     pub code_block_cache: HashMap<usize, crate::syntax::ViewportCodeBlockCache>,
+    /// Persistent list of org directories/files to scan for agenda items.
+    /// Stored in config.toml as `[org] agenda_files = [...]`.
+    pub org_agenda_files: Vec<String>,
 }
 
 impl Default for Editor {
@@ -869,9 +950,15 @@ impl Editor {
             render_markup: true,
             lsp_hover_popup: true,
             hover_popup: None,
+            signature_help: None,
+            peek_state: None,
+            peek_definition_pending: false,
+            blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,
             lsp_completion: true,
+            show_breadcrumbs: false,
+            breadcrumbs: None,
             code_action_menu: None,
             highlight_ranges: Vec::new(),
             highlight_generation: 0,
@@ -903,6 +990,7 @@ impl Editor {
             syntax_reparse_debounce_ms: 50,
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
+            org_agenda_files: Vec::new(),
         }
     }
 
@@ -1308,6 +1396,7 @@ impl Editor {
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
             "lsp_completion" => self.lsp_completion.to_string(),
+            "show_breadcrumbs" => self.show_breadcrumbs.to_string(),
             "mouse_autoselect_window" => self.mouse_autoselect_window.to_string(),
             "mouse_wheel_follow_mouse" => self.mouse_wheel_follow_mouse.to_string(),
             "scroll_speed" => self.scroll_speed.to_string(),
@@ -1328,6 +1417,7 @@ impl Editor {
             "degrade_threshold_line_length" => self.degrade_threshold_line_length.to_string(),
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
+            "org_agenda_files" => self.org_agenda_files.join(", "),
             _ => return None,
         };
         Some((value, def))
@@ -1516,6 +1606,9 @@ impl Editor {
             "lsp_completion" => {
                 self.lsp_completion = parse_option_bool(value)?;
             }
+            "show_breadcrumbs" => {
+                self.show_breadcrumbs = parse_option_bool(value)?;
+            }
             "mouse_autoselect_window" => {
                 self.mouse_autoselect_window = parse_option_bool(value)?;
             }
@@ -1632,6 +1725,9 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
+            }
+            "org_agenda_files" => {
+                return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -2035,6 +2131,24 @@ impl Editor {
             self.buffers.len()
         );
         &mut self.buffers[idx]
+    }
+
+    /// Per-window viewport height from cached layout. Falls back to global.
+    pub fn window_viewport_height(&self, win_id: WindowId) -> usize {
+        if self.last_layout_area.width > 0 && self.last_layout_area.height > 0 {
+            let rects = self.window_mgr.layout_rects(self.last_layout_area);
+            for (id, rect) in &rects {
+                if *id == win_id && rect.height >= 3 {
+                    return (rect.height as usize).saturating_sub(2); // status + border
+                }
+            }
+        }
+        self.viewport_height // fallback (startup, tests, zero-area)
+    }
+
+    /// Focused window's viewport height (convenience).
+    pub fn focused_viewport_height(&self) -> usize {
+        self.window_viewport_height(self.window_mgr.focused_id())
     }
 
     /// Save current editor state (buffer list, window layout, focus, mode)
@@ -2833,7 +2947,7 @@ impl Editor {
 
         // Miss — compute with padding to absorb future scroll shifts.
         let total = buf.display_line_count();
-        let pad = self.viewport_height;
+        let pad = self.focused_viewport_height();
         let compute_start = needed_start.saturating_sub(pad);
         let compute_end = (needed_end + pad).min(total);
 
@@ -3293,7 +3407,7 @@ impl Editor {
             let total = rope.len_lines();
             let win = self.window_mgr.focused_window();
             let start = win.scroll_offset;
-            let end = (start + self.viewport_height + 1).min(total);
+            let end = (start + self.focused_viewport_height() + 1).min(total);
             let mut max_w = 0usize;
             for i in start..end {
                 let line = rope.line(i);
@@ -3396,7 +3510,7 @@ impl Editor {
                 // Conversation buffers use win.scroll_offset (rope line index)
                 // via the standard FrameLayout pipeline.
                 let total = self.buffers[buf_idx].display_line_count();
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let amount = lines * scroll_speed;
                 let win = self.window_mgr.focused_window_mut();
                 if delta > 0 {
@@ -3414,11 +3528,12 @@ impl Editor {
                 } else {
                     -(lines as i32 * scroll_speed as i32)
                 };
-                self.pending_shell_scroll = Some(amount);
+                let prev = self.pending_shell_scroll.unwrap_or(0);
+                self.pending_shell_scroll = Some(prev + amount);
             }
             crate::BufferKind::Messages => {
                 let total = self.message_log.len();
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let win = self.window_mgr.focused_window_mut();
                 if delta > 0 {
                     win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
@@ -3429,7 +3544,7 @@ impl Editor {
             }
             _ => {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
-                let viewport_height = self.viewport_height;
+                let viewport_height = self.focused_viewport_height();
                 let steps = lines * scroll_speed;
 
                 // Phase 1: Sub-line-aware scroll stepping.
@@ -3567,25 +3682,31 @@ impl Editor {
         let buf_idx = self.active_buffer_idx();
         let kind = self.buffers[buf_idx].kind;
 
-        // Non-text buffers: convert to line delta, delegate to existing method.
+        // Non-text buffers: accumulate fractional lines, emit when threshold crossed.
         match kind {
             crate::BufferKind::Shell
             | crate::BufferKind::Conversation
             | crate::BufferKind::Messages => {
                 let cell_h = self.gui_cell_height;
-                let lines = (delta_px.abs() / cell_h).round() as i16;
-                if lines == 0 {
+                if cell_h <= 0.0 {
                     return false;
                 }
-                let sign: i16 = if delta_px > 0.0 { 1 } else { -1 };
-                self.handle_mouse_scroll(sign * lines);
-                return true;
+                let win = self.window_mgr.focused_window_mut();
+                win.shell_scroll_accumulator += delta_px;
+                let lines = (win.shell_scroll_accumulator / cell_h).trunc() as i16;
+                win.shell_scroll_accumulator -= lines as f32 * cell_h;
+                if lines != 0 {
+                    self.handle_mouse_scroll(lines);
+                }
+                // Keep inertia alive while accumulator has residual fractional pixels.
+                let acc = self.window_mgr.focused_window().shell_scroll_accumulator;
+                return acc.abs() > 0.01 || lines != 0;
             }
             _ => {}
         }
 
         let buf_line_count = self.buffers[buf_idx].display_line_count();
-        let viewport_height = self.viewport_height;
+        let viewport_height = self.focused_viewport_height();
         let cell_h = self.gui_cell_height;
         if cell_h <= 0.0 {
             return false;

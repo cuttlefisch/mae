@@ -12,12 +12,17 @@ impl Editor {
         match name {
             "move-up" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Messages {
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         win.scroll_offset = win.scroll_offset.saturating_sub(1);
                         win.cursor_row = win.cursor_row.saturating_sub(1);
                     }
+                } else if kind == crate::BufferKind::Shell {
+                    // In normal mode over a shell buffer, scroll scrollback up.
+                    let prev = self.pending_shell_scroll.unwrap_or(0);
+                    self.pending_shell_scroll = Some(prev + n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -27,9 +32,10 @@ impl Editor {
             }
             "move-down" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
-                    let vh = self.viewport_height;
+                    let vh = self.focused_viewport_height();
                     let max = total.saturating_sub(vh);
                     let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
@@ -37,6 +43,10 @@ impl Editor {
                         win.scroll_offset = (win.scroll_offset + 1).min(max);
                         win.cursor_row = (win.cursor_row + 1).min(line_count);
                     }
+                } else if kind == crate::BufferKind::Shell {
+                    // In normal mode over a shell buffer, scroll scrollback down.
+                    let prev = self.pending_shell_scroll.unwrap_or(0);
+                    self.pending_shell_scroll = Some(prev - n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -204,7 +214,7 @@ impl Editor {
                 let kind = self.buffers[idx].kind;
                 if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
-                    let vh = self.viewport_height;
+                    let vh = self.focused_viewport_height();
                     let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
                     win.scroll_offset = total.saturating_sub(vh);
@@ -346,7 +356,7 @@ impl Editor {
             "scroll-half-up" | "scroll-page-up" => {
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let is_half = name == "scroll-half-up";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
@@ -355,6 +365,12 @@ impl Editor {
                         for _ in 0..n {
                             win.scroll_offset = win.scroll_offset.saturating_sub(amount);
                             win.cursor_row = win.cursor_row.saturating_sub(amount);
+                        }
+                    }
+                    crate::BufferKind::Shell => {
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev + amount as i32);
                         }
                     }
                     _ => {
@@ -374,7 +390,7 @@ impl Editor {
             "scroll-half-down" | "scroll-page-down" => {
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let is_half = name == "scroll-half-down";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
@@ -386,6 +402,12 @@ impl Editor {
                         for _ in 0..n {
                             win.scroll_offset = (win.scroll_offset + amount).min(max);
                             win.cursor_row = (win.cursor_row + amount).min(line_count);
+                        }
+                    }
+                    crate::BufferKind::Shell => {
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev - amount as i32);
                         }
                     }
                     _ => {
@@ -413,15 +435,22 @@ impl Editor {
                 match kind {
                     crate::BufferKind::Messages => {
                         let total = self.message_log.len();
-                        let vh = self.viewport_height;
+                        let vh = self.focused_viewport_height();
                         let win = self.window_mgr.focused_window_mut();
                         let max = total.saturating_sub(vh);
                         for _ in 0..n {
                             win.scroll_offset = (win.scroll_offset + 1).min(max);
                         }
                     }
+                    crate::BufferKind::Shell => {
+                        let scroll_speed = self.scroll_speed as i32;
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev - scroll_speed);
+                        }
+                    }
                     _ => {
-                        let vh = self.viewport_height;
+                        let vh = self.focused_viewport_height();
                         let has_folds = !self.buffers[idx].folded_ranges.is_empty();
                         let needs_wrapped = (self.effective_word_wrap()
                             && self.text_area_width > 0)
@@ -498,8 +527,15 @@ impl Editor {
                             win.scroll_offset = win.scroll_offset.saturating_sub(1);
                         }
                     }
+                    crate::BufferKind::Shell => {
+                        let scroll_speed = self.scroll_speed as i32;
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev + scroll_speed);
+                        }
+                    }
                     _ => {
-                        let vh = self.viewport_height;
+                        let vh = self.focused_viewport_height();
                         let has_folds = !self.buffers[idx].folded_ranges.is_empty();
                         let needs_wrapped = (self.effective_word_wrap()
                             && self.text_area_width > 0)
@@ -556,7 +592,7 @@ impl Editor {
                 self.mark_scrolled();
             }
             "scroll-center" => {
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr.focused_window_mut().scroll_center(vh);
                 self.mark_scrolled();
             }
@@ -565,7 +601,7 @@ impl Editor {
                 self.mark_scrolled();
             }
             "scroll-bottom" => {
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .scroll_cursor_bottom(vh);
@@ -577,14 +613,14 @@ impl Editor {
             }
             "move-screen-middle" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .move_to_screen_middle(buf, vh);
             }
             "move-screen-bottom" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .move_to_screen_bottom(buf, vh);
