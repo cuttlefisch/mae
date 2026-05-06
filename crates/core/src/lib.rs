@@ -1,4 +1,5 @@
 pub mod agenda_view;
+pub mod babel;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -15,6 +16,7 @@ pub mod display_policy;
 pub mod display_region;
 pub mod editor;
 pub mod event_record;
+pub mod export;
 pub mod file_browser;
 pub mod file_picker;
 pub mod file_tree;

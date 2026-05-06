@@ -431,6 +431,35 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("babel") {
+        categories.push(serde_json::json!({
+            "name": "babel",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "babel_execute",
+                    "args": {},
+                    "assert": "Should report 'No source block at cursor' on a non-org buffer"
+                },
+                {
+                    "tool": "babel_tangle",
+                    "args": {},
+                    "assert": "Should report 'No blocks with :tangle directive' or similar"
+                },
+                {
+                    "tool": "org_export",
+                    "args": {"format": "html"},
+                    "assert": "Should export or report an error (not crash)"
+                },
+                {
+                    "tool": "kb_instances",
+                    "args": {},
+                    "assert": "Should list KB instances"
+                }
+            ]
+        }));
+    }
+
     if include("guidance") {
         categories.push(serde_json::json!({
             "name": "guidance",

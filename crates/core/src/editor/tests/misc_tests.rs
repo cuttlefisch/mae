@@ -1804,5 +1804,146 @@ fn git_or_project_root_falls_back_to_project_root_without_git() {
     assert_eq!(result, root.join("crates/core"));
 }
 
+// AI target dispatch tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ai_active_buffer_idx_defaults_to_focused() {
+    let editor = Editor::new();
+    assert_eq!(editor.ai_active_buffer_idx(), editor.active_buffer_idx());
+}
+
+#[test]
+fn ai_active_buffer_idx_uses_target_when_set() {
+    let mut editor = Editor::new();
+    // Add a second buffer
+    editor.buffers.push(Buffer::new());
+    editor.ai_target_buffer_idx = Some(1);
+    assert_eq!(editor.ai_active_buffer_idx(), 1);
+    assert_eq!(editor.active_buffer_idx(), 0); // focused is still 0
+}
+
+#[test]
+fn ai_cursor_row_defaults_to_focused_window() {
+    let mut editor = Editor::new();
+    editor.window_mgr.focused_window_mut().cursor_row = 5;
+    assert_eq!(editor.ai_cursor_row(), 5);
+}
+
+#[test]
+fn ai_cursor_row_uses_target_window() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    // Set cursor in the new window
+    if let Some(w) = editor
+        .window_mgr
+        .iter_windows_mut()
+        .find(|w| w.id == new_win_id)
+    {
+        w.cursor_row = 42;
+        w.buffer_idx = 1;
+    }
+    // Focus stays on original window
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    assert_eq!(editor.ai_cursor_row(), 42);
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0); // focused is still 0
+}
+
+#[test]
+fn dispatch_builtin_in_target_restores_focus() {
+    let mut editor = ed_with_text("line one\nline two\nline three");
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    // Dispatch move-down in the target window
+    editor.dispatch_builtin_in_target("move-down");
+
+    // Focus should be restored to original
+    assert_eq!(editor.window_mgr.focused_id(), original_id);
+}
+
+#[test]
+fn execute_command_respects_ai_target() {
+    let mut editor = ed_with_text("line one\nline two\nline three");
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 0, area)
+        .unwrap();
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    // Cursor in target window should be at 0 initially
+    let target_row_before = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id == new_win_id)
+        .unwrap()
+        .cursor_row;
+    assert_eq!(target_row_before, 0);
+
+    // Dispatch move-down in the target window
+    editor.dispatch_builtin_in_target("move-down");
+
+    // Target window cursor should have moved
+    let target_row_after = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id == new_win_id)
+        .unwrap()
+        .cursor_row;
+    assert_eq!(target_row_after, 1);
+
+    // Original window cursor should NOT have moved
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+pub mod federation;
 pub mod org;
 pub mod persist;
 pub mod watch;

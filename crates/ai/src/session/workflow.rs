@@ -256,6 +256,8 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
 
         "execute_command" => Some("scrolling"),
 
+        "babel_execute" | "babel_tangle" | "org_export" | "kb_instances" => Some("babel"),
+
         _ => None,
     }
 }

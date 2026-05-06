@@ -116,6 +116,33 @@ impl Editor {
             "table-move-row-down" => {
                 self.table_move_row_down();
             }
+            // Babel commands
+            "babel-execute" => {
+                self.babel_execute();
+            }
+            "babel-execute-all" => {
+                self.babel_execute_all();
+            }
+            "babel-tangle" => {
+                self.babel_tangle();
+            }
+            "babel-kill-sessions" => {
+                self.babel_kill_sessions();
+            }
+            // Export commands
+            "org-export-html" => {
+                self.org_export_html();
+            }
+            "org-export-markdown" => {
+                self.org_export_markdown();
+            }
+            "org-export-subtree" => {
+                self.org_export_subtree();
+            }
+            // KB federation commands
+            "kb-instances" => {
+                self.kb_instances();
+            }
             // Display region link navigation
             "text-next-link" => {
                 self.text_next_link();

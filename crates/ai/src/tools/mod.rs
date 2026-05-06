@@ -108,8 +108,8 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 102,
-            "Expected at least 102 AI tools, got {}",
+            tools.len() >= 106,
+            "Expected at least 106 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -207,8 +207,8 @@ mod tests {
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 50,
-            "core tools should be < 50, got {}",
+            core_count < 55,
+            "core tools should be < 55, got {}",
             core_count
         );
         assert!(
@@ -286,6 +286,89 @@ mod tests {
             classify_tool_category("kb_search"),
             Some(ToolCategory::Knowledge)
         );
+    }
+
+    #[test]
+    fn all_tools_have_descriptions() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        for tool in &tools {
+            assert!(
+                !tool.description.is_empty(),
+                "tool '{}' has empty description",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_tool_names_are_alphanumeric_underscore() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        for tool in &tools {
+            assert!(
+                tool.name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "bad tool name: {}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn tool_definitions_have_valid_required_params() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        for tool in &tools {
+            for req in &tool.parameters.required {
+                assert!(
+                    tool.parameters.properties.contains_key(req.as_str()),
+                    "tool '{}': required param '{}' not in properties",
+                    tool.name,
+                    req
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prompt_mentions_babel_tools() {
+        let full = include_str!("../../../mae/src/prompts/pair-programmer.xml");
+        let compact = include_str!("../../../mae/src/prompts/pair-programmer-compact.xml");
+        assert!(
+            full.contains("babel_execute") || full.contains("babel"),
+            "full prompt should mention babel"
+        );
+        assert!(
+            compact.contains("set_ai_target"),
+            "compact prompt should mention set_ai_target"
+        );
+        assert!(
+            compact.contains("babel_execute") || compact.contains("babel"),
+            "compact prompt should mention babel"
+        );
+    }
+
+    #[test]
+    fn compact_prompt_has_guardrails() {
+        let compact = include_str!("../../../mae/src/prompts/pair-programmer-compact.xml");
+        assert!(compact.contains("When You Are Stuck"));
+        assert!(compact.contains("Tool Preferences"));
+        assert!(compact.contains("Common Recipes"));
+    }
+
+    #[test]
+    fn compact_explorer_has_guardrails() {
+        let compact = include_str!("../../../mae/src/prompts/explorer-compact.xml");
+        assert!(compact.contains("When You Are Stuck"));
+        assert!(compact.contains("Tool Preferences"));
+        assert!(compact.contains("READ-ONLY"));
+    }
+
+    #[test]
+    fn compact_reviewer_has_guardrails() {
+        let compact = include_str!("../../../mae/src/prompts/reviewer-compact.xml");
+        assert!(compact.contains("When You Are Stuck"));
+        assert!(compact.contains("Tool Preferences"));
+        assert!(compact.contains("READ-ONLY"));
     }
 
     #[test]

@@ -453,15 +453,15 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     .unwrap_or_else(|| mae_ai::context_limits::tier(&config.model))
             };
 
-            let sub_session = AgentSession::new(
-                provider,
-                tools,
-                build_system_prompt(&profile, effective_tier),
-                proxy_tx,
-                sub_cmd_rx,
-            )
-            .with_budget(config.model, config.budget)
-            .with_target_buffer(target_buf_name.clone());
+            let mut sub_prompt = build_system_prompt(&profile, effective_tier);
+            let provider_hint = mae_ai::context_limits::ProviderHint::from_model(&config.model);
+            if let Some(hints) = provider_hint.prompt_hints() {
+                sub_prompt.push_str(hints);
+            }
+
+            let sub_session = AgentSession::new(provider, tools, sub_prompt, proxy_tx, sub_cmd_rx)
+                .with_budget(config.model, config.budget)
+                .with_target_buffer(target_buf_name.clone());
 
             // Spawn the sub-agent session.
             spawn_ai_session(sub_session);

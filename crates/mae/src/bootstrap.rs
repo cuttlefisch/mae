@@ -395,14 +395,16 @@ pub fn setup_ai(
             .unwrap_or_else(|| mae_ai::context_limits::tier(&model));
         info!(tier = effective_tier.as_str(), "selected prompt tier");
 
-        let session = AgentSession::new(
-            provider,
-            tools,
-            build_system_prompt("pair-programmer", effective_tier),
-            event_tx.clone(),
-            cmd_rx,
-        )
-        .with_budget(model, budget);
+        let mut prompt = build_system_prompt("pair-programmer", effective_tier);
+
+        // Inject provider-specific hints for non-Claude models
+        let provider_hint = mae_ai::context_limits::ProviderHint::from_model(&model);
+        if let Some(hints) = provider_hint.prompt_hints() {
+            prompt.push_str(hints);
+        }
+
+        let session = AgentSession::new(provider, tools, prompt, event_tx.clone(), cmd_rx)
+            .with_budget(model, budget);
 
         // Self-test mode: wider checkpoint interval, higher stagnation tolerance
         let session = if std::env::args().any(|a| a == "--self-test") {
@@ -479,14 +481,16 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
 
     // Fall back to bundled (tiered then generic)
     let content = base_content.unwrap_or_else(|| {
-        // For pair-programmer, try the tiered bundled prompt
-        if profile == "pair-programmer" && tier == mae_ai::context_limits::ModelTier::Compact {
-            return include_str!("prompts/pair-programmer-compact.xml").to_string();
-        }
-        match profile {
-            "explorer" => include_str!("prompts/explorer.xml").to_string(),
-            "planner" => include_str!("prompts/planner.xml").to_string(),
-            "reviewer" => include_str!("prompts/reviewer.xml").to_string(),
+        let is_compact = tier == mae_ai::context_limits::ModelTier::Compact;
+        match (profile, is_compact) {
+            ("pair-programmer", true) => {
+                include_str!("prompts/pair-programmer-compact.xml").to_string()
+            }
+            ("explorer", true) => include_str!("prompts/explorer-compact.xml").to_string(),
+            ("reviewer", true) => include_str!("prompts/reviewer-compact.xml").to_string(),
+            ("explorer", false) => include_str!("prompts/explorer.xml").to_string(),
+            ("planner", _) => include_str!("prompts/planner.xml").to_string(),
+            ("reviewer", false) => include_str!("prompts/reviewer.xml").to_string(),
             _ => include_str!("prompts/pair-programmer.xml").to_string(),
         }
     });

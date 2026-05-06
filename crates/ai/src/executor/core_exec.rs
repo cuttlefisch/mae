@@ -26,6 +26,9 @@ fn execute_eval_scheme(editor: &mut Editor, args: &serde_json::Value) -> Result<
 }
 
 /// Execute a registered editor command by name (MCP tool handler).
+/// Uses `dispatch_builtin_in_target()` so the command operates on the
+/// AI target window (if set via `set_ai_target`) rather than the
+/// human-focused window. This is the `with-current-buffer` pattern.
 fn execute_command_dispatch(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -34,7 +37,7 @@ fn execute_command_dispatch(
         .get("command")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'command' argument")?;
-    if editor.dispatch_builtin(cmd) {
+    if editor.dispatch_builtin_in_target(cmd) {
         Ok(format!("Executed: {}", cmd))
     } else {
         Err(format!("Unknown command: {}", cmd))

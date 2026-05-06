@@ -139,6 +139,62 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Babel tools ---
+        ToolDefinition {
+            name: "babel_execute".into(),
+            description: "Execute the org-babel source block at the cursor (or by name). Inserts #+RESULTS: below the block.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "block_name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Optional #+name of the block to execute (default: block at cursor)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "babel_tangle".into(),
+            description: "Tangle the current org buffer — write all :tangle blocks to their target files.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "org_export".into(),
+            description: "Export the current org buffer to a file. Writes alongside the source.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "format".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Export format".into(),
+                        enum_values: Some(vec!["html".into(), "markdown".into()]),
+                    },
+                )]),
+                required: vec!["format".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        // --- KB federation tools ---
+        ToolDefinition {
+            name: "kb_instances".into(),
+            description: "List all registered KB instances (name, UUID, node count, enabled).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // --- Org tools ---
         ToolDefinition {
             name: "org_cycle".into(),

@@ -772,6 +772,29 @@ impl CommandRegistry {
         reg.register_builtin("org-priority-up", "Cycle org priority up (S-Up)");
         reg.register_builtin("org-priority-down", "Cycle org priority down (S-Down)");
         reg.register_builtin("org-set-tags", "Set org heading tags (SPC m t)");
+        // Babel
+        reg.register_builtin(
+            "babel-execute",
+            "Execute source block at cursor (C-c C-c / SPC m x)",
+        );
+        reg.register_builtin(
+            "babel-execute-all",
+            "Execute all source blocks in buffer (SPC m X)",
+        );
+        reg.register_builtin("babel-tangle", "Tangle source blocks to files (SPC m T)");
+        reg.register_builtin("babel-kill-sessions", "Kill all babel session processes");
+        // Export
+        reg.register_builtin("org-export-html", "Export org buffer to HTML (SPC m e h)");
+        reg.register_builtin(
+            "org-export-markdown",
+            "Export org buffer to Markdown (SPC m e m)",
+        );
+        reg.register_builtin("org-export-subtree", "Export subtree at cursor (SPC m e s)");
+        // KB federation
+        reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
+        reg.register_builtin("kb-unregister", "Remove a registered KB instance");
+        reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
+        reg.register_builtin("kb-instances", "List all registered KB instances");
         reg.register_builtin(
             "insert-newline-smart",
             "Insert newline with list continuation",

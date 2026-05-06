@@ -1,4 +1,5 @@
 mod agenda_ops;
+mod babel_ops;
 mod changes;
 mod command;
 mod dap_ops;
@@ -508,6 +509,12 @@ pub struct Editor {
     /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
+    /// Babel: prompt before executing blocks (default true).
+    pub babel_confirm: bool,
+    /// Babel: trusted file patterns that skip confirmation.
+    pub babel_trust_paths: Vec<String>,
+    /// Babel: execution timeout in seconds (default 30).
+    pub babel_timeout: u64,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_help_state: Option<crate::help_view::HelpView>,
@@ -940,6 +947,9 @@ impl Editor {
             last_visual: None,
             pending_scheme_eval: Vec::new(),
             kb,
+            babel_confirm: true,
+            babel_trust_paths: Vec::new(),
+            babel_timeout: 30,
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
@@ -2208,6 +2218,24 @@ impl Editor {
     /// Convenience: index of the active (focused window's) buffer.
     pub fn active_buffer_idx(&self) -> usize {
         self.window_mgr.focused_window().buffer_idx
+    }
+
+    /// AI-aware buffer index: returns `ai_target_buffer_idx` if set,
+    /// otherwise falls back to `active_buffer_idx()`.
+    pub fn ai_active_buffer_idx(&self) -> usize {
+        self.ai_target_buffer_idx
+            .unwrap_or_else(|| self.active_buffer_idx())
+    }
+
+    /// AI-aware cursor row: reads cursor from the AI target window if set,
+    /// otherwise from the focused window.
+    pub fn ai_cursor_row(&self) -> usize {
+        if let Some(win_id) = self.ai_target_window_id {
+            if let Some(win) = self.window_mgr.iter_windows().find(|w| w.id == win_id) {
+                return win.cursor_row;
+            }
+        }
+        self.window_mgr.focused_window().cursor_row
     }
 
     pub fn active_buffer(&self) -> &Buffer {

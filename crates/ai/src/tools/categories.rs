@@ -60,6 +60,10 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "org_cycle"
         | "org_todo_cycle"
         | "org_open_link"
+        | "babel_execute"
+        | "babel_tangle"
+        | "org_export"
+        | "kb_instances"
         | "command_list"
         | "editor_save_state"
         | "editor_restore_state"
@@ -88,7 +92,11 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
         Some(ToolCategory::Lsp)
     } else if name.starts_with("dap_") || name == "debug_state" {
         Some(ToolCategory::Dap)
-    } else if name.starts_with("kb_") || name == "help_open" || name.starts_with("org_") {
+    } else if name.starts_with("kb_")
+        || name == "help_open"
+        || name.starts_with("org_")
+        || name.starts_with("babel_")
+    {
         Some(ToolCategory::Knowledge)
     } else if name.starts_with("shell_") && name != "shell_exec" {
         Some(ToolCategory::ShellMgmt)

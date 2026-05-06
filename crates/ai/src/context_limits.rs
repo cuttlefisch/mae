@@ -78,6 +78,61 @@ pub fn tier(model: &str) -> ModelTier {
     lookup(model).tier
 }
 
+/// Provider family detected from model name prefix.
+/// Used for provider-specific prompt hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHint {
+    Claude,
+    OpenAi,
+    Gemini,
+    DeepSeek,
+    Unknown,
+}
+
+impl ProviderHint {
+    /// Detect provider from a model name string.
+    pub fn from_model(model: &str) -> Self {
+        let lower = model.to_ascii_lowercase();
+        if lower.starts_with("claude") {
+            Self::Claude
+        } else if lower.starts_with("gpt") || lower.starts_with("o1") {
+            Self::OpenAi
+        } else if lower.starts_with("gemini") {
+            Self::Gemini
+        } else if lower.starts_with("deepseek") {
+            Self::DeepSeek
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// Optional provider-specific hints to append to the system prompt.
+    /// Returns `None` for Claude (the primary dev target — no extra hints needed).
+    pub fn prompt_hints(&self) -> Option<&'static str> {
+        match self {
+            Self::Gemini => Some(concat!(
+                "\n<provider-hints>\n",
+                "## Gemini-Specific\n",
+                "- Use explicit JSON examples when calling tools with complex args.\n",
+                "- tool_choice is set to 'auto' — you can call multiple tools per turn.\n",
+                "- Prefer longer, more descriptive tool call arguments.\n",
+                "</provider-hints>\n",
+            )),
+            Self::DeepSeek => Some(concat!(
+                "\n<provider-hints>\n",
+                "## DeepSeek-Specific\n",
+                "- Follow numbered step sequences strictly.\n",
+                "- If you find yourself repeating the same tool call, STOP and try a different approach.\n",
+                "- State your plan before each tool call.\n",
+                "</provider-hints>\n",
+            )),
+            Self::OpenAi => None, // Works well with current prompts
+            Self::Claude => None, // Primary target
+            Self::Unknown => None,
+        }
+    }
+}
+
 /// Conservative default context window for unknown models.
 pub const DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
 /// Conservative default max rounds for unknown models.
@@ -171,6 +226,41 @@ mod tests {
         assert_eq!(tier("gemini-2.5-pro-latest"), ModelTier::Full);
         assert_eq!(tier("gemini-2.5-flash"), ModelTier::Compact);
         assert_eq!(tier("unknown-model"), ModelTier::Compact);
+    }
+
+    #[test]
+    fn provider_hint_detection() {
+        assert_eq!(
+            ProviderHint::from_model("claude-opus-4-6"),
+            ProviderHint::Claude
+        );
+        assert_eq!(ProviderHint::from_model("gpt-4o"), ProviderHint::OpenAi);
+        assert_eq!(ProviderHint::from_model("o1-mini"), ProviderHint::OpenAi);
+        assert_eq!(
+            ProviderHint::from_model("gemini-2.5-pro"),
+            ProviderHint::Gemini
+        );
+        assert_eq!(
+            ProviderHint::from_model("deepseek-chat"),
+            ProviderHint::DeepSeek
+        );
+        assert_eq!(ProviderHint::from_model("llama3"), ProviderHint::Unknown);
+    }
+
+    #[test]
+    fn provider_hints_only_for_non_claude() {
+        assert!(ProviderHint::Claude.prompt_hints().is_none());
+        assert!(ProviderHint::OpenAi.prompt_hints().is_none());
+        assert!(ProviderHint::Gemini.prompt_hints().is_some());
+        assert!(ProviderHint::DeepSeek.prompt_hints().is_some());
+        assert!(ProviderHint::Unknown.prompt_hints().is_none());
+    }
+
+    #[test]
+    fn gemini_hints_contain_provider_tag() {
+        let hints = ProviderHint::Gemini.prompt_hints().unwrap();
+        assert!(hints.contains("<provider-hints>"));
+        assert!(hints.contains("Gemini"));
     }
 
     #[test]

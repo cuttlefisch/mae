@@ -650,12 +650,39 @@ impl Editor {
         org.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
         org.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
         org.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
+        // Babel commands
+        org.bind(parse_key_seq_spaced("SPC m x"), "babel-execute");
+        org.bind(parse_key_seq_spaced("SPC m X"), "babel-execute-all");
+        org.bind(parse_key_seq_spaced("SPC m T"), "babel-tangle");
+        // C-c C-c for babel execute
+        org.bind(
+            vec![
+                KeyPress {
+                    key: Key::Char('c'),
+                    ctrl: true,
+                    alt: false,
+                    shift: false,
+                },
+                KeyPress {
+                    key: Key::Char('c'),
+                    ctrl: true,
+                    alt: false,
+                    shift: false,
+                },
+            ],
+            "babel-execute",
+        );
+        // Export commands
+        org.bind(parse_key_seq_spaced("SPC m e h"), "org-export-html");
+        org.bind(parse_key_seq_spaced("SPC m e m"), "org-export-markdown");
+        org.bind(parse_key_seq_spaced("SPC m e s"), "org-export-subtree");
         org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
         org.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
         org.set_group_name(parse_key_seq_spaced("SPC m b"), "+table");
         org.set_group_name(parse_key_seq_spaced("SPC m b i"), "+insert");
         org.set_group_name(parse_key_seq_spaced("SPC m b d"), "+delete");
+        org.set_group_name(parse_key_seq_spaced("SPC m e"), "+export");
         org.bind(
             vec![KeyPress {
                 key: Key::Up,

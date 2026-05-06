@@ -634,6 +634,24 @@ impl OptionRegistry {
                     config_key: Some("performance.syntax_reparse_debounce_ms"),
                     valid_values: &[],
                 },
+                OptionDef {
+                    name: "babel_confirm",
+                    aliases: &["babel-confirm"],
+                    doc: "Prompt before executing org-babel source blocks",
+                    kind: OptionKind::Bool,
+                    default_value: "true",
+                    config_key: Some("babel.confirm"),
+                    valid_values: &[],
+                },
+                OptionDef {
+                    name: "babel_timeout",
+                    aliases: &["babel-timeout"],
+                    doc: "Execution timeout in seconds for babel source blocks",
+                    kind: OptionKind::Int,
+                    default_value: "30",
+                    config_key: Some("babel.timeout"),
+                    valid_values: &[],
+                },
             ],
         }
     }
