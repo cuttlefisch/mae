@@ -101,7 +101,7 @@ fn main() -> io::Result<()> {
         println!("  OPENAI_API_KEY      OpenAI API key");
         println!("  GEMINI_API_KEY      Gemini API key");
         println!("  DEEPSEEK_API_KEY    DeepSeek API key");
-        println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
+        println!("  MAE_AI_PERMISSIONS  readonly | write | shell | privileged");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
@@ -144,6 +144,12 @@ fn main() -> io::Result<()> {
                 }
                 Err(e) => return Err(e),
             }
+        }
+        // Also write init.scm template if it doesn't exist.
+        match config::write_init_template(force) {
+            Ok(path) => println!("Wrote init.scm to {}", path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {} // fine
+            Err(e) => eprintln!("Warning: could not write init.scm: {}", e),
         }
         config::run_wizard()?;
         return Ok(());
@@ -438,6 +444,8 @@ fn main() -> io::Result<()> {
             permission_policy,
         )
     });
+
+    editor.ai_configured = ai_command_tx.is_some();
 
     // --self-test [categories] — headless AI self-test.
     if args.iter().any(|a| a == "--self-test") {

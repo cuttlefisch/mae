@@ -91,10 +91,11 @@ pub struct AiSection {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     /// Permission tier for AI/MCP tool execution:
-    ///   "readonly"  — buffer reads only
-    ///   "standard"  — reads + edits
-    ///   "trusted"   — reads + edits + shell (default, container-first)
-    ///   "full"      — everything including quit/force-quit
+    ///   "readonly"    — buffer reads only
+    ///   "write"       — reads + edits
+    ///   "shell"       — reads + edits + shell (default, container-first)
+    ///   "privileged"  — everything including quit/force-quit
+    /// Legacy aliases: "standard" → write, "trusted" → shell, "full" → privileged
     /// Env override: MAE_AI_PERMISSIONS (highest precedence).
     pub auto_approve_tier: Option<String>,
     /// Override the prompt tier for this model: "full" or "compact".
@@ -269,6 +270,63 @@ pub fn write_template_config(force: bool) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Write a starter `init.scm` to `~/.config/mae/init.scm` if it doesn't exist.
+/// Called by `mae --init-config`. Skip if file exists unless `force` is true.
+pub fn write_init_template(force: bool) -> io::Result<PathBuf> {
+    let dir = config_path().parent().unwrap().to_path_buf();
+    let path = dir.join("init.scm");
+    if path.exists() && !force {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            ),
+        ));
+    }
+    fs::create_dir_all(&dir)?;
+    fs::write(&path, default_init_template())?;
+    Ok(path)
+}
+
+/// Starter init.scm template (Doom-style sections).
+fn default_init_template() -> &'static str {
+    r#";; MAE init.scm — Scheme configuration loaded on startup.
+;; This is a real Scheme program, not a settings file.
+;; Docs: :help config
+
+;; ── Appearance ──────────────────────────────────────────
+;; Available themes: default, dark-ansi, light-ansi, gruvbox-dark,
+;;   gruvbox-light, dracula, catppuccin-mocha, solarized-dark, one-dark
+(set-option! "theme" "default")
+
+;; Font size for GUI mode (6.0–72.0)
+;; (set-option! "font-size" "14.0")
+
+;; ── Editing ─────────────────────────────────────────────
+;; (set-option! "relative-line-numbers" "true")
+;; (set-option! "word-wrap" "true")
+;; (set-option! "scrolloff" "8")
+
+;; ── AI ──────────────────────────────────────────────────
+;; Provider and model can also be set here (overrides config.toml).
+;; (set-option! "ai-provider" "claude")
+;; (set-option! "ai-model" "claude-sonnet-4-20250514")
+
+;; ── Keybindings ─────────────────────────────────────────
+;; (define-key "normal" "SPC t t" "cycle-theme")
+;; (define-key "normal" "SPC g p" "git-push")
+
+;; ── Hooks ───────────────────────────────────────────────
+;; (add-hook! "before-save" "my-format-fn")
+;; (add-hook! "after-load" "my-setup-fn")
+
+;; ── Custom Functions ────────────────────────────────────
+;; (define (my-format-fn)
+;;   (run-cmd "lsp-format"))
+"#
+}
+
 /// Run `api_key_command` and return its trimmed stdout, or None on failure.
 fn run_key_command(cmd: &Option<String>) -> Option<String> {
     let cmd = cmd.as_deref()?;
@@ -415,7 +473,7 @@ pub fn resolve_ai_config_with_scheme(
             _ => match provider_type.as_str() {
                 "openai" => "gpt-4o".to_string(),
                 "gemini" => "gemini-2.5-flash".to_string(),
-                _ => "claude-sonnet-4-5".to_string(),
+                _ => "claude-sonnet-4-20250514".to_string(),
             },
         });
 
@@ -460,11 +518,11 @@ pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
         .unwrap_or_else(|| "trusted".into());
     let tier = match tier_str.as_str() {
         "readonly" => PermissionTier::ReadOnly,
-        "standard" => PermissionTier::Write,
-        "trusted" => PermissionTier::Shell,
-        "full" => PermissionTier::Privileged,
+        "write" | "standard" => PermissionTier::Write,
+        "shell" | "trusted" => PermissionTier::Shell,
+        "privileged" | "full" => PermissionTier::Privileged,
         _ => {
-            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'trusted'");
+            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'shell'");
             PermissionTier::Shell
         }
     };
@@ -574,7 +632,7 @@ pub fn run_wizard() -> io::Result<()> {
     let mut cfg = Config::default();
 
     let (provider, ask_key, default_model, default_base) = match choice.as_str() {
-        "1" | "claude" => ("claude", true, "claude-sonnet-4-5", None),
+        "1" | "claude" => ("claude", true, "claude-sonnet-4-20250514", None),
         "2" | "openai" => ("openai", true, "gpt-4o", None),
         "3" | "gemini" => ("gemini", true, "gemini-2.5-flash", None),
         "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
@@ -682,16 +740,20 @@ pub fn default_config_template() -> String {
 # provider = \"claude\"\n\
 \n\
 # Model identifier. Leave unset for the provider default.\n\
-# Claude defaults:  claude-sonnet-4-5  (also: claude-opus-4-6, claude-haiku-4-5-20251001)\n\
+# Claude defaults:  claude-sonnet-4-20250514  (also: claude-opus-4-6, claude-haiku-4-5-20251001)\n\
 # OpenAI defaults:  gpt-4o\n\
 # Gemini defaults:  gemini-2.5-flash (also: gemini-3.1-pro, gemini-3.1-flash-lite)\n\
 # Ollama examples:  llama3, codellama, qwen2.5-coder\n\
-# model = \"claude-sonnet-4-5\"\n\
+# model = \"claude-sonnet-4-20250514\"\n\
 \n\
 # Base URL for the API. Leave unset for provider defaults.\n\
 # base_url = \"http://localhost:11434/v1\"\n\
 \n\
-# API key. If unset, ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY env vars are read.\n\
+# API key. If unset, env vars are read:\n\
+#   ANTHROPIC_API_KEY — https://console.anthropic.com/settings/keys\n\
+#   OPENAI_API_KEY    — https://platform.openai.com/api-keys\n\
+#   GEMINI_API_KEY    — https://aistudio.google.com/apikey\n\
+#   DEEPSEEK_API_KEY  — https://platform.deepseek.com/api_keys\n\
 # Ollama doesn't need a key.\n\
 # api_key = \"...\"\n\
 \n\
@@ -700,9 +762,9 @@ pub fn default_config_template() -> String {
 # api_key_command = \"pass show deepseek/api-key\"\n\
 \n\
 # Permission tier for AI/MCP tool execution.\n\
-# Tiers: \"readonly\", \"standard\", \"trusted\" (default), \"full\"\n\
+# Tiers: \"readonly\", \"write\", \"shell\" (default), \"privileged\"\n\
 # Env override: MAE_AI_PERMISSIONS=full\n\
-# auto_approve_tier = \"trusted\"\n\
+# auto_approve_tier = \"shell\"\n\
 \n\
 # Override auto-detected prompt tier: \"full\" or \"compact\".\n\
 # Full: concise prompts for frontier models (Claude Opus/Sonnet, GPT-4o).\n\
@@ -726,7 +788,7 @@ pub fn default_config_template() -> String {
 # session_hard_cap_usd = 1.00\n\
 \n\
 [editor]\n\
-# Bundled themes: default, gruvbox-dark, nord, tokyo-night, catppuccin, solarized-light, dracula\n\
+# Bundled themes: default, dark-ansi, light-ansi, gruvbox-dark, gruvbox-light, dracula, catppuccin-mocha, solarized-dark, one-dark\n\
 # theme = \"default\"\n\
 \n\
 # Splash screen art: \"bat\" (more variants coming)\n\
@@ -747,6 +809,12 @@ pub fn default_config_template() -> String {
 # so MCP tools run without per-call approval prompts.\n\
 # Set to false to disable. Env override: MAE_AGENTS_AUTO_APPROVE=0\n\
 # auto_approve_tools = true\n\
+\n\
+# [performance]\n\
+# large_file_lines = 5000\n\
+# degrade_threshold_chars = 500000\n\
+# degrade_threshold_line_length = 10000\n\
+# syntax_reparse_debounce_ms = 50\n\
 \n\
 # [lsp]\n\
 # Per-language LSP server configuration. Any language key is valid.\n\

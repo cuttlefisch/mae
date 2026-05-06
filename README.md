@@ -2,13 +2,13 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2%2C629%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-2%2C698%20passing-brightgreen.svg)](#)
 [![Lines of Code](https://img.shields.io/badge/lines-~120k-informational.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling
 the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime. 2,629 tests. GPL-3.0-or-later.
+runtime. 2,698 tests.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
@@ -103,19 +103,26 @@ mae (binary)
 ### Prerequisites
 
 - **Rust stable** (1.75+) via [rustup](https://rustup.rs)
-- **GUI deps:** `fontconfig-devel`, `freetype-devel` (Fedora) / `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
-- **Optional:** `make setup-dev` installs `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+- **GUI deps:** `clang`, `fontconfig-devel`, `freetype-devel` (Fedora) / `clang`, `libclang-dev`, `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
+- **TUI-only:** `make build-tui` — no clang or GUI deps needed
+- **Optional:** `make setup-dev` installs `clang`, `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+- **Check deps:** `make doctor` — reports all prerequisites with install commands
 
 ### Build & Run
 
 ```sh
 git clone git@github.com:cuttlefisch/mae.git && cd mae
+make doctor                     # check prerequisites
 make build                      # GUI build (default)
-make install                    # install binary + desktop launcher
+make install                    # install to ~/.local/bin + desktop launcher
+mae --init-config               # generate config.toml + init.scm + wizard
 mae --gui file.rs               # launch GUI
 mae file.rs                     # terminal mode
-make build-tui                  # terminal-only (no skia dependency)
+make build-tui                  # terminal-only (no clang/skia dependency)
 ```
+
+**macOS:** `make install PREFIX=/usr/local/bin` or add `~/.local/bin` to PATH.
+**WSL:** `make install-tui` (terminal-only, no X11 needed).
 
 ### AI Setup
 
@@ -126,10 +133,10 @@ make build-tui                  # terminal-only (no skia dependency)
 Set one of these environment variables:
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...    # Claude (default)
-export OPENAI_API_KEY=sk-...           # OpenAI
-export GEMINI_API_KEY=...              # Gemini
-export DEEPSEEK_API_KEY=...            # DeepSeek
+export ANTHROPIC_API_KEY=sk-ant-...    # Claude (default) — https://console.anthropic.com/settings/keys
+export OPENAI_API_KEY=sk-...           # OpenAI          — https://platform.openai.com/api-keys
+export GEMINI_API_KEY=...              # Gemini           — https://aistudio.google.com/apikey
+export DEEPSEEK_API_KEY=...            # DeepSeek         — https://platform.deepseek.com/api_keys
 ```
 
 Or configure in `~/.config/mae/config.toml`:
@@ -181,8 +188,12 @@ not a settings file:
 ```
 
 Project-local config: `.mae/init.scm` is loaded after user config.
-`:describe-configuration` shows a health report. `--check-config` validates
-without launching.
+
+Useful commands:
+- `mae --check-config` — validate config + init.scm without launching (CI-friendly)
+- `mae --clean` / `mae -q` — pristine launch, skip all config/init/history (like `emacs -q`)
+- `:edit-config` — edit `config.toml` from inside the editor
+- `:describe-configuration` — health report (AI, LSP, DAP status)
 
 ## Vim-Level Editing
 
@@ -305,8 +316,10 @@ development target.
 ## Contributing
 
 Feature branches + PR workflow. CI runs `cargo fmt/clippy/test` on stable.
+Report bugs at [github.com/cuttlefisch/mae/issues](https://github.com/cuttlefisch/mae/issues).
 
 ```bash
+make doctor      # Check build prerequisites
 make ci          # Full CI pipeline locally (no GUI)
 make verify      # check + test + GUI check with summary
 make self-test   # AI-driven end-to-end self-test (headless)

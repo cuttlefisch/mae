@@ -238,6 +238,36 @@ impl Editor {
             // AI
             "ai-prompt" | "ai-chat" => {
                 self.open_conversation_buffer();
+                // If AI is not configured, show setup guidance in the output buffer
+                // and stay in Normal mode so the user can read/copy the URLs.
+                if !self.ai_configured {
+                    if let Some(ref pair) = self.conversation_pair {
+                        let out_idx = pair.output_buffer_idx;
+                        if out_idx < self.buffers.len() {
+                            let guidance = "\
+AI is not configured yet.
+
+Quick setup:
+  1. Get an API key from your provider:
+     - Claude:   https://console.anthropic.com/settings/keys
+     - OpenAI:   https://platform.openai.com/api-keys
+     - Gemini:   https://aistudio.google.com/apikey
+     - DeepSeek: https://platform.deepseek.com/api_keys
+
+  2. Set the environment variable:
+     export ANTHROPIC_API_KEY=sk-ant-...
+
+  3. Or run: mae --init-config
+     Then edit ~/.config/mae/config.toml
+
+  4. Restart MAE.
+
+For full setup guide: :help ai-setup";
+                            self.buffers[out_idx].replace_contents(guidance);
+                        }
+                    }
+                    self.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
+                }
             }
             "ai-set-mode" => {
                 let modes = vec!["standard", "plan", "auto-accept"];

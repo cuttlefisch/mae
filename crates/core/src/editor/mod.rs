@@ -837,6 +837,11 @@ pub struct Editor {
     /// Persistent list of org directories/files to scan for agenda items.
     /// Stored in config.toml as `[org] agenda_files = [...]`.
     pub org_agenda_files: Vec<String>,
+    /// Whether an AI provider was successfully configured at startup.
+    /// Set by `setup_ai()` in bootstrap.rs. Used by the UI layer to
+    /// show guidance when the user tries to open an AI conversation
+    /// without credentials.
+    pub ai_configured: bool,
 }
 
 impl Default for Editor {
@@ -1078,6 +1083,7 @@ impl Editor {
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
             org_agenda_files: Vec::new(),
+            ai_configured: false,
         }
     }
 

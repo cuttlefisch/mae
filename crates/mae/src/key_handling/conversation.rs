@@ -138,7 +138,7 @@ pub(crate) fn submit_conversation_prompt(
         editor.set_status("[AI] Thinking...");
     } else {
         warn!("AI prompt submitted but no AI provider configured");
-        editor.set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+        editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
         if let Some(conv) = editor.buffers[output_idx].conversation_mut() {
             conv.end_streaming();
         }
