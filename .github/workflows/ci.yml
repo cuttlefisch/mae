@@ -70,6 +70,18 @@ jobs:
       - name: Validate init.scm
         run: ./target/release/mae --check-config
 
+  gui-build:
+    name: gui / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Build GUI binary
+        run: cargo build --release --features gui --package mae
+
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest
