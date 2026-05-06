@@ -11,7 +11,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-linux:
     name: Build linux-x86_64
     runs-on: ubuntu-latest
     steps:
@@ -31,14 +31,85 @@ jobs:
       - name: Build static binary
         run: cargo build --release --target x86_64-unknown-linux-musl --package mae
 
-      - name: Generate code map
-        run: make code-map
-
       - name: Prepare artifact
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/mae dist/mae-linux-x86_64
           chmod +x dist/mae-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mae-linux-x86_64
+          path: dist/mae-linux-x86_64
+
+  build-macos-x86:
+    name: Build macos-x86_64
+    runs-on: macos-13  # last Intel runner
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build TUI binary
+        run: cargo build --release --package mae
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/release/mae dist/mae-macos-x86_64
+          chmod +x dist/mae-macos-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mae-macos-x86_64
+          path: dist/mae-macos-x86_64
+
+  build-macos-arm:
+    name: Build macos-aarch64
+    runs-on: macos-latest  # Apple Silicon M-series
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build TUI binary
+        run: cargo build --release --package mae
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp target/release/mae dist/mae-macos-aarch64
+          chmod +x dist/mae-macos-aarch64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mae-macos-aarch64
+          path: dist/mae-macos-aarch64
+
+  release:
+    name: Publish release
+    needs: [build-linux, build-macos-x86, build-macos-arm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate code map
+        run: |
+          cargo install --locked --path tools/code-map
+          code-map --workspace-root .
+        continue-on-error: true
 
       - name: Generate changelog
         run: |
@@ -49,5 +120,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body_path: CHANGELOG-release.md
-          files: dist/mae-linux-x86_64
+          files: |
+            dist/mae-linux-x86_64
+            dist/mae-macos-x86_64
+            dist/mae-macos-aarch64
           fail_on_unmatched_files: true

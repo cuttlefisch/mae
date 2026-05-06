@@ -34,6 +34,7 @@
 - [ ] Scheme module system (package manager architecture)
 - [ ] Semantic code search (vector embeddings)
 - [ ] Org ↔ Markdown bidirectional conversion
+- [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
 
 ### AI
 - [ ] Memory synthesis (sub-agent reads persistent memory into context)

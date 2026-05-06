@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help
 
 # Default target: release build
 all: build
@@ -153,6 +153,10 @@ ci: fmt-check
 	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
 	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
 	@echo "CI passed ✓"
+
+## audit: run cargo-deny security + license scanning
+audit:
+	cargo deny check
 
 ## setup-hooks: configure git to use version-controlled hooks
 setup-hooks:
