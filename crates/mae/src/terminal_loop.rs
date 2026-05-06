@@ -266,9 +266,11 @@ pub(crate) async fn run_terminal_loop(
             // Fire app-exit hook.
             editor.fire_hook("app-exit");
 
-            // Persist history
-            if let Err(e) = save_history(editor) {
-                error!(error = %e, "failed to save history");
+            // Persist history (skipped in clean mode)
+            if !editor.clean_mode {
+                if let Err(e) = save_history(editor) {
+                    error!(error = %e, "failed to save history");
+                }
             }
 
             // If debug mode is enabled, save a tombstone dump.

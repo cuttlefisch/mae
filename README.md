@@ -11,7 +11,7 @@ the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
 runtime. 2,629 tests. GPL-3.0-or-later.
 
 <p align="center">
-  <img src="assets/mae-screenshot.svg" alt="MAE screenshot" width="700">
+  <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
 </p>
 
 ## Features

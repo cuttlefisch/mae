@@ -86,6 +86,7 @@ fn main() -> io::Result<()> {
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
         println!("  --check-config --report Print configuration health report and exit");
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
+        println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!();
         println!("CONFIG:");
@@ -194,6 +195,9 @@ fn main() -> io::Result<()> {
         eprintln!("warning: first-run wizard failed: {}", e);
     }
 
+    // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
+    let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
+
     // Find the first positional argument (not a flag).
     let file_arg = args.iter().skip(1).find(|a| !a.starts_with('-'));
 
@@ -224,8 +228,8 @@ fn main() -> io::Result<()> {
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
     editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
-    // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
-    if editor.project.is_none() {
+    // Auto-detect project from CWD if not already set (skipped in clean mode).
+    if !clean_mode && editor.project.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
             if let Some(root) = mae_core::detect_project_root(&cwd) {
                 editor.recent_projects.push(root.clone());
@@ -237,8 +241,17 @@ fn main() -> io::Result<()> {
     // Cache the current git branch for status line display.
     editor.refresh_git_branch();
 
+    if clean_mode {
+        editor.clean_mode = true;
+        info!("clean mode: skipping config.toml, init.scm, and history.scm");
+    }
+
     // Apply editor preferences from config file.
-    let (app_config, config_error) = config::load_config();
+    let (app_config, config_error) = if clean_mode {
+        (config::Config::default(), None)
+    } else {
+        config::load_config()
+    };
     if let Some(ref err_msg) = config_error {
         editor.status_msg = err_msg.clone();
     }
@@ -305,9 +318,11 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Load init.scm and history.scm
-    load_init_file(&mut scheme, &mut editor);
-    load_history(&mut scheme, &mut editor);
+    // Load init.scm and history.scm (skipped in clean mode)
+    if !clean_mode {
+        load_init_file(&mut scheme, &mut editor);
+        load_history(&mut scheme, &mut editor);
+    }
 
     // Fire app-start hook after initialization is complete.
     editor.fire_hook("app-start");
@@ -824,9 +839,11 @@ impl GuiApp {
         // Fire app-exit hook.
         self.editor.fire_hook("app-exit");
 
-        // Persist history
-        if let Err(e) = bootstrap::save_history(&self.editor) {
-            error!(error = %e, "failed to save history");
+        // Persist history (skipped in clean mode)
+        if !self.editor.clean_mode {
+            if let Err(e) = bootstrap::save_history(&self.editor) {
+                error!(error = %e, "failed to save history");
+            }
         }
 
         // If debug mode is enabled, save a tombstone dump.

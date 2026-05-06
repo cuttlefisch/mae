@@ -649,6 +649,8 @@ pub struct Editor {
     pub debug_mode: bool,
     /// Debug init mode: verbose init file loading. Set via `--debug-init`.
     pub debug_init: bool,
+    /// Clean mode: skip user config, init.scm, history on startup; skip history save on exit.
+    pub clean_mode: bool,
     /// Rolling performance statistics (frame time, RSS, CPU).
     pub perf_stats: perf::PerfStats,
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
@@ -998,6 +1000,7 @@ impl Editor {
             splash_selection: 0,
             debug_mode: false,
             debug_init: false,
+            clean_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
