@@ -36,7 +36,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
-| `mae-mcp` | MCP bridge — Unix socket server, JSON-RPC, stdio shim |
+| `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim |
 | `mae` | Binary crate — event loop, key handling, CLI entry point |
 
 ## Architecture Principles
@@ -69,7 +69,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 See `ROADMAP.md` for granular milestone tracking:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
 - Knowledge base, embedded shell, MCP bridge, GUI backend
-- Babel + export (8 languages, HTML/Markdown, noweb, tangle)
+- Babel + export (12 languages, HTML/Markdown, noweb, tangle)
 - AI agent efficiency (tiered prompts, provider-aware hints, target dispatch, frame profiling)
 - Large document performance (graceful degradation, binary search display regions, content hash clipping)
 - LSP+DAP polish (rename, format, symbol outline, breadcrumbs, peek references, watch expressions, exception breakpoints)

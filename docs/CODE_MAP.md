@@ -58,6 +58,8 @@ Source: `crates/core/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `agenda_view` | mod |
+| `babel` | mod |
 | `buffer` | mod |
 | `buffer_mode` | mod |
 | `buffer_view` | mod |
@@ -74,6 +76,7 @@ Source: `crates/core/src/lib.rs`
 | `display_region` | mod |
 | `editor` | mod |
 | `event_record` | mod |
+| `export` | mod |
 | `file_browser` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
@@ -97,6 +100,7 @@ Source: `crates/core/src/lib.rs`
 | `session` | mod |
 | `swap` | mod |
 | `syntax` | mod |
+| `table` | mod |
 | `theme` | mod |
 | `visual_buffer` | mod |
 | `window` | mod |
@@ -133,6 +137,7 @@ Source: `crates/kb/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `federation` | mod |
 | `org` | mod |
 | `persist` | mod |
 | `watch` | mod |
@@ -215,6 +220,9 @@ Source: `crates/shell/src/lib.rs`
 | `shell-send-input` | `crates/scheme/src/runtime.rs` |
 | `recent-files-add!` | `crates/scheme/src/runtime.rs` |
 | `recent-projects-add!` | `crates/scheme/src/runtime.rs` |
+| `agenda-add!` | `crates/scheme/src/runtime.rs` |
+| `agenda-remove!` | `crates/scheme/src/runtime.rs` |
+| `agenda-list` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-rect!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-clear!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-line!` | `crates/scheme/src/runtime.rs` |
@@ -244,7 +252,7 @@ Source: `crates/shell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (406 built-in)
+## Commands (455 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -483,6 +491,9 @@ Source: `crates/shell/src/lib.rs`
 | `dap-refresh` | Refresh DAP state and debug panel |
 | `debug-attach` | Attach debugger to a running process (:debug-attach <adapter> <pid>) |
 | `debug-eval` | Evaluate expression in debug context (:debug-eval <expression>) |
+| `debug-exceptions` | Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none]) |
+| `debug-add-watch` | Add a watch expression (:debug-add-watch <expr>) |
+| `debug-remove-watch` | Remove a watch expression by index (:debug-remove-watch <index>) |
 | `lsp-goto-definition` | Jump to definition of symbol under cursor (gd) |
 | `lsp-find-references` | Find references to symbol under cursor (gr) |
 | `lsp-hover` | Show hover information for symbol under cursor (K) |
@@ -508,7 +519,17 @@ Source: `crates/shell/src/lib.rs`
 | `lsp-rename-apply` | Apply pending rename preview |
 | `lsp-rename-abort` | Abort pending rename preview |
 | `lsp-status` | Show LSP server status buffer (SPC c s) |
+| `lsp-signature-help` | Show function signature help |
+| `lsp-peek-definition` | Peek definition in floating preview (SPC l p) |
 | `toggle-lsp-diagnostics-inline` | Toggle inline diagnostic underlines (SPC t d) |
+| `lsp-symbol-outline` | Show symbol outline popup (SPC c o) |
+| `lsp-symbol-outline-next` | Select next outline symbol |
+| `lsp-symbol-outline-prev` | Select previous outline symbol |
+| `lsp-symbol-outline-select` | Jump to selected symbol |
+| `lsp-symbol-outline-dismiss` | Dismiss symbol outline |
+| `lsp-peek-references` | Peek references in floating preview (SPC l r) |
+| `lsp-peek-references-next` | Next peek reference |
+| `lsp-peek-references-prev` | Previous peek reference |
 | `toggle-fold` | Toggle fold at cursor (za) |
 | `close-all-folds` | Close all folds (zM) |
 | `open-all-folds` | Open all folds (zR) |
@@ -534,6 +555,30 @@ Source: `crates/shell/src/lib.rs`
 | `org-insert-heading` | Insert org heading after subtree (M-Enter) |
 | `org-narrow-subtree` | Narrow to org subtree |
 | `org-widen` | Widen from org narrow |
+| `org-priority-up` | Cycle org priority up (S-Up) |
+| `org-priority-down` | Cycle org priority down (S-Down) |
+| `org-set-tags` | Set org heading tags (SPC m t) |
+| `babel-execute` | Execute source block at cursor (C-c C-c / SPC m x) |
+| `babel-execute-all` | Execute all source blocks in buffer (SPC m X) |
+| `babel-tangle` | Tangle source blocks to files (SPC m T) |
+| `babel-kill-sessions` | Kill all babel session processes |
+| `org-export-html` | Export org buffer to HTML (SPC m e h) |
+| `org-export-markdown` | Export org buffer to Markdown (SPC m e m) |
+| `org-export-subtree` | Export subtree at cursor (SPC m e s) |
+| `kb-register` | Register org-roam directory as KB instance |
+| `kb-unregister` | Remove a registered KB instance |
+| `kb-reimport` | Re-import KB instance from org files |
+| `kb-instances` | List all registered KB instances |
+| `insert-newline-smart` | Insert newline with list continuation |
+| `table-next-cell` | Move to next table cell (Tab) |
+| `table-prev-cell` | Move to previous table cell (S-Tab) |
+| `table-align` | Align table columns (SPC m b a) |
+| `table-insert-row` | Insert table row below |
+| `table-delete-row` | Delete current table row |
+| `table-insert-column` | Insert table column after cursor |
+| `table-delete-column` | Delete table column at cursor |
+| `table-move-row-up` | Move table row up |
+| `table-move-row-down` | Move table row down |
 | `md-cycle` | Cycle markdown heading visibility (Tab) |
 | `md-global-cycle` | Cycle all markdown headings (S-Tab) |
 | `md-promote` | Promote markdown heading (M-Left) |
@@ -543,6 +588,18 @@ Source: `crates/shell/src/lib.rs`
 | `md-insert-heading` | Insert markdown heading after subtree (M-Enter) |
 | `md-narrow-subtree` | Narrow to markdown subtree |
 | `md-widen` | Widen from markdown narrow |
+| `open-agenda` | Open agenda view (:agenda, SPC o a) |
+| `agenda-goto` | Jump to source node from agenda (Enter) |
+| `agenda-refresh` | Refresh agenda view (r) |
+| `agenda-filter-todo` | Cycle TODO state filter (t) |
+| `agenda-filter-priority` | Cycle priority filter (p) |
+| `agenda-add` | Add path to agenda files (:agenda-add <path>) |
+| `agenda-remove` | Remove path from agenda files (:agenda-remove <path>) |
+| `agenda-list` | Show configured agenda file paths |
+| `agenda-ingest` | Re-ingest all agenda file paths |
+| `open-demo-tables` | Open interactive tables demo |
+| `open-demo-markup` | Open interactive markup demo |
+| `open-demo-agenda` | Open interactive agenda demo |
 | `narrow-to-subtree` | Narrow buffer to current subtree |
 | `widen` | Widen buffer from narrowed view |
 | `syntax-select-node` | Select the tree-sitter node at the cursor (SPC s s) |
@@ -558,7 +615,7 @@ Source: `crates/shell/src/lib.rs`
 | `rename-file` | Rename current file (SPC f R) |
 | `save-as` | Save buffer to new path (SPC f S) |
 | `edit-config` | Open init.scm config for editing (SPC f c) |
-| `edit-settings` | Open config.toml settings (SPC f C) |
+| `edit-settings` | Open config.toml settings (SPC f P) |
 | `setup-wizard` | Show how to re-run the first-run setup wizard |
 | `toggle-fps` | Toggle FPS overlay in status bar (SPC t F) |
 | `debug-mode` | Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D) |

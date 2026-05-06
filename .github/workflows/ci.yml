@@ -69,3 +69,13 @@ jobs:
         run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
       - name: Validate init.scm
         run: ./target/release/mae --check-config
+
+  code-map:
+    name: code-map freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check code-map is up to date
+        run: make code-map-check

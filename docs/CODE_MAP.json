@@ -74,6 +74,14 @@
       ],
       "public_items": [
         {
+          "name": "agenda_view",
+          "kind": "mod"
+        },
+        {
+          "name": "babel",
+          "kind": "mod"
+        },
+        {
           "name": "buffer",
           "kind": "mod"
         },
@@ -135,6 +143,10 @@
         },
         {
           "name": "event_record",
+          "kind": "mod"
+        },
+        {
+          "name": "export",
           "kind": "mod"
         },
         {
@@ -230,6 +242,10 @@
           "kind": "mod"
         },
         {
+          "name": "table",
+          "kind": "mod"
+        },
+        {
           "name": "theme",
           "kind": "mod"
         },
@@ -313,6 +329,10 @@
       "path": "crates/kb/src/lib.rs",
       "dependencies": [],
       "public_items": [
+        {
+          "name": "federation",
+          "kind": "mod"
+        },
         {
           "name": "org",
           "kind": "mod"
@@ -510,6 +530,18 @@
     },
     {
       "name": "recent-projects-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-remove!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-list",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -1568,6 +1600,18 @@
       "doc": "Evaluate expression in debug context (:debug-eval <expression>)"
     },
     {
+      "name": "debug-exceptions",
+      "doc": "Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none])"
+    },
+    {
+      "name": "debug-add-watch",
+      "doc": "Add a watch expression (:debug-add-watch <expr>)"
+    },
+    {
+      "name": "debug-remove-watch",
+      "doc": "Remove a watch expression by index (:debug-remove-watch <index>)"
+    },
+    {
       "name": "lsp-goto-definition",
       "doc": "Jump to definition of symbol under cursor (gd)"
     },
@@ -1668,8 +1712,48 @@
       "doc": "Show LSP server status buffer (SPC c s)"
     },
     {
+      "name": "lsp-signature-help",
+      "doc": "Show function signature help"
+    },
+    {
+      "name": "lsp-peek-definition",
+      "doc": "Peek definition in floating preview (SPC l p)"
+    },
+    {
       "name": "toggle-lsp-diagnostics-inline",
       "doc": "Toggle inline diagnostic underlines (SPC t d)"
+    },
+    {
+      "name": "lsp-symbol-outline",
+      "doc": "Show symbol outline popup (SPC c o)"
+    },
+    {
+      "name": "lsp-symbol-outline-next",
+      "doc": "Select next outline symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-prev",
+      "doc": "Select previous outline symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-select",
+      "doc": "Jump to selected symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-dismiss",
+      "doc": "Dismiss symbol outline"
+    },
+    {
+      "name": "lsp-peek-references",
+      "doc": "Peek references in floating preview (SPC l r)"
+    },
+    {
+      "name": "lsp-peek-references-next",
+      "doc": "Next peek reference"
+    },
+    {
+      "name": "lsp-peek-references-prev",
+      "doc": "Previous peek reference"
     },
     {
       "name": "toggle-fold",
@@ -1772,6 +1856,102 @@
       "doc": "Widen from org narrow"
     },
     {
+      "name": "org-priority-up",
+      "doc": "Cycle org priority up (S-Up)"
+    },
+    {
+      "name": "org-priority-down",
+      "doc": "Cycle org priority down (S-Down)"
+    },
+    {
+      "name": "org-set-tags",
+      "doc": "Set org heading tags (SPC m t)"
+    },
+    {
+      "name": "babel-execute",
+      "doc": "Execute source block at cursor (C-c C-c / SPC m x)"
+    },
+    {
+      "name": "babel-execute-all",
+      "doc": "Execute all source blocks in buffer (SPC m X)"
+    },
+    {
+      "name": "babel-tangle",
+      "doc": "Tangle source blocks to files (SPC m T)"
+    },
+    {
+      "name": "babel-kill-sessions",
+      "doc": "Kill all babel session processes"
+    },
+    {
+      "name": "org-export-html",
+      "doc": "Export org buffer to HTML (SPC m e h)"
+    },
+    {
+      "name": "org-export-markdown",
+      "doc": "Export org buffer to Markdown (SPC m e m)"
+    },
+    {
+      "name": "org-export-subtree",
+      "doc": "Export subtree at cursor (SPC m e s)"
+    },
+    {
+      "name": "kb-register",
+      "doc": "Register org-roam directory as KB instance"
+    },
+    {
+      "name": "kb-unregister",
+      "doc": "Remove a registered KB instance"
+    },
+    {
+      "name": "kb-reimport",
+      "doc": "Re-import KB instance from org files"
+    },
+    {
+      "name": "kb-instances",
+      "doc": "List all registered KB instances"
+    },
+    {
+      "name": "insert-newline-smart",
+      "doc": "Insert newline with list continuation"
+    },
+    {
+      "name": "table-next-cell",
+      "doc": "Move to next table cell (Tab)"
+    },
+    {
+      "name": "table-prev-cell",
+      "doc": "Move to previous table cell (S-Tab)"
+    },
+    {
+      "name": "table-align",
+      "doc": "Align table columns (SPC m b a)"
+    },
+    {
+      "name": "table-insert-row",
+      "doc": "Insert table row below"
+    },
+    {
+      "name": "table-delete-row",
+      "doc": "Delete current table row"
+    },
+    {
+      "name": "table-insert-column",
+      "doc": "Insert table column after cursor"
+    },
+    {
+      "name": "table-delete-column",
+      "doc": "Delete table column at cursor"
+    },
+    {
+      "name": "table-move-row-up",
+      "doc": "Move table row up"
+    },
+    {
+      "name": "table-move-row-down",
+      "doc": "Move table row down"
+    },
+    {
       "name": "md-cycle",
       "doc": "Cycle markdown heading visibility (Tab)"
     },
@@ -1806,6 +1986,54 @@
     {
       "name": "md-widen",
       "doc": "Widen from markdown narrow"
+    },
+    {
+      "name": "open-agenda",
+      "doc": "Open agenda view (:agenda, SPC o a)"
+    },
+    {
+      "name": "agenda-goto",
+      "doc": "Jump to source node from agenda (Enter)"
+    },
+    {
+      "name": "agenda-refresh",
+      "doc": "Refresh agenda view (r)"
+    },
+    {
+      "name": "agenda-filter-todo",
+      "doc": "Cycle TODO state filter (t)"
+    },
+    {
+      "name": "agenda-filter-priority",
+      "doc": "Cycle priority filter (p)"
+    },
+    {
+      "name": "agenda-add",
+      "doc": "Add path to agenda files (:agenda-add <path>)"
+    },
+    {
+      "name": "agenda-remove",
+      "doc": "Remove path from agenda files (:agenda-remove <path>)"
+    },
+    {
+      "name": "agenda-list",
+      "doc": "Show configured agenda file paths"
+    },
+    {
+      "name": "agenda-ingest",
+      "doc": "Re-ingest all agenda file paths"
+    },
+    {
+      "name": "open-demo-tables",
+      "doc": "Open interactive tables demo"
+    },
+    {
+      "name": "open-demo-markup",
+      "doc": "Open interactive markup demo"
+    },
+    {
+      "name": "open-demo-agenda",
+      "doc": "Open interactive agenda demo"
     },
     {
       "name": "narrow-to-subtree",
@@ -1869,7 +2097,7 @@
     },
     {
       "name": "edit-settings",
-      "doc": "Open config.toml settings (SPC f C)"
+      "doc": "Open config.toml settings (SPC f P)"
     },
     {
       "name": "setup-wizard",

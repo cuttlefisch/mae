@@ -16,7 +16,7 @@
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
-| 9. Babel + Export | ✅ Complete | 8-language executor, HTML/Markdown export, noweb, tangle, KB federation |
+| 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, noweb, tangle, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 
 ---
@@ -116,7 +116,7 @@
 <details>
 <summary>Phase 9–10 details — Babel, Export, Agent Efficiency</summary>
 
-- 8-language babel executor, noweb expansion, tangle directive
+- 12-language babel executor, noweb expansion, tangle directive
 - HTML/Markdown export with TOC, syntax highlighting, tag filtering
 - Tiered prompt system (Full/Compact), provider-aware hints
 - AI target dispatch (`save-excursion` pattern)

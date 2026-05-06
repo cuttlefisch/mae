@@ -32,6 +32,8 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
+| `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
+| `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim | `tokio`, `serde_json` |
 
 ## Architecture Principles
 
@@ -39,7 +41,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 1. **Concurrency from day one.** Emacs spent 23,901 commits across 3 branches trying to retrofit a concurrent GC and still hasn't merged it. We use Rust's ownership model for the core and a purpose-designed concurrent GC for the Scheme runtime. No Global Interpreter Lock, ever.
 
-2. **Modular display layer.** Emacs's `xdisp.c` is 38,605 lines and the most bug-prone file in the codebase. Our renderer is a separate crate with a clean trait-based HAL. Platform-specific code lives in the rendering backend library (crossterm/wgpu), not in our codebase.
+2. **Modular display layer.** Emacs's `xdisp.c` is 38,605 lines and the most bug-prone file in the codebase. Our renderer is a separate crate with a clean trait-based HAL. Platform-specific code lives in the rendering backend library (crossterm/Skia), not in our codebase.
 
 3. **The AI is a peer, not a plugin.** The AI agent calls the same Scheme functions as the user's keybindings. `(buffer-insert ...)`, `(lsp-references ...)`, `(dap-inspect-variable ...)` — same API surface for human and AI. No separate "AI mode" or simulated keystrokes.
 
@@ -114,7 +116,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - Shell integration + README overhaul ✅
 - Scheme shell functions: `shell-cwd`, `shell-read-output`, `*shell-buffers*` ✅
 - Send-to-shell: `SPC e s` (line), `SPC e S` (region) ✅
-- MCP bridge: Unix socket server, JSON-RPC, stdio shim, tool re-export ✅
+- MCP server: Unix socket, JSON-RPC, stdio shim, tool re-export ✅
 - File auto-reload: mtime tracking, clean buffer reload, dirty buffer warning, `file-changed-on-disk` hook ✅
 
 ### Phase 7: Embedded Documentation — COMPLETE (M1-M4)
@@ -188,7 +190,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 - **GPL-3.0-or-later:** Copyleft ensures the project stays open. No FSF copyright assignment — contributions are owned by their authors.
 
-- **Terminal-first:** ratatui/crossterm for initial development. GPU rendering (wgpu) is a future enhancement, not a prerequisite.
+- **Terminal-first:** ratatui/crossterm for initial development. GPU rendering (Skia) is now the primary target.
 
 ## Emacs Lessons (Reference Data)
 
@@ -198,7 +200,7 @@ These findings from analyzing the Emacs git repo (clone of emacs-mirror/emacs) m
 - **`xdisp.c`: 38,605 lines, 20k+ commits/decade** — the display engine is a monolithic maintenance black hole. We use a modular renderer crate.
 - **IGC/MPS: 23,901 commits across `feature/igc`, `igc2`, `igc3`** — still unmerged after 3 iterations. GC retrofit is intractable. We avoid needing one.
 - **Bus factor ~4 people** — top 5 = 50.8% of commits. Single-person dependencies on native-comp (Corallo), tree-sitter (Yuan Fu), Android (Po Lu), Tramp (Albinus). We enforce module boundaries.
-- **~10% of all commits are platform support** — separate `*term.c` files per platform. We delegate to crossterm/wgpu.
+- **~10% of all commits are platform support** — separate `*term.c` files per platform. We delegate to crossterm/Skia.
 - **Emacs 31 direction:** VC/git (1,048 commits = 16%), completions, TTY child frames, newcomer presets, `elisp-scope.el` (static analysis). QoL is the frontier.
 - **Development velocity peaked in 2022 (9,647 commits) and declined to ~3,356 in 2024.** The 2025 pace is even lower. Whether this is stabilization or contributor burnout is unclear.
 
@@ -224,7 +226,7 @@ All 130+ MAE editor tools are exposed via MCP with full parity — the same tool
 
 ### Connection
 
-Socket path: `$XDG_RUNTIME_DIR/mae-mcp.sock` (typically `/run/user/$UID/mae-mcp.sock`).
+Socket path: `/tmp/mae-{PID}.sock` (per-process, stale sockets cleaned on startup).
 Shim: `mae-mcp-shim` — translates MCP JSON-RPC over stdio to the Unix socket.
 
 ### Code Navigation (LSP)

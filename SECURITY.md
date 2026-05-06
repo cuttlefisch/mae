@@ -33,5 +33,5 @@ Org-babel code block execution (`SPC e e`) runs user code in a subprocess. Safet
 ### Shell Access
 The embedded terminal (`SPC o t`) spawns a real shell process. The AI can observe output and send input only when the permission tier is `shell` or `privileged`.
 
-### MCP Bridge
-The MCP socket (`$XDG_RUNTIME_DIR/mae-mcp.sock`) is user-local (Unix permissions). It exposes the same tool surface as the built-in AI agent.
+### MCP Server
+The MCP socket (`/tmp/mae-{PID}.sock`) is user-local (Unix permissions). It exposes the same tool surface as the built-in AI agent.

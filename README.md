@@ -29,7 +29,7 @@ runtime. 2,629 tests.
 - **DAP first-class** — Multi-language debugging (Python, Rust, C/C++).
   Breakpoints (conditional, logpoint), watch expressions, exception breakpoints.
   AI can set breakpoints and inspect variables.
-- **Org-mode babel** — Execute code blocks in 8 languages, noweb expansion,
+- **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
   `:tangle` directive, `:var` cross-references, safety policies. Export to
   HTML and Markdown with TOC, syntax highlighting, tag filtering.
 - **Embedded terminal** — Full VT100/VT500 via `alacritty_terminal`. AI can
@@ -37,7 +37,7 @@ runtime. 2,629 tests.
 - **Knowledge base** — SQLite + FTS5 graph store. 200+ help nodes, bidirectional
   links, org-mode parser, federated instances. Same docs the AI reads.
 - **Runtime redefinability** — Embedded R7RS Scheme (Steel). Redefine any
-  function while running. 45+ primitives, 17 hook points, `init.scm` is a
+  function while running. 45+ primitives, 18 hook points, `init.scm` is a
   real program.
 - **Tree-sitter** — 13 languages with structural parse trees. AI can query
   syntax trees for code reasoning.
@@ -95,7 +95,7 @@ mae (binary)
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
  ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search, federation
- └── mae-mcp         MCP bridge — Unix socket server, JSON-RPC, stdio shim
+ └── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
 ```
 
 ## Getting Started
@@ -192,7 +192,8 @@ Project-local config: `.mae/init.scm` is loaded after user config.
 Useful commands:
 - `mae --check-config` — validate config + init.scm without launching (CI-friendly)
 - `mae --clean` / `mae -q` — pristine launch, skip all config/init/history (like `emacs -q`)
-- `:edit-config` — edit `config.toml` from inside the editor
+- `:edit-config` — edit `init.scm` from inside the editor
+- `:edit-settings` — edit `config.toml` from inside the editor
 - `:describe-configuration` — health report (AI, LSP, DAP status)
 
 ## Vim-Level Editing
@@ -258,6 +259,11 @@ Full vi modal editing with 450+ commands:
 :terminal       Open terminal
 :tutor          Interactive tutorial
 :self-test      AI integration test
+:set opt=val    Set editor option
+:split / :vsplit  Window splitting
+:diagnostics    Show LSP diagnostics
+:messages       View message log
+:describe-configuration  Show config health report
 ```
 
 ## Stack
@@ -273,7 +279,7 @@ Full vi modal editing with 450+ commands:
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
 | Knowledge base | SQLite + FTS5 | Graph store with full-text search, federation |
 | Syntax | tree-sitter | 13 languages, structural parse trees |
-| Literate programming | Org-babel | 8 execution languages, tangle, noweb, export |
+| Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
 ## Roadmap
 
@@ -289,7 +295,8 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
 | 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia, inline images, variable-height, inertial scroll |
-| 9. Babel + Export | ✅ Complete | 8-language executor, HTML/Markdown export, KB federation |
+| 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
+| 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | **Next** | 🔧 In progress | PDF preview, module system, semantic code search |
 
 ## Design Lineage
@@ -309,9 +316,8 @@ decisions that led to its current maintenance burden:
 
 ## Self-Hosting
 
-MAE is used (alongside Emacs) to develop itself. The AI agent runs in an
-embedded shell, calling the same tools the human uses. The GUI is the primary
-development target.
+MAE is used to develop itself. The AI agent runs in an embedded shell, calling
+the same tools the human uses. The GUI is the primary development target.
 
 ## Contributing
 

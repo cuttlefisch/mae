@@ -2488,7 +2488,7 @@ structured access to LSP, DAP, KB, and editor state.\n\n\
 `command_list`, `execute_command`, `eval_scheme`, `audit_configuration`, `introspect`\n\
 - **Validation:** `self_test_suite` — structured JSON test plan\n\n\
 ### Connection\n\
-Socket: `$XDG_RUNTIME_DIR/mae-mcp.sock`\n\
+Socket: `/tmp/mae-{PID}.sock`\n\
 Shim: `mae-mcp-shim` (stdio ↔ Unix socket bridge)\n\n\
 ### When to Use\n\
 - **Navigating MAE code:** `lsp_definition` / `lsp_references` over grep — structured, no false positives\n\
