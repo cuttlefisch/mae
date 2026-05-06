@@ -396,8 +396,8 @@ impl KnowledgeBase {
     pub fn todo_nodes(&self) -> Vec<&Node> {
         let mut out: Vec<&Node> = self
             .todo_index
-            .iter()
-            .flat_map(|(_, ids)| ids.iter().filter_map(|id| self.nodes.get(id)))
+            .values()
+            .flat_map(|ids| ids.iter().filter_map(|id| self.nodes.get(id)))
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out.dedup_by(|a, b| a.id == b.id);
