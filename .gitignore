@@ -1,7 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
-
 # Editor temp files
 *.swp
 *.swo

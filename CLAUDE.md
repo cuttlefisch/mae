@@ -7,7 +7,7 @@
 
 An AI-native lisp machine editor — a successor to GNU Emacs where the human user and an AI agent are **peer actors** calling the same Lisp primitives. The editor is built on a Rust core with an embedded Scheme (R7RS-small) runtime. LSP and DAP are first-class protocols exposed to both the Scheme extension layer and the AI agent's tool-calling interface.
 
-The project README is an org-roam node symlinked from `~/RoamNotes/20260415142357-ai_native_lisp_machine_editor.org`. That file contains the full architecture spec, stack rationale, and Emacs git history analysis. **Read it before starting any work.**
+The project README (`README.md`) contains the architecture spec and stack rationale. **Read it before starting any work.**
 
 ## Stack
 
@@ -192,7 +192,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 
 ## Emacs Lessons (Reference Data)
 
-These findings from analyzing the Emacs git repo at `~/src/emacs` motivated our architecture:
+These findings from analyzing the Emacs git repo (clone of emacs-mirror/emacs) motivated our architecture:
 
 - **Fix ratio climbed from 15% to 32%** over 35 years — a complexity ceiling from C + untyped Lisp. Rust's type system structurally prevents this.
 - **`xdisp.c`: 38,605 lines, 20k+ commits/decade** — the display engine is a monolithic maintenance black hole. We use a modular renderer crate.
@@ -294,8 +294,8 @@ When developing **outside MAE** (Claude Code directly on filesystem):
 
 ## Related Resources
 
-- **Full architecture spec:** `README.org` (symlink to org-roam node)
-- **Emacs source for reference:** `~/src/emacs` (clone of emacs-mirror/emacs, `emacs-30` branch)
+- **Full architecture spec:** `README.md`
+- **Emacs source for reference:** the Emacs source tree (clone of emacs-mirror/emacs, `emacs-30` branch)
 - **Declarative project config:** `.project` in repo root (for declarative-project-mode in Emacs)
 - **Steel Scheme:** https://github.com/mattwparas/steel — primary candidate for embedded Scheme runtime
 - **ropey:** https://github.com/cessen/ropey — rope data structure for buffer management

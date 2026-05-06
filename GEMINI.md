@@ -10,25 +10,26 @@
 
 An AI-native lisp machine editor — a successor to GNU Emacs where the human user and an AI agent are **peer actors** calling the same Lisp primitives. The editor is built on a Rust core with an embedded Scheme (R7RS-small) runtime. LSP and DAP are first-class protocols exposed to both the Scheme extension layer and the AI agent's tool-calling interface.
 
-The full architecture spec lives in `README.org`. Read it before starting any work.
+The project README (`README.md`) contains the architecture spec and stack rationale.
 
 ## Stack
 
 - **Language:** Rust (core) + Scheme R7RS-small (extensions)
 - **License:** GPL-3.0-or-later
 - **Build:** `make check` / `make build` / `make test` / `make ci` from workspace root
-  - `make build` now builds with GUI by default (`--features gui`)
+  - `make build` builds with GUI by default (`--features gui`)
   - `make build-tui` for terminal-only build
-  - `make ci` still excludes GUI (skia system deps)
+  - `make ci` excludes GUI (skia system deps)
+  - `make audit` runs `cargo-deny` for license/advisory/ban checks
   - `make check-config` validates init.scm + config.toml without launching the editor
 
 ## Crate Layout
 
 | Crate | Purpose |
 |---|---|
-| `mae-core` | Buffer management (rope), event loop, core primitives |
+| `mae-core` | Buffer management (rope), editor state, commands, keymap, syntax, babel, export |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend |
-| `mae-gui` | GUI rendering backend — winit window + Skia 2D |
+| `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI |
@@ -63,15 +64,18 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 ## Development Status
 
-See `ROADMAP.md` for granular milestone tracking. All core phases (1-8) are complete:
+**v0.7.0-dev** — 2,629 tests, all 10 phases complete.
+
+See `ROADMAP.md` for granular milestone tracking:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
 - Knowledge base, embedded shell, MCP bridge, GUI backend
-- v0.5.0: agent reliability (progress checkpoints, watchdog, prompt caching, token dashboard, context compaction, graceful degradation, web fetch)
-- v0.5.1: GUI polish, pixel-based variable-height lines, cached lazy theme resolution
-- v0.6.0 (in progress): QoL + Doom parity — code folding (za/zM/zR), window management (resize/move/maximize), incremental syntax reparse, unified diff for AI edits, per-message token display, dispatch modularization (dispatch.rs → 10 submodules)
-- 1,796 tests, CI green
+- Babel + export (8 languages, HTML/Markdown, noweb, tangle)
+- AI agent efficiency (tiered prompts, provider-aware hints, target dispatch, frame profiling)
+- Large document performance (graceful degradation, binary search display regions, content hash clipping)
+- LSP+DAP polish (rename, format, symbol outline, breadcrumbs, peek references, watch expressions, exception breakpoints)
+- Render pipeline performance (tiered redraw levels, frame snapshot profiling, cache separation)
 
-### Key Modules (v0.6.0)
+### Key Modules
 
 - **`crates/core/src/editor/dispatch/`** — command dispatch split into 10 submodules: `git.rs`, `fold_org.rs`, `nav.rs`, `edit.rs`, `visual.rs`, `window.rs`, `lsp.rs`, `dap.rs`, `file.rs`, `ui.rs`. Each has `fn dispatch_X(&mut self, name, ...) -> Option<bool>`. `mod.rs` delegates.
 - **`crates/core/src/diff.rs`** — LCS-based unified diff (DiffLine enum, unified_diff/unified_diff_string)

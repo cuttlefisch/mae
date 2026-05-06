@@ -2,13 +2,13 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2%2C698%20passing-brightgreen.svg)](#)
-[![Lines of Code](https://img.shields.io/badge/lines-~120k-informational.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-2%2C629%20passing-brightgreen.svg)](#)
+[![Lines of Code](https://img.shields.io/badge/lines-~130k-informational.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling
 the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime. 2,698 tests.
+runtime. 2,629 tests.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
@@ -315,8 +315,9 @@ development target.
 
 ## Contributing
 
-Feature branches + PR workflow. CI runs `cargo fmt/clippy/test` on stable.
+Feature branches + PR workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
 Report bugs at [github.com/cuttlefisch/mae/issues](https://github.com/cuttlefisch/mae/issues).
+Check [Known Bugs](ROADMAP.md#known-bugs) before filing.
 
 ```bash
 make doctor      # Check build prerequisites

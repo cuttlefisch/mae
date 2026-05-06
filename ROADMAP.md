@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.7.0-dev · **Tests:** 2,698 passing · **Status:** Alpha — all 10 phases complete, polish in progress.
+**Current version:** v0.7.0-dev · **Tests:** 2,629 passing · **Status:** Alpha — all 10 phases complete, polish in progress.
 
 ---
 

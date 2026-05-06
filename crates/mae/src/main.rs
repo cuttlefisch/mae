@@ -3,6 +3,7 @@ mod ai_event_handler;
 mod bootstrap;
 mod config;
 mod dap_bridge;
+mod doctor;
 #[cfg(feature = "gui")]
 mod gui_event;
 mod key_handling;
@@ -88,6 +89,7 @@ fn main() -> io::Result<()> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  doctor                  Check prerequisites, config, LSP/DAP, AI provider");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -106,6 +108,10 @@ fn main() -> io::Result<()> {
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
         return Ok(());
+    }
+    if args.iter().any(|a| a == "doctor" || a == "--doctor") {
+        let code = doctor::run_doctor();
+        std::process::exit(code);
     }
     if args.iter().any(|a| a == "--print-config-path") {
         println!("{}", config::config_path().display());
