@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Miscellaneous
+
+- *(deps)* Update skia-safe requirement in the rust-dependencies group ([26fb773](https://github.com/cuttlefisch/mae/commit/26fb7737d3ae8c327ae791d881cb6339fc14d685))
+
+## [0.6.0] - 2026-05-02
+
 ### Bug Fixes
 
 - *(tests)* Harden flaky timing-dependent tests ([84a696d](https://github.com/cuttlefisch/mae/commit/84a696da9862a368aa60d6a40ecf198a62dbe2b1))
@@ -65,6 +71,10 @@ All notable changes to this project will be documented in this file.
 - *(lsp)* Hover popup, inline diagnostics, code actions, config discovery (2,165 tests) ([51b84d9](https://github.com/cuttlefisch/mae/commit/51b84d9f408f87c0a65f35f0c8fab168dc70683c))
 - *(lsp)* Popup hints, loading feedback, enriched status indicator (2,175 tests) ([67162ab](https://github.com/cuttlefisch/mae/commit/67162ab996fa2ce86e33cf26f65cfa431f4a2042))
 - Full audit — LSP fix, 12 configurable options, Scheme API, package system, KB docs (2,252 tests) ([0e8f88f](https://github.com/cuttlefisch/mae/commit/0e8f88f7733c2e805a583f2fe3e5ef8f788e9777))
+
+### Miscellaneous
+
+- Bump version to 0.6.0 ([1dd80fa](https://github.com/cuttlefisch/mae/commit/1dd80fad425632c8ffab099b20707374e9f49f4a))
 
 ### Performance
 
