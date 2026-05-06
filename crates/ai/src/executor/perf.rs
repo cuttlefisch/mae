@@ -113,7 +113,7 @@ pub(crate) fn execute_perf_benchmark(
 
             // Find the 5 slowest iterations with their positions.
             let mut indexed: Vec<(usize, u64)> = times.iter().copied().enumerate().collect();
-            indexed.sort_by(|a, b| b.1.cmp(&a.1));
+            indexed.sort_by_key(|x| std::cmp::Reverse(x.1));
             let slowest: Vec<serde_json::Value> = indexed
                 .iter()
                 .take(5)
