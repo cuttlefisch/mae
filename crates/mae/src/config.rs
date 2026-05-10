@@ -24,6 +24,10 @@ use tracing::{debug, info, warn};
 /// Every field is optional so an empty or partial file is valid.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
+    /// Schema version for forward-compatible config evolution.
+    /// Absent or 0 in legacy files; current version is 1.
+    #[serde(default = "default_config_version")]
+    pub config_version: u32,
     #[serde(default)]
     pub ai: AiSection,
     #[serde(default)]
@@ -36,6 +40,13 @@ pub struct Config {
     pub performance: PerformanceSection,
     #[serde(default)]
     pub org: OrgSection,
+}
+
+/// Current config schema version. Bump when config.toml format changes.
+const CURRENT_CONFIG_VERSION: u32 = 1;
+
+fn default_config_version() -> u32 {
+    1
 }
 
 /// Per-language LSP server configuration.
@@ -206,9 +217,21 @@ pub fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
-/// Load the config file, returning `Config::default()` if it doesn't exist or
-/// is unreadable. Parse errors are logged (not fatal).
-///
+// Load the config file, returning `Config::default()` if it doesn't exist or
+// is unreadable. Parse errors are logged (not fatal).
+
+fn validate_config_version(cfg: &Config) -> Option<String> {
+    if cfg.config_version > CURRENT_CONFIG_VERSION {
+        Some(format!(
+            "Config version {} is newer than this MAE build (supports v{}). \
+             Some settings may be ignored.",
+            cfg.config_version, CURRENT_CONFIG_VERSION
+        ))
+    } else {
+        None
+    }
+}
+
 /// Returns `(Config, Option<String>)` where the second element is a
 /// human-readable error message when the config was malformed or unreadable.
 /// Callers can surface this in the status bar at startup.
@@ -217,8 +240,9 @@ pub fn load_config() -> (Config, Option<String>) {
     match fs::read_to_string(&path) {
         Ok(contents) => match toml::from_str::<Config>(&contents) {
             Ok(cfg) => {
+                let warning = validate_config_version(&cfg);
                 debug!(path = %path.display(), "loaded config");
-                (cfg, None)
+                (cfg, warning)
             }
             Err(e) => {
                 let msg = format!("Config parse error: {}; using defaults", e);

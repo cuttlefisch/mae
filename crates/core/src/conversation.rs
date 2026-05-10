@@ -140,6 +140,7 @@ impl TokenUsage {
 pub struct ConversationEntry {
     pub role: ConversationRole,
     pub content: String,
+    #[serde(default)]
     pub collapsed: bool,
     /// Token usage for this message (populated from API response for assistant messages).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +208,8 @@ pub struct Conversation {
     pub link_descriptive: bool,
     /// Whether to render inline bold/italic/code spans.
     pub render_markup: bool,
+    /// Wire format version of the last-loaded conversation (0 if never loaded).
+    loaded_wire_version: u32,
     /// When true, the user has scrolled up during streaming and we should
     /// NOT auto-follow new content. Cleared on `scroll_to_bottom()`.
     /// Emacs lesson: `comint-scroll-to-bottom-on-output`.
@@ -241,6 +244,7 @@ impl Conversation {
             rendered_links: Vec::new(),
             link_descriptive: true,
             render_markup: true,
+            loaded_wire_version: 0,
             scroll_locked: false,
         };
         conv.rebuild_render_cache();
@@ -432,6 +436,13 @@ impl Conversation {
     const WIRE_VERSION: u32 = 2;
 
     pub fn to_json(&self) -> Result<String, String> {
+        if self.loaded_wire_version > Self::WIRE_VERSION {
+            tracing::warn!(
+                "Saving conversation as v{} (loaded as v{}) — some data may be lost",
+                Self::WIRE_VERSION,
+                self.loaded_wire_version
+            );
+        }
         #[derive(Serialize)]
         struct Wire<'a> {
             version: u32,
@@ -444,21 +455,28 @@ impl Conversation {
         .map_err(|e| e.to_string())
     }
 
-    /// Replace entries with those loaded from JSON. Supports v1 (legacy)
-    /// and v2 (ToolCallState) formats.
+    /// Replace entries with those loaded from JSON. Supports v1 (legacy),
+    /// v2 (ToolCallState), and forward-compatible loading of higher versions.
     pub fn load_json(&mut self, json: &str) -> Result<(), String> {
         #[derive(Deserialize)]
         struct Wire {
             version: u32,
+            #[serde(default)]
             entries: Vec<ConversationEntry>,
         }
         let wire: Wire = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        if wire.version != 1 && wire.version != 2 {
-            return Err(format!(
-                "Unsupported conversation format version: {}",
-                wire.version
-            ));
+        if wire.version == 0 {
+            return Err("Conversation format version 0 is not supported".into());
         }
+        if wire.version > 2 {
+            // Forward-compatible: load what we can, warn about unknown fields.
+            // serde(default) on entries ensures missing/unknown fields don't fail.
+            tracing::warn!(
+                "Conversation v{} loaded by v2 parser — some data may be lost",
+                wire.version
+            );
+        }
+        self.loaded_wire_version = wire.version;
         self.entries = wire.entries;
         self.trim_entries();
         self.version += 1;
@@ -1237,11 +1255,52 @@ mod tests {
     }
 
     #[test]
-    fn load_json_rejects_unknown_version() {
-        let bad = r#"{"version": 99, "entries": []}"#;
+    fn load_json_accepts_future_version_with_warning() {
+        // Forward-compatible: higher versions load what we can parse.
+        let future = r#"{"version": 99, "entries": []}"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap(); // should succeed, not error
+        assert!(conv.entries.is_empty());
+        assert_eq!(conv.loaded_wire_version, 99);
+    }
+
+    #[test]
+    fn load_json_future_version_with_extra_fields() {
+        let future = r#"{
+            "version": 3,
+            "entries": [
+                {
+                    "role": "User",
+                    "content": "hello",
+                    "collapsed": false,
+                    "future_field": "should be ignored"
+                }
+            ]
+        }"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap();
+        assert_eq!(conv.entries.len(), 1);
+        assert_eq!(conv.entries[0].content, "hello");
+        assert_eq!(conv.loaded_wire_version, 3);
+    }
+
+    #[test]
+    fn save_after_loading_future_version_writes_current() {
+        let future =
+            r#"{"version": 5, "entries": [{"role": "User", "content": "hi", "collapsed": false}]}"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap();
+        let saved = conv.to_json().unwrap();
+        // Version is downgraded to current wire version (2)
+        assert!(saved.contains("\"version\": 2"), "saved: {saved}");
+    }
+
+    #[test]
+    fn load_json_rejects_version_zero() {
+        let bad = r#"{"version": 0, "entries": []}"#;
         let mut conv = Conversation::new();
         let err = conv.load_json(bad).unwrap_err();
-        assert!(err.contains("Unsupported"));
+        assert!(err.contains("version 0"));
     }
 
     #[test]
