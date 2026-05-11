@@ -350,6 +350,10 @@
           "kind": "enum"
         },
         {
+          "name": "NodeSource",
+          "kind": "enum"
+        },
+        {
           "name": "Node",
           "kind": "struct"
         },

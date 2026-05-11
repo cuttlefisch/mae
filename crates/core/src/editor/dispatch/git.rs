@@ -1,3 +1,5 @@
+//! Git porcelain: status, stage, commit, blame, diff, log.
+
 use super::super::Editor;
 
 impl Editor {

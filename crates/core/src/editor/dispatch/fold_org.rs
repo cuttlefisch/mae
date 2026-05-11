@@ -1,3 +1,5 @@
+//! Folding + org/markdown structural editing.
+
 use super::super::Editor;
 
 impl Editor {

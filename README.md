@@ -312,12 +312,23 @@ decisions that led to its current maintenance burden:
 - **Fix ratio doubled** — from 15% to 32% over 35 years. Rust's type system
   structurally prevents this.
 - **Bus factor of ~4** — top 5 contributors = 50.8% of commits. MAE enforces
-  module boundaries across 10 crates.
+  module boundaries across 11 crates.
 
 ## Self-Hosting
 
 MAE is used to develop itself. The AI agent runs in an embedded shell, calling
 the same tools the human uses. The GUI is the primary development target.
+
+## Data Directories
+
+MAE follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/):
+
+| Path | Contents |
+|------|----------|
+| `~/.config/mae/` | `config.toml`, `init.scm`, `help/*.org` |
+| `~/.local/share/mae/` | `swap/`, `transcripts/` |
+| `~/.local/state/mae/` | `logs/`, `history.scm` |
+| `.mae/` (per-project) | `session.json`, `conversation.json`, `kb.sqlite3`, `memory/`, `plans/` |
 
 ## Contributing
 

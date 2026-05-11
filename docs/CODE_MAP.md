@@ -142,6 +142,7 @@ Source: `crates/kb/src/lib.rs`
 | `persist` | mod |
 | `watch` | mod |
 | `NodeKind` | enum |
+| `NodeSource` | enum |
 | `Node` | struct |
 | `parse_links` | fn |
 | `KnowledgeBase` | struct |

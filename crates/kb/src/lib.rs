@@ -48,6 +48,20 @@ pub enum NodeKind {
     Project,
 }
 
+/// Provenance of a node — how it was created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeSource {
+    /// Seeded at startup from compiled-in content.
+    Seed,
+    /// Imported from a user org file.
+    UserOrg,
+    /// Created manually (e.g. via `:help-edit`).
+    Manual,
+    /// Received via federation from another MAE instance.
+    Federation,
+}
+
 /// A single node in the knowledge base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
@@ -68,6 +82,12 @@ pub struct Node {
     /// Priority extracted from org heading (e.g. 'A', 'B', 'C').
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<char>,
+    /// How this node was created (seed, user org import, manual, federation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<NodeSource>,
+    /// Version of the seed data that created this node (for re-seeding).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_version: Option<u32>,
 }
 
 impl Node {
@@ -85,11 +105,19 @@ impl Node {
             tags: Vec::new(),
             todo_state: None,
             priority: None,
+            source: None,
+            source_version: None,
         }
     }
 
     pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_source(mut self, source: NodeSource, version: u32) -> Self {
+        self.source = Some(source);
+        self.source_version = Some(version);
         self
     }
 
@@ -372,6 +400,16 @@ impl KnowledgeBase {
         self.nodes.values()
     }
 
+    /// Stamp all nodes that have no source with the given source and version.
+    pub fn stamp_source(&mut self, source: NodeSource, version: u32) {
+        for node in self.nodes.values_mut() {
+            if node.source.is_none() {
+                node.source = Some(source);
+                node.source_version = Some(version);
+            }
+        }
+    }
+
     /// Ingest a project config as a KB node.
     pub fn ingest_project(&mut self, name: &str, root: &std::path::Path, config_body: &str) {
         let id = format!("project:{}", name.to_lowercase().replace(' ', "-"));
@@ -388,6 +426,8 @@ impl KnowledgeBase {
             tags: vec!["project".to_string()],
             todo_state: None,
             priority: None,
+            source: None,
+            source_version: None,
         };
         self.insert(node);
     }

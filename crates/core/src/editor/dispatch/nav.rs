@@ -1,3 +1,5 @@
+//! Navigation: cursor movement, scrolling, jumps, search, marks.
+
 use super::super::Editor;
 
 impl Editor {

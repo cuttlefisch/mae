@@ -1,3 +1,5 @@
+//! File operations: open, save, close, rename, file picker.
+
 use crate::buffer::Buffer;
 use crate::file_picker::FilePicker;
 use crate::Mode;

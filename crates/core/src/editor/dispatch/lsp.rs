@@ -1,3 +1,5 @@
+//! LSP commands: definition, references, hover, complete, rename, format.
+
 use super::super::Editor;
 
 impl Editor {

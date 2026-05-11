@@ -1,3 +1,5 @@
+//! Editing: insert, delete, yank, paste, undo/redo, text objects.
+
 use crate::Mode;
 
 use super::super::Editor;

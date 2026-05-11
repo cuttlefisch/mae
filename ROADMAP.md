@@ -134,5 +134,18 @@ These are non-negotiable constraints derived from Emacs git history analysis:
 1. **No file exceeds 3,000 lines** — Emacs's `xdisp.c` is 38,605 lines. We enforce module splits.
 2. **No Global Interpreter Lock** — Emacs spent 23,901 commits on GC retrofit. We use Rust ownership.
 3. **AI is a peer, not a plugin** — same `dispatch_builtin()` for human and AI.
-4. **Module boundaries enable distributed ownership** — 10 crates with clear responsibilities.
+4. **Module boundaries enable distributed ownership** — 11 crates with clear responsibilities.
 5. **Runtime redefinability is sacred** — Scheme `defadvice`, live REPL, hot reload.
+
+## Near-Term Technical Debt (v0.8.0)
+
+### Editor struct extraction
+`editor/mod.rs` is 4,006 lines with 80+ pub fields spanning LSP, DAP, AI, completion, and debug concerns. Extract `LspState`, `DapState`, and `AiState` structs to bring it under 3,500 lines.
+
+### Upgrade path pre-work
+Before introducing a module/package system, these foundations must be in place:
+- **Config versioning** — `config_version` field in config.toml (added in v0.7.0)
+- **KB migration framework** — step-wise schema migrations with `NodeSource` provenance tracking (added in v0.7.0)
+- **Scheme API deprecation mechanism** — `mae-api-version` global + deprecation wrappers
+- **Forward-compatible serialization** — conversation format accepts unknown-higher versions with warning (added in v0.7.0)
+- **Package manifest spec** — `package.scm` format (name, version, dependencies)

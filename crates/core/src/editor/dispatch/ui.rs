@@ -1,3 +1,5 @@
+//! UI commands: palette, help, messages, config, themes, registers.
+
 use crate::buffer::Buffer;
 use crate::command_palette::CommandPalette;
 use crate::theme::bundled_theme_names;

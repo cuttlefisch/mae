@@ -1,3 +1,5 @@
+//! File tree sidebar: expand, collapse, navigate, open.
+
 use crate::buffer::{Buffer, BufferKind};
 use crate::window::SplitDirection;
 

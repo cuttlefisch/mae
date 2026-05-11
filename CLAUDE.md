@@ -18,7 +18,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
   - `make build-tui` for terminal-only build
   - `make ci` still excludes GUI (skia system deps)
   - `make check-config` validates init.scm + config.toml without launching the editor
-- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `help`, `project`, `lsp`, `scrolling`.
+- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
 
 ## Crate Layout
 
@@ -34,6 +34,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links | `rusqlite`, `tree-sitter`, `tree-sitter-org` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim | `tokio`, `serde_json` |
+| `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
 
 ## Architecture Principles
 
@@ -137,7 +138,7 @@ Granular milestone tracking lives in **ROADMAP.md**.
 - `audit_configuration` MCP tool (structured JSON) ✅
 - `--check-config --report` CLI extension ✅
 
-### Phase 8: GUI Rendering Backend — M1-M7 COMPLETE (2,389 tests)
+### Phase 8: GUI Rendering Backend — M1-M7 + M9 COMPLETE (2,629 tests)
 - `Renderer` trait extracted: backend-agnostic HAL for terminal + GUI ✅
 - `InputEvent` type: backend-agnostic input abstraction in mae-core ✅
 - `mae-gui` crate: winit + skia-safe, monospace text, theme colors ✅
@@ -274,7 +275,7 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 
 ### Validation
 
-`self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `help`, `project`, `lsp`, `scrolling`.
+`self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
 
 ### When to Use
 
@@ -293,6 +294,25 @@ When developing **inside MAE** (connected via `mae-mcp-shim`):
 When developing **outside MAE** (Claude Code directly on filesystem):
 - Use built-in Grep/Glob/Read tools (faster, no event loop round-trip)
 - LSP tools require the editor to be running with rust-analyzer connected
+
+## Security
+
+See `SECURITY.md` for the full security posture. Key points for development:
+
+- **Permission tiers** are enforced before tool execution — no bypass vectors exist
+- Use `api_key_command` with a password manager, not plaintext `api_key` in config
+- MCP socket (`/tmp/mae-{PID}.sock`) uses Unix permissions only — no per-client auth
+- Transcripts in `~/.local/share/mae/transcripts/` contain raw tool output (no secret scrubbing)
+- Shell blocklist is substring-based and bypassable — defense in depth, not a sandbox
+
+## API Stability
+
+These APIs are intended to remain stable through v1.0:
+
+- **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
+- **Hooks:** 18 hook points (see `:help concept:hooks`)
+- **MCP tools:** 130+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug)
+- **Config options:** 83+ registered, persistable via `:set-save`
 
 ## Related Resources
 

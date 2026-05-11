@@ -1,3 +1,5 @@
+//! Window management: split, resize, focus, close, balance.
+
 use crate::window::{Direction, SplitDirection};
 
 use super::super::Editor;

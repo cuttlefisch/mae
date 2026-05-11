@@ -1,3 +1,5 @@
+//! Visual mode: selection, operators, block ops.
+
 use crate::{Mode, VisualType};
 
 use super::super::Editor;

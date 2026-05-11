@@ -1,3 +1,5 @@
+//! DAP commands: breakpoints, step, continue, inspect, watch.
+
 use super::super::Editor;
 
 impl Editor {
