@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### CI
+
+- Drop macOS x86_64 from release matrix, add version bump guidance ([ca17004](https://github.com/cuttlefisch/mae/commit/ca170041098fb602d578043924efdc3dc7c4a799))
+
+## [0.8.0] - 2026-05-11
+
 ### Bug Fixes
 
 - Nightly clippy unnecessary_sort_by in perf.rs ([1298cc9](https://github.com/cuttlefisch/mae/commit/1298cc9a1e5d2496496147a921fa4b75acb785f4))
@@ -20,6 +26,10 @@ All notable changes to this project will be documented in this file.
 - Remove manual test plan from tracked files ([578cd4b](https://github.com/cuttlefisch/mae/commit/578cd4bbcfb7bc8910cfc05c4e905bba587d6f77))
 - Accuracy audit + release pipeline fixes ([2d11cf4](https://github.com/cuttlefisch/mae/commit/2d11cf40230dd121fb61cd3287805809ce198047))
 - Pre-merge audit — kb_seed split, dispatch headers, security posture ([51e69c2](https://github.com/cuttlefisch/mae/commit/51e69c2e113d82edd078fbeaee11124bc7902b5f))
+
+### Miscellaneous
+
+- Bump version to 0.8.0 ([b21fefe](https://github.com/cuttlefisch/mae/commit/b21fefebe2e5ecd19704fcf3a53f0378ea729f3d))
 
 ## [0.6.1] - 2026-05-06
 
