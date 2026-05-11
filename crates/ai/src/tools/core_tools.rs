@@ -594,7 +594,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         prop_type: "string".into(),
                         description: "Name of the hook to fire (e.g. 'app-start', 'buffer-open')".into(),
                         enum_values: Some(
-                            mae_core::hooks::HOOK_NAMES
+                            mae_core::hooks::WELL_KNOWN_HOOKS
                                 .iter()
                                 .map(|s: &&str| s.to_string())
                                 .collect(),

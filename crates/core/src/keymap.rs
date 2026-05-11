@@ -120,12 +120,13 @@ impl Keymap {
     }
 
     /// Bind a key sequence to a command name.
-    pub fn bind(&mut self, seq: Vec<KeyPress>, command: impl Into<String>) {
+    /// Returns the previous command if this overwrites an existing binding.
+    pub fn bind(&mut self, seq: Vec<KeyPress>, command: impl Into<String>) -> Option<String> {
         // Register all proper prefixes
         for i in 1..seq.len() {
             self.prefixes.insert(seq[..i].to_vec());
         }
-        self.bindings.insert(seq, command.into());
+        self.bindings.insert(seq, command.into())
     }
 
     /// Look up a key sequence.

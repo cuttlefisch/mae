@@ -501,7 +501,7 @@ impl Editor {
                         },
                         SetAction::Disable(name) => match self.get_option(&name) {
                             Some((_, def)) if def.kind == crate::options::OptionKind::Bool => {
-                                match self.set_option(def.name, "false") {
+                                match self.set_option(&name, "false") {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
                                 }
@@ -529,9 +529,9 @@ impl Editor {
                         }
                         SetAction::Toggle(name) => {
                             // Toggle: read effective, flip, set local
-                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            let def_name = self.option_registry.find(&name).map(|d| d.name.clone());
                             if let Some(dn) = def_name {
-                                let current = match dn {
+                                let current = match dn.as_ref() {
                                     "word_wrap" => self.effective_word_wrap(),
                                     "line_numbers" => {
                                         self.line_numbers_for(self.active_buffer_idx())
@@ -554,7 +554,7 @@ impl Editor {
                                     }
                                 };
                                 let new_val = if current { "false" } else { "true" };
-                                match self.set_local_option(dn, new_val) {
+                                match self.set_local_option(&dn, new_val) {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
                                 }
@@ -571,10 +571,10 @@ impl Editor {
                             Err(e) => self.set_status(e),
                         },
                         SetAction::Query(name) => {
-                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            let def_name = self.option_registry.find(&name).map(|d| d.name.clone());
                             if let Some(dn) = def_name {
                                 let idx = self.active_buffer_idx();
-                                let local_val = match dn {
+                                let local_val = match dn.as_ref() {
                                     "word_wrap" => self.buffers[idx]
                                         .local_options
                                         .word_wrap

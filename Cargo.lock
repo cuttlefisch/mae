@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "crossterm",
  "dirs",
@@ -2046,6 +2046,7 @@ dependencies = [
  "mae-renderer",
  "mae-scheme",
  "mae-shell",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -2058,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2074,7 +2075,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "imagesize",
  "kamadak-exif",
@@ -2107,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "mae-core",
  "serde",
@@ -2118,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "mae-gui"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2132,7 +2133,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "notify",
  "rusqlite",
@@ -2145,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "mae-lsp"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2155,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2165,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -2177,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "mae-core",
  "steel-core",
@@ -2186,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.7.0"
+version = "0.8.1"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -2195,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "mae-test-fixtures"
-version = "0.7.0"
+version = "0.8.1"
 
 [[package]]
 name = "matchers"
@@ -3709,6 +3710,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"

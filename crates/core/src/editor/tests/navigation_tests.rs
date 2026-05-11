@@ -141,18 +141,12 @@ fn paste_in_empty_buffer() {
 // --- from changelist_tests ---
 
 #[test]
-fn change_list_keybindings_registered() {
+fn change_list_commands_registered() {
+    // Keybindings for g; and g, moved to modules/marks-jumps/autoloads.scm.
+    // Verify the commands themselves are still registered as builtins.
     let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::LookupResult;
-    assert_eq!(
-        normal.lookup(&parse_key_seq("g;")),
-        LookupResult::Exact("change-backward")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("g,")),
-        LookupResult::Exact("change-forward")
-    );
+    assert!(editor.commands.get("change-backward").is_some());
+    assert!(editor.commands.get("change-forward").is_some());
 }
 
 #[test]

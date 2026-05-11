@@ -19,6 +19,7 @@ mod concepts;
 mod keys;
 mod lessons;
 mod scheme_api;
+mod terminology;
 mod tutorials;
 
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ use concepts::*;
 use keys::*;
 use lessons::*;
 use scheme_api::install_scheme_nodes;
+use terminology::install_terminology_nodes;
 use tutorials::install_tutorial_nodes;
 
 /// Build the initial KB: hand-authored concept/index nodes + generated
@@ -49,6 +51,7 @@ pub fn seed_kb(
     install_tutor_nodes(&mut kb);
     install_tutorial_nodes(&mut kb);
     install_scheme_nodes(&mut kb);
+    install_terminology_nodes(&mut kb);
     let keybinding_map = collect_keybindings(keymaps);
     install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
     install_category_nodes(&mut kb, registry, &keybinding_map);
@@ -436,7 +439,7 @@ fn install_option_nodes(kb: &mut KnowledgeBase) {
                     .join(", ")
             )
         };
-        let config_line = match def.config_key {
+        let config_line = match def.config_key.as_deref() {
             Some(key) => format!("\n**Config key:** `{}`", key),
             None => String::new(),
         };
@@ -460,7 +463,11 @@ fn install_option_nodes(kb: &mut KnowledgeBase) {
             aliases = aliases,
             config = config_line,
             name = def.name,
-            scheme_name = def.aliases.first().unwrap_or(&def.name),
+            scheme_name = def
+                .aliases
+                .first()
+                .map(|c| c.as_ref())
+                .unwrap_or(def.name.as_ref()),
         );
         let id = format!("option:{}", def.name);
         let title = format!("Option: {}", def.name);

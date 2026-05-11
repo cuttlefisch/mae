@@ -121,13 +121,8 @@ impl Editor {
         // intercepts C-o / C-i before keymap lookup and routes them to
         // help-back / help-forward. Everywhere else these drive the
         // vim-style jump list.
-        normal.bind(parse_key_seq("C-o"), "jump-backward");
-        normal.bind(parse_key_seq("C-i"), "jump-forward");
-        // Change list (Practical Vim ch. 9): g; walks back through edit
-        // positions, g, walks forward. Symmetric to Ctrl-o / Ctrl-i but
-        // scoped to edit locations, not motion targets.
-        normal.bind(parse_key_seq("g;"), "change-backward");
-        normal.bind(parse_key_seq("g,"), "change-forward");
+        // Jump list (C-o/C-i), marks (m/'), change list (g;/g,)
+        // — moved to modules/marks-jumps/autoloads.scm
         // gf — open file under cursor. Resolves absolute paths, relative
         // paths (cwd first, then buffer's dir), and ~-expanded home paths.
         normal.bind(parse_key_seq("gf"), "goto-file-under-cursor");
@@ -135,9 +130,7 @@ impl Editor {
         normal.bind(parse_key_seq("gx"), "open-link-at-cursor");
         // gl — edit link at cursor (jump into link region + insert mode)
         normal.bind(parse_key_seq("gl"), "edit-link");
-        // Marks (m<letter> sets, '<letter> jumps)
-        normal.bind(parse_key_seq("m"), "set-mark-await");
-        normal.bind(parse_key_seq("'"), "jump-mark-await");
+        // Marks (m/') — moved to modules/marks-jumps/autoloads.scm
         // Macros (q<letter> records, @<letter> replays, @@ repeats last).
         // @@ is handled by dispatch_char_motion: if the register char is '@',
         // last_macro_register is used. This avoids the keymap prefix conflict
@@ -180,11 +173,8 @@ impl Editor {
         // yank/delete/paste. Resolved by the key-handling layer via
         // `pending_register_prompt` — dispatch just arms the flag.
         normal.bind(parse_key_seq("\""), "prompt-register");
-        // Surrounds (vim-surround)
-        normal.bind(parse_key_seq("ds"), "delete-surround-await");
-        normal.bind(parse_key_seq("cs"), "change-surround-await");
-        normal.bind(parse_key_seq("ys"), "operator-surround");
-        normal.bind(parse_key_seq("yss"), "surround-line-await");
+        // Surrounds (vim-surround) — keybindings moved to modules/surround/autoloads.scm
+        // Commands remain registered as builtins; keys come from the module.
         // Undo/Redo
         normal.bind(parse_key_seq("u"), "undo");
         normal.bind(parse_key_seq("C-r"), "redo");
@@ -270,6 +260,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
         normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
         normal.bind(parse_key_seq_spaced("SPC h d"), "dashboard");
+        normal.bind(parse_key_seq_spaced("SPC h B"), "describe-bindings");
         normal.bind(parse_key_seq_spaced("SPC h D"), "describe-display-policy");
         // +scratch
         normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");
@@ -464,9 +455,7 @@ impl Editor {
         visual.bind(parse_key_seq("F"), "find-char-backward-await");
         visual.bind(parse_key_seq("t"), "till-char-forward-await");
         visual.bind(parse_key_seq("T"), "till-char-backward-await");
-        // Marks
-        visual.bind(parse_key_seq("m"), "set-mark-await");
-        visual.bind(parse_key_seq("'"), "jump-mark-await");
+        // Marks (m/') — moved to modules/marks-jumps/autoloads.scm
         // Scroll
         visual.bind(parse_key_seq("C-u"), "scroll-half-up");
         visual.bind(parse_key_seq("C-d"), "scroll-half-down");
@@ -499,8 +488,7 @@ impl Editor {
         visual.bind(parse_key_seq(","), "repeat-find-reverse");
         // Register prompt (same as Normal: `"<char>` routes the next op).
         visual.bind(parse_key_seq("\""), "prompt-register");
-        // Surround visual selection: `S<char>`.
-        visual.bind(parse_key_seq("S"), "surround-visual-await");
+        // Surround visual (S) — moved to modules/surround/autoloads.scm
         // Block visual insert (I inserts at left edge on all rows)
         visual.bind(parse_key_seq("I"), "block-visual-insert");
         // Block visual append (A appends at right edge on all rows)

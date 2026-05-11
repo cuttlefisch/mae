@@ -310,6 +310,22 @@ For full setup guide: :help ai-setup";
             "describe-configuration" => {
                 self.show_configuration_report();
             }
+            "describe-bindings" => {
+                self.show_bindings_report();
+            }
+            "describe-module" => {
+                self.show_module_report();
+            }
+            "module-reload" => {
+                // Module name comes from the command line argument.
+                let arg = self.command_line.trim().to_string();
+                if arg.is_empty() {
+                    self.set_status("Usage: :module-reload <name>".to_string());
+                } else {
+                    self.pending_module_reloads.push(arg.clone());
+                    self.set_status(format!("Reloading module '{}'...", arg));
+                }
+            }
             "describe-display-policy" => {
                 let report = self.display_policy.format_report();
                 let mut buf = crate::buffer::Buffer::new();

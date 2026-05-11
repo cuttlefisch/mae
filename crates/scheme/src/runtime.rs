@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -87,6 +87,14 @@ struct SharedState {
     pending_agenda_removes: Vec<String>,
     /// Request to display agenda file list via `(agenda-list)`.
     pending_agenda_list: bool,
+    /// Dynamic option registrations from modules: (name, kind, default, doc).
+    pending_dynamic_options: Vec<(String, String, String, String)>,
+    /// Active modules: name → version.
+    active_modules: HashMap<String, String>,
+    /// Pending command unregistrations (for module unload).
+    pending_command_unregisters: Vec<String>,
+    /// Pending option unregistrations (for module unload).
+    pending_option_unregisters: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -585,6 +593,115 @@ impl SchemeRuntime {
             },
         );
 
+        // --- Module system functions ---
+
+        // (when-flag FLAG-NAME THUNK) — evaluate thunk if flag is set.
+        // Flags are set as __mae-flag-MODULE-FLAG variables by the loader.
+        // This is a convenience wrapper that modules use in autoloads.scm.
+        engine
+            .run(
+                r#"
+(define (when-flag flag-name thunk)
+  ;; Flag variables are set as __mae-flag-MODULE-FLAG = #t by the loader.
+  ;; We can't easily check from Scheme since we don't know the module name here,
+  ;; so for now just evaluate the thunk. The loader only sets flags that are enabled.
+  (thunk))
+"#,
+            )
+            .ok();
+
+        // (define-option! NAME KIND DEFAULT DOC) — register a runtime option.
+        // Queued and applied in apply_to_editor().
+        let s = shared.clone();
+        engine.register_fn(
+            "define-option!",
+            move |name: String, kind: String, default: String, doc: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_dynamic_options
+                    .push((name, kind, default, doc));
+                SteelVal::Void
+            },
+        );
+
+        // (module-loaded? NAME) — check if a module is active
+        let s = shared.clone();
+        engine.register_fn("module-loaded?", move |name: String| {
+            SteelVal::BoolV(s.lock().unwrap().active_modules.contains_key(&name))
+        });
+
+        // (module-version NAME) — get version of active module, or #f
+        let s = shared.clone();
+        engine.register_fn("module-version", move |name: String| {
+            match s.lock().unwrap().active_modules.get(&name) {
+                Some(v) => SteelVal::StringV(v.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (module-list) — list all active module names
+        let s = shared.clone();
+        engine.register_fn("module-list", move || {
+            let state = s.lock().unwrap();
+            SteelVal::ListV(
+                state
+                    .active_modules
+                    .keys()
+                    .map(|k| SteelVal::StringV(k.clone().into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        // (register-module! NAME VERSION) — called by loader after loading a module
+        let s = shared.clone();
+        engine.register_fn("register-module!", move |name: String, version: String| {
+            s.lock().unwrap().active_modules.insert(name, version);
+            SteelVal::Void
+        });
+
+        // (when-module NAME THUNK) — evaluate thunk only if module is active.
+        // Defined in Scheme for ergonomics (thunk is a lambda).
+        engine
+            .run(
+                r#"
+(define (when-module name thunk)
+  (when (module-loaded? name)
+    (thunk)))
+"#,
+            )
+            .ok();
+
+        // (module-flags NAME) — get enabled flags for a module.
+        // Returns the flags stored by the loader via flag variables.
+        // For now returns an empty list — flags are injected as individual
+        // Scheme variables (__mae-flag-<module>-<flag>), not collected.
+        // TODO: populate from loader when mae! parsing is implemented.
+        engine.register_fn("module-flags", move |_name: String| -> SteelVal {
+            SteelVal::ListV(vec![].into())
+        });
+
+        // (undefine-command! NAME) — remove a command (for module unload)
+        let s = shared.clone();
+        engine.register_fn("undefine-command!", move |name: String| {
+            s.lock().unwrap().pending_command_unregisters.push(name);
+            SteelVal::Void
+        });
+
+        // (undefine-option! NAME) — remove an option (for module unload)
+        let s = shared.clone();
+        engine.register_fn("undefine-option!", move |name: String| {
+            s.lock().unwrap().pending_option_unregisters.push(name);
+            SteelVal::Void
+        });
+
+        // (unload-feature NAME) — remove from loaded_features
+        let s = shared.clone();
+        engine.register_fn("unload-feature", move |name: String| {
+            let removed = s.lock().unwrap().loaded_features.remove(&name);
+            SteelVal::BoolV(removed)
+        });
+
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
         engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
@@ -877,10 +994,10 @@ impl SchemeRuntime {
             .map(|o| {
                 SteelVal::ListV(
                     vec![
-                        SteelVal::StringV(o.name.into()),
+                        SteelVal::StringV(o.name.as_ref().into()),
                         SteelVal::StringV(format!("{}", o.kind).into()),
-                        SteelVal::StringV(o.default_value.into()),
-                        SteelVal::StringV(o.doc.into()),
+                        SteelVal::StringV(o.default_value.as_ref().into()),
+                        SteelVal::StringV(o.doc.as_ref().into()),
                     ]
                     .into(),
                 )
@@ -896,7 +1013,7 @@ impl SchemeRuntime {
             .iter()
             .filter_map(|o| {
                 editor
-                    .get_option(o.name)
+                    .get_option(&o.name)
                     .map(|(v, _)| (o.name.to_string(), v))
             })
             .collect();
@@ -1010,9 +1127,16 @@ impl SchemeRuntime {
                     warn!(keymap = %map_name, key = %key_str, command = %cmd_name,
                           "scheme keybinding produced empty key sequence, skipping");
                 } else {
-                    debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
-                           keys = seq.len(), "applying scheme keybinding");
-                    keymap.bind(seq, &cmd_name);
+                    let prev = keymap.bind(seq, &cmd_name);
+                    if let Some(ref prev_cmd) = prev {
+                        if prev_cmd != &cmd_name {
+                            debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                                   previous = %prev_cmd, "scheme keybinding overwrites existing");
+                        }
+                    } else {
+                        debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                               "applying scheme keybinding");
+                    }
                 }
             } else {
                 warn!(keymap = %map_name, key = %key_str, command = %cmd_name, "scheme keybinding targets unknown keymap");
@@ -1032,14 +1156,41 @@ impl SchemeRuntime {
             editor.commands.register_autoload(&cmd_name, &doc, &feature);
         }
 
+        // Register dynamic options from (define-option!)
+        for (name, kind_str, default, doc) in state.pending_dynamic_options.drain(..) {
+            let kind = match kind_str.as_str() {
+                "bool" | "boolean" => mae_core::options::OptionKind::Bool,
+                "int" | "integer" => mae_core::options::OptionKind::Int,
+                "string" => mae_core::options::OptionKind::String,
+                other => {
+                    warn!(name = %name, kind = %other, "define-option! unknown kind, defaulting to string");
+                    mae_core::options::OptionKind::String
+                }
+            };
+            editor
+                .option_registry
+                .register_dynamic(name.clone(), vec![], doc, kind, default, None);
+            debug!(option = %name, "registered dynamic option from module");
+        }
+
+        // Unregister commands (for module unload)
+        for name in state.pending_command_unregisters.drain(..) {
+            if editor.commands.unregister(&name) {
+                debug!(command = %name, "unregistered command");
+            }
+        }
+
+        // Unregister options (for module unload)
+        for name in state.pending_option_unregisters.drain(..) {
+            if editor.option_registry.unregister(&name) {
+                debug!(option = %name, "unregistered option");
+            }
+        }
+
         // Apply hook registrations
         for (hook, fn_name) in state.pending_hook_adds.drain(..) {
-            if editor.hooks.add(&hook, &fn_name) {
-                debug!(hook = %hook, fn_name = %fn_name, "hook registered");
-            } else {
-                warn!(hook = %hook, "unknown hook name in add-hook!");
-                editor.set_status(format!("Unknown hook: {}", hook));
-            }
+            editor.hooks.add(&hook, &fn_name);
+            debug!(hook = %hook, fn_name = %fn_name, "hook registered");
         }
         for (hook, fn_name) in state.pending_hook_removes.drain(..) {
             if editor.hooks.remove(&hook, &fn_name) {
@@ -1866,15 +2017,15 @@ mod tests {
     }
 
     #[test]
-    fn add_hook_invalid_name_warns() {
+    fn add_hook_any_name_succeeds() {
+        // Hook namespace is open — modules can define custom hooks.
         let mut rt = new_runtime();
         let mut editor = Editor::new();
 
-        rt.eval(r#"(add-hook! "nonexistent" "fn")"#).unwrap();
+        rt.eval(r#"(add-hook! "custom-module-hook" "fn")"#).unwrap();
         rt.apply_to_editor(&mut editor);
 
-        // Should have set a warning in status
-        assert!(editor.status_msg.contains("Unknown hook"));
+        assert_eq!(editor.hooks.get("custom-module-hook"), &["fn"]);
     }
 
     // --- set-option! tests ---
@@ -2452,6 +2603,106 @@ mod tests {
             CommandSource::Autoload {
                 feature: "my-pkg".into()
             }
+        );
+    }
+
+    #[test]
+    fn module_loaded_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        // No modules registered → module-loaded? returns false
+        let result = rt.eval(r#"(module-loaded? "dashboard")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        // Register a module → returns true
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval(r#"(module-loaded? "dashboard")"#).unwrap();
+        assert!(result.contains("t"), "expected true, got: {}", result);
+    }
+
+    #[test]
+    fn module_version_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let result = rt.eval(r#"(module-version "dashboard")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval(r#"(module-version "dashboard")"#).unwrap();
+        assert!(
+            result.contains("0.1.0"),
+            "expected version, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn module_list_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let result = rt.eval("(module-list)").unwrap();
+        // Empty list
+        assert!(
+            result.contains("()"),
+            "expected empty list, got: {}",
+            result
+        );
+
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval("(module-list)").unwrap();
+        assert!(
+            result.contains("dashboard"),
+            "expected dashboard, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn define_option_applies() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(define-option! "my_option" "string" "hello" "A test option")"#)
+            .unwrap();
+        let mut editor = Editor::new();
+        rt.apply_to_editor(&mut editor);
+        let def = editor.option_registry.find("my_option");
+        assert!(def.is_some(), "dynamic option should be registered");
+        assert_eq!(def.unwrap().default_value.as_ref(), "hello");
+    }
+
+    #[test]
+    fn undefine_command_applies() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        // Editor starts with built-in commands
+        assert!(editor.commands.get("move-left").is_some());
+        rt.eval(r#"(undefine-command! "move-left")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(editor.commands.get("move-left").is_none());
+    }
+
+    #[test]
+    fn unload_feature_removes() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(provide-feature "test-mod")"#).unwrap();
+        // Check via unload return value — true means it was present
+        let result = rt.eval(r#"(unload-feature "test-mod")"#).unwrap();
+        assert!(
+            result.contains("t"),
+            "expected true (was loaded), got: {}",
+            result
+        );
+        // Second unload should return false
+        let result = rt.eval(r#"(unload-feature "test-mod")"#).unwrap();
+        assert!(
+            result.contains("f"),
+            "expected false (already removed), got: {}",
+            result
         );
     }
 }

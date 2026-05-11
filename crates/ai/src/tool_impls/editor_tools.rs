@@ -90,7 +90,7 @@ pub fn execute_get_option(editor: &Editor, args: &serde_json::Value) -> Result<S
             .list()
             .iter()
             .filter_map(|def| {
-                let (value, _) = editor.get_option(def.name)?;
+                let (value, _) = editor.get_option(&def.name)?;
                 Some(serde_json::json!({
                     "name": def.name,
                     "value": value,
@@ -436,10 +436,6 @@ pub fn execute_trigger_hook(
         .get("hook_name")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'hook_name' parameter")?;
-
-    if !mae_core::hooks::HOOK_NAMES.contains(&hook_name) {
-        return Err(format!("Invalid hook name: '{}'", hook_name));
-    }
 
     editor.fire_hook(hook_name);
     Ok(format!("Hook '{}' triggered", hook_name))
@@ -877,8 +873,8 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     // Modified options
     let mut options_modified = Vec::new();
     for def in editor.option_registry.list() {
-        if let Some((val, _)) = editor.get_option(def.name) {
-            if val != def.default_value {
+        if let Some((val, _)) = editor.get_option(&def.name) {
+            if val != def.default_value.as_ref() {
                 options_modified.push(def.name.to_string());
             }
         }

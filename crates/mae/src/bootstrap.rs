@@ -584,16 +584,22 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
     prompt
 }
 
-/// Load init.scm files in layers: user → project.
-/// Each layer is independent — errors in one don't block others.
+/// Load init files, discover/load modules, then load config.scm.
 ///
-/// Loading order:
-/// 1. `~/.config/mae/init.scm` (user config)
-/// 2. `$PROJECT_ROOT/.mae/init.scm` (project-local, if cwd has .mae/)
+/// This implements the three-file loading model:
+///   1. init.scm (module declarations) — user → project
+///   2. Module autoloads (topo-sorted, before user config)
+///   3. config.scm (user customization, overrides module defaults)
 ///
-/// Legacy fallbacks: `init.scm` and `scheme/init.scm` in cwd (for v0.6 compat).
-pub fn load_init_file(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+/// Returns the ModuleRegistry for the caller to store.
+pub fn load_init_file(
+    scheme: &mut SchemeRuntime,
+    editor: &mut Editor,
+) -> crate::pkg::loader::ModuleRegistry {
     load_init_files(scheme, editor);
+    let registry = load_modules(scheme, editor);
+    load_config_scm(scheme, editor);
+    registry
 }
 
 /// Layered init loading — returns the number of files loaded.
@@ -682,6 +688,201 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
         info!(count = loaded, "init files loaded");
     }
     loaded
+}
+
+/// Discover, resolve, and load module autoloads.
+///
+/// Module loading happens between init.scm and config.scm:
+///   1. Discover modules in built-in `modules/` dir and user `~/.config/mae/packages/`
+///   2. Resolve dependencies (topological sort)
+///   3. Load each module's autoloads.scm (registers commands, keys, options, hooks)
+///   4. config.scm runs AFTER this, so users can override any module setting
+///
+/// Returns the populated ModuleRegistry.
+pub fn load_modules(
+    scheme: &mut SchemeRuntime,
+    editor: &mut Editor,
+) -> crate::pkg::loader::ModuleRegistry {
+    use crate::pkg::{
+        loader::{load_module_autoloads, ModuleRegistry},
+        manifest::discover_modules,
+        resolver::resolve_load_order,
+    };
+
+    let mut all_modules = Vec::new();
+
+    // Built-in modules (shipped with MAE binary, relative to exe or repo root)
+    let builtin_dirs = [
+        PathBuf::from("modules"),
+        // Also check next to the executable
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("modules")))
+            .unwrap_or_default(),
+    ];
+    for dir in &builtin_dirs {
+        if dir.exists() {
+            all_modules.extend(discover_modules(dir));
+        }
+    }
+
+    // User-installed modules
+    if let Some(user_pkg) = dirs_candidate("mae/packages") {
+        if user_pkg.exists() {
+            all_modules.extend(discover_modules(&user_pkg));
+        }
+    }
+
+    if all_modules.is_empty() {
+        debug!("no modules discovered");
+        return ModuleRegistry::new();
+    }
+
+    // For now, enable all discovered built-in modules with no flags.
+    // TODO: Parse mae! block from init.scm for selective enable + flags.
+    let enabled: HashMap<String, Vec<String>> = all_modules
+        .iter()
+        .map(|(_, m)| (m.name().to_string(), vec![]))
+        .collect();
+
+    let resolved = match resolve_load_order(&all_modules, &enabled) {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "module resolution failed");
+            editor.set_status(format!("Module error: {}", e));
+            return ModuleRegistry::new();
+        }
+    };
+
+    let mut registry = ModuleRegistry::new();
+    registry.register_resolved(&resolved);
+
+    for module in &resolved {
+        match load_module_autoloads(module, scheme, editor) {
+            Ok(()) => {
+                registry.mark_loaded(&module.name);
+                info!(module = %module.name, "module loaded");
+                // Fire module-loaded hook
+                editor.fire_hook(&format!("module-loaded:{}", module.name));
+            }
+            Err(e) => {
+                registry.mark_failed(&module.name, e.clone());
+                error!(module = %module.name, error = %e, "module load failed");
+                editor.set_status(format!("Module '{}' failed: {}", module.name, e));
+                // Continue loading other modules — error isolation
+            }
+        }
+    }
+
+    // Populate editor's active_modules for :describe-module
+    editor.active_modules = registry
+        .list()
+        .iter()
+        .map(|m| {
+            let status = match &m.status {
+                crate::pkg::loader::ModuleStatus::Loaded => "loaded".to_string(),
+                crate::pkg::loader::ModuleStatus::Failed(e) => format!("failed: {}", e),
+                crate::pkg::loader::ModuleStatus::Disabled => "disabled".to_string(),
+                crate::pkg::loader::ModuleStatus::Discovered => "discovered".to_string(),
+            };
+            (m.name.clone(), m.version.clone(), status)
+        })
+        .collect();
+
+    let loaded_count = resolved
+        .iter()
+        .filter(|m| registry.is_loaded(&m.name))
+        .count();
+    if loaded_count > 0 {
+        info!(
+            count = loaded_count,
+            total = resolved.len(),
+            "modules loaded"
+        );
+    }
+
+    registry
+}
+
+/// Reload a single module's autoloads.scm.
+///
+/// Scans discovered modules for the named one, re-evaluates its autoloads,
+/// and applies the result to the editor. This is a hot-reload path for
+/// module development — no restart needed.
+pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    use crate::pkg::loader::load_module_autoloads;
+    use crate::pkg::manifest::discover_modules;
+    use crate::pkg::resolver::ResolvedModule;
+
+    // Find the module in known locations
+    let mut found = None;
+    let search_dirs = [
+        std::path::PathBuf::from("modules"),
+        dirs_candidate("mae/packages").unwrap_or_default(),
+    ];
+    for dir in &search_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        for (path, manifest) in discover_modules(dir) {
+            if manifest.name() == name {
+                found = Some((path, manifest));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+
+    let Some((path, manifest)) = found else {
+        editor.set_status(format!("Module '{}' not found", name));
+        return;
+    };
+
+    let resolved = ResolvedModule {
+        name: name.to_string(),
+        path,
+        manifest,
+        enabled_flags: vec![],
+    };
+
+    match load_module_autoloads(&resolved, scheme, editor) {
+        Ok(()) => {
+            info!(module = %name, "module reloaded");
+            editor.set_status(format!("Module '{}' reloaded", name));
+            editor.fire_hook(&format!("module-loaded:{}", name));
+        }
+        Err(e) => {
+            error!(module = %name, error = %e, "module reload failed");
+            editor.set_status(format!("Module '{}' reload failed: {}", name, e));
+        }
+    }
+}
+
+/// Load user config.scm — runs AFTER module autoloads so users can override.
+///
+/// This is the second half of the three-file model:
+///   init.scm → module autoloads → config.scm
+pub fn load_config_scm(scheme: &mut SchemeRuntime, editor: &mut Editor) -> bool {
+    if let Some(config_scm) = dirs_candidate("mae/config.scm") {
+        if config_scm.exists() {
+            info!(path = %config_scm.display(), "loading config.scm");
+            scheme.inject_editor_state(editor);
+            match scheme.load_file(&config_scm) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    info!("config.scm loaded");
+                    return true;
+                }
+                Err(e) => {
+                    error!(error = %e, "config.scm load failed");
+                    editor.set_status(format!("Error in config.scm: {}", e));
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Find the first conversation buffer's Conversation, if any.

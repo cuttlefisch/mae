@@ -1615,7 +1615,10 @@ fn get_option_performance() {
     let ed = Editor::new();
     let (val, def) = ed.get_option("large_file_lines").unwrap();
     assert_eq!(val, "5000");
-    assert_eq!(def.config_key, Some("performance.large_file_lines"));
+    assert_eq!(
+        def.config_key.as_deref(),
+        Some("performance.large_file_lines")
+    );
 }
 
 #[test]

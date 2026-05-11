@@ -842,6 +842,12 @@ pub struct Editor {
     /// show guidance when the user tries to open an AI conversation
     /// without credentials.
     pub ai_configured: bool,
+    /// Active modules: (name, version, status). Populated by the module
+    /// loader in bootstrap.rs. Used by `:describe-module`.
+    pub active_modules: Vec<(String, String, String)>,
+    /// Pending module reload requests. Drained by the binary which owns
+    /// the SchemeRuntime and ModuleRegistry.
+    pub pending_module_reloads: Vec<String>,
 }
 
 impl Default for Editor {
@@ -1084,6 +1090,8 @@ impl Editor {
             code_block_cache: HashMap::new(),
             org_agenda_files: Vec::new(),
             ai_configured: false,
+            active_modules: Vec::new(),
+            pending_module_reloads: Vec::new(),
         }
     }
 
@@ -1424,11 +1432,11 @@ impl Editor {
         let def_name = self
             .option_registry
             .find(name)
-            .map(|d| d.name)
+            .map(|d| d.name.clone())
             .ok_or_else(|| format!("Unknown option: {}", name))?;
         let idx = self.active_buffer_idx();
         let opts = &mut self.buffers[idx].local_options;
-        match def_name {
+        match def_name.as_ref() {
             "word_wrap" => {
                 opts.word_wrap = Some(crate::options::parse_option_bool(value)?);
                 self.buffers[idx].visual_rows_cache = None;
@@ -1470,7 +1478,7 @@ impl Editor {
     /// Get the current value and definition of an option by name or alias.
     pub fn get_option(&self, name: &str) -> Option<(String, &crate::options::OptionDef)> {
         let def = self.option_registry.find(name)?;
-        let value = match def.name {
+        let value = match def.name.as_ref() {
             "line_numbers" => self.show_line_numbers.to_string(),
             "relative_line_numbers" => self.relative_line_numbers.to_string(),
             "word_wrap" => self.word_wrap.to_string(),
@@ -1543,9 +1551,9 @@ impl Editor {
         let def_name = self
             .option_registry
             .find(name)
-            .map(|d| d.name)
+            .map(|d| d.name.clone())
             .ok_or_else(|| format!("Unknown option: {}", name))?;
-        match def_name {
+        match def_name.as_ref() {
             "line_numbers" => {
                 self.show_line_numbers = parse_option_bool(value)?;
             }
@@ -1850,7 +1858,7 @@ impl Editor {
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self
-            .get_option(def_name)
+            .get_option(&def_name)
             .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;
         // Fire parameterized option-change hook (e.g. "option-change:font_size")
         self.fire_hook(&format!("option-change:{}", def_name));
@@ -1864,6 +1872,7 @@ impl Editor {
             .ok_or_else(|| format!("Unknown option: {}", name))?;
         let config_key = def
             .config_key
+            .as_deref()
             .ok_or_else(|| format!("Option '{}' cannot be saved to config", def.name))?;
 
         let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -1959,7 +1968,7 @@ impl Editor {
             "------", "----", "-------", "-------"
         ));
         for def in self.option_registry.list() {
-            let current = match self.get_option(def.name) {
+            let current = match self.get_option(&def.name) {
                 Some((v, _)) => v,
                 None => "?".to_string(),
             };
@@ -1978,6 +1987,153 @@ impl Editor {
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();
         buf.name = "*Options*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
+    /// Show all active modules in a read-only buffer.
+    pub fn show_module_report(&mut self) {
+        let mut lines = Vec::new();
+        lines.push("Active Modules".to_string());
+        lines.push("==============".to_string());
+        lines.push(String::new());
+
+        if self.active_modules.is_empty() {
+            lines.push("No modules loaded.".to_string());
+        } else {
+            lines.push(format!("{:<25} {:<12} {}", "Module", "Version", "Status"));
+            lines.push(format!("{:<25} {:<12} {}", "------", "-------", "------"));
+            for (name, version, status) in &self.active_modules {
+                lines.push(format!("{:<25} {:<12} {}", name, version, status));
+            }
+            lines.push(String::new());
+            lines.push(format!("Total: {} modules", self.active_modules.len()));
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Modules*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
+    /// Show all keybindings for the current mode in a read-only buffer.
+    pub fn show_bindings_report(&mut self) {
+        use crate::Key;
+
+        fn format_key(kp: &crate::KeyPress) -> String {
+            let mut s = String::new();
+            if kp.ctrl {
+                s.push_str("C-");
+            }
+            if kp.alt {
+                s.push_str("M-");
+            }
+            match kp.key {
+                Key::Char(' ') => s.push_str("SPC"),
+                Key::Char(c) => s.push(c),
+                Key::Enter => s.push_str("RET"),
+                Key::Escape => s.push_str("ESC"),
+                Key::Tab => s.push_str("TAB"),
+                Key::Backspace => s.push_str("BS"),
+                Key::Delete => s.push_str("DEL"),
+                Key::Up => s.push_str("Up"),
+                Key::Down => s.push_str("Down"),
+                Key::Left => s.push_str("Left"),
+                Key::Right => s.push_str("Right"),
+                Key::Home => s.push_str("Home"),
+                Key::End => s.push_str("End"),
+                Key::PageUp => s.push_str("PgUp"),
+                Key::PageDown => s.push_str("PgDn"),
+                ref k => s.push_str(&format!("{:?}", k)),
+            }
+            s
+        }
+
+        fn format_seq(seq: &[crate::KeyPress]) -> String {
+            seq.iter().map(format_key).collect::<Vec<_>>().join(" ")
+        }
+
+        let (primary_map, parent_map) = match self.current_keymap_names() {
+            Some(names) => names,
+            None => {
+                self.set_status("No keymap for current mode".to_string());
+                return;
+            }
+        };
+        let mode = self.mode;
+
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Keybindings — {:?} mode (keymap: {})",
+            mode, primary_map
+        ));
+        lines.push("=".repeat(60));
+        lines.push(String::new());
+
+        // Collect bindings from the keymap chain (child → parent)
+        let mut all_bindings: Vec<(String, String)> = Vec::new();
+        let mut visited_maps = Vec::new();
+        let mut current_map = Some(primary_map.to_string());
+        if current_map.as_deref() != parent_map {
+            // If there's a separate parent, we'll traverse to it via the keymap's parent field
+        }
+
+        while let Some(map_name) = current_map.take() {
+            if visited_maps.contains(&map_name) {
+                break;
+            }
+            if let Some(km) = self.keymaps.get(&map_name) {
+                for (seq, cmd) in km.bindings() {
+                    let key_str = format_seq(seq);
+                    if !all_bindings.iter().any(|(k, _)| k == &key_str) {
+                        all_bindings.push((key_str, cmd.clone()));
+                    }
+                }
+                visited_maps.push(map_name);
+                current_map = km.parent.clone();
+            } else {
+                break;
+            }
+        }
+
+        // Also include parent_map if it wasn't in the chain
+        if let Some(pm) = parent_map {
+            if !visited_maps.iter().any(|v| v == pm) {
+                if let Some(km) = self.keymaps.get(pm) {
+                    for (seq, cmd) in km.bindings() {
+                        let key_str = format_seq(seq);
+                        if !all_bindings.iter().any(|(k, _)| k == &key_str) {
+                            all_bindings.push((key_str, cmd.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        all_bindings.sort_by(|a, b| a.0.cmp(&b.0));
+
+        lines.push(format!("{:<30} {}", "Key", "Command"));
+        lines.push(format!("{:<30} {}", "---", "-------"));
+        for (key, cmd) in &all_bindings {
+            lines.push(format!("{:<30} {}", key, cmd));
+        }
+        lines.push(String::new());
+        lines.push(format!("Total: {} bindings", all_bindings.len()));
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Bindings*".to_string();
         buf.replace_contents(&content);
         buf.modified = false;
         buf.read_only = true;
@@ -2131,8 +2287,8 @@ impl Editor {
         // Modified options
         let mut modified = Vec::new();
         for def in self.option_registry.list() {
-            if let Some((val, _)) = self.get_option(def.name) {
-                if val != def.default_value {
+            if let Some((val, _)) = self.get_option(&def.name) {
+                if val != def.default_value.as_ref() {
                     modified.push(def.name.to_string());
                 }
             }

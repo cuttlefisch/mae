@@ -76,6 +76,7 @@ impl CommandRegistry {
     }
 
     /// Register a Scheme-defined command.
+    /// Logs a warning if overwriting an existing command.
     pub fn register_scheme(
         &mut self,
         name: impl Into<String>,
@@ -83,6 +84,11 @@ impl CommandRegistry {
         scheme_fn: impl Into<String>,
     ) {
         let name = name.into();
+        if let Some(existing) = self.commands.get(&name) {
+            if existing.source != CommandSource::Builtin {
+                eprintln!("[warn] Command '{}' already registered (overwriting)", name);
+            }
+        }
         self.commands.insert(
             name.clone(),
             Command {
@@ -94,6 +100,7 @@ impl CommandRegistry {
     }
 
     /// Register a command that will `(require FEATURE)` on first invocation.
+    /// Logs a warning if overwriting an existing command.
     pub fn register_autoload(
         &mut self,
         name: impl Into<String>,
@@ -101,6 +108,11 @@ impl CommandRegistry {
         feature: impl Into<String>,
     ) {
         let name = name.into();
+        if let Some(existing) = self.commands.get(&name) {
+            if existing.source != CommandSource::Builtin {
+                eprintln!("[warn] Command '{}' already registered (overwriting)", name);
+            }
+        }
         self.commands.insert(
             name.clone(),
             Command {
@@ -111,6 +123,11 @@ impl CommandRegistry {
                 },
             },
         );
+    }
+
+    /// Unregister a command by name (for module unload). Returns true if found.
+    pub fn unregister(&mut self, name: &str) -> bool {
+        self.commands.remove(name).is_some()
     }
 
     /// Look up a command by name.
@@ -911,6 +928,15 @@ impl CommandRegistry {
         reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
+        );
+        reg.register_builtin(
+            "describe-bindings",
+            "Show all keybindings for the current mode",
+        );
+        reg.register_builtin("describe-module", "Show active modules and their status");
+        reg.register_builtin(
+            "module-reload",
+            "Reload a module's autoloads (:module-reload <name>)",
         );
         reg.register_builtin(
             "set-save",

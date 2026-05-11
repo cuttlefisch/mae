@@ -8,6 +8,7 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
+pub mod pkg;
 mod shell_keys;
 mod shell_lifecycle;
 mod terminal_loop;
@@ -90,6 +91,7 @@ fn main() -> io::Result<()> {
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
         println!("  doctor                  Check prerequisites, config, LSP/DAP, AI provider");
+        println!("  pkg <subcommand>        Module package manager (list, doctor, help)");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -108,6 +110,10 @@ fn main() -> io::Result<()> {
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
         return Ok(());
+    }
+    if args.get(1).is_some_and(|a| a == "pkg") {
+        let code = pkg::cli::run_pkg_cli(&args[2..]);
+        std::process::exit(code);
     }
     if args.iter().any(|a| a == "doctor" || a == "--doctor") {
         let code = doctor::run_doctor();
@@ -177,7 +183,7 @@ fn main() -> io::Result<()> {
                 std::process::exit(1);
             }
         };
-        load_init_file(&mut scheme, &mut editor);
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
         // Check if init.scm set an error status
         let status = &editor.status_msg;
         let has_error = status.starts_with("Error in");
@@ -332,7 +338,7 @@ fn main() -> io::Result<()> {
 
     // Load init.scm and history.scm (skipped in clean mode)
     if !clean_mode {
-        load_init_file(&mut scheme, &mut editor);
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
         load_history(&mut scheme, &mut editor);
     }
 
@@ -844,6 +850,12 @@ impl GuiApp {
         // Clean up generation tracking for removed shells.
         self.shell_generations
             .retain(|idx, _| self.shell_terminals.contains_key(idx));
+
+        // Process module reload requests.
+        let reloads = std::mem::take(&mut self.editor.pending_module_reloads);
+        for module_name in reloads {
+            bootstrap::reload_module(&module_name, &mut self.scheme, &mut self.editor);
+        }
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
