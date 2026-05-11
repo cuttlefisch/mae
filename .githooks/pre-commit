@@ -11,8 +11,8 @@ if ! cargo fmt --check --quiet 2>/dev/null; then
 fi
 
 # 2. Clippy lint check
-# Note: we run clippy on the workspace with default features.
-if ! cargo clippy --workspace --all-targets --all-features -- -D warnings >/dev/null 2>&1; then
+# Exclude mae-gui (requires skia/clang) and mae-test-fixtures (generated).
+if ! cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings >/dev/null 2>&1; then
     echo "❌ cargo clippy check failed. Run 'make clippy' to see errors."
     exit 1
 fi

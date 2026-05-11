@@ -103,6 +103,8 @@ pub(crate) fn handle_shell_key(
                     shell.write_input(&bytes);
                 }
             }
+            // Auto-scroll to live output on any input (Emacs term-scroll-to-bottom-on-input).
+            shell.scroll_to_bottom();
         }
     }
 }

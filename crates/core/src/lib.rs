@@ -1,3 +1,5 @@
+pub mod agenda_view;
+pub mod babel;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -5,13 +7,16 @@ pub mod clipboard;
 pub mod command_palette;
 pub mod commands;
 pub mod conversation;
+pub mod cursor;
 pub mod dap_intent;
 pub mod debug;
 pub mod debug_view;
 pub mod diff;
+pub mod display_policy;
 pub mod display_region;
 pub mod editor;
 pub mod event_record;
+pub mod export;
 pub mod file_browser;
 pub mod file_picker;
 pub mod file_tree;
@@ -20,6 +25,7 @@ pub mod grapheme;
 pub mod heading;
 pub mod help_view;
 pub mod hooks;
+pub mod image_meta;
 pub mod input;
 pub mod kb_seed;
 pub mod keymap;
@@ -34,6 +40,7 @@ pub mod search;
 pub mod session;
 pub mod swap;
 pub mod syntax;
+pub mod table;
 pub mod theme;
 pub mod visual_buffer;
 pub mod window;
@@ -48,13 +55,16 @@ pub use commands::{Command, CommandRegistry, CommandSource};
 pub use conversation::Conversation;
 pub use dap_intent::{BreakpointSpec, DapIntent, DapSpawnConfig, StepKind};
 pub use debug::{
-    Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame, Variable,
+    Breakpoint, DebugState, DebugTarget, DebugThread, SchemeErrorEntry, Scope, StackFrame,
+    Variable, WatchExpression,
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    CodeActionItem, CodeActionMenu, CompletionItem, Diagnostic, DiagnosticSeverity,
-    DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind, HoverPopup,
-    InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
+    BlameEntry, BlameOverlay, CodeActionItem, CodeActionMenu, CompletionItem, Diagnostic,
+    DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind,
+    HoverPopup, InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
+    PeekReferenceLocation, PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState,
+    SymbolOutlineEntry, SymbolOutlineState,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
@@ -71,11 +81,13 @@ pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
+pub use display_policy::{DisplayAction, DisplayPolicy};
 pub use syntax::{
-    compute_markdown_style_spans, compute_markup_spans, compute_org_style_spans,
-    detect_code_block_lines, language_for_buffer, language_for_path, language_from_id,
-    language_from_modeline, language_from_shebang, HighlightSpan, Language, MarkupFlavor,
-    SyntaxMap, SyntaxSpanMap,
+    compute_markdown_style_spans, compute_markup_spans, compute_markup_spans_for_range,
+    compute_org_style_spans, detect_code_block_lines, detect_code_block_lines_for_range,
+    language_for_buffer, language_for_path, language_from_id, language_from_modeline,
+    language_from_shebang, HighlightSpan, Language, MarkupCache, MarkupFlavor, SyntaxMap,
+    SyntaxSpanMap, ViewportCodeBlockCache,
 };
 pub use theme::{
     bundled_theme_names, default_theme, BundledResolver, NamedColor, Theme, ThemeColor, ThemeError,

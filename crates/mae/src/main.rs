@@ -3,6 +3,7 @@ mod ai_event_handler;
 mod bootstrap;
 mod config;
 mod dap_bridge;
+mod doctor;
 #[cfg(feature = "gui")]
 mod gui_event;
 mod key_handling;
@@ -84,7 +85,11 @@ fn main() -> io::Result<()> {
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
+        println!("  --check-config --report Print configuration health report and exit");
+        println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
+        println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  doctor                  Check prerequisites, config, LSP/DAP, AI provider");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -98,11 +103,15 @@ fn main() -> io::Result<()> {
         println!("  OPENAI_API_KEY      OpenAI API key");
         println!("  GEMINI_API_KEY      Gemini API key");
         println!("  DEEPSEEK_API_KEY    DeepSeek API key");
-        println!("  MAE_AI_PERMISSIONS  readonly | standard | trusted | full");
+        println!("  MAE_AI_PERMISSIONS  readonly | write | shell | privileged");
         println!("  MAE_AGENTS_AUTO_MCP=0 Disable auto .mcp.json on terminal spawn");
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
         return Ok(());
+    }
+    if args.iter().any(|a| a == "doctor" || a == "--doctor") {
+        let code = doctor::run_doctor();
+        std::process::exit(code);
     }
     if args.iter().any(|a| a == "--print-config-path") {
         println!("{}", config::config_path().display());
@@ -142,12 +151,19 @@ fn main() -> io::Result<()> {
                 Err(e) => return Err(e),
             }
         }
+        // Also write init.scm template if it doesn't exist.
+        match config::write_init_template(force) {
+            Ok(path) => println!("Wrote init.scm to {}", path.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {} // fine
+            Err(e) => eprintln!("Warning: could not write init.scm: {}", e),
+        }
         config::run_wizard()?;
         return Ok(());
     }
 
     // --check-config: bootstrap editor + Scheme, load init.scm, exit with status.
     // Useful in CI to validate that init.scm parses and evaluates cleanly.
+    // --check-config --report: also print a configuration health report.
     if args.iter().any(|a| a == "--check-config") {
         let mut editor = Editor::new();
         let (app_config, _) = config::load_config();
@@ -164,8 +180,20 @@ fn main() -> io::Result<()> {
         load_init_file(&mut scheme, &mut editor);
         // Check if init.scm set an error status
         let status = &editor.status_msg;
-        if status.starts_with("Error in") {
+        let has_error = status.starts_with("Error in");
+        if has_error {
             eprintln!("mae: {}", status);
+        }
+
+        if args.iter().any(|a| a == "--report") {
+            // Print configuration health report to stdout
+            match mae_ai::execute_audit_configuration(&editor) {
+                Ok(json) => println!("{}", json),
+                Err(e) => eprintln!("mae: report generation failed: {}", e),
+            }
+        }
+
+        if has_error {
             std::process::exit(1);
         }
         println!("mae: config OK");
@@ -178,6 +206,9 @@ fn main() -> io::Result<()> {
     if let Err(e) = config::maybe_run_first_run_wizard() {
         eprintln!("warning: first-run wizard failed: {}", e);
     }
+
+    // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
+    let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
 
     // Find the first positional argument (not a flag).
     let file_arg = args.iter().skip(1).find(|a| !a.starts_with('-'));
@@ -209,8 +240,8 @@ fn main() -> io::Result<()> {
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
     editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
-    // Auto-detect project from CWD if not already set (e.g. no-file-arg startup).
-    if editor.project.is_none() {
+    // Auto-detect project from CWD if not already set (skipped in clean mode).
+    if !clean_mode && editor.project.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
             if let Some(root) = mae_core::detect_project_root(&cwd) {
                 editor.recent_projects.push(root.clone());
@@ -222,8 +253,17 @@ fn main() -> io::Result<()> {
     // Cache the current git branch for status line display.
     editor.refresh_git_branch();
 
+    if clean_mode {
+        editor.clean_mode = true;
+        info!("clean mode: skipping config.toml, init.scm, and history.scm");
+    }
+
     // Apply editor preferences from config file.
-    let (app_config, config_error) = config::load_config();
+    let (app_config, config_error) = if clean_mode {
+        (config::Config::default(), None)
+    } else {
+        config::load_config()
+    };
     if let Some(ref err_msg) = config_error {
         editor.status_msg = err_msg.clone();
     }
@@ -243,6 +283,12 @@ fn main() -> io::Result<()> {
         editor.autosave_interval = interval;
     }
 
+    // Apply org agenda files from config.
+    if !app_config.org.agenda_files.is_empty() {
+        editor.org_agenda_files = app_config.org.agenda_files.clone();
+        editor.ingest_agenda_files();
+    }
+
     // Apply font settings from config early (init.scm can override).
     if let Some(size) = app_config.editor.font_size {
         editor.gui_font_size = size;
@@ -253,6 +299,23 @@ fn main() -> io::Result<()> {
     }
     if let Some(ref icon_family) = app_config.editor.icon_font_family {
         editor.gui_icon_font_family = icon_family.clone();
+    }
+
+    // Apply performance thresholds from config.
+    if let Some(v) = app_config.performance.large_file_lines {
+        editor.large_file_lines = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_chars {
+        editor.degrade_threshold_chars = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_line_length {
+        editor.degrade_threshold_line_length = v;
+    }
+    if let Some(v) = app_config.performance.display_region_debounce_ms {
+        editor.display_region_debounce_ms = v;
+    }
+    if let Some(v) = app_config.performance.syntax_reparse_debounce_ms {
+        editor.syntax_reparse_debounce_ms = v;
     }
 
     // Initialize Scheme runtime
@@ -267,9 +330,11 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Load init.scm and history.scm
-    load_init_file(&mut scheme, &mut editor);
-    load_history(&mut scheme, &mut editor);
+    // Load init.scm and history.scm (skipped in clean mode)
+    if !clean_mode {
+        load_init_file(&mut scheme, &mut editor);
+        load_history(&mut scheme, &mut editor);
+    }
 
     // Fire app-start hook after initialization is complete.
     editor.fire_hook("app-start");
@@ -282,6 +347,12 @@ fn main() -> io::Result<()> {
             std::env::set_var("MAE_LOG", "debug");
         }
         info!("debug mode enabled via --debug flag");
+    }
+
+    // --debug-init: verbose init file loading
+    if args.iter().any(|a| a == "--debug-init") {
+        editor.debug_init = true;
+        info!("debug-init mode enabled");
     }
 
     let use_gui = args.iter().any(|a| a == "--gui");
@@ -379,6 +450,8 @@ fn main() -> io::Result<()> {
             permission_policy,
         )
     });
+
+    editor.ai_configured = ai_command_tx.is_some();
 
     // --self-test [categories] — headless AI self-test.
     if args.iter().any(|a| a == "--self-test") {
@@ -570,12 +643,14 @@ fn run_gui(
         dirty: true,
         cursor_x: 0.0,
         cursor_y: 0.0,
-        scroll_accumulator: 0.0,
         scroll_accumulator_x: 0.0,
+        last_scroll_window: None,
+        last_scroll_time: None,
         mouse_pressed: false,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
         input_dirty: false,
+        last_input_time: std::time::Instant::now(),
         bell_sent: false,
         last_theme_name,
         shell_active,
@@ -615,11 +690,13 @@ async fn bridge_task(
     let mut shell_interval = tokio::time::interval(Duration::from_millis(33));
     let mut mcp_interval = tokio::time::interval(Duration::from_millis(500));
     let mut health_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut idle_interval = tokio::time::interval(Duration::from_millis(100));
 
     // Skip the initial immediate tick from each interval.
     shell_interval.tick().await;
     mcp_interval.tick().await;
     health_interval.tick().await;
+    idle_interval.tick().await;
 
     loop {
         tokio::select! {
@@ -649,6 +726,9 @@ async fn bridge_task(
             }
             _ = health_interval.tick() => {
                 let _ = proxy.send_event(MaeEvent::HealthCheck);
+            }
+            _ = idle_interval.tick() => {
+                let _ = proxy.send_event(MaeEvent::IdleTick);
             }
         }
     }
@@ -702,8 +782,11 @@ struct GuiApp {
     dirty: bool,
     cursor_x: f64,
     cursor_y: f64,
-    scroll_accumulator: f64,
     scroll_accumulator_x: f64,
+    // Per-window inertial scrolling: tracks which window last scrolled
+    // and when, so inertia activates in the correct pane.
+    last_scroll_window: Option<mae_core::WindowId>,
+    last_scroll_time: Option<std::time::Instant>,
     mouse_pressed: bool,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
@@ -714,6 +797,8 @@ struct GuiApp {
     /// Keyboard/mouse input needs immediate visual feedback.
     /// Bypasses the 60fps frame cap so scroll/movement is never delayed.
     input_dirty: bool,
+    /// Timestamp of last keyboard/mouse input. Used for idle tick scheduling.
+    last_input_time: std::time::Instant,
 
     // Bell urgency state
     bell_sent: bool,
@@ -768,9 +853,11 @@ impl GuiApp {
         // Fire app-exit hook.
         self.editor.fire_hook("app-exit");
 
-        // Persist history
-        if let Err(e) = bootstrap::save_history(&self.editor) {
-            error!(error = %e, "failed to save history");
+        // Persist history (skipped in clean mode)
+        if !self.editor.clean_mode {
+            if let Err(e) = bootstrap::save_history(&self.editor) {
+                error!(error = %e, "failed to save history");
+            }
         }
 
         // If debug mode is enabled, save a tombstone dump.
@@ -888,11 +975,17 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.dirty = true;
             }
             MaeEvent::ShellTick => {
-                for (idx, term) in &self.shell_terminals {
-                    let gen = term.generation();
-                    if self.shell_generations.get(idx) != Some(&gen) {
-                        self.shell_generations.insert(*idx, gen);
-                        self.dirty = true;
+                // Only check generations if we're not already waiting to render.
+                // This prevents redraw stacking when shell output streams faster
+                // than the frame budget allows.
+                if !self.dirty {
+                    for (idx, term) in &self.shell_terminals {
+                        let gen = term.generation();
+                        if self.shell_generations.get(idx) != Some(&gen) {
+                            self.shell_generations.insert(*idx, gen);
+                            self.dirty = true;
+                            break; // One dirty is enough
+                        }
                     }
                 }
             }
@@ -920,6 +1013,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
             }
+            MaeEvent::IdleTick => {
+                if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
+                    self.editor.idle_work();
+                    // Don't set dirty — idle work shouldn't trigger redraws.
+                }
+            }
         }
     }
 
@@ -938,6 +1037,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             }
             WindowEvent::Resized(size) => {
                 self.renderer.handle_resize(size.width, size.height);
+                if let Ok((w, h)) = self.renderer.size() {
+                    self.editor.last_layout_area = mae_core::WinRect {
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h.saturating_sub(2),
+                    };
+                }
                 self.dirty = true;
             }
             WindowEvent::ModifiersChanged(mods) => {
@@ -965,6 +1072,16 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     _ => {}
                 }
 
+                // Bare modifier keys don't dispatch commands — skip dirty/frame.
+                if matches!(
+                    &event.logical_key,
+                    WinitKey::Named(
+                        NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super
+                    )
+                ) {
+                    return;
+                }
+
                 // Only process non-release events for actual key dispatch.
                 if event.state != winit::event::ElementState::Pressed {
                     return;
@@ -972,11 +1089,22 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
 
                 self.dirty = true;
                 self.input_dirty = true;
+                self.last_input_time = std::time::Instant::now();
                 self.editor.last_edit_time = std::time::Instant::now();
                 self.editor.clear_highlights();
-                // Default to full redraw for keyboard input. Commands that only
-                // move the cursor can downgrade this via mark_cursor_moved().
-                self.editor.mark_full_redraw();
+                // Cancel inertial scrolling on any key input.
+                self.last_scroll_window = None;
+                self.last_scroll_time = None;
+                for win in self.editor.window_mgr.iter_windows_mut() {
+                    win.inertia_active = false;
+                    win.scroll_velocity = 0.0;
+                    win.scroll_samples.clear();
+                }
+                // Default to CursorOnly redraw for keyboard input. Commands that
+                // modify text or change mode escalate via mark_full_redraw() or
+                // mark_scrolled() internally. This avoids full syntax recomputation
+                // on every keypress (scroll, cursor move).
+                self.editor.mark_cursor_moved();
                 if let Some(mae_core::InputEvent::Key(kp)) = mae_gui::winit_event_to_input(
                     &event,
                     self.ctrl_held,
@@ -1042,13 +1170,21 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_x = position.x;
                 self.cursor_y = position.y;
-                if self.mouse_pressed {
-                    let (cell_w, cell_h) = self.renderer.cell_dimensions();
-                    if cell_w > 0.0 && cell_h > 0.0 {
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    if self.mouse_pressed {
                         let col = (self.cursor_x / cell_w as f64) as u16;
                         let row = (self.cursor_y / cell_h as f64) as u16;
+                        // Drag across windows: switch focus so visual selection extends correctly.
+                        self.editor.focus_window_at(col, row);
                         self.editor.handle_mouse_drag(row as usize, col as usize);
                         self.dirty = true;
+                    } else if self.editor.mouse_autoselect_window {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        if self.editor.focus_window_at(col, row) {
+                            self.dirty = true;
+                        }
                     }
                 }
             }
@@ -1061,38 +1197,55 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     if matches!(mae_button, mae_core::input::MouseButton::Left) {
                         self.mouse_pressed = true;
                     }
+                    self.last_input_time = std::time::Instant::now();
+                    // Cancel inertial scrolling on mouse click.
+                    self.last_scroll_window = None;
+                    self.last_scroll_time = None;
+                    for win in self.editor.window_mgr.iter_windows_mut() {
+                        win.inertia_active = false;
+                        win.scroll_velocity = 0.0;
+                        win.scroll_samples.clear();
+                    }
                     let (cell_w, cell_h) = self.renderer.cell_dimensions();
                     if cell_w > 0.0 && cell_h > 0.0 {
-                        // Try pixel-precise positioning via cached FrameLayout
-                        // (handles scaled headings and folded lines correctly).
-                        let px_x = self.cursor_x as f32;
-                        let px_y = self.cursor_y as f32;
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+
+                        // Click-to-focus: switch window before dispatching the click.
+                        self.editor.focus_window_at(col, row);
+
                         // Dismiss stale popups on any mouse click.
                         self.editor.hover_popup = None;
                         self.editor.code_action_menu = None;
 
-                        if let Some(fl) = self.renderer.last_focused_layout() {
+                        // Try pixel-precise positioning via cached FrameLayout
+                        // (handles scaled headings and folded lines correctly).
+                        let px_x = self.cursor_x as f32;
+                        let px_y = self.cursor_y as f32;
+                        let focused_id = self.editor.window_mgr.focused_id();
+                        let fl = self.renderer.window_layout(focused_id);
+                        if let Some(fl) = fl {
                             if let Some((buf_row, char_col)) =
                                 fl.pixel_to_buffer_position(px_x, px_y)
                             {
                                 self.editor.set_cursor_position(buf_row, char_col);
                                 self.dirty = true;
                             } else {
-                                // Click outside text area — fall back to grid math.
-                                let col = (self.cursor_x / cell_w as f64) as u16;
-                                let row = (self.cursor_y / cell_h as f64) as u16;
-                                self.editor.handle_mouse_click(
+                                self.editor.handle_mouse_click_shift(
                                     row as usize,
                                     col as usize,
                                     mae_button,
+                                    self.shift_held,
                                 );
                                 self.dirty = true;
                             }
                         } else {
-                            let col = (self.cursor_x / cell_w as f64) as u16;
-                            let row = (self.cursor_y / cell_h as f64) as u16;
-                            self.editor
-                                .handle_mouse_click(row as usize, col as usize, mae_button);
+                            self.editor.handle_mouse_click_shift(
+                                row as usize,
+                                col as usize,
+                                mae_button,
+                                self.shift_held,
+                            );
                             self.dirty = true;
                         }
                     }
@@ -1113,34 +1266,97 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                let now = std::time::Instant::now();
+                self.last_input_time = now;
                 use tracing::debug;
-                let (h_delta, v_delta) = match delta {
+
+                let cell_h = self.editor.gui_cell_height;
+                let (h_px, v_px): (f32, f32) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
                         debug!(x, y, "MouseWheel: LineDelta");
-                        (x as i16, y as i16)
+                        // Convert line deltas to pixel amounts (3 lines per notch).
+                        (x * cell_h * 3.0, y * cell_h * 3.0)
                     }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        self.scroll_accumulator += pos.y;
-                        self.scroll_accumulator_x += pos.x;
-                        let whole_lines = (self.scroll_accumulator / 20.0) as i16;
-                        let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
                         debug!(pos_x = pos.x, pos_y = pos.y, "MouseWheel: PixelDelta");
-                        if whole_lines != 0 {
-                            self.scroll_accumulator -= whole_lines as f64 * 20.0;
-                        }
-                        if whole_cols != 0 {
-                            self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
-                        }
-                        (whole_cols, whole_lines)
+                        (pos.x as f32, pos.y as f32)
                     }
                 };
-                if v_delta != 0 {
-                    self.editor.handle_mouse_scroll(v_delta);
+
+                if v_px.abs() > 0.01 {
+                    // Determine target window for scroll.
+                    let target_win = if self.editor.mouse_wheel_follow_mouse {
+                        let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
+                        if cell_w > 0.0 && cell_h_dim > 0.0 {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h_dim as f64) as u16;
+                            self.editor.window_mgr.window_at_cell(
+                                col,
+                                row,
+                                self.editor.last_layout_area,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let target_id =
+                        target_win.unwrap_or_else(|| self.editor.window_mgr.focused_id());
+
+                    // Push sample to target window and prune old samples (>100ms).
+                    if let Some(win) = self.editor.window_mgr.window_mut(target_id) {
+                        win.scroll_samples
+                            .retain(|(t, _)| now.duration_since(*t).as_secs_f32() < 0.10);
+                        win.scroll_samples.push((now, v_px));
+                        // Real input overrides inertia in this window.
+                        win.inertia_active = false;
+                    }
+                    self.last_scroll_window = Some(target_id);
+                    self.last_scroll_time = Some(now);
+
+                    // Apply pixel delta directly.
+                    if target_win.is_some() {
+                        self.editor
+                            .handle_mouse_scroll_pixels_in_window(target_id, v_px);
+                    } else {
+                        self.editor.handle_mouse_scroll_pixels(v_px);
+                    }
                     self.dirty = true;
                     self.input_dirty = true;
                 }
+
+                // Horizontal scroll: keep simple accumulator (no inertia).
+                let h_delta = {
+                    self.scroll_accumulator_x += h_px as f64;
+                    let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
+                    if whole_cols != 0 {
+                        self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
+                    }
+                    whole_cols
+                };
                 if h_delta != 0 {
-                    self.editor.handle_mouse_scroll_horizontal(h_delta);
+                    if self.editor.mouse_wheel_follow_mouse {
+                        let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                        if cell_w > 0.0 && cell_h > 0.0 {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            if let Some(target) = self.editor.window_mgr.window_at_cell(
+                                col,
+                                row,
+                                self.editor.last_layout_area,
+                            ) {
+                                self.editor
+                                    .handle_mouse_scroll_horizontal_in_window(target, h_delta);
+                            } else {
+                                self.editor.handle_mouse_scroll_horizontal(h_delta);
+                            }
+                        } else {
+                            self.editor.handle_mouse_scroll_horizontal(h_delta);
+                        }
+                    } else {
+                        self.editor.handle_mouse_scroll_horizontal(h_delta);
+                    }
                     self.dirty = true;
                     self.input_dirty = true;
                 }
@@ -1158,6 +1374,24 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.editor.perf_stats.record_frame(frame_elapsed);
                 if self.editor.debug_mode {
                     self.editor.perf_stats.sample_process_stats();
+                }
+                // Record frame snapshot for perf_profile tool.
+                if self.editor.event_recorder.is_recording() {
+                    let ps = &self.editor.perf_stats;
+                    let snapshot = mae_core::event_record::FrameSnapshot {
+                        offset_us: self.editor.event_recorder.duration_us(),
+                        frame_time_us: frame_elapsed,
+                        total_render_us: ps.total_render_us,
+                        render_syntax_us: ps.render_syntax_us,
+                        render_layout_us: ps.render_layout_us,
+                        render_draw_us: ps.render_draw_us,
+                        redraw_level: format!("{:?}", self.editor.redraw_level),
+                        scroll_offset: self.editor.window_mgr.focused_window().scroll_offset,
+                        syntax_cache_hit: ps.syntax_cache_hits > 0 && ps.syntax_cache_misses == 0,
+                        visual_rows_cache_hit: ps.visual_rows_cache_hits > 0
+                            && ps.visual_rows_cache_misses == 0,
+                    };
+                    self.editor.event_recorder.record_frame_snapshot(snapshot);
                 }
                 self.dirty = false;
                 self.editor.clear_redraw();
@@ -1187,6 +1421,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.editor.viewport_height = viewport_height;
             self.dirty = true;
         }
+
+        // Push real cell dimensions so image_extra_rows() matches GUI layout.
+        let (cw, ch) = self.renderer.cell_dimensions();
+        self.editor.gui_cell_width = cw;
+        self.editor.gui_cell_height = ch;
 
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
@@ -1231,23 +1470,41 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
                 let scroll = self.editor.window_mgr.focused_window().scroll_offset;
                 let so = self.editor.scrolloff;
-                let range_start = scroll.min(cursor_row);
-                let range_end = (scroll.max(cursor_row) + vh + 2)
+                // Pass tight needed range — populate_visual_rows_cache adds padding internally.
+                let cache_start = scroll.min(cursor_row).saturating_sub(1);
+                let cache_end = (scroll.max(cursor_row) + vh + 2)
                     .min(self.editor.buffers[buf_idx].display_line_count());
-                let row_cache: Vec<(usize, usize)> = (range_start..range_end)
-                    .map(|l| (l, self.editor.line_visual_rows(buf_idx, l)))
-                    .collect();
-
                 self.editor
-                    .window_mgr
-                    .focused_window_mut()
-                    .ensure_scroll_wrapped_with_margin(vh, so, |line| {
-                        row_cache
-                            .iter()
-                            .find(|(l, _)| *l == line)
-                            .map(|(_, r)| *r)
-                            .unwrap_or(1)
+                    .populate_visual_rows_cache(buf_idx, cache_start, cache_end);
+
+                // Snapshot cache Vec<u8> to avoid borrow conflict with window_mgr.
+                let (cache_rows, cache_line_start) = {
+                    let buf = &self.editor.buffers[buf_idx];
+                    match &buf.visual_rows_cache {
+                        Some(c) => (c.rows.clone(), c.line_start),
+                        None => (Vec::new(), 0),
+                    }
+                };
+
+                let line_count = self.editor.buffers[buf_idx].display_line_count();
+                let win = self.editor.window_mgr.focused_window_mut();
+                if win.scroll_locked && win.cursor_row == win.scroll_locked_cursor {
+                    // Cursor hasn't moved since scroll command; keep lock active
+                } else {
+                    win.scroll_locked = false;
+                    win.ensure_scroll_wrapped_with_margin(vh, so, line_count, |line| {
+                        if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                            let v = cache_rows[line - cache_line_start] as usize;
+                            if v > 0 {
+                                v
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
                     });
+                }
             }
         }
 
@@ -1274,9 +1531,11 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
             self.bell_sent = false;
         }
 
-        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        // Debounced syntax reparse: drain pending reparses after configured ms idle.
+        let reparse_debounce =
+            std::time::Duration::from_millis(self.editor.syntax_reparse_debounce_ms);
         if !self.editor.syntax_reparse_pending.is_empty()
-            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+            && self.editor.last_edit_time.elapsed() >= reparse_debounce
         {
             mae_core::syntax::drain_pending_reparses(&mut self.editor);
             self.dirty = true;
@@ -1288,6 +1547,77 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
         {
             self.editor.lsp_request_document_highlight();
         }
+
+        // Breadcrumbs: request/refresh on cursor idle.
+        if self.editor.show_breadcrumbs {
+            self.editor.request_breadcrumb_symbols();
+        }
+
+        // Per-window inertial scrolling.
+        // Phase 1: Activate inertia after 50ms gap since last real scroll event.
+        const MAX_INERTIA_VELOCITY: f32 = 3000.0;
+        const MIN_INERTIA_VELOCITY: f32 = 100.0;
+        const INERTIA_KILL_THRESHOLD: f32 = 20.0;
+        const INERTIA_DECAY: f32 = 0.92;
+
+        if let Some(last) = self.last_scroll_time {
+            if last.elapsed().as_secs_f32() > 0.05 {
+                if let Some(target_id) = self.last_scroll_window.take() {
+                    self.last_scroll_time = None;
+                    // Compute velocity from samples: total displacement / total time.
+                    if let Some(win) = self.editor.window_mgr.window_mut(target_id) {
+                        if win.scroll_samples.len() >= 2 {
+                            let first_t = win.scroll_samples.first().unwrap().0;
+                            let last_t = win.scroll_samples.last().unwrap().0;
+                            let dt = last_t.duration_since(first_t).as_secs_f32();
+                            let total_disp: f32 = win.scroll_samples.iter().map(|(_, d)| d).sum();
+                            if dt > 0.001 {
+                                let velocity = (total_disp / dt)
+                                    .clamp(-MAX_INERTIA_VELOCITY, MAX_INERTIA_VELOCITY);
+                                if velocity.abs() >= MIN_INERTIA_VELOCITY {
+                                    win.inertia_active = true;
+                                    win.scroll_velocity = velocity;
+                                }
+                            }
+                        }
+                        win.scroll_samples.clear();
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Process active inertia windows.
+        let any_inertia = {
+            // Collect active windows to avoid borrow conflict.
+            let active: Vec<(mae_core::WindowId, f32)> = self
+                .editor
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.inertia_active)
+                .map(|w| (w.id, w.scroll_velocity))
+                .collect();
+            let mut any = false;
+            for (win_id, velocity) in active {
+                let dt = 1.0 / 60.0_f32;
+                let delta_px = velocity * dt;
+                let moved = self
+                    .editor
+                    .handle_mouse_scroll_pixels_in_window(win_id, delta_px);
+                if let Some(win) = self.editor.window_mgr.window_mut(win_id) {
+                    win.scroll_velocity *= INERTIA_DECAY;
+                    if win.scroll_velocity.abs() < INERTIA_KILL_THRESHOLD || !moved {
+                        win.scroll_velocity = 0.0;
+                        win.inertia_active = false;
+                    } else {
+                        any = true;
+                    }
+                }
+            }
+            if any {
+                self.dirty = true;
+            }
+            any
+        };
 
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
@@ -1304,10 +1634,15 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
+        } else if any_inertia || self.last_scroll_time.is_some() {
+            // Inertia pending or about to activate — keep 60fps cadence.
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                std::time::Instant::now() + frame_budget,
+            ));
         } else if !self.editor.syntax_reparse_pending.is_empty() {
             // Pending reparses but not otherwise dirty — wake up when debounce expires.
-            let debounce = std::time::Duration::from_millis(50);
-            let wake_at = self.editor.last_edit_time + debounce;
+            let wake_at = self.editor.last_edit_time + reparse_debounce;
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake_at));
         } else {
             // Not dirty — sleep until next event (no busy-loop).

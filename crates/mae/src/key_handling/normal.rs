@@ -1,6 +1,6 @@
 use super::{crossterm_to_keypress, dispatch_command, is_operator_command};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use mae_core::{BufferKind, LookupResult};
+use mae_core::LookupResult;
 use mae_core::{Editor, KeyPress, Mode};
 use mae_scheme::SchemeRuntime;
 
@@ -373,52 +373,7 @@ pub(super) fn handle_normal_mode(
     // Help buffer and Debug panel keys are now handled via their respective
     // overlay keymaps ("help" and "debug"), so no inline interception needed.
 
-    // Pending file delete confirmation (y/n). Shared by file-tree-delete and delete-this-file.
-    if editor.pending_file_delete.is_some() && pending_keys.is_empty() {
-        if let KeyCode::Char('y') = key.code {
-            if let Some((path, close_buf)) = editor.pending_file_delete.take() {
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let result = if path.is_dir() {
-                    std::fs::remove_dir_all(&path)
-                } else {
-                    std::fs::remove_file(&path)
-                };
-                match result {
-                    Ok(()) => {
-                        if close_buf {
-                            // Close buffer associated with this file
-                            let idx = editor.active_buffer_idx();
-                            editor.dispatch_builtin("force-kill-buffer");
-                            let _ = idx; // buffer closed
-                        }
-                        // Refresh file tree if open
-                        let tree_idx = editor
-                            .buffers
-                            .iter()
-                            .position(|b| b.kind == BufferKind::FileTree);
-                        if let Some(ti) = tree_idx {
-                            if let Some(ft) = editor.buffers[ti].file_tree_mut() {
-                                ft.refresh();
-                            }
-                        }
-                        editor.set_status(format!("Deleted {}", name));
-                    }
-                    Err(e) => {
-                        editor.set_status(format!("Delete failed: {}", e));
-                    }
-                }
-            }
-        } else {
-            editor.pending_file_delete = None;
-            editor.set_status("Delete cancelled");
-        }
-        editor.count_prefix = None;
-        return;
-    }
+    // File delete confirmation is now handled via MiniDialog (Confirm kind).
 
     // File tree keys are now handled via the "file-tree" overlay keymap.
 

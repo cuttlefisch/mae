@@ -3,7 +3,7 @@
 
 use mae_core::Editor;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::theme_convert::ts;
 
@@ -289,6 +289,12 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Editor) {
+    // If a mini-dialog is active, render that instead of the fuzzy palette.
+    if let Some(ref dialog) = editor.mini_dialog {
+        render_mini_dialog(frame, area, editor, dialog);
+        return;
+    }
+
     let palette = match &editor.command_palette {
         Some(p) => p,
         None => return,
@@ -345,6 +351,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {
         (inner.width as usize).saturating_sub(2)
@@ -580,4 +587,285 @@ pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, edi
 
     let para = Paragraph::new(content_lines);
     frame.render_widget(para, inner);
+}
+
+// ---------------------------------------------------------------------------
+// Mini-dialog renderer (edit-link, rename, etc.)
+// ---------------------------------------------------------------------------
+
+fn render_mini_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &Editor,
+    dialog: &mae_core::command_palette::MiniDialogState,
+) {
+    let dialog_width = 50u16.min(area.width.saturating_sub(4));
+    let dialog_height = (4 + dialog.fields.len() as u16).min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
+    let popup_area = Rect::new(x, y, dialog_width, dialog_height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border.active");
+    let title = format!(" {} ", dialog.title());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title);
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let text_style = ts(editor, "ui.text");
+    let prompt_style = ts(editor, "ui.popup.key");
+    let selected_style = ts(editor, "ui.selection");
+
+    for (i, field) in dialog.fields.iter().enumerate() {
+        if i as u16 >= inner.height.saturating_sub(1) {
+            break;
+        }
+        let is_active = i == dialog.active_field;
+        let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+
+        let label = format!("{}: ", field.label);
+        let display_value = if field.value.is_empty() {
+            &field.placeholder
+        } else {
+            &field.value
+        };
+        let cursor = if is_active { "│" } else { "" };
+        let line_text = format!("{}{}{}", label, display_value, cursor);
+
+        let style = if is_active {
+            selected_style
+        } else {
+            text_style
+        };
+        let line = Line::styled(line_text, style);
+        frame.render_widget(Paragraph::new(line), row_area);
+    }
+
+    // Footer hint
+    let footer_row = dialog.fields.len() as u16;
+    if footer_row < inner.height {
+        let hint = "Tab: next  Enter: apply  Esc: cancel";
+        let hint_area = Rect::new(inner.x, inner.y + footer_row, inner.width, 1);
+        frame.render_widget(Paragraph::new(Line::styled(hint, prompt_style)), hint_area);
+    }
+}
+
+/// Render signature help popup (TUI).
+pub(crate) fn render_signature_help_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let state = match &editor.signature_help {
+        Some(s) => s,
+        None => return,
+    };
+    if state.signatures.is_empty() {
+        return;
+    }
+
+    let sig = &state.signatures[state.active_signature.min(state.signatures.len() - 1)];
+    let width = (sig.label.len() as u16 + 4).min(area.width).max(20);
+    let height = if sig.documentation.is_some() { 4 } else { 3 };
+
+    let win = editor.window_mgr.focused_window();
+    let anchor_row = state.anchor_line.saturating_sub(win.scroll_offset) as u16;
+
+    let top = if anchor_row > height {
+        area.y + anchor_row.saturating_sub(height)
+    } else {
+        area.y + anchor_row + 1
+    };
+    let top = top.min(area.y + area.height.saturating_sub(height));
+    let left = area.x + (state.anchor_col as u16).min(area.width.saturating_sub(width));
+
+    let popup_area = Rect::new(left, top, width, height);
+    let block = Block::default().title(" Signature ").borders(Borders::ALL);
+    let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
+
+    if inner.height > 0 {
+        let label_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        let display: String = sig.label.chars().take(inner.width as usize).collect();
+        frame.render_widget(Paragraph::new(display), label_area);
+    }
+    if let Some(doc) = &sig.documentation {
+        if inner.height > 1 {
+            let doc_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
+            let doc_line: String = doc
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(inner.width as usize)
+                .collect();
+            frame.render_widget(Paragraph::new(doc_line), doc_area);
+        }
+    }
+}
+
+/// Render peek definition popup (TUI).
+pub(crate) fn render_peek_definition_popup(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let state = match &editor.peek_state {
+        Some(s) => s,
+        None => return,
+    };
+    if state.context_lines.is_empty() {
+        return;
+    }
+
+    let max_width = state
+        .context_lines
+        .iter()
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(40);
+    let width = ((max_width + 4) as u16).min(area.width).max(40);
+    let height = ((state.context_lines.len() + 2) as u16).min(area.height.saturating_sub(2));
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+
+    let top = if cursor_row + 2 + height < area.height {
+        area.y + cursor_row + 1
+    } else if cursor_row > height {
+        area.y + cursor_row.saturating_sub(height)
+    } else {
+        area.y
+    };
+    let top = top.min(area.y + area.height.saturating_sub(height));
+
+    let short_path = state
+        .file_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&state.file_path);
+    let title = format!(" {}:{} ", short_path, state.line + 1);
+
+    let popup_area = Rect::new(area.x, top, width, height);
+    let block = Block::default().title(title).borders(Borders::ALL);
+    let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
+
+    let visible = inner.height as usize;
+    let scroll = state.scroll_offset;
+    for (i, line) in state
+        .context_lines
+        .iter()
+        .skip(scroll)
+        .take(visible)
+        .enumerate()
+    {
+        let row_area = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let display: String = line.chars().take(inner.width as usize).collect();
+        let style = if scroll + i == state.highlight_line {
+            Style::default().bg(Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        frame.render_widget(Paragraph::new(Line::styled(display, style)), row_area);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Symbol outline popup
+// ---------------------------------------------------------------------------
+
+pub(crate) fn render_symbol_outline_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let state = match &editor.symbol_outline {
+        Some(s) => s,
+        None => return,
+    };
+    if state.entries.is_empty() {
+        return;
+    }
+
+    const MAX_ITEMS: usize = 20;
+    let filtered_count = state.filtered_indices.len();
+    let visible_count = filtered_count.min(MAX_ITEMS) as u16;
+    // +2 for border, +1 for filter line
+    let popup_height = visible_count + 3;
+    let popup_width = (editor_area.width * 3 / 4).clamp(30, 60);
+    let popup_left = editor_area.x + (editor_area.width.saturating_sub(popup_width)) / 2;
+    let popup_top = editor_area.y + (editor_area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: popup_left,
+        y: popup_top,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let border_style = ts(editor, "ui.window.border");
+    let normal_style = ts(editor, "ui.popup.text");
+    let selected_style = ts(editor, "ui.popup.key");
+
+    let title = format!(" Outline [{}/{}] ", filtered_count, state.entries.len());
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Filter line
+    if inner.height > 0 {
+        let filter_text = if state.filter.is_empty() {
+            "Type to filter...".to_string()
+        } else {
+            state.filter.clone()
+        };
+        let filter_style = if state.filter.is_empty() {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            normal_style
+        };
+        let filter_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::styled(filter_text, filter_style)),
+            filter_area,
+        );
+    }
+
+    // Entries
+    let entries_start = inner.y + 1;
+    let entries_height = inner.height.saturating_sub(1) as usize;
+    // Scroll if selected is beyond visible window
+    let scroll = if state.selected >= entries_height {
+        state.selected - entries_height + 1
+    } else {
+        0
+    };
+
+    for (i, &idx) in state
+        .filtered_indices
+        .iter()
+        .skip(scroll)
+        .take(entries_height)
+        .enumerate()
+    {
+        let entry = &state.entries[idx];
+        let row_area = Rect::new(inner.x, entries_start + i as u16, inner.width, 1);
+        let indent = "  ".repeat(entry.depth);
+        let line_num = format!("{:>4}", entry.line + 1);
+        let display = format!(
+            "{} {}{} {} {}",
+            entry.kind_icon,
+            indent,
+            entry.name,
+            line_num,
+            entry.detail.as_deref().unwrap_or("")
+        );
+        let display: String = display.chars().take(inner.width as usize).collect();
+        let style = if scroll + i == state.selected {
+            selected_style
+        } else {
+            normal_style
+        };
+        frame.render_widget(Paragraph::new(Line::styled(display, style)), row_area);
+    }
 }

@@ -4,7 +4,8 @@
 
 [editor]
 # Color theme (use :theme or SPC t s to preview)
-# Available: default, gruvbox, solarized-dark, solarized-light, dracula, nord, monokai
+# Available: default, dark-ansi, light-ansi, gruvbox-dark, gruvbox-light,
+#   dracula, catppuccin-mocha, solarized-dark, one-dark
 theme = "default"
 
 # Show line numbers in the gutter
@@ -62,9 +63,16 @@ restore_session = false
 # AI provider: "claude", "openai", "gemini", "ollama", or "deepseek"
 provider = "claude"
 
-# AI permission tier: ReadOnly, Write, Shell, Privileged
+# API key generation links:
+#   Claude:   https://console.anthropic.com/settings/keys
+#   OpenAI:   https://platform.openai.com/api-keys
+#   Gemini:   https://aistudio.google.com/apikey
+#   DeepSeek: https://platform.deepseek.com/api_keys
+
+# AI permission tier: readonly, write, shell, privileged
 # Controls what AI tools can do without explicit approval.
-auto_approve_tier = "ReadOnly"
+# Default: shell (AI can read, write, and run commands)
+auto_approve_tier = "shell"
 
 # Command to launch for AI agent shell sessions (SPC a a)
 editor = "claude"
@@ -91,9 +99,24 @@ editor = "claude"
 # model = "deepseek-chat"
 # api_key is read from DEEPSEEK_API_KEY env var
 
+[org]
+# Directories and files to include in the agenda view.
+# Use :agenda-add <path> / :agenda-remove <path> to manage.
+# agenda_files = ["~/org", "~/work/notes"]
+
 [agents]
 # Auto-write .mcp.json to project root on first shell spawn
 auto_mcp_json = true
 
 # Auto-configure agent tool approval settings
 auto_approve_tools = true
+
+# [performance]
+# Line count threshold for viewport-local syntax highlighting
+# large_file_lines = 5000
+# Character count above which rendering features degrade (so-long pattern)
+# degrade_threshold_chars = 500000
+# Max line length before degradation
+# degrade_threshold_line_length = 10000
+# Milliseconds to debounce syntax reparse after edits
+# syntax_reparse_debounce_ms = 50

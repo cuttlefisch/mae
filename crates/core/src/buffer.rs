@@ -43,6 +43,10 @@ pub enum BufferKind {
     FileTree,
     /// AI-generated unified diff view (read-only).
     Diff,
+    /// Agenda view — cross-file TODO list (read-only).
+    Agenda,
+    /// Interactive demo buffer — editable but not saveable.
+    Demo,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -88,6 +92,7 @@ pub struct BufferLocalOptions {
     pub heading_scale: Option<bool>,
     pub link_descriptive: Option<bool>,
     pub render_markup: Option<bool>,
+    pub inline_images: Option<bool>,
 }
 
 impl BufferLocalOptions {
@@ -117,6 +122,9 @@ impl BufferLocalOptions {
         if self.render_markup.is_none() {
             self.render_markup = defaults.render_markup;
         }
+        if self.inline_images.is_none() {
+            self.inline_images = defaults.inline_images;
+        }
     }
 }
 
@@ -142,6 +150,10 @@ pub struct Buffer {
     /// When non-None, edits accumulate here instead of the undo stack directly.
     /// `end_undo_group()` flushes them as a single `EditAction::Group`.
     undo_group_acc: Option<Vec<EditAction>>,
+    /// Undo stack depth at last save. When undo/redo brings the stack back to
+    /// this depth, the buffer is considered unmodified (Vim/Emacs behavior).
+    /// `None` means never saved (new buffer) — only explicit save clears modified.
+    saved_undo_depth: Option<usize>,
     /// Last known modification time of the backing file on disk.
     /// Used by auto-reload to detect external changes.
     pub file_mtime: Option<SystemTime>,
@@ -186,12 +198,38 @@ pub struct Buffer {
     pub display_regions: Vec<crate::display_region::DisplayRegion>,
     /// Generation at which `display_regions` were last computed.
     pub display_regions_gen: u64,
+    /// Set of line indices where images are individually collapsed (Tab toggle).
+    pub collapsed_images: HashSet<usize>,
+    /// Cached degradation status. Set on file open; avoids re-scanning every frame.
+    /// `None` = not yet evaluated, `Some(true)` = large file mode.
+    pub degraded: Option<bool>,
+    /// When set, display regions need recomputation but we're debouncing.
+    /// Recomputation happens once 150ms have elapsed since this instant.
+    pub display_regions_dirty_since: Option<std::time::Instant>,
     /// Cursor byte offset for org-appear reveal. When the cursor is inside a
     /// display region, that region is suppressed so raw text is visible.
     /// Set per-frame from the focused window's cursor position. `None` = no reveal.
     pub display_reveal_cursor: Option<usize>,
     /// Swap file state for crash recovery (Emacs-style autosave).
     pub swap: crate::swap::SwapState,
+    /// Cached visual row counts for scroll computation.
+    /// Invalidated automatically by generation/display_regions_gen changes
+    /// and explicitly when wrap-affecting options change.
+    pub visual_rows_cache: Option<VisualRowsCache>,
+}
+
+/// Cached visual-row counts for a contiguous range of buffer lines.
+/// Used by scroll pre-computation to avoid recomputing wrap rows every frame.
+pub struct VisualRowsCache {
+    pub generation: u64,
+    pub display_regions_gen: u64,
+    pub text_width: usize,
+    pub break_indent: bool,
+    pub show_break_width: usize,
+    pub heading_scale: bool,
+    pub line_start: usize,
+    /// Visual text rows per line (capped at 255). Does NOT include image rows.
+    pub rows: Vec<u8>,
 }
 
 impl Default for Buffer {
@@ -213,6 +251,7 @@ impl Buffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_group_acc: None,
+            saved_undo_depth: None,
             file_mtime: None,
             project_root: None,
             agent_shell: false,
@@ -227,22 +266,22 @@ impl Buffer {
             local_options: BufferLocalOptions::default(),
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
+            collapsed_images: HashSet::new(),
+            degraded: None,
+            display_regions_dirty_since: None,
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
+            visual_rows_cache: None,
         }
     }
 
-    /// Recompute display regions for link concealment.
+    /// Recompute display regions for link concealment and inline images.
     /// Called when buffer generation changes or `link_descriptive` toggles.
     pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
         self.display_regions.clear();
         self.display_regions_gen = self.generation;
 
-        if !link_descriptive {
-            return;
-        }
-
-        // Only text buffers have link concealment.
+        // Only text buffers have display regions.
         if self.kind != BufferKind::Text {
             return;
         }
@@ -254,7 +293,24 @@ impl Buffer {
             .and_then(|e| e.to_str());
 
         let source: String = self.rope.chars().collect();
-        self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
+
+        if link_descriptive {
+            self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
+        }
+
+        // Append image regions when inline_images is enabled.
+        if self.local_options.inline_images.unwrap_or(false) {
+            let base_dir = self.file_path.as_ref().and_then(|p| p.parent());
+            let image_regions = crate::display_region::compute_image_regions(
+                &source,
+                ext,
+                base_dir,
+                &self.collapsed_images,
+            );
+            self.display_regions.extend(image_regions);
+            // Re-sort by byte_start so regions stay ordered for rendering.
+            self.display_regions.sort_by_key(|r| r.byte_start);
+        }
     }
 
     /// Create a dashboard buffer (startup splash screen).
@@ -359,6 +415,7 @@ impl Buffer {
             file_path: Some(path.to_path_buf()),
             file_mtime: mtime,
             project_root,
+            saved_undo_depth: Some(0),
             ..Self::new()
         })
     }
@@ -377,6 +434,7 @@ impl Buffer {
                 return Err(e);
             }
             self.modified = false;
+            self.saved_undo_depth = Some(self.undo_stack.len());
             // changed_lines persist across saves — cleared on revert/reload.
             self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
             Ok(())
@@ -438,6 +496,7 @@ impl Buffer {
         self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.undo_stack.clear();
+        self.saved_undo_depth = Some(0);
         self.redo_stack.clear();
         Ok(())
     }
@@ -585,6 +644,14 @@ impl Buffer {
             .any(|(start, end)| line > *start && line < *end)
     }
 
+    /// Find the fold end if this line is the start of a folded range.
+    pub fn fold_end_at(&self, line: usize) -> Option<usize> {
+        self.folded_ranges
+            .iter()
+            .find(|(s, _)| *s == line)
+            .map(|(_, end)| *end)
+    }
+
     /// Toggle fold at a given line. If the line is the start of a fold range,
     /// unfold it. If the line is inside a foldable range, fold it.
     pub fn toggle_fold_at(&mut self, line: usize, fold_ranges: &[(usize, usize)]) {
@@ -630,6 +697,15 @@ impl Buffer {
         let row = row.min(self.line_count().saturating_sub(1));
         let line_start = self.rope.line_to_char(row);
         line_start + col
+    }
+
+    /// Convert a char offset back to (row, col).
+    pub fn row_col_from_offset(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.rope.len_chars().saturating_sub(1));
+        let row = self.rope.char_to_line(offset);
+        let line_start = self.rope.line_to_char(row);
+        let col = offset - line_start;
+        (row, col)
     }
 
     /// Maximum number of undo entries to retain.
@@ -1015,7 +1091,8 @@ impl Buffer {
         };
         Self::apply_undo_action(&mut self.rope, win, &action);
         self.redo_stack.push(action);
-        self.modified = true;
+        // Check if undo brought us back to the saved state.
+        self.modified = self.saved_undo_depth != Some(self.undo_stack.len());
         self.bump_generation();
         win.clamp_cursor(self);
     }
@@ -1027,7 +1104,8 @@ impl Buffer {
         };
         Self::apply_redo_action(&mut self.rope, win, &action);
         self.push_undo(action);
-        self.modified = true;
+        // Check if redo brought us back to the saved state.
+        self.modified = self.saved_undo_depth != Some(self.undo_stack.len());
         self.bump_generation();
         win.clamp_cursor(self);
     }
@@ -2020,5 +2098,41 @@ mod tests {
         assert_eq!(opts.link_descriptive, Some(true));
         // Fields None in both stay None
         assert_eq!(opts.word_wrap, None);
+    }
+
+    #[test]
+    fn recompute_display_regions_includes_image_regions() {
+        let mut buf = Buffer::new();
+        buf.local_options.inline_images = Some(true);
+        let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        buf.file_path = Some(assets.join("test.md"));
+        buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(true);
+        let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
+        assert!(has_image, "display_regions should include image regions");
+    }
+
+    #[test]
+    fn recompute_display_regions_no_images_when_disabled() {
+        let mut buf = Buffer::new();
+        buf.local_options.inline_images = Some(false);
+        let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("assets");
+        buf.file_path = Some(assets.join("test.md"));
+        buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(true);
+        let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
+        assert!(!has_image, "no image regions when inline_images disabled");
     }
 }

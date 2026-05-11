@@ -24,14 +24,22 @@ use crate::{KnowledgeBase, Node, NodeKind};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 3;
 
 /// Error type wrapping rusqlite and serde errors for the persistence layer.
 #[derive(Debug)]
 pub enum PersistError {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
-    SchemaMismatch { found: i32, expected: i32 },
+    SchemaMismatch {
+        found: i32,
+        expected: i32,
+    },
+    /// The database was created by a newer version of MAE.
+    FutureSchema {
+        found: i32,
+        supported: i32,
+    },
 }
 
 impl std::fmt::Display for PersistError {
@@ -41,6 +49,12 @@ impl std::fmt::Display for PersistError {
             Self::Json(e) => write!(f, "json: {e}"),
             Self::SchemaMismatch { found, expected } => {
                 write!(f, "KB schema v{found} found, expected v{expected}")
+            }
+            Self::FutureSchema { found, supported } => {
+                write!(
+                    f,
+                    "KB schema v{found} is from a newer MAE version (this build supports up to v{supported})"
+                )
             }
         }
     }
@@ -88,11 +102,15 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS nodes (
-            id        TEXT PRIMARY KEY,
-            title     TEXT NOT NULL,
-            kind      TEXT NOT NULL,
-            body      TEXT NOT NULL,
-            tags_json TEXT NOT NULL DEFAULT '[]'
+            id              TEXT PRIMARY KEY,
+            title           TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            body            TEXT NOT NULL,
+            tags_json       TEXT NOT NULL DEFAULT '[]',
+            todo_state      TEXT,
+            priority        TEXT,
+            source          TEXT,
+            source_version  INTEGER
         );
         CREATE TABLE IF NOT EXISTS links (
             src     TEXT NOT NULL,
@@ -101,6 +119,14 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
             PRIMARY KEY (src, dst)
         );
         CREATE INDEX IF NOT EXISTS idx_links_dst ON links(dst);
+        CREATE INDEX IF NOT EXISTS idx_nodes_todo ON nodes(todo_state);
+        CREATE INDEX IF NOT EXISTS idx_nodes_priority ON nodes(priority);
+        CREATE TABLE IF NOT EXISTS node_tags (
+            node_id TEXT NOT NULL,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (node_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags(tag);
         CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
             id UNINDEXED,
             title,
@@ -116,12 +142,69 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
 
 fn check_schema_version(conn: &Connection) -> Result<(), PersistError> {
     let found: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if found != 0 && found != SCHEMA_VERSION {
-        return Err(PersistError::SchemaMismatch {
+    if found == 0 || found == SCHEMA_VERSION {
+        return Ok(());
+    }
+    if found > SCHEMA_VERSION {
+        return Err(PersistError::FutureSchema {
             found,
-            expected: SCHEMA_VERSION,
+            supported: SCHEMA_VERSION,
         });
     }
+    // Step-wise migration chain: v1 → v2 → v3 → ...
+    if found < 2 {
+        migrate_v1_to_v2(conn)?;
+    }
+    if found < 3 {
+        migrate_v2_to_v3(conn)?;
+    }
+    Ok(())
+}
+
+/// Check whether a column exists in a table via `PRAGMA table_info`.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, PersistError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let found = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|r| r.as_deref() == Ok(column));
+    Ok(found)
+}
+
+fn migrate_v1_to_v2(conn: &Connection) -> Result<(), PersistError> {
+    let tx = conn.unchecked_transaction()?;
+    if !has_column(conn, "nodes", "todo_state")? {
+        tx.execute("ALTER TABLE nodes ADD COLUMN todo_state TEXT", [])?;
+    }
+    if !has_column(conn, "nodes", "priority")? {
+        tx.execute("ALTER TABLE nodes ADD COLUMN priority TEXT", [])?;
+    }
+    tx.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_nodes_todo ON nodes(todo_state);
+        CREATE INDEX IF NOT EXISTS idx_nodes_priority ON nodes(priority);
+        CREATE TABLE IF NOT EXISTS node_tags (
+            node_id TEXT NOT NULL,
+            tag     TEXT NOT NULL,
+            PRIMARY KEY (node_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags(tag);
+        "#,
+    )?;
+    tx.pragma_update(None, "user_version", 2)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_v2_to_v3(conn: &Connection) -> Result<(), PersistError> {
+    let tx = conn.unchecked_transaction()?;
+    if !has_column(conn, "nodes", "source")? {
+        tx.execute("ALTER TABLE nodes ADD COLUMN source TEXT", [])?;
+    }
+    if !has_column(conn, "nodes", "source_version")? {
+        tx.execute("ALTER TABLE nodes ADD COLUMN source_version INTEGER", [])?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -136,22 +219,36 @@ impl KnowledgeBase {
         tx.execute("DELETE FROM nodes", [])?;
         tx.execute("DELETE FROM links", [])?;
         tx.execute("DELETE FROM nodes_fts", [])?;
+        tx.execute("DELETE FROM node_tags", [])?;
         {
             let mut ins_node = tx.prepare(
-                "INSERT INTO nodes (id, title, kind, body, tags_json) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_link =
                 tx.prepare("INSERT OR IGNORE INTO links (src, dst, display) VALUES (?, ?, ?)")?;
             let mut ins_fts =
                 tx.prepare("INSERT INTO nodes_fts (id, title, body, tags) VALUES (?, ?, ?, ?)")?;
+            let mut ins_tag =
+                tx.prepare("INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)")?;
             for node in self.nodes_values() {
                 let tags_json = serde_json::to_string(&node.tags)?;
+                let pri_str = node.priority.map(|c| c.to_string());
+                let source_str = node.source.map(|s| match s {
+                    crate::NodeSource::Seed => "seed",
+                    crate::NodeSource::UserOrg => "user_org",
+                    crate::NodeSource::Manual => "manual",
+                    crate::NodeSource::Federation => "federation",
+                });
                 ins_node.execute(params![
                     &node.id,
                     &node.title,
                     kind_to_str(node.kind),
                     &node.body,
                     &tags_json,
+                    &node.todo_state,
+                    &pri_str,
+                    &source_str,
+                    &node.source_version,
                 ])?;
                 ins_fts.execute(params![
                     &node.id,
@@ -159,6 +256,9 @@ impl KnowledgeBase {
                     &node.body,
                     node.tags.join(" "),
                 ])?;
+                for tag in &node.tags {
+                    ins_tag.execute(params![&node.id, tag])?;
+                }
                 for (dst, display) in crate::parse_links(&node.body) {
                     let disp: Option<&str> = if dst == display {
                         None
@@ -183,21 +283,59 @@ impl KnowledgeBase {
         check_schema_version(&conn)?;
         init_schema(&conn)?; // no-op if already initialized
         *self = KnowledgeBase::new();
-        let mut stmt =
-            conn.prepare("SELECT id, title, kind, body, tags_json FROM nodes ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version FROM nodes ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |row| {
             let id: String = row.get(0)?;
             let title: String = row.get(1)?;
             let kind: String = row.get(2)?;
             let body: String = row.get(3)?;
             let tags_json: String = row.get(4)?;
-            Ok((id, title, kind, body, tags_json))
+            let todo_state: Option<String> = row.get(5)?;
+            let priority_str: Option<String> = row.get(6)?;
+            let source_str: Option<String> = row.get(7)?;
+            let source_version: Option<u32> = row.get(8)?;
+            Ok((
+                id,
+                title,
+                kind,
+                body,
+                tags_json,
+                todo_state,
+                priority_str,
+                source_str,
+                source_version,
+            ))
         })?;
         let mut count = 0;
         for row in rows {
-            let (id, title, kind, body, tags_json) = row?;
+            let (
+                id,
+                title,
+                kind,
+                body,
+                tags_json,
+                todo_state,
+                priority_str,
+                source_str,
+                source_version,
+            ) = row?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            self.insert(Node::new(id, title, kind_from_str(&kind), body).with_tags(tags));
+            let priority = priority_str.and_then(|s| s.chars().next());
+            let source = source_str.as_deref().map(|s| match s {
+                "seed" => crate::NodeSource::Seed,
+                "user_org" => crate::NodeSource::UserOrg,
+                "manual" => crate::NodeSource::Manual,
+                "federation" => crate::NodeSource::Federation,
+                _ => crate::NodeSource::Manual,
+            });
+            let mut node = Node::new(id, title, kind_from_str(&kind), body).with_tags(tags);
+            node.todo_state = todo_state;
+            node.priority = priority;
+            node.source = source;
+            node.source_version = source_version;
+            self.insert(node);
             count += 1;
         }
         Ok(count)
@@ -215,6 +353,7 @@ impl KnowledgeBase {
     ) -> Result<Vec<String>, PersistError> {
         let conn = Connection::open(path)?;
         check_schema_version(&conn)?;
+        init_schema(&conn)?; // ensure FTS virtual table exists on old databases
         let mut stmt = conn.prepare(
             "SELECT id FROM nodes_fts WHERE nodes_fts MATCH ? ORDER BY bm25(nodes_fts) LIMIT ?",
         )?;
@@ -389,5 +528,144 @@ mod tests {
         ));
         kb.load_from_sqlite(&path).unwrap();
         assert!(kb.get("ghost").is_none(), "pre-load state must be cleared");
+    }
+
+    /// Create a v1 database (no todo_state, priority, source columns)
+    /// and verify the migration chain runs through to current.
+    #[test]
+    fn migrate_v1_to_current() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v1.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE nodes (
+                id        TEXT PRIMARY KEY,
+                title     TEXT NOT NULL,
+                kind      TEXT NOT NULL,
+                body      TEXT NOT NULL,
+                tags_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE links (
+                src TEXT NOT NULL, dst TEXT NOT NULL, display TEXT,
+                PRIMARY KEY (src, dst)
+            );
+            "#,
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, title, kind, body, tags_json) VALUES (?, ?, ?, ?, ?)",
+            params!["n1", "Test", "note", "body", "[]"],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut kb = KnowledgeBase::new();
+        let n = kb.load_from_sqlite(&path).unwrap();
+        assert_eq!(n, 1);
+        let node = kb.get("n1").unwrap();
+        assert_eq!(node.title, "Test");
+        assert!(node.todo_state.is_none());
+        assert!(node.source.is_none());
+    }
+
+    /// Create a v2 database (has todo_state/priority, no source columns)
+    /// and verify v2→v3 migration preserves todo_state.
+    #[test]
+    fn migrate_v2_to_current() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v2.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE nodes (
+                id        TEXT PRIMARY KEY,
+                title     TEXT NOT NULL,
+                kind      TEXT NOT NULL,
+                body      TEXT NOT NULL,
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                todo_state TEXT,
+                priority   TEXT
+            );
+            CREATE TABLE links (
+                src TEXT NOT NULL, dst TEXT NOT NULL, display TEXT,
+                PRIMARY KEY (src, dst)
+            );
+            CREATE TABLE node_tags (
+                node_id TEXT NOT NULL, tag TEXT NOT NULL,
+                PRIMARY KEY (node_id, tag)
+            );
+            "#,
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state) VALUES (?, ?, ?, ?, ?, ?)",
+            params!["n1", "Task", "note", "do thing", "[]", "TODO"],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut kb = KnowledgeBase::new();
+        let n = kb.load_from_sqlite(&path).unwrap();
+        assert_eq!(n, 1);
+        let node = kb.get("n1").unwrap();
+        assert_eq!(node.todo_state.as_deref(), Some("TODO"));
+        assert!(node.source.is_none()); // added by migration but NULL
+    }
+
+    /// Running migrations twice must not crash (idempotent ALTER TABLE).
+    #[test]
+    fn migrate_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v1.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE nodes (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
+                body TEXT NOT NULL, tags_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE links (
+                src TEXT NOT NULL, dst TEXT NOT NULL, display TEXT,
+                PRIMARY KEY (src, dst)
+            );
+            "#,
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        drop(conn);
+
+        // First load triggers v1→v2→v3 migration
+        let mut kb = KnowledgeBase::new();
+        kb.load_from_sqlite(&path).unwrap();
+
+        // Second load — migration should be a no-op (already at v3)
+        let mut kb2 = KnowledgeBase::new();
+        kb2.load_from_sqlite(&path).unwrap(); // must not crash
+    }
+
+    /// A database from a future MAE version should return FutureSchema error.
+    #[test]
+    fn future_schema_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("future.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE nodes (id TEXT PRIMARY KEY, title TEXT, kind TEXT, body TEXT, tags_json TEXT);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 999).unwrap();
+        drop(conn);
+
+        let mut kb = KnowledgeBase::new();
+        let err = kb.load_from_sqlite(&path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("999"), "should mention found version: {msg}");
+        assert!(
+            msg.contains("newer"),
+            "should explain it's from a newer version: {msg}"
+        );
     }
 }

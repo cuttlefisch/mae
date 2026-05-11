@@ -2,43 +2,50 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2%2C252%20passing-brightgreen.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-2%2C629%20passing-brightgreen.svg)](#)
+[![Lines of Code](https://img.shields.io/badge/lines-~130k-informational.svg)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
-[![Lines of Code](https://img.shields.io/badge/lines-~107k-informational.svg)](#)
 
-> [!CAUTION]
-> **MAE is in early Alpha.** AI features and cost guardrails are experimental and may fail under certain conditions (e.g., unexpected provider API behavior or infinite loops). **Use at your own risk.** Always monitor your AI usage costs directly via your provider dashboards.
+An AI-native lisp machine editor. The human and the AI are peer actors calling
+the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
+runtime. 2,629 tests.
 
-An editor where the human and the AI are peer actors calling the same
-Lisp primitives. Built on a Rust core with an embedded Scheme (R7RS-small)
-runtime. 2,252 tests. GPL-3.0-or-later.
+<p align="center">
+  <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
+</p>
 
-## Why MAE Exists
+## Features
 
-Emacs is the only editor with true runtime redefinability — you can redefine any
-function while the editor is running. But after 35 years and 180k commits, its
-architecture has hit structural limits:
+- **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
+  the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
+  keystrokes.
+- **Multi-provider** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
+  prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
+- **Full vi modal editing** — Motions, operators, text objects, count prefix,
+  dot repeat, macros, registers, marks, surround, visual block mode, multi-cursor.
+- **LSP first-class** — Go-to-definition, references, hover, completion, rename,
+  format, symbol outline, breadcrumbs, peek references. AI gets structured
+  semantic data.
+- **DAP first-class** — Multi-language debugging (Python, Rust, C/C++).
+  Breakpoints (conditional, logpoint), watch expressions, exception breakpoints.
+  AI can set breakpoints and inspect variables.
+- **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
+  `:tangle` directive, `:var` cross-references, safety policies. Export to
+  HTML and Markdown with TOC, syntax highlighting, tag filtering.
+- **Embedded terminal** — Full VT100/VT500 via `alacritty_terminal`. AI can
+  observe output and send input. `Ctrl-\ Ctrl-n` exits to normal mode.
+- **Knowledge base** — SQLite + FTS5 graph store. 200+ help nodes, bidirectional
+  links, org-mode parser, federated instances. Same docs the AI reads.
+- **Runtime redefinability** — Embedded R7RS Scheme (Steel). Redefine any
+  function while running. 45+ primitives, 18 hook points, `init.scm` is a
+  real program.
+- **Tree-sitter** — 13 languages with structural parse trees. AI can query
+  syntax trees for code reasoning.
+- **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
+  terminal fallback. Inline images (PNG/JPG/SVG), variable-height rendering,
+  inertial scrolling. Desktop launcher for freedesktop environments.
 
-- **GC retrofit is intractable.** 23,901 commits across 3 branches trying to add
-  concurrent garbage collection. Still unmerged. Real threading remains blocked.
-- **The display engine is a monolith.** `xdisp.c` is 38,605 lines. ~10% of all
-  Emacs commits are platform support.
-- **The fix ratio doubled.** From 15% in the 1990s to 32% post-2010. One third
-  of all effort is now fixes.
-- **Bus factor of ~4 people.** Top 5 contributors = 50.8% of all commits.
-
-Meanwhile, AI coding assistants are bolted onto editors as plugins — they can't
-call the same functions as your keybindings, can't access LSP semantics or debug
-state, and can't compose with your extensions.
-
-MAE is a from-scratch editor that addresses both problems: Emacs's architecture
-limits and the AI-as-afterthought pattern.
-
-## The Design
-
-MAE makes the AI a **peer, not a plugin**. A keybinding and an AI tool-call both
-resolve to the same command via the same dispatcher. There is no separate "AI
-mode", no simulated keystrokes, no shadow API:
+## Architecture
 
 ```
    Human (keys)      Scheme (eval)      AI / MCP (tool call)
@@ -58,7 +65,7 @@ mode", no simulated keystrokes, no shadow API:
          │  buffer.insert/delete()   │
          │  lsp/dap/kb/shell ops     │
          │                           │
-         │  380+ commands · same     │
+         │  450+ commands · same     │
          │  functions for all actors │
          └─────────────┬─────────────┘
                        ▼
@@ -71,174 +78,78 @@ mode", no simulated keystrokes, no shadow API:
 
 All three actors converge on the same Editor Core API. The AI's tools are thin
 wrappers — `buffer_read` calls the same `buffer.line()` the renderer uses;
-`lsp_definition` queues the same intent as pressing `gd`. When you type `dd` to
-delete a line, the AI agent invokes `delete-line` with the same effect. When a
-package author writes `(define my/summarize ...)`, it's immediately available to
-both the user's keybinding and the AI's tool palette.
+`lsp_definition` queues the same intent as pressing `gd`. When a package author
+writes `(define my/summarize ...)`, it's immediately available to both the
+user's keybinding and the AI's tool palette.
 
-## What Makes MAE Different
-
-### AI as Peer Actor
-
-Not a copilot sidebar. The AI calls the same 300+ commands you do. It reads
-LSP types, DAP debug state, tree-sitter parse trees, and the knowledge base —
-structured data, not just syntax. Every editor command is an AI tool; the AI's
-specialized tools (buffer I/O, LSP queries, DAP inspection, Git) are thin wrappers
-around the same core API.
-
-**Key Architecture:**
-- **Transactional Callstack**: Ephemeral tool history prevents context overflow during long-running tasks.
-- **Self-Healing**: AI sessions automatically scale context windows and prune history to recover from provider limits.
-- **Provider Choice**: First-class support for **Gemini (Flash/Pro)**, Claude, and OpenAI.
-- **Permission Tiers**: (ReadOnly, Write, Shell, Privileged) let you control how far the agent can act autonomously.
-
-### Built-in Documentation & Knowledge Base
-
-`:help` opens a hyperlinked knowledge base with 200+ nodes — the same docs the
-AI reads. Tab cycles links, Enter follows, C-o / C-i for history (browser-like).
-Every command is auto-documented at startup. The KB is backed by SQLite with
-FTS5 full-text search, bidirectional links, org-mode parser for importing
-existing notes, and graph queries from both Scheme and AI.
-
-### Embedded Terminal Emulator
-
-Full VT100/VT500 via `alacritty_terminal` — vim, fzf, htop, tmux all work
-correctly. This is not a line-oriented shell. `Ctrl-\ Ctrl-n` exits to normal
-mode (Neovim convention), `i` to re-enter. AI can observe terminal output and
-send input via tools.
-
-### Built-in Debugger (DAP)
-
-Debug Adapter Protocol — multi-language debugging inside the editor. AI can set
-breakpoints, step through code, inspect variables, and read call stacks.
-Breakpoints and the execution line render in the gutter alongside diagnostics.
-
-### LSP Integration
-
-Go-to-definition (`gd`), find references (`gr`), hover docs (`K`), diagnostics,
-completion popup with fuzzy matching. AI gets structured semantic data — not
-just syntax, but types, references, and diagnostics.
-
-### Runtime Redefinability (Scheme)
-
-Embedded R7RS Scheme (Steel) — redefine any function while running. ~40 Scheme
-functions for buffer editing, window management, option/command/keymap
-introspection, and file I/O. 17 hook points for event-driven config.
-`require-feature`/`provide-feature` package system with `load-path` search.
-`init.scm` is a real program, not a settings file.
-
-### Tree-sitter Syntax Highlighting
-
-13 languages (Rust, Python, JavaScript, TypeScript, TSX, Go, Bash, JSON, TOML,
-Markdown, YAML, Scheme, Org) with structural parse trees. AI can query syntax
-trees for code reasoning.
-
-### GUI + Terminal
-
-Dual rendering backend — terminal (ratatui/crossterm) and GUI (winit + Skia 2D).
-`mae --gui` launches the hardware-accelerated window; plain `mae` uses the terminal.
-Both share the same editor core, commands, and AI integration. Desktop launcher
-included for GNOME, sway, and other freedesktop environments.
-
-## Vim-Level Editing
-
-Full vi modal editing with 380+ commands:
-
-| Category | Features |
-|----------|----------|
-| Modes | Normal, Insert, Visual (char/line), Command, Search, ShellInsert, FileBrowser, CommandPalette |
-| Motions | hjkl, w/b/e/W/B/E, f/F/t/T, %, {/}, 0/$, gg/G, H/M/L, ge/gE |
-| Operators | d, c, y — compose with any motion or text object |
-| Text objects | `iw`, `aw`, `i(`, `a{`, `i"`, `it` (tag), and more |
-| Count prefix | 5j, 3dd, 2dw |
-| Dot repeat | Full `.` repeat for change/delete/insert sequences |
-| Registers | Named (`"a`–`"z`), numbered (`"0`–`"9`), system clipboard (`"+`) |
-| Macros | `qa` record, `q` stop, `@a` play, `@@` repeat |
-| Marks | `ma` set, `'a` jump, `` `a `` exact position |
-| Search | `/pattern`, `?pattern`, `n`/`N`, `*`, `:s///g`, `:%s` |
-| Surround | `ys{motion}{char}`, `cs{old}{new}`, `ds{char}` (vim-surround) |
-| Visual | `v` (charwise), `V` (linewise) + all operators |
-| Scroll | Ctrl-U/D/F/B, zz/zt/zb, H/M/L |
-| Leader | 14-group `SPC` leader system (Doom Emacs style) with which-key popup |
-| Code folding | `za` toggle, `zM` close all, `zR` open all (tree-sitter fold ranges) |
-| File tree | `SPC f t` sidebar with icons, expand/collapse, git markers |
-| Git status | `SPC g s` Magit-style: stage/unstage/discard at hunk level, branch/stash/push/pull |
-| Swap files | Crash recovery via non-destructive swap files, `:recover` / `:recover-session` |
-| Autosave | Interval-based with idle debounce, configurable via `:set autosave_interval` |
-| Display overlays | Link concealment (md/org), inline bold/italic/code/strikethrough |
-
-## Stack
-
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Core | Rust | Eliminates GC problem, ownership model for concurrency |
-| Extensions | Scheme R7RS-small (Steel) | Runtime redefinability, hygienic macros, tail calls |
-| Terminal UI | ratatui + crossterm | Platform-specific code lives in the library, not us |
-| GUI | winit + skia-safe | Hardware-accelerated 2D, mouse, font config |
-| Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
-| AI | Claude / OpenAI APIs | Tool-calling maps 1:1 to command API |
-| Protocols | LSP + DAP | First-class, not bolted on — exposed to Scheme and AI |
-| Knowledge base | SQLite + FTS5 | Graph store with full-text search |
-| Syntax | tree-sitter | 13 languages, structural parse trees |
-
-### Crate Architecture
+### Crate Layout
 
 ```
 mae (binary)
- ├── mae-core       Buffer (rope), editor state, commands, keymap, search, themes, syntax
+ ├── mae-core       Buffer (rope), editor state, commands, keymap, syntax, babel, export
  ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
+ ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
  ├── mae-scheme      Steel Scheme runtime, init.scm loading, hook dispatch
  ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
- ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion
- ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping
+ ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
+ ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
- ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search
- ├── mae-gui       GUI rendering (winit + Skia), mouse input, font config
- └── mae-mcp       MCP bridge — Unix socket server, JSON-RPC, stdio shim
+ ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search, federation
+ └── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
 ```
-
-### Event Loop
-
-The binary's `select!` loop multiplexes:
-
-- **Crossterm key events** → modal dispatch (Normal/Insert/Visual/ShellInsert/...)
-- **LSP responses** → diagnostics, completions, navigation results
-- **DAP events** → breakpoint hits, variable updates
-- **Shell PTY output** → viewport render + exit detection
-- **AI stream chunks** → conversation buffer updates + tool execution
-- **Scheme eval results** → command execution
-- **Render tick** → ratatui frame draw (~30fps when shells active)
-- **GUI events** (when `--gui`): winit window events, mouse clicks/scroll, dirty-flag render gating
 
 ## Getting Started
 
 ### Prerequisites
 
 - **Rust stable** (1.75+) via [rustup](https://rustup.rs)
-- **System deps for GUI:** `fontconfig-devel`, `freetype-devel` (Fedora) / `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode Command Line Tools (macOS)
-- **Optional:** An AI provider API key (Anthropic, OpenAI, Google, or DeepSeek)
-- **Optional:** `make setup-dev` installs `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+- **GUI deps:** `clang`, `fontconfig-devel`, `freetype-devel` (Fedora) / `clang`, `libclang-dev`, `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
+- **TUI-only:** `make build-tui` — no clang or GUI deps needed
+- **Optional:** `make setup-dev` installs `clang`, `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+- **Check deps:** `make doctor` — reports all prerequisites with install commands
 
 ### Build & Run
 
 ```sh
 git clone git@github.com:cuttlefisch/mae.git && cd mae
+make doctor                     # check prerequisites
 make build                      # GUI build (default)
-make install                    # install binary + desktop launcher
+make install                    # install to ~/.local/bin + desktop launcher
+mae --init-config               # generate config.toml + init.scm + wizard
 mae --gui file.rs               # launch GUI
 mae file.rs                     # terminal mode
-make build-tui                  # terminal-only build (no skia dependency)
+make build-tui                  # terminal-only (no clang/skia dependency)
 ```
 
+**macOS:** `make install PREFIX=/usr/local/bin` or add `~/.local/bin` to PATH.
+**WSL:** `make install-tui` (terminal-only, no X11 needed).
+
+### Container Build
+
+No Rust installation needed — everything runs inside Docker:
+
+```sh
+git clone git@github.com:cuttlefisch/mae.git && cd mae
+make docker-ci          # full CI pipeline (fmt + clippy + check + test)
+make docker-new-user    # validate first-run experience in clean environment
+make docker-dev         # interactive dev shell with Rust toolchain
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full container development workflow.
+
 ### AI Setup
+
+> [!CAUTION]
+> **MAE is in early Alpha.** AI features and cost guardrails are experimental.
+> Always monitor your API usage and costs directly in your provider dashboards.
 
 Set one of these environment variables:
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...    # Claude
-export OPENAI_API_KEY=sk-...           # OpenAI
-export GEMINI_API_KEY=...              # Gemini
-export DEEPSEEK_API_KEY=...            # DeepSeek
+export ANTHROPIC_API_KEY=sk-ant-...    # Claude (default) — https://console.anthropic.com/settings/keys
+export OPENAI_API_KEY=sk-...           # OpenAI          — https://platform.openai.com/api-keys
+export GEMINI_API_KEY=...              # Gemini           — https://aistudio.google.com/apikey
+export DEEPSEEK_API_KEY=...            # DeepSeek         — https://platform.deepseek.com/api_keys
 ```
 
 Or configure in `~/.config/mae/config.toml`:
@@ -247,21 +158,34 @@ Or configure in `~/.config/mae/config.toml`:
 [ai]
 provider = "claude"
 model = "claude-sonnet-4-20250514"
+
+# Optional: permission tier (readonly, write, shell, privileged)
+# Default: shell (AI can read, write, and run commands)
+permission_tier = "shell"
+
+# Optional: force prompt tier (full, compact)
+# Default: auto-detected from model
+# prompt_tier = "full"
 ```
+
+**Provider-aware prompts:** MAE auto-detects the provider from the model name
+and injects provider-specific guidance (e.g., Gemini gets explicit JSON
+examples; DeepSeek gets anti-looping guardrails).
 
 ### First Steps
 
-1. `:tutor` — start the built-in tutorial (12 interactive lessons)
+1. `:tutor` — interactive tutorial (12 lessons: vim, beginner, AI tracks)
 2. `SPC SPC` — command palette (fuzzy search all commands)
 3. `SPC f f` — find file in project
 4. `SPC h h` — help index (knowledge base)
-5. `SPC a p` — start an AI conversation
-6. `SPC a a` — launch AI agent in embedded shell
-7. `:self-test` — verify AI integration works
+5. `SPC a a` — launch AI agent in embedded shell
+6. `SPC a p` — start an AI conversation
+7. `:self-test` — verify AI integration
 
 ### Configuration
 
-MAE loads `~/.config/mae/init.scm` on startup:
+MAE loads `~/.config/mae/init.scm` on startup. This is a real Scheme program,
+not a settings file:
 
 ```scheme
 ;; Example init.scm
@@ -272,11 +196,45 @@ MAE loads `~/.config/mae/init.scm` on startup:
 ;; Custom keybinding
 (define-key "normal" "SPC t t" "cycle-theme")
 
-;; Hook: auto-format before save (when LSP available)
+;; Hook: run on buffer save
 (add-hook! "before-save" "my-format-fn")
 ```
 
-### Key Bindings (summary)
+Project-local config: `.mae/init.scm` is loaded after user config.
+
+Useful commands:
+- `mae --check-config` — validate config + init.scm without launching (CI-friendly)
+- `mae --clean` / `mae -q` — pristine launch, skip all config/init/history (like `emacs -q`)
+- `:edit-config` — edit `init.scm` from inside the editor
+- `:edit-settings` — edit `config.toml` from inside the editor
+- `:describe-configuration` — health report (AI, LSP, DAP status)
+
+## Vim-Level Editing
+
+Full vi modal editing with 450+ commands:
+
+| Category | Features |
+|----------|----------|
+| Modes | Normal, Insert, Visual (char/line/block), Command, Search, ShellInsert |
+| Motions | hjkl, w/b/e/W/B/E, f/F/t/T, %, {/}, 0/$, gg/G, H/M/L, ge/gE |
+| Operators | d, c, y — compose with any motion or text object |
+| Text objects | `iw`, `aw`, `i(`, `a{`, `i"`, `it` (tag), and more |
+| Count prefix | 5j, 3dd, 2dw |
+| Dot repeat | Full `.` repeat for change/delete/insert sequences |
+| Registers | Named (`"a`–`"z`), numbered (`"0`–`"9`), system clipboard (`"+`) |
+| Macros | `qa` record, `q` stop, `@a` play, `@@` repeat |
+| Marks | `ma` set, `'a` jump, `` `a `` exact position |
+| Search | `/pattern`, `?pattern`, `n`/`N`, `*`, `:s///g`, `:%s` |
+| Surround | `ys{motion}{char}`, `cs{old}{new}`, `ds{char}` (vim-surround) |
+| Multi-cursor | `Ctrl-d` add next match, `Ctrl-Alt-d` add all, `mc-align` |
+| Scroll | Ctrl-U/D/F/B, zz/zt/zb, inertial (kinetic) scrolling in GUI |
+| Leader | `SPC` leader system (Doom Emacs style) with which-key popup |
+| Code folding | `za` toggle, `zM` close all, `zR` open all (tree-sitter ranges) |
+| File tree | `SPC f t` sidebar with expand/collapse, git markers |
+| Git status | `SPC g s` Magit-style: stage/unstage/discard at hunk level |
+| Swap files | Crash recovery via non-destructive swap files |
+
+### Key Bindings
 
 | Key | Mode | Action |
 |-----|------|--------|
@@ -290,80 +248,115 @@ MAE loads `~/.config/mae/init.scm` on startup:
 | `gd` | Normal | Go to definition (LSP) |
 | `gr` | Normal | Find references (LSP) |
 | `K` | Normal | Hover docs (LSP) |
-| `SPC SPC` | Normal | Command palette (fuzzy) |
+| `SPC SPC` | Normal | Command palette |
 | `SPC f f` | Normal | Fuzzy file picker |
-| `SPC a a` | Normal | Open AI conversation |
+| `SPC a a` | Normal | AI agent (shell) |
+| `SPC a p` | Normal | AI conversation |
 | `SPC o t` | Normal | Open terminal |
-| `SPC h h` | Normal | Help index |
 | `SPC d b` | Normal | Toggle breakpoint |
+| `SPC h h` | Normal | Help index |
 | `Ctrl-\ Ctrl-n` | ShellInsert | Exit terminal → Normal |
 
-### Commands
+### Ex Commands
 
 ```
 :w              Save
-:w path         Save as
-:e path         Open file (Tab to complete)
-:q              Quit (fails if unsaved)
-:q!             Force quit
+:e path         Open file
+:q              Quit
 :wq             Save and quit
-:s/old/new/g    Substitute on current line
-:%s/old/new/g   Substitute in entire buffer
+:s/old/new/g    Substitute (current line)
+:%s/old/new/g   Substitute (whole buffer)
 :theme name     Switch theme
-:eval (expr)    Evaluate Scheme expression
-:help           Open help / knowledge base
-:terminal       Open embedded terminal
-:command-list   Show all commands
+:eval (expr)    Evaluate Scheme
+:help topic     Open help
+:terminal       Open terminal
+:tutor          Interactive tutorial
+:self-test      AI integration test
+:set opt=val    Set editor option
+:split / :vsplit  Window splitting
+:diagnostics    Show LSP diagnostics
+:messages       View message log
+:describe-configuration  Show config health report
 ```
 
-## Project Structure
+## Stack
 
-```
-crates/
-  mae/          Binary — event loop, key handling, main()
-  core/         Buffer (rope), editor state, commands, keymap, search, themes, syntax
-  renderer/     Terminal rendering (ratatui), status bar, popups, shell viewport
-  scheme/       Steel Scheme runtime, init.scm loading, hook dispatch
-  ai/           Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
-  lsp/          LSP client — connection, navigation, diagnostics, completion
-  dap/          DAP client — protocol types, transport, breakpoints, stepping
-  kb/           Knowledge base — SQLite graph store, org-mode parser, FTS5 search
-  shell/        Terminal emulator (alacritty_terminal), PTY management
-```
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Core | Rust | Eliminates GC problem, ownership model for concurrency |
+| Extensions | Scheme R7RS-small (Steel) | Runtime redefinability, hygienic macros, tail calls |
+| Terminal UI | ratatui + crossterm | Platform-specific code in the library, not us |
+| GUI | winit + skia-safe | Hardware-accelerated 2D, mouse, fonts, inline images |
+| Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
+| AI | Claude / OpenAI / Gemini / DeepSeek | Tool-calling maps 1:1 to command API |
+| Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
+| Knowledge base | SQLite + FTS5 | Graph store with full-text search, federation |
+| Syntax | tree-sitter | 13 languages, structural parse trees |
+| Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
-## Self-Hosting Goal
+## Roadmap
 
-The near-term goal is to use MAE + AI (Claude/Gemini/DeepSeek) to develop MAE itself. All Tier 1
-blockers are complete: multi-file AI editing, LSP semantic understanding,
-tree-sitter syntax highlighting, DAP debugging, and the embedded terminal.
-MAE is now used as a terminal/GUI editor for its own development alongside Emacs.
-The GUI is the primary dev target going forward.
+See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
+
+| Phase | Status | Summary |
+|-------|--------|---------|
+| 1. Core + Renderer | ✅ Complete | Buffer (rope), event loop, terminal renderer, modal editing |
+| 2. Scheme Runtime | ✅ Complete | Steel R7RS-small, config loading, `define-key`, REPL |
+| 3. AI Integration | ✅ Complete | Multi-provider tool-calling, conversation, permissions |
+| 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
+| 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, help system, federation |
+| 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
+| 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config` |
+| 8. GUI Backend | ✅ Complete | winit + Skia, inline images, variable-height, inertial scroll |
+| 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
+| 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
+| **Next** | 🔧 In progress | PDF preview, module system, semantic code search |
 
 ## Design Lineage
 
-This project is informed by a detailed analysis of [35 years of Emacs git
+MAE is informed by analysis of [35 years of Emacs git
 history](https://github.com/emacs-mirror/emacs) — identifying the structural
-decisions that led to its current maintenance burden and designing around them.
-The full analysis is in the project's org-roam notes.
+decisions that led to its current maintenance burden:
 
-Key lessons applied:
-- Concurrency from day one (no GC retrofit)
-- Modular display layer (no monolithic `xdisp.c`)
-- Module boundaries that enable distributed ownership
-- Forge-native workflow (no mailing lists, no copyright assignment)
+- **GC retrofit is intractable** — 23,901 commits across 3 branches, still
+  unmerged. MAE uses Rust ownership (no GC needed).
+- **`xdisp.c` is 38,605 lines** — monolithic display engine. MAE uses a
+  `Renderer` trait with separate terminal and GUI backends.
+- **Fix ratio doubled** — from 15% to 32% over 35 years. Rust's type system
+  structurally prevents this.
+- **Bus factor of ~4** — top 5 contributors = 50.8% of commits. MAE enforces
+  module boundaries across 11 crates.
+
+## Self-Hosting
+
+MAE is used to develop itself. The AI agent runs in an embedded shell, calling
+the same tools the human uses. The GUI is the primary development target.
+
+## Data Directories
+
+MAE follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/):
+
+| Path | Contents |
+|------|----------|
+| `~/.config/mae/` | `config.toml`, `init.scm`, `help/*.org` |
+| `~/.local/share/mae/` | `swap/`, `transcripts/` |
+| `~/.local/state/mae/` | `logs/`, `history.scm` |
+| `.mae/` (per-project) | `session.json`, `conversation.json`, `kb.sqlite3`, `memory/`, `plans/` |
 
 ## Contributing
 
-Feature branches + PR workflow. CI runs `cargo check/test/clippy` on stable and nightly.
-GUI builds require skia system deps and are excluded from CI.
+Feature branches + PR workflow. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+Report bugs at [github.com/cuttlefisch/mae/issues](https://github.com/cuttlefisch/mae/issues).
+Check [Known Bugs](ROADMAP.md#known-bugs) before filing.
 
 ```bash
-make ci          # Run the CI pipeline locally (no GUI)
-make check       # Type-check with GUI (local dev)
-make test        # Full test suite with GUI
+make doctor      # Check build prerequisites
+make ci          # Full CI pipeline locally (no GUI)
+make verify      # check + test + GUI check with summary
+make self-test   # AI-driven end-to-end self-test (headless)
 ```
 
-See CLAUDE.md for architecture principles and development priorities.
+See [CLAUDE.md](CLAUDE.md) for architecture principles and development guide.
 
 ## License
 

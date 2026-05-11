@@ -132,10 +132,11 @@ impl Editor {
         };
 
         // Switch buffer if necessary.
-        {
-            let win = self.window_mgr.focused_window_mut();
-            if win.buffer_idx != target_idx {
-                win.buffer_idx = target_idx;
+        if self.window_mgr.focused_window().buffer_idx != target_idx {
+            if self.is_conversation_buffer(self.active_buffer_idx()) {
+                self.display_buffer_and_focus(target_idx);
+            } else {
+                self.window_mgr.focused_window_mut().buffer_idx = target_idx;
             }
         }
 
@@ -145,7 +146,7 @@ impl Editor {
         let col_max = self.buffers[target_idx].line_len(row);
         let col = entry.col.min(col_max);
 
-        let vh = self.viewport_height;
+        let vh = self.focused_viewport_height();
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = row;
         win.cursor_col = col;

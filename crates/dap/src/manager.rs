@@ -68,6 +68,8 @@ pub enum DapCommand {
         frame_id: Option<i64>,
         context: Option<String>,
     },
+    /// Set exception breakpoints (filters: "caught", "uncaught", etc.).
+    SetExceptionBreakpoints { filters: Vec<String> },
     /// Soft terminate the debuggee.
     Terminate,
     /// Hard disconnect (terminates the adapter process).
@@ -221,6 +223,7 @@ async fn handle_command(
         DapCommand::RequestScopes { .. } => "RequestScopes",
         DapCommand::RequestVariables { .. } => "RequestVariables",
         DapCommand::Evaluate { .. } => "Evaluate",
+        DapCommand::SetExceptionBreakpoints { .. } => "SetExceptionBreakpoints",
         DapCommand::Terminate => "Terminate",
         DapCommand::Disconnect { .. } => "Disconnect",
         DapCommand::Shutdown => "Shutdown",
@@ -514,6 +517,19 @@ async fn handle_command(
                 Err(e) => {
                     let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
                 }
+            }
+        }
+        DapCommand::SetExceptionBreakpoints { filters } => {
+            let Some(sess) = session.as_ref() else {
+                let _ = event_tx
+                    .send(DapTaskEvent::Error {
+                        message: "no DAP session active".into(),
+                    })
+                    .await;
+                return;
+            };
+            if let Err(e) = sess.client.set_exception_breakpoints(filters).await {
+                let _ = event_tx.send(DapTaskEvent::Error { message: e }).await;
             }
         }
         DapCommand::Terminate => {

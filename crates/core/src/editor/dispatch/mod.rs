@@ -21,11 +21,28 @@ impl Editor {
     /// This is the shared dispatch point for human keybindings and the AI agent.
     /// Scheme-defined commands are handled by the binary (which has the SchemeRuntime).
     pub fn dispatch_builtin(&mut self, name: &str) -> bool {
+        let _cmd_start = std::time::Instant::now();
+        let _cmd_name = name;
+        let result = self.dispatch_builtin_inner(name);
+        let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
+        self.perf_stats.record_command(_cmd_name, elapsed_us);
+        result
+    }
+
+    fn dispatch_builtin_inner(&mut self, name: &str) -> bool {
         // Auto-dismiss hover popup on any command that isn't hover-related.
         if self.hover_popup.is_some()
             && !matches!(name, "lsp-hover" | "hover-scroll-down" | "hover-scroll-up")
         {
             self.hover_popup = None;
+        }
+        // Auto-dismiss signature help on non-related commands.
+        if self.signature_help.is_some() && !matches!(name, "lsp-signature-help") {
+            self.signature_help = None;
+        }
+        // Auto-dismiss peek definition on non-peek commands.
+        if self.peek_state.is_some() && !matches!(name, "lsp-peek-definition") {
+            self.peek_state = None;
         }
         // Auto-dismiss code action menu on non-code-action commands.
         if self.code_action_menu.is_some()
@@ -74,6 +91,45 @@ impl Editor {
         if let Some(v) = self.dispatch_fold_org(name) {
             return v;
         }
+        // Multi-cursor commands
+        match name {
+            "mc-add-cursor-below" => {
+                super::multicursor::mc_add_cursor_below(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-add-cursor-above" => {
+                super::multicursor::mc_add_cursor_above(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-add-at-next-word" => {
+                super::multicursor::mc_add_at_next_word(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-add-all-word" => {
+                super::multicursor::mc_add_all_word(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-skip-next" => {
+                super::multicursor::mc_skip_next(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-clear" => {
+                super::multicursor::mc_clear(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            "mc-align" => {
+                super::multicursor::mc_align(self);
+                self.mark_full_redraw();
+                return true;
+            }
+            _ => {}
+        }
         if let Some(v) = self.dispatch_git(name) {
             return v;
         }
@@ -84,14 +140,51 @@ impl Editor {
             return v;
         }
         if let Some(v) = self.dispatch_file_tree(name) {
+            self.mark_full_redraw();
             return v;
         }
 
         false
     }
 
+    /// Dispatch a built-in command in the AI target window context.
+    ///
+    /// Temporarily switches focus to the AI target window (if set), dispatches
+    /// the command, then restores focus. This is the Emacs `save-excursion` /
+    /// `with-current-buffer` pattern. Synchronous — no render between
+    /// save/restore, so no visual flicker.
+    ///
+    /// Returns true if the command was recognized.
+    pub fn dispatch_builtin_in_target(&mut self, name: &str) -> bool {
+        let target_win = self.ai_target_window_id;
+        let saved_focus = self.window_mgr.focused_id();
+
+        // Switch focus to the AI target window if set
+        if let Some(win_id) = target_win {
+            self.window_mgr.set_focused(win_id);
+        }
+
+        let result = self.dispatch_builtin(name);
+
+        // Restore original focus
+        if target_win.is_some() {
+            self.window_mgr.set_focused(saved_focus);
+        }
+
+        result
+    }
+
+    /// Dispatch a command and replay at secondary cursors if applicable.
+    pub fn dispatch_with_multicursor(&mut self, name: &str) -> bool {
+        let result = self.dispatch_builtin(name);
+        if result {
+            super::multicursor::replay_command_at_secondaries(self, name);
+        }
+        result
+    }
+
     /// Kill buffer at `idx`, handling LSP notification, window fixup, and fallback.
-    fn kill_buffer_at(&mut self, idx: usize) {
+    pub fn kill_buffer_at(&mut self, idx: usize) {
         // If this buffer is part of a conversation pair, close both halves.
         if let Some(ref pair) = self.conversation_pair {
             let sibling_idx = if idx == pair.output_buffer_idx {
@@ -123,6 +216,14 @@ impl Editor {
         }
 
         self.fire_hook("buffer-close");
+        // Dismiss hover popup if it belongs to the buffer being killed.
+        if self
+            .hover_popup
+            .as_ref()
+            .is_some_and(|p| p.buffer_idx == idx)
+        {
+            self.hover_popup = None;
+        }
         if self.buffers.len() <= 1 {
             self.lsp_notify_did_close_for_buffer(0);
             self.buffers[0] = Buffer::new();
@@ -186,13 +287,14 @@ impl Editor {
         let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::buffer::BufferKind::Conversation {
             let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
+            let vh = self.focused_viewport_height();
             let win = self.window_mgr.focused_window_mut();
             if win.cursor_row == 0 && last_line > 0 {
                 win.cursor_row = last_line;
                 win.cursor_col = 0;
                 // scroll_offset is now a rope line index (same as all other buffers).
                 // Set it high; the renderer clamps to total-viewport_height.
-                win.scroll_offset = last_line.saturating_sub(self.viewport_height);
+                win.scroll_offset = last_line.saturating_sub(vh);
             }
         }
         self.fire_hook("focus-in");

@@ -3,13 +3,14 @@ use std::path::{Path, PathBuf};
 use mae_core::Editor;
 
 pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
-    let path = args
+    let raw_path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
+    let path = mae_core::file_picker::expand_tilde(raw_path);
 
     // Check if file is already open in a buffer
-    let file_path = PathBuf::from(path);
+    let file_path = PathBuf::from(&path);
     let canonical = file_path.canonicalize().ok();
     let existing_idx = editor.buffers.iter().enumerate().find_map(|(i, buf)| {
         buf.file_path().and_then(|bp| {
@@ -30,7 +31,7 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
     }
 
     // Open new buffer
-    editor.open_file_non_conversation(path);
+    editor.open_file_non_conversation(&path);
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
     } else {
@@ -126,10 +127,11 @@ pub fn execute_rename_file(
     editor: &mut Editor,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    let new_path = args
+    let raw_new_path = args
         .get("new_path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'new_path' argument")?;
+    let new_path = mae_core::file_picker::expand_tilde(raw_new_path);
 
     let idx = editor.active_buffer_idx();
     let old_path = editor.buffers[idx]
@@ -137,7 +139,7 @@ pub fn execute_rename_file(
         .map(|p| p.to_path_buf())
         .ok_or("Buffer has no file path")?;
 
-    let new = PathBuf::from(new_path);
+    let new = PathBuf::from(&new_path);
     std::fs::rename(&old_path, &new).map_err(|e| format!("Rename failed: {}", e))?;
 
     editor.buffers[idx].set_file_path(new.clone());
@@ -156,13 +158,14 @@ pub fn execute_create_file(
     editor: &mut Editor,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    let path = args
+    let raw_path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
+    let path = mae_core::file_picker::expand_tilde(raw_path);
     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
-    let file_path = Path::new(path);
+    let file_path = Path::new(&path);
 
     // Create parent directories if needed
     if let Some(parent) = file_path.parent() {
@@ -180,13 +183,13 @@ pub fn execute_create_file(
     let file_name = file_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(path);
+        .unwrap_or(&path);
     if let Some(existing) = editor.find_buffer_by_name(file_name) {
         let _ = editor.buffers[existing].reload_from_disk();
     }
 
     // Open it as a buffer (reuses existing if present)
-    editor.open_file_non_conversation(path);
+    editor.open_file_non_conversation(&path);
     if editor.status_msg.contains("Error") {
         Err(editor.status_msg.clone())
     } else {

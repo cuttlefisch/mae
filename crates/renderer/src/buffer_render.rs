@@ -130,14 +130,7 @@ pub(crate) fn render_buffer(
             }
         }
         // Skip folded lines
-        let mut is_folded = false;
-        for (start, end) in &buf.folded_ranges {
-            if line_idx > *start && line_idx < *end {
-                is_folded = true;
-                break;
-            }
-        }
-        if is_folded {
+        if buf.is_line_folded(line_idx) {
             line_idx += 1;
             continue;
         }
@@ -154,10 +147,10 @@ pub(crate) fn render_buffer(
         let line_byte_end_dr = buf
             .rope()
             .char_to_byte(line_char_start_dr + rope_chars.len());
-        let has_display_regions = !effective_regions.is_empty()
-            && effective_regions
-                .iter()
-                .any(|r| r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr);
+        let has_display_regions = !effective_regions.is_empty() && {
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start_dr);
+            idx < effective_regions.len() && effective_regions[idx].byte_start < line_byte_end_dr
+        };
         let (display_chars_vec, display_map_vec) = if has_display_regions {
             mae_core::display_region::apply_display_regions_to_line(
                 &rope_chars,
@@ -173,6 +166,14 @@ pub(crate) fn render_buffer(
         } else {
             rope_chars.iter().collect()
         };
+
+        // Check for an image display region on this line. When found, the
+        // replacement text is already set to "[Image: filename]" by
+        // compute_image_regions(). We detect the image region here so we can
+        // apply the `markup.image` style to that replacement span.
+        let image_region_on_line = effective_regions.iter().find(|r| {
+            r.byte_start < line_byte_end_dr && r.byte_end > line_byte_start_dr && r.image.is_some()
+        });
 
         let line_num = gutter_common::format_line_number(
             line_idx,
@@ -198,7 +199,9 @@ pub(crate) fn render_buffer(
             }
             None => (' ', gutter_style),
         };
-        let line_text_style = if stopped_line == Some(line_idx_u32) {
+        let line_text_style = if image_region_on_line.is_some() {
+            ts(editor, "markup.image")
+        } else if stopped_line == Some(line_idx_u32) {
             stopped_line_style
         } else {
             text_style
@@ -265,7 +268,7 @@ pub(crate) fn render_buffer(
                 let link_style = ts(editor, "markup.link");
                 let line_byte_start = buf.rope().char_to_byte(line_char_start);
                 let line_byte_end = buf.rope().char_to_byte(line_char_end);
-                for region in &effective_regions {
+                for region in effective_regions.iter() {
                     if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start {
                         continue;
                     }
@@ -370,6 +373,14 @@ pub(crate) fn render_buffer(
                 }
             }
 
+            // Image region: apply markup.image style to the placeholder text.
+            if image_region_on_line.is_some() {
+                let image_style = ts(editor, "markup.image");
+                for s in styles.iter_mut() {
+                    *s = image_style;
+                }
+            }
+
             // Diagnostic underlines (wavy in GUI, underlined in TUI).
             if editor.lsp_diagnostics_inline {
                 if let Some(path) = buf.file_path() {
@@ -387,6 +398,24 @@ pub(crate) fn render_buffer(
                         let ce = ds.col_end.max(cs + 1).min(full_count);
                         for s in styles[cs..ce].iter_mut() {
                             *s = s.patch(diag_style);
+                        }
+                    }
+                }
+            }
+
+            // Secondary cursors: highlight the cell at each secondary cursor position.
+            if focused && !win.cursor_set.is_single() {
+                let sec_style = ts(editor, "ui.cursor.secondary");
+                for sc in win.cursor_set.secondaries() {
+                    if sc.row == line_idx {
+                        let sc_col = sc.col.saturating_sub(col_offset);
+                        if sc_col < full_count {
+                            styles[sc_col] = styles[sc_col].patch(if let Some(bg) = sec_style.bg {
+                                ratatui::style::Style::default().bg(bg)
+                            } else {
+                                ratatui::style::Style::default()
+                                    .bg(ratatui::style::Color::Rgb(100, 100, 180))
+                            });
                         }
                     }
                 }
@@ -482,7 +511,7 @@ pub(crate) fn render_buffer(
                 }
 
                 // Fold indicator
-                if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+                if let Some(end) = buf.fold_end_at(line_idx) {
                     let folded_count = end - line_idx - 1;
                     let comment_style = ts(editor, "comment");
                     spans.push(Span::styled(
@@ -558,7 +587,7 @@ pub(crate) fn render_buffer(
                 Span::styled(display, line_text_style),
             ];
             // Fold indicator
-            if let Some((_, end)) = buf.folded_ranges.iter().find(|(s, _)| *s == line_idx) {
+            if let Some(end) = buf.fold_end_at(line_idx) {
                 let folded_count = end - line_idx - 1;
                 let comment_style = ts(editor, "comment");
                 spans.push(Span::styled(

@@ -448,7 +448,14 @@ impl CommandRegistry {
         reg.register_builtin("switch-buffer", "Switch to another buffer");
         reg.register_builtin("new-buffer", "Create a new empty scratch buffer");
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
-        reg.register_builtin("ai-prompt", "Open AI conversation and prompt");
+        reg.register_builtin(
+            "ai-prompt",
+            "AI Chat — built-in conversation with editor context (SPC a p)",
+        );
+        reg.register_builtin(
+            "ai-chat",
+            "AI Chat — built-in conversation with editor context (SPC a p)",
+        );
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("ai-accept", "Accept proposed AI changes");
         reg.register_builtin("ai-reject", "Reject proposed AI changes");
@@ -622,6 +629,19 @@ impl CommandRegistry {
             "Evaluate expression in debug context (:debug-eval <expression>)",
         );
 
+        reg.register_builtin(
+            "debug-exceptions",
+            "Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none])",
+        );
+        reg.register_builtin(
+            "debug-add-watch",
+            "Add a watch expression (:debug-add-watch <expr>)",
+        );
+        reg.register_builtin(
+            "debug-remove-watch",
+            "Remove a watch expression by index (:debug-remove-watch <index>)",
+        );
+
         // LSP (Phase 4a)
         reg.register_builtin(
             "lsp-goto-definition",
@@ -673,16 +693,53 @@ impl CommandRegistry {
         reg.register_builtin("lsp-code-action-dismiss", "Dismiss code action menu");
         reg.register_builtin("lsp-rename", "Rename symbol under cursor via LSP (SPC c R)");
         reg.register_builtin("lsp-format", "Format buffer via LSP (SPC c f)");
+        reg.register_builtin(
+            "lsp-range-format",
+            "Format visual selection via LSP (SPC c F)",
+        );
+        reg.register_builtin("lsp-rename-apply", "Apply pending rename preview");
+        reg.register_builtin("lsp-rename-abort", "Abort pending rename preview");
         reg.register_builtin("lsp-status", "Show LSP server status buffer (SPC c s)");
+        reg.register_builtin("lsp-signature-help", "Show function signature help");
+        reg.register_builtin(
+            "lsp-peek-definition",
+            "Peek definition in floating preview (SPC l p)",
+        );
         reg.register_builtin(
             "toggle-lsp-diagnostics-inline",
             "Toggle inline diagnostic underlines (SPC t d)",
         );
+        reg.register_builtin("lsp-symbol-outline", "Show symbol outline popup (SPC c o)");
+        reg.register_builtin("lsp-symbol-outline-next", "Select next outline symbol");
+        reg.register_builtin("lsp-symbol-outline-prev", "Select previous outline symbol");
+        reg.register_builtin("lsp-symbol-outline-select", "Jump to selected symbol");
+        reg.register_builtin("lsp-symbol-outline-dismiss", "Dismiss symbol outline");
+        reg.register_builtin(
+            "lsp-peek-references",
+            "Peek references in floating preview (SPC l r)",
+        );
+        reg.register_builtin("lsp-peek-references-next", "Next peek reference");
+        reg.register_builtin("lsp-peek-references-prev", "Previous peek reference");
 
         // Folding
         reg.register_builtin("toggle-fold", "Toggle fold at cursor (za)");
         reg.register_builtin("close-all-folds", "Close all folds (zM)");
         reg.register_builtin("open-all-folds", "Open all folds (zR)");
+
+        // Multi-cursor
+        reg.register_builtin("mc-add-cursor-below", "Add cursor below (SPC m j)");
+        reg.register_builtin("mc-add-cursor-above", "Add cursor above (SPC m k)");
+        reg.register_builtin(
+            "mc-add-at-next-word",
+            "Add cursor at next word match (SPC m d)",
+        );
+        reg.register_builtin(
+            "mc-add-all-word",
+            "Add cursors at all word matches (SPC m a)",
+        );
+        reg.register_builtin("mc-skip-next", "Skip current match, find next (SPC m s)");
+        reg.register_builtin("mc-clear", "Remove all secondary cursors (SPC m c)");
+        reg.register_builtin("mc-align", "Align all cursors to primary column (SPC m l)");
 
         // Org-mode
         reg.register_builtin("org-cycle", "Cycle org heading visibility (Tab)");
@@ -698,6 +755,10 @@ impl CommandRegistry {
             "open-link-at-cursor",
             "Open URL or file path under cursor (gx)",
         );
+        reg.register_builtin(
+            "edit-link",
+            "Edit link at cursor — enter insert mode in link region (gl)",
+        );
         reg.register_builtin("org-promote", "Promote org heading (M-Left)");
         reg.register_builtin("org-demote", "Demote org heading (M-Right)");
         reg.register_builtin("org-move-subtree-up", "Move org subtree up (M-Up)");
@@ -708,6 +769,47 @@ impl CommandRegistry {
         );
         reg.register_builtin("org-narrow-subtree", "Narrow to org subtree");
         reg.register_builtin("org-widen", "Widen from org narrow");
+        reg.register_builtin("org-priority-up", "Cycle org priority up (S-Up)");
+        reg.register_builtin("org-priority-down", "Cycle org priority down (S-Down)");
+        reg.register_builtin("org-set-tags", "Set org heading tags (SPC m t)");
+        // Babel
+        reg.register_builtin(
+            "babel-execute",
+            "Execute source block at cursor (C-c C-c / SPC m x)",
+        );
+        reg.register_builtin(
+            "babel-execute-all",
+            "Execute all source blocks in buffer (SPC m X)",
+        );
+        reg.register_builtin("babel-tangle", "Tangle source blocks to files (SPC m T)");
+        reg.register_builtin("babel-kill-sessions", "Kill all babel session processes");
+        // Export
+        reg.register_builtin("org-export-html", "Export org buffer to HTML (SPC m e h)");
+        reg.register_builtin(
+            "org-export-markdown",
+            "Export org buffer to Markdown (SPC m e m)",
+        );
+        reg.register_builtin("org-export-subtree", "Export subtree at cursor (SPC m e s)");
+        // KB federation
+        reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
+        reg.register_builtin("kb-unregister", "Remove a registered KB instance");
+        reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
+        reg.register_builtin("kb-instances", "List all registered KB instances");
+        reg.register_builtin(
+            "insert-newline-smart",
+            "Insert newline with list continuation",
+        );
+
+        // Table commands
+        reg.register_builtin("table-next-cell", "Move to next table cell (Tab)");
+        reg.register_builtin("table-prev-cell", "Move to previous table cell (S-Tab)");
+        reg.register_builtin("table-align", "Align table columns (SPC m b a)");
+        reg.register_builtin("table-insert-row", "Insert table row below");
+        reg.register_builtin("table-delete-row", "Delete current table row");
+        reg.register_builtin("table-insert-column", "Insert table column after cursor");
+        reg.register_builtin("table-delete-column", "Delete table column at cursor");
+        reg.register_builtin("table-move-row-up", "Move table row up");
+        reg.register_builtin("table-move-row-down", "Move table row down");
 
         // Markdown
         reg.register_builtin("md-cycle", "Cycle markdown heading visibility (Tab)");
@@ -725,6 +827,28 @@ impl CommandRegistry {
         );
         reg.register_builtin("md-narrow-subtree", "Narrow to markdown subtree");
         reg.register_builtin("md-widen", "Widen from markdown narrow");
+
+        // Agenda
+        reg.register_builtin("open-agenda", "Open agenda view (:agenda, SPC o a)");
+        reg.register_builtin("agenda-goto", "Jump to source node from agenda (Enter)");
+        reg.register_builtin("agenda-refresh", "Refresh agenda view (r)");
+        reg.register_builtin("agenda-filter-todo", "Cycle TODO state filter (t)");
+        reg.register_builtin("agenda-filter-priority", "Cycle priority filter (p)");
+        reg.register_builtin(
+            "agenda-add",
+            "Add path to agenda files (:agenda-add <path>)",
+        );
+        reg.register_builtin(
+            "agenda-remove",
+            "Remove path from agenda files (:agenda-remove <path>)",
+        );
+        reg.register_builtin("agenda-list", "Show configured agenda file paths");
+        reg.register_builtin("agenda-ingest", "Re-ingest all agenda file paths");
+
+        // Demo buffers
+        reg.register_builtin("open-demo-tables", "Open interactive tables demo");
+        reg.register_builtin("open-demo-markup", "Open interactive markup demo");
+        reg.register_builtin("open-demo-agenda", "Open interactive agenda demo");
 
         // Narrow/widen (generic)
         reg.register_builtin("narrow-to-subtree", "Narrow buffer to current subtree");
@@ -762,7 +886,7 @@ impl CommandRegistry {
         reg.register_builtin("rename-file", "Rename current file (SPC f R)");
         reg.register_builtin("save-as", "Save buffer to new path (SPC f S)");
         reg.register_builtin("edit-config", "Open init.scm config for editing (SPC f c)");
-        reg.register_builtin("edit-settings", "Open config.toml settings (SPC f C)");
+        reg.register_builtin("edit-settings", "Open config.toml settings (SPC f P)");
         reg.register_builtin(
             "setup-wizard",
             "Show how to re-run the first-run setup wizard",
@@ -772,10 +896,21 @@ impl CommandRegistry {
             "debug-mode",
             "Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D)",
         );
-        reg.register_builtin("reload-config", "Reload config.toml and init.scm");
+        reg.register_builtin(
+            "reload-config",
+            "Reload config.toml and re-evaluate init.scm",
+        );
         reg.register_builtin(
             "describe-option",
             "Show documentation for an editor option (SPC h o)",
+        );
+        reg.register_builtin(
+            "describe-configuration",
+            "Show a configuration health report (AI, LSP, DAP status)",
+        );
+        reg.register_builtin(
+            "describe-display-policy",
+            "Show the active display policy rules (how buffers are placed in windows)",
         );
         reg.register_builtin(
             "set-save",
@@ -800,6 +935,18 @@ impl CommandRegistry {
             "Toggle relative line numbers (SPC t r)",
         );
         reg.register_builtin("toggle-word-wrap", "Toggle word wrap (SPC t w)");
+        reg.register_builtin(
+            "toggle-inline-images",
+            "Toggle inline image display in current buffer (SPC t i)",
+        );
+        reg.register_builtin(
+            "toggle-image-at-point",
+            "Collapse/expand the image at the cursor line",
+        );
+        reg.register_builtin(
+            "image-info-at-point",
+            "Show image metadata for the image at cursor (SPC m i)",
+        );
         reg.register_builtin("toggle-scrollbar", "Toggle scrollbar visibility (SPC t s)");
 
         // Git commands (shell-out stubs)
@@ -877,9 +1024,17 @@ impl CommandRegistry {
         reg.register_builtin("help-close", "Close help buffer");
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
+        reg.register_builtin(
+            "help-edit",
+            "Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>)",
+        );
 
         // Shell / terminal emulator
         reg.register_builtin("terminal", "Open a terminal emulator buffer (:terminal)");
+        reg.register_builtin(
+            "terminal-here",
+            "Open terminal in current buffer's file directory (SPC o T)",
+        );
         reg.register_builtin(
             "terminal-reset",
             "Reset/clear the current terminal emulator",
@@ -969,7 +1124,7 @@ impl CommandRegistry {
         reg.register_builtin("debug-path", "Show current PATH environment variable");
 
         // AI agent launcher
-        reg.register_builtin("open-ai-agent", "Open AI agent in a shell terminal");
+        reg.register_builtin("open-ai-agent", "AI Agent — terminal shell (SPC a a)");
 
         // Tutorial
         reg.register_builtin("tutor", "Open interactive MAE tutorial");
@@ -1185,5 +1340,32 @@ mod tests {
             source: CommandSource::Builtin,
         };
         assert_eq!(cmd.which_key_label(), "Run tests (unit) and report");
+    }
+
+    #[test]
+    fn describe_configuration_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(
+            reg.contains("describe-configuration"),
+            "describe-configuration should be registered"
+        );
+    }
+
+    #[test]
+    fn help_edit_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("help-edit"), "help-edit should be registered");
+    }
+
+    #[test]
+    fn ai_chat_alias_registered() {
+        let reg = CommandRegistry::with_builtins();
+        assert!(reg.contains("ai-chat"), "ai-chat should be registered");
+    }
+
+    #[test]
+    fn debug_init_field_default_false() {
+        let editor = crate::Editor::new();
+        assert!(!editor.debug_init, "debug_init should default to false");
     }
 }

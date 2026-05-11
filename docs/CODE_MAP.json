@@ -74,6 +74,14 @@
       ],
       "public_items": [
         {
+          "name": "agenda_view",
+          "kind": "mod"
+        },
+        {
+          "name": "babel",
+          "kind": "mod"
+        },
+        {
           "name": "buffer",
           "kind": "mod"
         },
@@ -102,6 +110,10 @@
           "kind": "mod"
         },
         {
+          "name": "cursor",
+          "kind": "mod"
+        },
+        {
           "name": "dap_intent",
           "kind": "mod"
         },
@@ -118,6 +130,10 @@
           "kind": "mod"
         },
         {
+          "name": "display_policy",
+          "kind": "mod"
+        },
+        {
           "name": "display_region",
           "kind": "mod"
         },
@@ -127,6 +143,10 @@
         },
         {
           "name": "event_record",
+          "kind": "mod"
+        },
+        {
+          "name": "export",
           "kind": "mod"
         },
         {
@@ -159,6 +179,10 @@
         },
         {
           "name": "hooks",
+          "kind": "mod"
+        },
+        {
+          "name": "image_meta",
           "kind": "mod"
         },
         {
@@ -218,6 +242,10 @@
           "kind": "mod"
         },
         {
+          "name": "table",
+          "kind": "mod"
+        },
+        {
           "name": "theme",
           "kind": "mod"
         },
@@ -235,6 +263,10 @@
         },
         {
           "name": "wrap",
+          "kind": "mod"
+        },
+        {
+          "name": "redraw",
           "kind": "mod"
         },
         {
@@ -298,6 +330,10 @@
       "dependencies": [],
       "public_items": [
         {
+          "name": "federation",
+          "kind": "mod"
+        },
+        {
           "name": "org",
           "kind": "mod"
         },
@@ -311,6 +347,10 @@
         },
         {
           "name": "NodeKind",
+          "kind": "enum"
+        },
+        {
+          "name": "NodeSource",
           "kind": "enum"
         },
         {
@@ -473,6 +513,18 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "set-local-option!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "display-buffer-policy",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "set-display-rule!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "shell-send-input",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -482,6 +534,18 @@
     },
     {
       "name": "recent-projects-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-remove!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "agenda-list",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -505,6 +569,66 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "buffer-delete-range",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-replace-range",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-undo",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-redo",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "switch-to-buffer",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "undefine-key!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "read-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "file-exists?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "list-directory",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "provide-feature",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "featurep",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "require-feature",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "load-path",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "add-to-load-path!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "autoload",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-line",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -514,6 +638,26 @@
     },
     {
       "name": "shell-read-output",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "buffer-text-range",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "get-buffer-by-name",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "get-option",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "command-exists?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "keymap-bindings",
       "source": "crates/scheme/src/runtime.rs"
     }
   ],
@@ -1133,7 +1277,11 @@
     },
     {
       "name": "ai-prompt",
-      "doc": "Open AI conversation and prompt"
+      "doc": "AI Chat — built-in conversation with editor context (SPC a p)"
+    },
+    {
+      "name": "ai-chat",
+      "doc": "AI Chat — built-in conversation with editor context (SPC a p)"
     },
     {
       "name": "ai-cancel",
@@ -1456,6 +1604,18 @@
       "doc": "Evaluate expression in debug context (:debug-eval <expression>)"
     },
     {
+      "name": "debug-exceptions",
+      "doc": "Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none])"
+    },
+    {
+      "name": "debug-add-watch",
+      "doc": "Add a watch expression (:debug-add-watch <expr>)"
+    },
+    {
+      "name": "debug-remove-watch",
+      "doc": "Remove a watch expression by index (:debug-remove-watch <index>)"
+    },
+    {
       "name": "lsp-goto-definition",
       "doc": "Jump to definition of symbol under cursor (gd)"
     },
@@ -1466,6 +1626,18 @@
     {
       "name": "lsp-hover",
       "doc": "Show hover information for symbol under cursor (K)"
+    },
+    {
+      "name": "dismiss-hover-popup",
+      "doc": "Dismiss the LSP hover popup"
+    },
+    {
+      "name": "hover-scroll-down",
+      "doc": "Scroll the LSP hover popup down"
+    },
+    {
+      "name": "hover-scroll-up",
+      "doc": "Scroll the LSP hover popup up"
     },
     {
       "name": "lsp-next-diagnostic",
@@ -1504,12 +1676,88 @@
       "doc": "Run LSP code action at cursor (SPC c a)"
     },
     {
+      "name": "lsp-code-action-next",
+      "doc": "Select next code action"
+    },
+    {
+      "name": "lsp-code-action-prev",
+      "doc": "Select previous code action"
+    },
+    {
+      "name": "lsp-code-action-select",
+      "doc": "Apply selected code action"
+    },
+    {
+      "name": "lsp-code-action-dismiss",
+      "doc": "Dismiss code action menu"
+    },
+    {
       "name": "lsp-rename",
       "doc": "Rename symbol under cursor via LSP (SPC c R)"
     },
     {
       "name": "lsp-format",
       "doc": "Format buffer via LSP (SPC c f)"
+    },
+    {
+      "name": "lsp-range-format",
+      "doc": "Format visual selection via LSP (SPC c F)"
+    },
+    {
+      "name": "lsp-rename-apply",
+      "doc": "Apply pending rename preview"
+    },
+    {
+      "name": "lsp-rename-abort",
+      "doc": "Abort pending rename preview"
+    },
+    {
+      "name": "lsp-status",
+      "doc": "Show LSP server status buffer (SPC c s)"
+    },
+    {
+      "name": "lsp-signature-help",
+      "doc": "Show function signature help"
+    },
+    {
+      "name": "lsp-peek-definition",
+      "doc": "Peek definition in floating preview (SPC l p)"
+    },
+    {
+      "name": "toggle-lsp-diagnostics-inline",
+      "doc": "Toggle inline diagnostic underlines (SPC t d)"
+    },
+    {
+      "name": "lsp-symbol-outline",
+      "doc": "Show symbol outline popup (SPC c o)"
+    },
+    {
+      "name": "lsp-symbol-outline-next",
+      "doc": "Select next outline symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-prev",
+      "doc": "Select previous outline symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-select",
+      "doc": "Jump to selected symbol"
+    },
+    {
+      "name": "lsp-symbol-outline-dismiss",
+      "doc": "Dismiss symbol outline"
+    },
+    {
+      "name": "lsp-peek-references",
+      "doc": "Peek references in floating preview (SPC l r)"
+    },
+    {
+      "name": "lsp-peek-references-next",
+      "doc": "Next peek reference"
+    },
+    {
+      "name": "lsp-peek-references-prev",
+      "doc": "Previous peek reference"
     },
     {
       "name": "toggle-fold",
@@ -1522,6 +1770,34 @@
     {
       "name": "open-all-folds",
       "doc": "Open all folds (zR)"
+    },
+    {
+      "name": "mc-add-cursor-below",
+      "doc": "Add cursor below (SPC m j)"
+    },
+    {
+      "name": "mc-add-cursor-above",
+      "doc": "Add cursor above (SPC m k)"
+    },
+    {
+      "name": "mc-add-at-next-word",
+      "doc": "Add cursor at next word match (SPC m d)"
+    },
+    {
+      "name": "mc-add-all-word",
+      "doc": "Add cursors at all word matches (SPC m a)"
+    },
+    {
+      "name": "mc-skip-next",
+      "doc": "Skip current match, find next (SPC m s)"
+    },
+    {
+      "name": "mc-clear",
+      "doc": "Remove all secondary cursors (SPC m c)"
+    },
+    {
+      "name": "mc-align",
+      "doc": "Align all cursors to primary column (SPC m l)"
     },
     {
       "name": "org-cycle",
@@ -1544,8 +1820,16 @@
       "doc": "Open org link under cursor"
     },
     {
+      "name": "smart-enter",
+      "doc": "Context-aware Enter: toggle checkbox, cycle TODO, or follow link"
+    },
+    {
       "name": "open-link-at-cursor",
       "doc": "Open URL or file path under cursor (gx)"
+    },
+    {
+      "name": "edit-link",
+      "doc": "Edit link at cursor — enter insert mode in link region (gl)"
     },
     {
       "name": "org-promote",
@@ -1574,6 +1858,102 @@
     {
       "name": "org-widen",
       "doc": "Widen from org narrow"
+    },
+    {
+      "name": "org-priority-up",
+      "doc": "Cycle org priority up (S-Up)"
+    },
+    {
+      "name": "org-priority-down",
+      "doc": "Cycle org priority down (S-Down)"
+    },
+    {
+      "name": "org-set-tags",
+      "doc": "Set org heading tags (SPC m t)"
+    },
+    {
+      "name": "babel-execute",
+      "doc": "Execute source block at cursor (C-c C-c / SPC m x)"
+    },
+    {
+      "name": "babel-execute-all",
+      "doc": "Execute all source blocks in buffer (SPC m X)"
+    },
+    {
+      "name": "babel-tangle",
+      "doc": "Tangle source blocks to files (SPC m T)"
+    },
+    {
+      "name": "babel-kill-sessions",
+      "doc": "Kill all babel session processes"
+    },
+    {
+      "name": "org-export-html",
+      "doc": "Export org buffer to HTML (SPC m e h)"
+    },
+    {
+      "name": "org-export-markdown",
+      "doc": "Export org buffer to Markdown (SPC m e m)"
+    },
+    {
+      "name": "org-export-subtree",
+      "doc": "Export subtree at cursor (SPC m e s)"
+    },
+    {
+      "name": "kb-register",
+      "doc": "Register org-roam directory as KB instance"
+    },
+    {
+      "name": "kb-unregister",
+      "doc": "Remove a registered KB instance"
+    },
+    {
+      "name": "kb-reimport",
+      "doc": "Re-import KB instance from org files"
+    },
+    {
+      "name": "kb-instances",
+      "doc": "List all registered KB instances"
+    },
+    {
+      "name": "insert-newline-smart",
+      "doc": "Insert newline with list continuation"
+    },
+    {
+      "name": "table-next-cell",
+      "doc": "Move to next table cell (Tab)"
+    },
+    {
+      "name": "table-prev-cell",
+      "doc": "Move to previous table cell (S-Tab)"
+    },
+    {
+      "name": "table-align",
+      "doc": "Align table columns (SPC m b a)"
+    },
+    {
+      "name": "table-insert-row",
+      "doc": "Insert table row below"
+    },
+    {
+      "name": "table-delete-row",
+      "doc": "Delete current table row"
+    },
+    {
+      "name": "table-insert-column",
+      "doc": "Insert table column after cursor"
+    },
+    {
+      "name": "table-delete-column",
+      "doc": "Delete table column at cursor"
+    },
+    {
+      "name": "table-move-row-up",
+      "doc": "Move table row up"
+    },
+    {
+      "name": "table-move-row-down",
+      "doc": "Move table row down"
     },
     {
       "name": "md-cycle",
@@ -1610,6 +1990,54 @@
     {
       "name": "md-widen",
       "doc": "Widen from markdown narrow"
+    },
+    {
+      "name": "open-agenda",
+      "doc": "Open agenda view (:agenda, SPC o a)"
+    },
+    {
+      "name": "agenda-goto",
+      "doc": "Jump to source node from agenda (Enter)"
+    },
+    {
+      "name": "agenda-refresh",
+      "doc": "Refresh agenda view (r)"
+    },
+    {
+      "name": "agenda-filter-todo",
+      "doc": "Cycle TODO state filter (t)"
+    },
+    {
+      "name": "agenda-filter-priority",
+      "doc": "Cycle priority filter (p)"
+    },
+    {
+      "name": "agenda-add",
+      "doc": "Add path to agenda files (:agenda-add <path>)"
+    },
+    {
+      "name": "agenda-remove",
+      "doc": "Remove path from agenda files (:agenda-remove <path>)"
+    },
+    {
+      "name": "agenda-list",
+      "doc": "Show configured agenda file paths"
+    },
+    {
+      "name": "agenda-ingest",
+      "doc": "Re-ingest all agenda file paths"
+    },
+    {
+      "name": "open-demo-tables",
+      "doc": "Open interactive tables demo"
+    },
+    {
+      "name": "open-demo-markup",
+      "doc": "Open interactive markup demo"
+    },
+    {
+      "name": "open-demo-agenda",
+      "doc": "Open interactive agenda demo"
     },
     {
       "name": "narrow-to-subtree",
@@ -1673,7 +2101,7 @@
     },
     {
       "name": "edit-settings",
-      "doc": "Open config.toml settings (SPC f C)"
+      "doc": "Open config.toml settings (SPC f P)"
     },
     {
       "name": "setup-wizard",
@@ -1689,11 +2117,19 @@
     },
     {
       "name": "reload-config",
-      "doc": "Reload config.toml and init.scm"
+      "doc": "Reload config.toml and re-evaluate init.scm"
     },
     {
       "name": "describe-option",
       "doc": "Show documentation for an editor option (SPC h o)"
+    },
+    {
+      "name": "describe-configuration",
+      "doc": "Show a configuration health report (AI, LSP, DAP status)"
+    },
+    {
+      "name": "describe-display-policy",
+      "doc": "Show the active display policy rules (how buffers are placed in windows)"
     },
     {
       "name": "set-save",
@@ -1722,6 +2158,18 @@
     {
       "name": "toggle-word-wrap",
       "doc": "Toggle word wrap (SPC t w)"
+    },
+    {
+      "name": "toggle-inline-images",
+      "doc": "Toggle inline image display in current buffer (SPC t i)"
+    },
+    {
+      "name": "toggle-image-at-point",
+      "doc": "Collapse/expand the image at the cursor line"
+    },
+    {
+      "name": "image-info-at-point",
+      "doc": "Show image metadata for the image at cursor (SPC m i)"
     },
     {
       "name": "toggle-scrollbar",
@@ -1880,8 +2328,16 @@
       "doc": "Reopen the last-closed help buffer"
     },
     {
+      "name": "help-edit",
+      "doc": "Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>)"
+    },
+    {
       "name": "terminal",
       "doc": "Open a terminal emulator buffer (:terminal)"
+    },
+    {
+      "name": "terminal-here",
+      "doc": "Open terminal in current buffer's file directory (SPC o T)"
     },
     {
       "name": "terminal-reset",
@@ -1973,7 +2429,7 @@
     },
     {
       "name": "open-ai-agent",
-      "doc": "Open AI agent in a shell terminal"
+      "doc": "AI Agent — terminal shell (SPC a a)"
     },
     {
       "name": "tutor",

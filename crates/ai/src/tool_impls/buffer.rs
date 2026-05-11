@@ -94,20 +94,26 @@ pub fn execute_buffer_write(
 }
 
 pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
-    let buf_idx = editor
-        .ai_target_buffer_idx
-        .unwrap_or_else(|| editor.active_buffer_idx());
-    let buf = &editor.buffers[buf_idx];
-
-    // Find a window showing this buffer to get a cursor position.
-    // If multiple windows show it, we use the first one.
-    // If no window shows it (unlikely for active/target), we default to (0,0).
-    let (row, col) = editor
+    let target_win_id = super::resolve_active_window_id(editor);
+    let (buf_idx, row, col, scroll_offset) = editor
         .window_mgr
         .iter_windows()
-        .find(|w| w.buffer_idx == buf_idx)
-        .map(|w| (w.cursor_row, w.cursor_col))
-        .unwrap_or((0, 0));
+        .find(|w| w.id == target_win_id)
+        .map(|w| (w.buffer_idx, w.cursor_row, w.cursor_col, w.scroll_offset))
+        .unwrap_or_else(|| {
+            // Fallback: use ai_target_buffer_idx or active buffer.
+            let idx = editor
+                .ai_target_buffer_idx
+                .unwrap_or_else(|| editor.active_buffer_idx());
+            let win_data = editor
+                .window_mgr
+                .iter_windows()
+                .find(|w| w.buffer_idx == idx)
+                .map(|w| (w.cursor_row, w.cursor_col, w.scroll_offset))
+                .unwrap_or((0, 0, 0));
+            (idx, win_data.0, win_data.1, win_data.2)
+        });
+    let buf = &editor.buffers[buf_idx];
 
     let info = serde_json::json!({
         "buffer_name": buf.name,
@@ -116,16 +122,24 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
         "line_count": buf.line_count(),
         "modified": buf.modified,
         "mode": format!("{:?}", editor.mode),
+        "scroll_offset": scroll_offset,
+        "viewport_height": editor.viewport_height,
     });
     Ok(info.to_string())
 }
 
 pub fn execute_file_read(args: &serde_json::Value) -> Result<String, String> {
-    let path = args
+    let raw_path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
-    let content = std::fs::read_to_string(path).map_err(|e| format!("File read error: {}", e))?;
+    let path = mae_core::file_picker::expand_tilde(raw_path);
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "File read error: {} (path: {}). Hint: use absolute paths — call audit_configuration for correct config paths.",
+            e, path
+        )
+    })?;
     let mut output = String::new();
     for (i, line) in content.lines().enumerate() {
         output.push_str(&format!("{:>4} | {}\n", i + 1, line));
@@ -139,13 +153,24 @@ pub fn execute_list_buffers(editor: &Editor) -> Result<String, String> {
         .iter()
         .enumerate()
         .map(|(i, buf)| {
-            serde_json::json!({
+            // Find window(s) showing this buffer for targeting info.
+            let window_ids: Vec<u32> = editor
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == i)
+                .map(|w| w.id)
+                .collect();
+            let mut obj = serde_json::json!({
                 "index": i,
                 "name": buf.name,
                 "modified": buf.modified,
                 "active": i == editor.active_buffer_idx(),
                 "line_count": buf.line_count(),
-            })
+            });
+            if !window_ids.is_empty() {
+                obj["window_ids"] = serde_json::json!(window_ids);
+            }
+            obj
         })
         .collect();
     serde_json::to_string_pretty(&buffers).map_err(|e| e.to_string())

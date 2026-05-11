@@ -1,3 +1,5 @@
+//! Visual mode: selection, operators, block ops.
+
 use crate::{Mode, VisualType};
 
 use super::super::Editor;
@@ -94,6 +96,7 @@ impl Editor {
             "visual-lowercase" => self.visual_lowercase(),
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

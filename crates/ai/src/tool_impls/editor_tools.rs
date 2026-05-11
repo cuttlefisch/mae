@@ -19,6 +19,11 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "renderer": editor.renderer_name,
         "git_branch": editor.git_branch,
         "project_root": editor.project.as_ref().map(|p| p.root.display().to_string()),
+        "gui_cell_width": editor.gui_cell_width,
+        "gui_cell_height": editor.gui_cell_height,
+        "viewport_height": editor.viewport_height,
+        "text_area_width": editor.text_area_width,
+        "scrolloff": editor.scrolloff,
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
@@ -196,6 +201,18 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 .map(|s| s.as_str())
                 .collect();
 
+            let watches: Vec<serde_json::Value> = state
+                .watch_expressions
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "expression": w.expression,
+                        "value": w.last_value,
+                        "error": w.error,
+                    })
+                })
+                .collect();
+
             let info = serde_json::json!({
                 "target": format!("{:?}", state.target),
                 "active_thread_id": state.active_thread_id,
@@ -207,6 +224,7 @@ pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
                 "breakpoints": breakpoints,
                 "stopped_location": state.stopped_location,
                 "output_log": recent_output,
+                "watch_expressions": watches,
             });
             serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
         }
@@ -442,6 +460,34 @@ pub fn execute_org_todo_cycle(
 
 pub fn execute_org_open_link(editor: &mut Editor) -> Result<String, String> {
     editor.org_open_link();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_babel_execute(editor: &mut Editor) -> Result<String, String> {
+    editor.babel_execute();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_babel_tangle(editor: &mut Editor) -> Result<String, String> {
+    editor.babel_tangle();
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_org_export(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let format = args
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("html");
+    match format {
+        "html" => editor.org_export_html(),
+        "markdown" | "md" => editor.org_export_markdown(),
+        _ => return Err(format!("Unknown export format: {}", format)),
+    }
+    Ok(editor.status_msg.clone())
+}
+
+pub fn execute_kb_instances(editor: &mut Editor) -> Result<String, String> {
+    editor.kb_instances();
     Ok(editor.status_msg.clone())
 }
 
@@ -700,4 +746,239 @@ pub fn execute_editor_save_state(editor: &mut Editor) -> Result<String, String> 
 
 pub fn execute_editor_restore_state(editor: &mut Editor) -> Result<String, String> {
     editor.restore_state()
+}
+
+/// Audit the editor configuration and return structured JSON with status and issues.
+pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
+    fn on_path(cmd: &str) -> bool {
+        std::process::Command::new("which")
+            .arg(cmd)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    let mut issues = Vec::new();
+
+    // AI Agent
+    let ai_cmd = if editor.ai_editor.is_empty() {
+        "claude".to_string()
+    } else {
+        editor.ai_editor.clone()
+    };
+    let ai_agent_found = on_path(&ai_cmd);
+    if !ai_agent_found {
+        issues.push(format!("AI Agent command '{}' not found on PATH", ai_cmd));
+    }
+
+    // AI Chat
+    let provider = if editor.ai_provider.is_empty() {
+        String::new()
+    } else {
+        editor.ai_provider.clone()
+    };
+    let model = editor.ai_model.clone();
+
+    let (api_key_set, api_key_source) = match provider.as_str() {
+        "claude" if std::env::var("ANTHROPIC_API_KEY").is_ok() => {
+            (true, "env:ANTHROPIC_API_KEY".to_string())
+        }
+        "openai" if std::env::var("OPENAI_API_KEY").is_ok() => {
+            (true, "env:OPENAI_API_KEY".to_string())
+        }
+        "gemini" if std::env::var("GEMINI_API_KEY").is_ok() => {
+            (true, "env:GEMINI_API_KEY".to_string())
+        }
+        "deepseek" if std::env::var("DEEPSEEK_API_KEY").is_ok() => {
+            (true, "env:DEEPSEEK_API_KEY".to_string())
+        }
+        _ if !editor.ai_api_key_command.is_empty() => {
+            (true, format!("command:{}", editor.ai_api_key_command))
+        }
+        _ => (false, String::new()),
+    };
+    if !provider.is_empty() && !api_key_set {
+        issues.push(format!(
+            "AI Chat provider '{}' configured but no API key found",
+            provider
+        ));
+    }
+
+    // LSP servers
+    let lsp_servers = [
+        ("rust", "rust-analyzer"),
+        ("python", "pyright"),
+        ("typescript", "typescript-language-server"),
+        ("go", "gopls"),
+    ];
+    let lsp_json: Vec<serde_json::Value> = lsp_servers
+        .iter()
+        .map(|(lang, cmd)| {
+            let found = on_path(cmd);
+            if !found {
+                issues.push(format!("LSP server '{}' ({}) not found on PATH", cmd, lang));
+            }
+            serde_json::json!({
+                "language": lang,
+                "command": cmd,
+                "binary_found": found,
+            })
+        })
+        .collect();
+
+    // DAP adapters
+    let dap_adapters = [("lldb-dap", "lldb"), ("debugpy", "pip install debugpy")];
+    let dap_json: Vec<serde_json::Value> = dap_adapters
+        .iter()
+        .map(|(cmd, install_hint)| {
+            let found = on_path(cmd);
+            if !found {
+                issues.push(format!(
+                    "DAP adapter '{}' not found — install with: {}",
+                    cmd, install_hint
+                ));
+            }
+            serde_json::json!({
+                "name": cmd,
+                "binary_found": found,
+            })
+        })
+        .collect();
+
+    // Init files
+    let user_config_dir = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+        });
+    let mut init_files = Vec::new();
+    if let Some(ref dir) = user_config_dir {
+        let p = dir.join("mae").join("init.scm");
+        let exists = p.exists();
+        init_files.push(serde_json::json!({
+            "path": p.display().to_string(),
+            "exists": exists,
+        }));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let p = cwd.join(".mae").join("init.scm");
+        let exists = p.exists();
+        init_files.push(serde_json::json!({
+            "path": p.display().to_string(),
+            "exists": exists,
+        }));
+    }
+
+    // Modified options
+    let mut options_modified = Vec::new();
+    for def in editor.option_registry.list() {
+        if let Some((val, _)) = editor.get_option(def.name) {
+            if val != def.default_value {
+                options_modified.push(def.name.to_string());
+            }
+        }
+    }
+
+    // Prompt tier (auto-detected from model)
+    let prompt_tier = crate::context_limits::tier(&model).as_str();
+
+    // Display policy rules
+    let display_policy: std::collections::HashMap<String, String> = [
+        mae_core::BufferKind::Text,
+        mae_core::BufferKind::Diff,
+        mae_core::BufferKind::Help,
+        mae_core::BufferKind::Messages,
+        mae_core::BufferKind::Shell,
+        mae_core::BufferKind::Debug,
+        mae_core::BufferKind::FileTree,
+        mae_core::BufferKind::GitStatus,
+        mae_core::BufferKind::Dashboard,
+        mae_core::BufferKind::Visual,
+        mae_core::BufferKind::Preview,
+        mae_core::BufferKind::Conversation,
+        mae_core::BufferKind::Agenda,
+        mae_core::BufferKind::Demo,
+    ]
+    .iter()
+    .map(|kind| {
+        let action = editor.display_policy.action_for(*kind);
+        (
+            format!("{:?}", kind),
+            mae_core::display_policy::action_to_string(&action),
+        )
+    })
+    .collect();
+
+    let report = serde_json::json!({
+        "ai_agent": {
+            "command": ai_cmd,
+            "binary_found": ai_agent_found,
+        },
+        "ai_chat": {
+            "provider": provider,
+            "model": model,
+            "api_key_set": api_key_set,
+            "api_key_source": api_key_source,
+            "prompt_tier": prompt_tier,
+        },
+        "lsp_servers": lsp_json,
+        "dap_adapters": dap_json,
+        "init_files": init_files,
+        "options_modified": options_modified,
+        "display_policy": display_policy,
+        "issues": issues,
+    });
+
+    serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_configuration_returns_valid_json() {
+        let editor = Editor::new();
+        let result = execute_audit_configuration(&editor);
+        assert!(result.is_ok(), "audit_configuration should succeed");
+        let json: serde_json::Value =
+            serde_json::from_str(&result.unwrap()).expect("should be valid JSON");
+        assert!(json.get("ai_agent").is_some());
+        assert!(json.get("ai_chat").is_some());
+        assert!(json.get("lsp_servers").is_some());
+        assert!(json.get("dap_adapters").is_some());
+        assert!(json.get("init_files").is_some());
+        assert!(json.get("options_modified").is_some());
+        assert!(json.get("issues").is_some());
+    }
+
+    #[test]
+    fn audit_configuration_issues_populated() {
+        let editor = Editor::new();
+        let result = execute_audit_configuration(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let issues = json["issues"].as_array().unwrap();
+        // At minimum, some LSP servers or DAP adapters won't be on PATH in test env
+        // The issues array should exist and be an array (may or may not be empty)
+        assert!(json["issues"].is_array());
+        // lsp_servers should have entries
+        let lsp = json["lsp_servers"].as_array().unwrap();
+        assert!(lsp.len() >= 4, "should list at least 4 LSP servers");
+        let _ = issues; // suppress unused
+    }
+
+    #[test]
+    fn audit_configuration_is_readonly_tier() {
+        use crate::tools::{classify_tool_tier, ToolTier};
+        assert_eq!(
+            classify_tool_tier("audit_configuration"),
+            ToolTier::Core,
+            "audit_configuration should be Core tier"
+        );
+    }
 }

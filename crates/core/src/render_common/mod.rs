@@ -4,6 +4,7 @@
 //! render without depending on *how* to render it.  Backend-specific code
 //! converts these shared types into Skia draw calls or ratatui Spans.
 
+pub mod agenda;
 pub mod color;
 pub mod debug;
 pub mod diagnostics;

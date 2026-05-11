@@ -106,6 +106,35 @@ fn toggle_case_with_count() {
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 3);
 }
 
+// --- Undo grouping: multi-step edits should undo in one step ---
+
+#[test]
+fn toggle_case_single_undo() {
+    let mut editor = editor_with_text("abc");
+    editor.dispatch_builtin("toggle-case");
+    assert_eq!(editor.buffers[0].text(), "Abc");
+    editor.dispatch_builtin("undo");
+    assert_eq!(editor.buffers[0].text(), "abc");
+}
+
+#[test]
+fn join_line_single_undo() {
+    let mut editor = editor_with_text("hello\n  world");
+    editor.dispatch_builtin("join-lines");
+    assert_eq!(editor.buffers[0].text(), "hello world");
+    editor.dispatch_builtin("undo");
+    assert_eq!(editor.buffers[0].text(), "hello\n  world");
+}
+
+#[test]
+fn replace_char_single_undo() {
+    let mut editor = editor_with_text("abc");
+    editor.dispatch_char_motion("replace-char", 'x');
+    assert_eq!(editor.buffers[0].text(), "xbc");
+    editor.dispatch_builtin("undo");
+    assert_eq!(editor.buffers[0].text(), "abc");
+}
+
 #[test]
 fn uppercase_line() {
     let mut editor = editor_with_text("hello world");

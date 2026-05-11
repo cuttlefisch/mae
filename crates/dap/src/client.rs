@@ -481,6 +481,20 @@ impl DapClient {
     }
 
     /// Ask the adapter to terminate the debuggee (soft, if supported).
+    /// Set exception breakpoints (which exceptions to break on).
+    pub async fn set_exception_breakpoints(
+        &self,
+        filters: Vec<String>,
+    ) -> Result<DapResponse, String> {
+        let args = serde_json::json!({ "filters": filters });
+        self.request(
+            "setExceptionBreakpoints",
+            Some(args),
+            std::time::Duration::from_secs(5),
+        )
+        .await
+    }
+
     pub async fn terminate(&self) -> Result<DapResponse, String> {
         self.request("terminate", None, std::time::Duration::from_secs(5))
             .await

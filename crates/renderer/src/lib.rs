@@ -2,6 +2,7 @@ use std::io::{self, Stdout};
 
 use crossterm::{
     cursor::SetCursorStyle,
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -73,7 +74,7 @@ impl TerminalRenderer {
     pub fn new() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
         Ok(TerminalRenderer { terminal })
@@ -115,6 +116,7 @@ impl Renderer for TerminalRenderer {
         execute!(
             self.terminal.backend_mut(),
             SetCursorStyle::DefaultUserShape,
+            DisableMouseCapture,
             LeaveAlternateScreen
         )?;
         Ok(())
@@ -133,6 +135,75 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
     // Pre-compute syntax-highlight spans for every visible text buffer.
     // Uses stale spans during typing; deferred reparse happens in the event loop.
     let syntax_spans = mae_core::syntax::compute_visible_syntax_spans(editor);
+
+    // Pre-compute markup spans for visible org/markdown buffers (cache by generation).
+    // Large files (>5K lines) use viewport-local computation.
+    {
+        let visible: Vec<(usize, usize)> = editor
+            .window_mgr
+            .iter_windows()
+            .map(|w| (w.buffer_idx, w.scroll_offset))
+            .collect();
+        let area_height = area.height as usize;
+        for &(bi, scroll) in &visible {
+            if bi >= editor.buffers.len() {
+                continue;
+            }
+            let flavor = editor.effective_markup_flavor(bi);
+            if flavor == mae_core::MarkupFlavor::None {
+                continue;
+            }
+            let gen = editor.buffers[bi].generation;
+            let line_count = editor.buffers[bi].rope().len_lines();
+            let is_large = line_count > editor.large_file_lines;
+            let (vp_start, vp_end) = if is_large {
+                let vh = area_height;
+                (
+                    scroll.saturating_sub(vh * 2),
+                    (scroll + vh * 3).min(line_count),
+                )
+            } else {
+                (0, line_count)
+            };
+            let needs_update = editor
+                .markup_cache
+                .get(&bi)
+                .is_none_or(|c| !c.covers(gen, flavor, vp_start, vp_end));
+            if needs_update {
+                if is_large {
+                    let rope = editor.buffers[bi].rope().clone();
+                    let (byte_offset, spans) =
+                        mae_core::compute_markup_spans_for_range(&rope, flavor, vp_start, vp_end);
+                    editor.markup_cache.insert(
+                        bi,
+                        mae_core::MarkupCache {
+                            generation: gen,
+                            flavor,
+                            line_start: vp_start,
+                            line_end: vp_end,
+                            byte_offset,
+                            spans,
+                        },
+                    );
+                } else {
+                    let source: String = editor.buffers[bi].rope().chars().collect();
+                    let spans = mae_core::compute_markup_spans(&source, flavor);
+                    editor.markup_cache.insert(
+                        bi,
+                        mae_core::MarkupCache {
+                            generation: gen,
+                            flavor,
+                            line_start: 0,
+                            line_end: line_count,
+                            byte_offset: 0,
+                            spans,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     let editor: &Editor = editor;
 
     if editor.file_picker.is_some() {
@@ -231,6 +302,15 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.code_action_menu.is_some() {
             popup_render::render_code_action_popup(frame, chunks[0], editor);
         }
+        if editor.signature_help.is_some() {
+            popup_render::render_signature_help_popup(frame, chunks[0], editor);
+        }
+        if editor.peek_state.is_some() {
+            popup_render::render_peek_definition_popup(frame, chunks[0], editor);
+        }
+        if editor.symbol_outline.is_some() {
+            popup_render::render_symbol_outline_popup(frame, chunks[0], editor);
+        }
     }
 }
 
@@ -327,11 +407,17 @@ fn render_window_area(
                                 .get(&win.buffer_idx)
                                 .map(|v| v.as_ref().clone())
                                 .unwrap_or_default();
-                            mae_core::render_common::spans::enrich_spans_with_markup(
-                                &mut enriched,
-                                buf,
-                                flavor,
-                            );
+                            let gen = buf.generation;
+                            let cached = editor.markup_cache.get(&win.buffer_idx);
+                            if let Some(c) =
+                                cached.filter(|c| c.generation == gen && c.flavor == flavor)
+                            {
+                                enriched.extend_from_slice(&c.spans);
+                            } else {
+                                let source: String = buf.rope().chars().collect();
+                                enriched.extend(mae_core::compute_markup_spans(&source, flavor));
+                            }
+                            enriched.sort_by_key(|s| s.byte_start);
                             owned_spans = Some(enriched);
                             owned_spans.as_deref()
                         } else {
@@ -353,6 +439,30 @@ fn render_window_area(
             }
         }
     }
+
+    // Breadcrumb bar: overlay on top of the focused window.
+    if editor.show_breadcrumbs && editor.breadcrumbs.is_some() {
+        if let Some(focused_rect) = rects
+            .iter()
+            .find(|(id, _)| *id == focused_id)
+            .map(|(_, r)| r)
+        {
+            let bar_rect = Rect::new(focused_rect.x, focused_rect.y, focused_rect.width, 1);
+            render_breadcrumb_bar(frame, bar_rect, editor);
+        }
+    }
+}
+
+fn render_breadcrumb_bar(frame: &mut Frame, area: Rect, editor: &Editor) {
+    let crumbs = match &editor.breadcrumbs {
+        Some(c) if !c.is_empty() => c,
+        _ => return,
+    };
+    let text = crumbs.join(" > ");
+    let display: String = text.chars().take(area.width as usize).collect();
+    let style = Style::default().fg(Color::DarkGray).bg(Color::Black);
+    let bar = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(Paragraph::new(display).style(style), bar);
 }
 
 fn render_visual_buffer(frame: &mut Frame, area: Rect, vb: &mae_core::visual_buffer::VisualBuffer) {

@@ -210,8 +210,14 @@ impl WorkflowTracker {
 /// Returns None if the tool doesn't map to a known self-test category.
 pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'static str> {
     match tool_name {
-        "introspect" | "cursor_info" | "editor_state" | "list_buffers" | "window_layout"
-        | "command_list" | "ai_permissions" => Some("introspection"),
+        "introspect"
+        | "cursor_info"
+        | "editor_state"
+        | "list_buffers"
+        | "window_layout"
+        | "command_list"
+        | "ai_permissions"
+        | "audit_configuration" => Some("introspection"),
 
         "create_file" | "buffer_write" | "buffer_read" | "open_file" | "close_buffer"
         | "switch_buffer" | "rename_file" | "file_read" => Some("editing"),
@@ -228,7 +234,7 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "lsp_document_symbols"
         | "lsp_diagnostics" => Some("lsp"),
 
-        "perf_stats" | "perf_benchmark" => Some("performance"),
+        "perf_stats" | "perf_benchmark" | "perf_profile" => Some("performance"),
 
         // All actual DAP tools from dap_exec.rs
         "dap_start"
@@ -247,6 +253,10 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "debug_state" => Some("dap"),
 
         "git_status" | "git_diff" | "git_log" | "github_pr_status" => Some("git"),
+
+        "execute_command" => Some("scrolling"),
+
+        "babel_execute" | "babel_tangle" | "org_export" | "kb_instances" => Some("babel"),
 
         _ => None,
     }

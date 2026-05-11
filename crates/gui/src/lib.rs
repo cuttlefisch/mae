@@ -59,6 +59,24 @@ use winit::window::Window;
 
 pub use input::{winit_event_to_input, winit_key_to_keypress, winit_mouse_button};
 
+/// Cached rendered pixels for a non-focused window.
+/// When a window's state is unchanged, the cached image is blitted instead
+/// of re-rendering the full layout/draw pipeline.
+struct WindowRenderCache {
+    /// Buffer content generation (invalidates on any edit).
+    generation: u64,
+    /// Viewport scroll position.
+    scroll_offset: usize,
+    /// Sub-pixel scroll offset (f32 stored as bits for exact comparison).
+    scroll_pixel_offset_bits: u32,
+    /// Window pixel rectangle (invalidates on resize).
+    pixel_rect: skia_safe::IRect,
+    /// Cached rendered pixels.
+    image: skia_safe::Image,
+    /// Cached layout for mouse click positioning.
+    frame_layout: layout::FrameLayout,
+}
+
 /// GUI renderer implementing the `Renderer` trait.
 ///
 /// Manages a winit window with a Skia surface for GPU-accelerated rendering.
@@ -79,11 +97,20 @@ pub struct GuiRenderer {
     icon_font_family: Option<String>,
     /// Configured font size (None = 14.0).
     font_size: Option<f32>,
-    /// Cached FrameLayout from the last render of the focused window.
+    /// Cached FrameLayouts from the last render, keyed by window ID.
     /// Used by the mouse handler for pixel-precise click positioning.
-    last_focused_layout: Option<layout::FrameLayout>,
+    window_layouts: HashMap<mae_core::WindowId, layout::FrameLayout>,
     /// Window title (read from editor config at construction).
     window_title: String,
+    /// Accumulated layout+draw timing from the previous frame (microseconds).
+    /// Copied into `editor.perf_stats` at the start of the next mutable phase.
+    pending_render_layout_us: u64,
+    pending_render_draw_us: u64,
+    /// Total render time from the previous frame (microseconds).
+    pending_total_render_us: u64,
+    /// Per-window render cache: non-focused windows with unchanged state
+    /// are blitted from cached images instead of re-rendered.
+    window_render_cache: HashMap<mae_core::WindowId, WindowRenderCache>,
 }
 
 impl GuiRenderer {
@@ -102,8 +129,12 @@ impl GuiRenderer {
             font_family: None,
             icon_font_family: None,
             font_size: None,
-            last_focused_layout: None,
+            window_layouts: HashMap::new(),
             window_title: "MAE — Modern AI Editor".to_string(),
+            pending_render_layout_us: 0,
+            pending_render_draw_us: 0,
+            pending_total_render_us: 0,
+            window_render_cache: HashMap::new(),
         }
     }
 
@@ -202,11 +233,19 @@ impl GuiRenderer {
         self.font_size.unwrap_or(14.0)
     }
 
-    /// Access the cached FrameLayout from the last render.
-    /// Used by the mouse handler for pixel-precise click positioning
-    /// on scaled/folded lines.
+    /// Access the cached FrameLayout for a specific window.
+    pub fn window_layout(&self, win_id: mae_core::WindowId) -> Option<&layout::FrameLayout> {
+        self.window_layouts.get(&win_id)
+    }
+
+    /// Access the cached FrameLayout for the focused window from the last render.
+    /// Falls back to the single entry if only one window is cached.
     pub fn last_focused_layout(&self) -> Option<&layout::FrameLayout> {
-        self.last_focused_layout.as_ref()
+        if self.window_layouts.len() == 1 {
+            self.window_layouts.values().next()
+        } else {
+            None
+        }
     }
 
     /// Apply a new font size at runtime — recreates font objects, recalculates
@@ -243,7 +282,15 @@ impl Renderer for GuiRenderer {
         let _span = trace_span!("gui_render").entered();
         let frame_start = std::time::Instant::now();
 
-        let Some(canvas) = &mut self.canvas else {
+        // Copy render phase timing from previous frame into perf_stats.
+        editor.perf_stats.render_layout_us = self.pending_render_layout_us;
+        editor.perf_stats.render_draw_us = self.pending_render_draw_us;
+        editor.perf_stats.total_render_us = self.pending_total_render_us;
+        self.pending_render_layout_us = 0;
+        self.pending_render_draw_us = 0;
+        self.pending_total_render_us = 0;
+
+        let (Some(canvas), wrc) = (&mut self.canvas, &mut self.window_render_cache) else {
             return Ok(());
         };
 
@@ -265,24 +312,191 @@ impl Renderer for GuiRenderer {
         canvas.set_clip_height(clip_height);
 
         // Pre-compute syntax-highlight spans for every visible text buffer.
-        // CursorOnly fast path: reuse cached spans from the previous frame,
-        // skipping the most expensive per-frame operation (syntax span lookup
-        // + tree walk). This is the Emacs `try_cursor_movement` pattern.
-        let syntax_spans = if editor.redraw_level == mae_core::redraw::RedrawLevel::CursorOnly {
+        // Fast path for CursorOnly and Scroll: reuse cached spans from the
+        // previous frame, skipping the most expensive per-frame operation
+        // (syntax span lookup + tree walk). This is the Emacs `try_cursor_movement`
+        // pattern. Scroll only changes viewport offset, not buffer content.
+        let syntax_start = std::time::Instant::now();
+        let syntax_spans = if editor.redraw_level <= mae_core::redraw::RedrawLevel::Scroll {
             mae_core::syntax::cached_visible_syntax_spans(editor)
         } else {
             mae_core::syntax::compute_visible_syntax_spans(editor)
         };
+        editor.perf_stats.render_syntax_us = syntax_start.elapsed().as_micros() as u64;
+
+        // Pre-compute markup spans and code block lines for visible buffers (cache by generation).
+        // Large files (>5K lines) use viewport-local computation: O(viewport) instead of O(buffer).
+        //
+        // Scroll fast-path: when redraw level is Scroll (viewport shifted but content unchanged),
+        // skip markup/code_block recomputation if the buffer generation hasn't changed. Existing
+        // cached spans remain valid for the overlapping region. Lines outside the cached range
+        // render as plain text until the next Full redraw (any edit or mode change). This is the
+        // same deferred-fontification pattern as Emacs jit-lock-mode.
+        let skip_markup_recompute = editor.redraw_level <= mae_core::redraw::RedrawLevel::Scroll;
+        {
+            let visible: Vec<(usize, usize)> = editor
+                .window_mgr
+                .iter_windows()
+                .map(|w| (w.buffer_idx, w.scroll_offset))
+                .collect();
+            let area_height = rows.saturating_sub(2);
+            for &(bi, scroll) in &visible {
+                if bi >= editor.buffers.len() {
+                    continue;
+                }
+                // Graceful degradation: skip expensive markup work for extreme files.
+                let degraded = editor.should_degrade_features(bi);
+                let flavor = if degraded {
+                    mae_core::MarkupFlavor::None
+                } else {
+                    editor.effective_markup_flavor(bi)
+                };
+                let gen = editor.buffers[bi].generation;
+                let line_count = editor.buffers[bi].rope().len_lines();
+                let is_large = line_count > editor.large_file_lines;
+
+                // Compute viewport window for large files.
+                let (vp_start, vp_end) = if is_large {
+                    let vh = area_height;
+                    (
+                        scroll.saturating_sub(vh * 3),
+                        (scroll + vh * 4).min(line_count),
+                    )
+                } else {
+                    (0, line_count)
+                };
+
+                // Visible viewport range (used for scroll fast-path checks below).
+                let visible_start = scroll;
+                let visible_end = (scroll + area_height).min(line_count);
+
+                // Markup spans cache.
+                if flavor != mae_core::MarkupFlavor::None {
+                    // During scroll with unchanged content, skip recomputation only if
+                    // the cache still covers the actual visible viewport (not the padded range).
+                    // This allows smooth scrolling within the cached region while still
+                    // refreshing markup when scrolling beyond it.
+                    let cache_covers_viewport = editor.markup_cache.get(&bi).is_some_and(|c| {
+                        c.generation == gen
+                            && c.flavor == flavor
+                            && c.line_start <= visible_start
+                            && c.line_end >= visible_end
+                    });
+                    let needs_update = if skip_markup_recompute && cache_covers_viewport {
+                        false // Cache still covers visible area — skip during scroll
+                    } else {
+                        editor
+                            .markup_cache
+                            .get(&bi)
+                            .is_none_or(|c| !c.covers(gen, flavor, vp_start, vp_end))
+                    };
+                    if needs_update {
+                        editor.perf_stats.markup_cache_misses += 1;
+                        if is_large {
+                            let rope = editor.buffers[bi].rope().clone();
+                            let (byte_offset, spans) = mae_core::compute_markup_spans_for_range(
+                                &rope, flavor, vp_start, vp_end,
+                            );
+                            editor.markup_cache.insert(
+                                bi,
+                                mae_core::MarkupCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: vp_start,
+                                    line_end: vp_end,
+                                    byte_offset,
+                                    spans,
+                                },
+                            );
+                        } else {
+                            let source: String = editor.buffers[bi].rope().chars().collect();
+                            let spans = mae_core::compute_markup_spans(&source, flavor);
+                            editor.markup_cache.insert(
+                                bi,
+                                mae_core::MarkupCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: 0,
+                                    line_end: line_count,
+                                    byte_offset: 0,
+                                    spans,
+                                },
+                            );
+                        }
+                    } else {
+                        editor.perf_stats.markup_cache_hits += 1;
+                    }
+                }
+
+                // Code block lines cache.
+                if !degraded {
+                    let cb_cache_covers_viewport =
+                        editor.code_block_cache.get(&bi).is_some_and(|c| {
+                            c.generation == gen
+                                && c.flavor == flavor
+                                && c.line_start <= visible_start
+                                && c.line_end >= visible_end
+                        });
+                    let cb_needs_update = if skip_markup_recompute && cb_cache_covers_viewport {
+                        false // Cache still covers visible area — skip during scroll
+                    } else {
+                        editor.code_block_cache.get(&bi).is_none_or(|c| {
+                            c.generation != gen
+                                || c.flavor != flavor
+                                || c.line_start > vp_start
+                                || c.line_end < vp_end
+                        })
+                    };
+                    if cb_needs_update {
+                        if is_large {
+                            let lines = mae_core::detect_code_block_lines_for_range(
+                                &editor.buffers[bi],
+                                flavor,
+                                vp_start,
+                                vp_end,
+                            );
+                            editor.code_block_cache.insert(
+                                bi,
+                                mae_core::ViewportCodeBlockCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: vp_start,
+                                    line_end: vp_end,
+                                    lines,
+                                },
+                            );
+                        } else {
+                            let lines =
+                                mae_core::detect_code_block_lines(&editor.buffers[bi], flavor);
+                            editor.code_block_cache.insert(
+                                bi,
+                                mae_core::ViewportCodeBlockCache {
+                                    generation: gen,
+                                    flavor,
+                                    line_start: 0,
+                                    line_end: line_count,
+                                    lines,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         let editor: &Editor = editor;
+
+        // Per-phase render timing accumulators (written to self at end of frame).
+        let mut layout_time_us: u64 = 0;
+        let mut draw_time_us: u64 = 0;
 
         // Layout: window area = rows-2, status bar = 1, command line = 1.
         let status_row = rows.saturating_sub(2);
         let cmd_row = rows.saturating_sub(1);
         let window_height = rows.saturating_sub(2);
 
-        // Track focused layout across render branches for mouse click caching.
-        let mut focused_frame_layout: Option<layout::FrameLayout> = None;
+        // Track all window layouts across render branches for mouse click caching.
+        let mut all_layouts: HashMap<mae_core::WindowId, layout::FrameLayout> = HashMap::new();
 
         // Check for fullscreen overlays first.
         if editor.file_picker.is_some() {
@@ -296,6 +510,10 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -311,6 +529,10 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -326,6 +548,10 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
             );
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
@@ -355,6 +581,10 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 win_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
             );
             popup_render::render_which_key_popup(
                 canvas,
@@ -372,7 +602,7 @@ impl Renderer for GuiRenderer {
             status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else {
             debug!("render: normal window area");
-            focused_frame_layout = render_window_area(
+            render_window_area(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -381,9 +611,48 @@ impl Renderer for GuiRenderer {
                 0,
                 cols,
                 window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
             );
+            // Breadcrumb bar: overlay on focused window top row.
+            if editor.show_breadcrumbs {
+                if let Some(crumbs) = &editor.breadcrumbs {
+                    if !crumbs.is_empty() {
+                        let win_area = mae_core::WinRect {
+                            x: 0,
+                            y: 0,
+                            width: cols as u16,
+                            height: window_height as u16,
+                        };
+                        let rects = editor.window_mgr.layout_rects(win_area);
+                        if let Some((_, r)) = rects
+                            .iter()
+                            .find(|(id, _)| *id == editor.window_mgr.focused_id())
+                        {
+                            let text = crumbs.join(" > ");
+                            let display: String = text.chars().take(r.width as usize).collect();
+                            let bg =
+                                theme::ts_bg(editor, "ui.statusline").unwrap_or(theme::DEFAULT_BG);
+                            let fg = theme::ts_fg(editor, "comment");
+                            canvas.draw_rect_fill(
+                                r.y as usize,
+                                r.x as usize,
+                                r.width as usize,
+                                1,
+                                bg,
+                            );
+                            canvas.draw_text_at(r.y as usize, r.x as usize, &display, fg);
+                        }
+                    }
+                }
+            }
+
             status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
             status_render::render_command_line(canvas, editor, cmd_row, cols);
+
+            let focused_frame_layout = all_layouts.get(&editor.window_mgr.focused_id());
 
             // Cursor (not for shell buffers — they render their own).
             if editor.mode != mae_core::Mode::ShellInsert {
@@ -395,9 +664,32 @@ impl Renderer for GuiRenderer {
                     status_row,
                     cmd_row,
                     &syntax_spans,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
                 );
             }
+
+            // Compute focused window's screen rect for proper popup positioning
+            // in split layouts.
+            let win_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: cols as u16,
+                height: window_height as u16,
+            };
+            let rects = editor.window_mgr.layout_rects(win_area);
+            let focused_rect = rects
+                .iter()
+                .find(|(id, _)| *id == editor.window_mgr.focused_id())
+                .map(|(_, r)| *r);
+            let (win_col_off, win_row_off, win_w, win_h) = match focused_rect {
+                Some(r) => (
+                    r.x as usize,
+                    r.y as usize,
+                    r.width as usize,
+                    r.height as usize,
+                ),
+                None => (0, 0, cols, window_height),
+            };
 
             // Completion popup.
             if !editor.completion_items.is_empty() {
@@ -405,10 +697,13 @@ impl Renderer for GuiRenderer {
                     canvas,
                     editor,
                     0,
-                    0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
                 );
             }
 
@@ -420,7 +715,11 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
                 );
             }
 
@@ -432,13 +731,68 @@ impl Renderer for GuiRenderer {
                     0,
                     cols,
                     window_height,
-                    focused_frame_layout.as_ref(),
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
+                );
+            }
+
+            // Signature help popup.
+            if editor.signature_help.is_some() {
+                popup_render::render_signature_help_popup(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_h,
+                );
+            }
+
+            // Peek definition popup.
+            if editor.peek_state.is_some() {
+                popup_render::render_peek_definition_popup(
+                    canvas,
+                    editor,
+                    cols,
+                    window_height,
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_h,
+                );
+            }
+
+            // Symbol outline popup.
+            if editor.symbol_outline.is_some() {
+                popup_render::render_symbol_outline_popup(canvas, editor, cols, window_height);
+            }
+
+            // Blame gutter overlay.
+            if editor.blame_overlay.is_some() {
+                let visible_start = editor.window_mgr.focused_window().scroll_offset;
+                popup_render::render_blame_gutter(
+                    canvas,
+                    editor,
+                    win_row_off,
+                    win_col_off,
+                    win_h,
+                    visible_start,
                 );
             }
         }
 
-        // Cache focused layout for mouse click positioning.
-        self.last_focused_layout = focused_frame_layout;
+        // Cache all window layouts for mouse click positioning.
+        self.window_layouts = all_layouts;
+
+        // Record layout+draw timing from immutable phase.
+        self.pending_render_layout_us = layout_time_us;
+        self.pending_render_draw_us = draw_time_us;
+        self.pending_total_render_us = frame_start.elapsed().as_micros() as u64;
 
         canvas.end_frame();
 
@@ -486,7 +840,11 @@ fn render_window_area(
     area_col: usize,
     area_width: usize,
     area_height: usize,
-) -> Option<layout::FrameLayout> {
+    layouts_out: &mut HashMap<mae_core::WindowId, layout::FrameLayout>,
+    layout_time_us: &mut u64,
+    draw_time_us: &mut u64,
+    window_render_cache: &mut HashMap<mae_core::WindowId, WindowRenderCache>,
+) {
     // Pre-compute scaled glyph advances for heading scales.
     // Font engines grid-fit advances at each font size, so `cell_width * scale`
     // is incorrect. We measure once and pass into layout/render.
@@ -513,7 +871,6 @@ fn render_window_area(
         }
     };
 
-    let mut focused_layout: Option<layout::FrameLayout> = None;
     let window_area = mae_core::WinRect {
         x: area_col as u16,
         y: area_row as u16,
@@ -533,35 +890,75 @@ fn render_window_area(
             let buf = &editor.buffers[win.buffer_idx];
             let is_focused = *win_id == focused_id;
 
+            // Per-window image caching: non-focused, non-shell windows with
+            // unchanged state are blitted from cached pixels (GPU texture blit
+            // ~100μs vs full render ~90ms for large files).
+            let is_cacheable = !is_focused && !matches!(buf.kind, BufferKind::Shell);
+            if is_cacheable {
+                let (cw_px, ch_px) = canvas.cell_size();
+                let pixel_rect = skia_safe::IRect::from_xywh(
+                    (r_col as f32 * cw_px) as i32,
+                    (r_row as f32 * ch_px) as i32,
+                    (r_width as f32 * cw_px) as i32,
+                    (r_height as f32 * ch_px) as i32,
+                );
+                if let Some(cached) = window_render_cache.get(win_id) {
+                    if cached.generation == buf.generation
+                        && cached.scroll_offset == win.scroll_offset
+                        && cached.scroll_pixel_offset_bits == win.scroll_pixel_offset.to_bits()
+                        && cached.pixel_rect == pixel_rect
+                    {
+                        // Cache hit: blit cached image, reuse cached layout.
+                        canvas.draw_cached_image(
+                            &cached.image,
+                            pixel_rect.left as f32,
+                            pixel_rect.top as f32,
+                        );
+                        layouts_out.insert(*win_id, cached.frame_layout.clone());
+                        continue;
+                    }
+                }
+            }
+
             match buf.kind {
                 BufferKind::Messages => {
+                    let t = std::time::Instant::now();
                     messages_render::render_messages_window(
                         canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
+                    *draw_time_us += t.elapsed().as_micros() as u64;
                 }
                 BufferKind::Debug => {
+                    let t = std::time::Instant::now();
                     debug_render::render_debug_window(
                         canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
+                    *draw_time_us += t.elapsed().as_micros() as u64;
                 }
                 BufferKind::Shell => {
                     if let Some(shell) = shells.get(&win.buffer_idx) {
+                        let t = std::time::Instant::now();
                         shell_render::render_shell_window(
                             canvas, buf, win, is_focused, editor, shell, r_row, r_col, r_width,
                             r_height,
                         );
+                        *draw_time_us += t.elapsed().as_micros() as u64;
                     }
                 }
                 BufferKind::Visual => {
                     // Phase 1 Visual Debugger rendering
                     if let Some(vb) = buf.visual() {
+                        let t = std::time::Instant::now();
                         render_visual_buffer(canvas, vb, r_row, r_col, r_width, r_height);
+                        *draw_time_us += t.elapsed().as_micros() as u64;
                     }
                 }
                 BufferKind::FileTree => {
+                    let t = std::time::Instant::now();
                     file_tree_render::render_file_tree_window(
                         canvas, buf, win, is_focused, editor, r_row, r_col, r_width, r_height,
                     );
+                    *draw_time_us += t.elapsed().as_micros() as u64;
                 }
                 _ => {
                     // Standard text pipeline: shared span selection for Conversation,
@@ -574,17 +971,28 @@ fn render_window_area(
                         owned_spans = Some(shared);
                         owned_spans.as_deref()
                     } else {
-                        let flavor = editor.effective_markup_flavor(win.buffer_idx);
+                        let degraded = editor.should_degrade_features(win.buffer_idx);
+                        let flavor = if degraded {
+                            mae_core::MarkupFlavor::None
+                        } else {
+                            editor.effective_markup_flavor(win.buffer_idx)
+                        };
                         if flavor != mae_core::MarkupFlavor::None {
                             let mut enriched = syntax_spans
                                 .get(&win.buffer_idx)
                                 .map(|v| v.as_ref().clone())
                                 .unwrap_or_default();
-                            mae_core::render_common::spans::enrich_spans_with_markup(
-                                &mut enriched,
-                                buf,
-                                flavor,
-                            );
+                            let gen = buf.generation;
+                            let cached = editor.markup_cache.get(&win.buffer_idx);
+                            if let Some(c) =
+                                cached.filter(|c| c.generation == gen && c.flavor == flavor)
+                            {
+                                enriched.extend_from_slice(&c.spans);
+                            } else {
+                                let source: String = buf.rope().chars().collect();
+                                enriched.extend(mae_core::compute_markup_spans(&source, flavor));
+                            }
+                            enriched.sort_by_key(|s| s.byte_start);
                             owned_spans = Some(enriched);
                             owned_spans.as_deref()
                         } else {
@@ -601,20 +1009,30 @@ fn render_window_area(
                     };
                     // Conversation buffers show streaming indicator in title.
                     let title = if buf.kind == BufferKind::Conversation {
-                        let streaming_indicator = if let Some(conv) = buf.conversation() {
-                            if conv.streaming {
-                                if let Some(start) = conv.streaming_start {
-                                    format!(" [waiting... {}s] ", start.elapsed().as_secs())
+                        let (streaming_indicator, new_content_indicator) =
+                            if let Some(conv) = buf.conversation() {
+                                let si = if conv.streaming {
+                                    if let Some(start) = conv.streaming_start {
+                                        format!(" [waiting... {}s]", start.elapsed().as_secs())
+                                    } else {
+                                        " [waiting...]".to_string()
+                                    }
                                 } else {
-                                    " [waiting...] ".to_string()
-                                }
+                                    String::new()
+                                };
+                                let nci = if conv.has_new_content_below() {
+                                    " ↓ New content below"
+                                } else {
+                                    ""
+                                };
+                                (si, nci)
                             } else {
-                                String::new()
-                            }
-                        } else {
-                            String::new()
-                        };
-                        format!(" {}{} ", buf.name, streaming_indicator)
+                                (String::new(), "")
+                            };
+                        format!(
+                            " {}{}{} ",
+                            buf.name, streaming_indicator, new_content_indicator
+                        )
                     } else {
                         let modified = if buf.modified { " [+]" } else { "" };
                         format!(" {}{} ", buf.name, modified)
@@ -626,6 +1044,7 @@ fn render_window_area(
                     let inner_width = r_width.saturating_sub(2);
                     let inner_height = r_height.saturating_sub(2);
                     let (_, cell_height) = canvas.cell_size();
+                    let t0 = std::time::Instant::now();
                     let fl = layout::compute_layout(
                         editor,
                         buf,
@@ -639,13 +1058,42 @@ fn render_window_area(
                         spans,
                         Some(&glyph_advance_fn),
                     );
-                    buffer_render::render_buffer_content(
-                        canvas, editor, buf, win, is_focused, &fl, spans,
-                    );
+                    *layout_time_us += t0.elapsed().as_micros() as u64;
+                    // Clip buffer rendering to the inner window area so images
+                    // don't overflow into borders, status line, or command area.
+                    let t1 = std::time::Instant::now();
+                    canvas.with_clip(inner_row, inner_col, inner_width, inner_height, |canvas| {
+                        buffer_render::render_buffer_content(
+                            canvas, editor, buf, win, is_focused, &fl, spans,
+                        );
+                    });
+                    *draw_time_us += t1.elapsed().as_micros() as u64;
                     scrollbar::render_scrollbar(canvas, editor, &fl);
-                    if is_focused {
-                        focused_layout = Some(fl);
+
+                    // Cache the rendered window for non-focused windows.
+                    if is_cacheable {
+                        let (cw_px, ch_px) = canvas.cell_size();
+                        let pixel_rect = skia_safe::IRect::from_xywh(
+                            (r_col as f32 * cw_px) as i32,
+                            (r_row as f32 * ch_px) as i32,
+                            (r_width as f32 * cw_px) as i32,
+                            (r_height as f32 * ch_px) as i32,
+                        );
+                        if let Some(image) = canvas.snapshot_region(pixel_rect) {
+                            window_render_cache.insert(
+                                *win_id,
+                                WindowRenderCache {
+                                    generation: buf.generation,
+                                    scroll_offset: win.scroll_offset,
+                                    scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
+                                    pixel_rect,
+                                    image,
+                                    frame_layout: fl.clone(),
+                                },
+                            );
+                        }
                     }
+                    layouts_out.insert(*win_id, fl);
                 }
             }
         }
@@ -667,8 +1115,6 @@ fn render_window_area(
             }
         }
     }
-
-    focused_layout
 }
 
 fn render_visual_buffer(
@@ -866,6 +1312,17 @@ fn render_gui_cursor(
             };
             cursor::render_cursor(canvas, editor, cursor_pixel_y, cursor_pixel_x, pos.scale);
         }
+
+        // Render secondary cursors (multi-cursor mode).
+        cursor::render_secondary_cursors(
+            canvas,
+            editor,
+            frame_layout,
+            inner_row,
+            inner_col,
+            inner_height,
+            gutter_w,
+        );
     }
 }
 

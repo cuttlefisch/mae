@@ -22,6 +22,7 @@ pub use provider::{
     StopReason, Usage,
 };
 pub use session::AgentSession;
+pub use tool_impls::execute_audit_configuration;
 pub use tools::{
     ai_specific_tools, classify_command_permission, classify_tool_tier, tools_from_registry,
     PermissionPolicy, ToolCategory, ToolTier,

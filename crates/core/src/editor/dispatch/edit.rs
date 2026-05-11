@@ -1,3 +1,5 @@
+//! Editing: insert, delete, yank, paste, undo/redo, text objects.
+
 use crate::Mode;
 
 use super::super::Editor;
@@ -165,10 +167,20 @@ impl Editor {
             "paste-after" => {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
-                            let win = self.window_mgr.focused_window();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             let line_len =
                                 self.buffers[idx].rope().line(win.cursor_row).len_chars();
@@ -198,10 +210,20 @@ impl Editor {
             "paste-before" => {
                 if let Some(text) = self.paste_text() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
-                            let win = self.window_mgr.focused_window();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             self.buffers[idx].insert_text_at(line_start, &text);
                             let win = self.window_mgr.focused_window_mut();
@@ -576,10 +598,20 @@ impl Editor {
             "paste-from-yank" => {
                 if let Some(text) = self.registers.get(&'0').cloned() {
                     let idx = self.active_buffer_idx();
+                    if self.buffers[idx].kind == crate::BufferKind::Shell {
+                        self.pending_shell_inputs.push((idx, text));
+                        return None;
+                    }
+                    if self.buffers[idx].read_only {
+                        self.set_status("Cannot paste: buffer is read-only");
+                        return None;
+                    }
                     let is_linewise = text.ends_with('\n');
                     for _ in 0..n {
                         if is_linewise {
                             let win = self.window_mgr.focused_window_mut();
+                            let line_count = self.buffers[idx].rope().len_lines();
+                            win.cursor_row = win.cursor_row.min(line_count.saturating_sub(1));
                             let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                             let line_len =
                                 self.buffers[idx].rope().line(win.cursor_row).len_chars();
@@ -630,10 +662,7 @@ impl Editor {
                         self.save_mode_to_buffer();
                         let current = self.active_buffer_idx();
                         self.alternate_buffer_idx = Some(current);
-                        let win = self.window_mgr.focused_window_mut();
-                        win.buffer_idx = alt_idx;
-                        win.cursor_row = 0;
-                        win.cursor_col = 0;
+                        self.display_buffer_and_focus(alt_idx);
                         let name = self.buffers[alt_idx].name.clone();
                         self.set_status(format!("Buffer: {}", name));
                         self.sync_mode_to_buffer();
@@ -692,6 +721,9 @@ impl Editor {
 
             _ => return None,
         }
+        // All edit commands potentially modify buffer content or change mode;
+        // escalate to full redraw so syntax/markup gets recomputed.
+        self.mark_full_redraw();
         Some(true)
     }
 }

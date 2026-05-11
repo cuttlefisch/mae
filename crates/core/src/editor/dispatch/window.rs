@@ -1,3 +1,5 @@
+//! Window management: split, resize, focus, close, balance.
+
 use crate::window::{Direction, SplitDirection};
 
 use super::super::Editor;
@@ -80,6 +82,7 @@ impl Editor {
             }
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

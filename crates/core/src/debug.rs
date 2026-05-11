@@ -96,6 +96,14 @@ pub enum DebugTarget {
     },
 }
 
+/// A user-defined watch expression evaluated on each stop.
+#[derive(Debug, Clone)]
+pub struct WatchExpression {
+    pub expression: String,
+    pub last_value: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Complete debug state snapshot — the unified data model.
 ///
 /// Both the self-debugger and DAP client populate this same struct.
@@ -122,6 +130,8 @@ pub struct DebugState {
     /// Monotonic counter for locally-assigned breakpoint ids (avoids an
     /// O(N²) scan over all breakpoints on every add/toggle).
     pub next_bp_id: i64,
+    /// User-defined watch expressions, evaluated on each stop event.
+    pub watch_expressions: Vec<WatchExpression>,
 }
 
 impl DebugState {
@@ -140,6 +150,7 @@ impl DebugState {
             output_log: Vec::new(),
             scheme_errors: Vec::new(),
             next_bp_id: 1,
+            watch_expressions: Vec::new(),
         }
     }
 

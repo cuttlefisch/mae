@@ -54,6 +54,63 @@ impl Editor {
                 self.dispatch_builtin("view-messages");
                 true
             }
+            "agenda" => {
+                self.dispatch_builtin("open-agenda");
+                true
+            }
+            "agenda-add" => {
+                if let Some(path) = args {
+                    self.agenda_add_path(path);
+                } else {
+                    self.set_status("Usage: :agenda-add <path>");
+                }
+                true
+            }
+            "agenda-remove" => {
+                if let Some(path) = args {
+                    self.agenda_remove_path(path);
+                } else {
+                    self.set_status("Usage: :agenda-remove <path>");
+                }
+                true
+            }
+            "agenda-list" => {
+                self.agenda_list_paths();
+                true
+            }
+            "agenda-ingest" => {
+                self.ingest_agenda_files();
+                self.set_status("Agenda files re-ingested");
+                true
+            }
+            "help-edit" => {
+                // `:help-edit <topic>` → open/create ~/.config/mae/help/<topic>.org
+                let topic = args
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("scratch");
+                let help_dir = std::env::var("XDG_CONFIG_HOME")
+                    .ok()
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        std::env::var("HOME")
+                            .ok()
+                            .map(|h| std::path::PathBuf::from(h).join(".config"))
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from(".config"))
+                    .join("mae")
+                    .join("help");
+                let _ = std::fs::create_dir_all(&help_dir);
+                let file_path = help_dir.join(format!("{}.org", topic));
+                if !file_path.exists() {
+                    let template = format!(
+                        ":ID: {topic}\n:END:\n#+title: {topic}\n\nWrite your help content here.\n"
+                    );
+                    let _ = std::fs::write(&file_path, template);
+                }
+                self.open_file(file_path.display().to_string());
+                true
+            }
             "help" => {
                 // `:help`  → index; `:help <topic>` → open KB node `topic`
                 // with the same namespace-fallback the AI uses: first try
@@ -65,6 +122,11 @@ impl Editor {
                             topic.to_string(),
                             format!("cmd:{}", topic),
                             format!("concept:{}", topic),
+                            format!("scheme:{}", topic),
+                            format!("option:{}", topic),
+                            format!("lesson:{}", topic),
+                            format!("tutorial:{}", topic),
+                            format!("category:{}", topic),
                         ];
                         let found = candidates.iter().find(|id| self.kb.contains(id));
                         match found {
@@ -725,6 +787,39 @@ impl Editor {
                 } else {
                     self.dap_evaluate(expression, None, Some("repl"));
                     self.set_status(format!("Evaluating: {}", expression));
+                }
+                true
+            }
+            "debug-exceptions" => {
+                let arg = args.unwrap_or("").trim();
+                let filters = match arg {
+                    "caught" => vec!["caught".to_string()],
+                    "uncaught" => vec!["uncaught".to_string()],
+                    "all" | "" => vec!["caught".to_string(), "uncaught".to_string()],
+                    "none" | "clear" => vec![],
+                    other => other.split(',').map(|s| s.trim().to_string()).collect(),
+                };
+                self.dap_set_exception_breakpoints(filters);
+                true
+            }
+            "debug-add-watch" => {
+                let expression = args.unwrap_or("").trim();
+                if expression.is_empty() {
+                    self.set_status("Usage: :debug-add-watch <expression>");
+                } else {
+                    self.debug_add_watch(expression.to_string());
+                    self.debug_panel_refresh_if_open();
+                }
+                true
+            }
+            "debug-remove-watch" => {
+                let idx_str = args.unwrap_or("").trim();
+                match idx_str.parse::<usize>() {
+                    Ok(idx) => {
+                        self.debug_remove_watch(idx);
+                        self.debug_panel_refresh_if_open();
+                    }
+                    Err(_) => self.set_status("Usage: :debug-remove-watch <index>"),
                 }
                 true
             }

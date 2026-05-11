@@ -36,6 +36,7 @@ pub enum PalettePurpose {
     AiMode,
     AiProfile,
     GitBranch,
+    MiniDialog,
 }
 
 impl PalettePurpose {
@@ -53,6 +54,136 @@ impl PalettePurpose {
             Self::AiMode => "AI Operating Mode",
             Self::AiProfile => "AI Prompt Profile",
             Self::GitBranch => "Git Branch",
+            Self::MiniDialog => "Dialog",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MiniDialog — reusable multi-field interactive dialog
+// ---------------------------------------------------------------------------
+
+/// What interactive command opened this mini-dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MiniDialogKind {
+    EditLink,
+    /// y/n confirmation (delete file, kill unsaved buffer, etc.)
+    Confirm,
+    /// One text field (rename, create file, save-as, tags, etc.)
+    SingleInput,
+}
+
+/// One editable field in a mini-dialog.
+#[derive(Debug, Clone)]
+pub struct MiniDialogField {
+    /// Prompt label (e.g. "URL", "Label").
+    pub label: String,
+    /// Current text value.
+    pub value: String,
+    /// Hint text when value is empty.
+    pub placeholder: String,
+}
+
+/// Context needed to apply the dialog result back to the buffer.
+#[derive(Debug, Clone)]
+pub enum MiniDialogContext {
+    LinkEdit {
+        buf_idx: usize,
+        byte_start: usize,
+        byte_end: usize,
+        is_org: bool,
+    },
+    FileDelete {
+        path: std::path::PathBuf,
+        close_buffer: bool,
+    },
+    FileRename {
+        old_path: std::path::PathBuf,
+    },
+    FileCopy {
+        src_path: std::path::PathBuf,
+    },
+    FileSaveAs,
+    FileTreeRename {
+        path: std::path::PathBuf,
+    },
+    FileTreeCreate {
+        parent: std::path::PathBuf,
+    },
+    OrgSetTags {
+        heading_line: usize,
+    },
+    AgendaFilterTag,
+}
+
+/// State for a multi-field mini-dialog (edit-link, rename, etc.)
+#[derive(Debug, Clone)]
+pub struct MiniDialogState {
+    /// What interactive command opened this dialog.
+    pub kind: MiniDialogKind,
+    /// The field prompts and current values.
+    pub fields: Vec<MiniDialogField>,
+    /// Which field is currently being edited (0-indexed).
+    pub active_field: usize,
+    /// Context needed to apply the result.
+    pub context: MiniDialogContext,
+}
+
+impl MiniDialogState {
+    /// Title for the dialog window.
+    pub fn title(&self) -> &'static str {
+        match self.kind {
+            MiniDialogKind::EditLink => "Edit Link",
+            MiniDialogKind::Confirm => "Confirm",
+            MiniDialogKind::SingleInput => match &self.context {
+                MiniDialogContext::FileRename { .. } | MiniDialogContext::FileTreeRename { .. } => {
+                    "Rename"
+                }
+                MiniDialogContext::FileCopy { .. } => "Copy File",
+                MiniDialogContext::FileSaveAs => "Save As",
+                MiniDialogContext::FileTreeCreate { .. } => "Create",
+                MiniDialogContext::OrgSetTags { .. } => "Set Tags",
+                MiniDialogContext::AgendaFilterTag => "Filter by Tag",
+                _ => "Input",
+            },
+        }
+    }
+
+    /// Whether this dialog is a simple confirmation (no text input).
+    pub fn is_confirm(&self) -> bool {
+        self.kind == MiniDialogKind::Confirm
+    }
+
+    /// Create a confirmation dialog (yes/no).
+    pub fn confirm(question: impl Into<String>, context: MiniDialogContext) -> Self {
+        Self {
+            kind: MiniDialogKind::Confirm,
+            fields: vec![MiniDialogField {
+                label: question.into(),
+                value: String::new(),
+                placeholder: String::new(),
+            }],
+            active_field: 0,
+            context,
+        }
+    }
+
+    /// Create a single-input dialog with an optional pre-filled value.
+    pub fn single_input(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        placeholder: impl Into<String>,
+        context: MiniDialogContext,
+    ) -> Self {
+        Self {
+            kind: MiniDialogKind::SingleInput,
+            fields: vec![MiniDialogField {
+                label: label.into(),
+                value: value.into(),
+                placeholder: placeholder.into(),
+            }],
+            active_field: 0,
+            context,
         }
     }
 }
@@ -274,6 +405,7 @@ mod tests {
             PalettePurpose::AiMode,
             PalettePurpose::AiProfile,
             PalettePurpose::GitBranch,
+            PalettePurpose::MiniDialog,
         ];
         for p in &purposes {
             assert!(!p.label().is_empty(), "{:?} has empty label", p);

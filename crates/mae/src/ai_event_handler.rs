@@ -379,7 +379,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             };
             editor.buffers[buf_idx].replace_contents(&diff_text);
-            editor.switch_to_buffer(buf_idx);
+            editor.display_buffer_and_focus(buf_idx);
 
             if let Some(conv) = find_conversation_buffer_mut(editor) {
                 conv.push_system(format!(
@@ -443,15 +443,25 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 t
             };
 
-            let sub_session = AgentSession::new(
-                provider,
-                tools,
-                build_system_prompt(&profile),
-                proxy_tx,
-                sub_cmd_rx,
-            )
-            .with_budget(config.model, config.budget)
-            .with_target_buffer(target_buf_name.clone());
+            let effective_tier = {
+                let (file_cfg, _) = crate::config::load_config();
+                file_cfg
+                    .ai
+                    .prompt_tier
+                    .as_deref()
+                    .map(mae_ai::context_limits::ModelTier::parse_tier)
+                    .unwrap_or_else(|| mae_ai::context_limits::tier(&config.model))
+            };
+
+            let mut sub_prompt = build_system_prompt(&profile, effective_tier);
+            let provider_hint = mae_ai::context_limits::ProviderHint::from_model(&config.model);
+            if let Some(hints) = provider_hint.prompt_hints() {
+                sub_prompt.push_str(hints);
+            }
+
+            let sub_session = AgentSession::new(provider, tools, sub_prompt, proxy_tx, sub_cmd_rx)
+                .with_budget(config.model, config.budget)
+                .with_target_buffer(target_buf_name.clone());
 
             // Spawn the sub-agent session.
             spawn_ai_session(sub_session);
@@ -534,9 +544,19 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
     }
 
     // After every AI event that may have mutated conversation state,
-    // sync the output rope and auto-scroll the output window to bottom.
+    // sync the output rope and auto-scroll the output window to bottom
+    // — but only if the user hasn't scroll-locked during streaming.
     editor.sync_conversation_buffer_rope();
-    crate::key_handling::conversation::scroll_output_to_bottom(editor);
+    let is_scroll_locked = editor
+        .conversation_pair
+        .as_ref()
+        .and_then(|p| editor.buffers.get(p.output_buffer_idx))
+        .and_then(|b| b.conversation())
+        .map(|conv| conv.scroll_locked)
+        .unwrap_or(false);
+    if !is_scroll_locked {
+        crate::key_handling::conversation::scroll_output_to_bottom(editor);
+    }
 }
 
 fn render_changes_to_diff(changes: &serde_json::Value) -> String {

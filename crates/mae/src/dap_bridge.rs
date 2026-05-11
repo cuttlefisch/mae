@@ -38,6 +38,7 @@ fn dap_command_name(cmd: &DapCommand) -> &'static str {
         DapCommand::RequestScopes { .. } => "request-scopes",
         DapCommand::RequestVariables { .. } => "request-variables",
         DapCommand::Evaluate { .. } => "evaluate",
+        DapCommand::SetExceptionBreakpoints { .. } => "set-exception-breakpoints",
         DapCommand::Terminate => "terminate",
         DapCommand::Disconnect { .. } => "disconnect",
         DapCommand::Shutdown => "shutdown",
@@ -99,6 +100,9 @@ fn intent_to_dap_command(intent: DapIntent) -> DapCommand {
             scope_name,
             variables_reference,
         },
+        DapIntent::SetExceptionBreakpoints { filters } => {
+            DapCommand::SetExceptionBreakpoints { filters }
+        }
         DapIntent::Terminate => DapCommand::Terminate,
         DapIntent::Disconnect { terminate_debuggee } => {
             DapCommand::Disconnect { terminate_debuggee }
@@ -203,15 +207,30 @@ pub(crate) fn handle_dap_event(editor: &mut Editor, event: DapTaskEvent) {
             type_field,
             variables_reference: _,
         } => {
-            if let Some(ref mut ds) = editor.debug_state {
-                ds.log(format!(
-                    "eval: {} = {} ({})",
-                    expression,
-                    result,
-                    type_field.as_deref().unwrap_or("?")
-                ));
+            // Check if this is a watch expression result.
+            let is_watch = editor
+                .debug_state
+                .as_ref()
+                .map(|s| {
+                    s.watch_expressions
+                        .iter()
+                        .any(|w| w.expression == expression)
+                })
+                .unwrap_or(false);
+            if is_watch {
+                editor.apply_watch_result(&expression, &result, true);
+                editor.debug_panel_refresh_if_open();
+            } else {
+                if let Some(ref mut ds) = editor.debug_state {
+                    ds.log(format!(
+                        "eval: {} = {} ({})",
+                        expression,
+                        result,
+                        type_field.as_deref().unwrap_or("?")
+                    ));
+                }
+                editor.set_status(format!("= {}", result));
             }
-            editor.set_status(format!("= {}", result));
         }
     }
 }

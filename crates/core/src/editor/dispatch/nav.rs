@@ -1,3 +1,5 @@
+//! Navigation: cursor movement, scrolling, jumps, search, marks.
+
 use super::super::Editor;
 
 impl Editor {
@@ -12,12 +14,17 @@ impl Editor {
         match name {
             "move-up" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Messages {
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         win.scroll_offset = win.scroll_offset.saturating_sub(1);
                         win.cursor_row = win.cursor_row.saturating_sub(1);
                     }
+                } else if kind == crate::BufferKind::Shell {
+                    // In normal mode over a shell buffer, scroll scrollback up.
+                    let prev = self.pending_shell_scroll.unwrap_or(0);
+                    self.pending_shell_scroll = Some(prev + n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -27,9 +34,10 @@ impl Editor {
             }
             "move-down" => {
                 let idx = self.active_buffer_idx();
-                if self.buffers[idx].kind == crate::BufferKind::Messages {
+                let kind = self.buffers[idx].kind;
+                if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
-                    let vh = self.viewport_height;
+                    let vh = self.focused_viewport_height();
                     let max = total.saturating_sub(vh);
                     let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
@@ -37,6 +45,10 @@ impl Editor {
                         win.scroll_offset = (win.scroll_offset + 1).min(max);
                         win.cursor_row = (win.cursor_row + 1).min(line_count);
                     }
+                } else if kind == crate::BufferKind::Shell {
+                    // In normal mode over a shell buffer, scroll scrollback down.
+                    let prev = self.pending_shell_scroll.unwrap_or(0);
+                    self.pending_shell_scroll = Some(prev - n as i32);
                 } else {
                     let buf = &self.buffers[idx];
                     for _ in 0..n {
@@ -204,7 +216,7 @@ impl Editor {
                 let kind = self.buffers[idx].kind;
                 if kind == crate::BufferKind::Messages {
                     let total = self.message_log.len();
-                    let vh = self.viewport_height;
+                    let vh = self.focused_viewport_height();
                     let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
                     let win = self.window_mgr.focused_window_mut();
                     win.scroll_offset = total.saturating_sub(vh);
@@ -346,7 +358,7 @@ impl Editor {
             "scroll-half-up" | "scroll-page-up" => {
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let is_half = name == "scroll-half-up";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
@@ -355,6 +367,12 @@ impl Editor {
                         for _ in 0..n {
                             win.scroll_offset = win.scroll_offset.saturating_sub(amount);
                             win.cursor_row = win.cursor_row.saturating_sub(amount);
+                        }
+                    }
+                    crate::BufferKind::Shell => {
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev + amount as i32);
                         }
                     }
                     _ => {
@@ -369,11 +387,12 @@ impl Editor {
                         }
                     }
                 }
+                self.mark_scrolled();
             }
             "scroll-half-down" | "scroll-page-down" => {
                 let idx = self.active_buffer_idx();
                 let kind = self.buffers[idx].kind;
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let is_half = name == "scroll-half-down";
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
@@ -385,6 +404,12 @@ impl Editor {
                         for _ in 0..n {
                             win.scroll_offset = (win.scroll_offset + amount).min(max);
                             win.cursor_row = (win.cursor_row + amount).min(line_count);
+                        }
+                    }
+                    crate::BufferKind::Shell => {
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev - amount as i32);
                         }
                     }
                     _ => {
@@ -404,6 +429,7 @@ impl Editor {
                         }
                     }
                 }
+                self.mark_scrolled();
             }
             "scroll-down-line" => {
                 let idx = self.active_buffer_idx();
@@ -411,23 +437,87 @@ impl Editor {
                 match kind {
                     crate::BufferKind::Messages => {
                         let total = self.message_log.len();
-                        let vh = self.viewport_height;
+                        let vh = self.focused_viewport_height();
                         let win = self.window_mgr.focused_window_mut();
                         let max = total.saturating_sub(vh);
                         for _ in 0..n {
                             win.scroll_offset = (win.scroll_offset + 1).min(max);
                         }
                     }
-                    _ => {
-                        let buf = &self.buffers[idx];
-                        let vh = self.viewport_height;
+                    crate::BufferKind::Shell => {
+                        let scroll_speed = self.scroll_speed as i32;
                         for _ in 0..n {
-                            self.window_mgr
-                                .focused_window_mut()
-                                .scroll_down_line(buf, vh);
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev - scroll_speed);
+                        }
+                    }
+                    _ => {
+                        let vh = self.focused_viewport_height();
+                        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
+                        let needs_wrapped = (self.effective_word_wrap()
+                            && self.text_area_width > 0)
+                            || has_folds
+                            || self.heading_scale
+                            || self.buffers[idx]
+                                .local_options
+                                .inline_images
+                                .unwrap_or(false);
+                        let cell_h = self.gui_cell_height;
+                        // Pre-allocate a reusable buffer for visual rows cache data
+                        // to avoid cloning the Vec on every scroll iteration.
+                        let mut rows_buf: Vec<u8> = Vec::new();
+                        for _ in 0..n {
+                            if needs_wrapped {
+                                let buf = &self.buffers[idx];
+                                let max_line = buf.display_line_count();
+                                let scroll = self.window_mgr.focused_window().scroll_offset;
+                                let range_start = scroll;
+                                let range_end = (scroll + vh + 2).min(max_line);
+                                self.populate_visual_rows_cache(idx, range_start, range_end);
+                                let cache_line_start = match &self.buffers[idx].visual_rows_cache {
+                                    Some(c) => {
+                                        rows_buf.clear();
+                                        rows_buf.extend_from_slice(&c.rows);
+                                        c.line_start
+                                    }
+                                    None => {
+                                        rows_buf.clear();
+                                        0
+                                    }
+                                };
+                                let buf = &self.buffers[idx];
+                                self.window_mgr.focused_window_mut().scroll_down_line(
+                                    buf,
+                                    vh,
+                                    cell_h,
+                                    |line| {
+                                        if line >= cache_line_start
+                                            && line < cache_line_start + rows_buf.len()
+                                        {
+                                            let v = rows_buf[line - cache_line_start] as usize;
+                                            if v > 0 {
+                                                v
+                                            } else {
+                                                1
+                                            }
+                                        } else {
+                                            1
+                                        }
+                                    },
+                                );
+                            } else {
+                                let buf = &self.buffers[idx];
+                                self.window_mgr.focused_window_mut().scroll_down_line(
+                                    buf,
+                                    vh,
+                                    cell_h,
+                                    |_| 1,
+                                );
+                            }
                         }
                     }
                 }
+                self.mark_scrolled();
             }
             "scroll-up-line" => {
                 let idx = self.active_buffer_idx();
@@ -439,39 +529,59 @@ impl Editor {
                             win.scroll_offset = win.scroll_offset.saturating_sub(1);
                         }
                     }
+                    crate::BufferKind::Shell => {
+                        let scroll_speed = self.scroll_speed as i32;
+                        for _ in 0..n {
+                            let prev = self.pending_shell_scroll.unwrap_or(0);
+                            self.pending_shell_scroll = Some(prev + scroll_speed);
+                        }
+                    }
                     _ => {
-                        let vh = self.viewport_height;
+                        let vh = self.focused_viewport_height();
                         let has_folds = !self.buffers[idx].folded_ranges.is_empty();
                         let needs_wrapped = (self.effective_word_wrap()
                             && self.text_area_width > 0)
                             || has_folds
                             || self.heading_scale;
+                        let cell_h = self.gui_cell_height;
+                        let mut rows_buf: Vec<u8> = Vec::new();
                         for _ in 0..n {
                             if needs_wrapped {
-                                // Pre-compute visual rows for the viewport range so
-                                // the closure doesn't need &self (borrow conflict).
                                 let buf = &self.buffers[idx];
                                 let max_line = buf.display_line_count();
                                 let scroll = self.window_mgr.focused_window().scroll_offset;
-                                // Pre-compute for lines around scroll_offset ± viewport.
                                 let range_start = scroll.saturating_sub(1);
                                 let range_end = (scroll + vh + 2).min(max_line);
-                                let mut row_cache: Vec<(usize, usize)> =
-                                    Vec::with_capacity(range_end - range_start + 1);
-                                for l in range_start..range_end {
-                                    row_cache.push((l, self.line_visual_rows(idx, l)));
-                                }
+                                self.populate_visual_rows_cache(idx, range_start, range_end);
+                                let cache_line_start = match &self.buffers[idx].visual_rows_cache {
+                                    Some(c) => {
+                                        rows_buf.clear();
+                                        rows_buf.extend_from_slice(&c.rows);
+                                        c.line_start
+                                    }
+                                    None => {
+                                        rows_buf.clear();
+                                        0
+                                    }
+                                };
                                 let buf = &self.buffers[idx];
                                 self.window_mgr.focused_window_mut().scroll_up_line_wrapped(
                                     buf,
                                     vh,
+                                    cell_h,
                                     |line| {
-                                        // Look up from pre-computed cache; fallback to 1.
-                                        row_cache
-                                            .iter()
-                                            .find(|(l, _)| *l == line)
-                                            .map(|(_, r)| *r)
-                                            .unwrap_or(1)
+                                        if line >= cache_line_start
+                                            && line < cache_line_start + rows_buf.len()
+                                        {
+                                            let v = rows_buf[line - cache_line_start] as usize;
+                                            if v > 0 {
+                                                v
+                                            } else {
+                                                1
+                                            }
+                                        } else {
+                                            1
+                                        }
                                     },
                                 );
                             } else {
@@ -481,19 +591,23 @@ impl Editor {
                         }
                     }
                 }
+                self.mark_scrolled();
             }
             "scroll-center" => {
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr.focused_window_mut().scroll_center(vh);
+                self.mark_scrolled();
             }
             "scroll-top" => {
                 self.window_mgr.focused_window_mut().scroll_cursor_top();
+                self.mark_scrolled();
             }
             "scroll-bottom" => {
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .scroll_cursor_bottom(vh);
+                self.mark_scrolled();
             }
             // Screen-relative cursor
             "move-screen-top" => {
@@ -501,14 +615,14 @@ impl Editor {
             }
             "move-screen-middle" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .move_to_screen_middle(buf, vh);
             }
             "move-screen-bottom" => {
                 let buf = &self.buffers[self.active_buffer_idx()];
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 self.window_mgr
                     .focused_window_mut()
                     .move_to_screen_bottom(buf, vh);
@@ -563,23 +677,28 @@ impl Editor {
                 for _ in 0..n {
                     self.jump_to_next_match(true);
                 }
+                self.mark_full_redraw();
             }
             "search-prev" => {
                 self.record_jump();
                 for _ in 0..n {
                     self.jump_to_next_match(false);
                 }
+                self.mark_full_redraw();
             }
             "search-word-under-cursor" => {
                 self.record_jump();
                 self.search_word_at_cursor();
+                self.mark_full_redraw();
             }
             "search-word-under-cursor-backward" => {
                 self.record_jump();
                 self.search_word_at_cursor_backward();
+                self.mark_full_redraw();
             }
             "clear-search-highlight" | "nohlsearch" => {
                 self.search_state.highlight_active = false;
+                self.mark_full_redraw();
             }
             "visual-select-next-match" => {
                 self.record_jump();

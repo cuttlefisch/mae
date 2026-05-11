@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci setup-hooks setup-dev self-test check-config code-map code-map-check help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean
 
 # Default target: release build
 all: build
@@ -80,6 +80,16 @@ install: build
 	@if command -v gtk-update-icon-cache >/dev/null 2>&1; then \
 		gtk-update-icon-cache -f -t $(DATADIR)/icons/hicolor 2>/dev/null || true; \
 	fi
+	@echo ""
+	@echo "Next steps:"
+	@echo "  mae --init-config    # generate config + init.scm + run first-time wizard"
+	@echo "  mae --gui file.rs    # launch with GUI"
+	@echo "  mae file.rs          # launch in terminal"
+	@case ":$$PATH:" in *":$(PREFIX):"*) ;; *) \
+		echo ""; \
+		echo "  Warning: $(PREFIX) is not on your PATH. Add to your shell profile:"; \
+		echo "    export PATH=\"$(PREFIX):\$$PATH\""; \
+	esac
 
 ## install-tui: terminal-only install (no skia dependency)
 install-tui: build-tui
@@ -116,6 +126,15 @@ test:
 check:
 	$(CARGO) check $(FEAT_FLAG)
 
+## verify: check + test + GUI check — single command for development validation
+verify:
+	@echo "=== Check (workspace) ==="
+	$(CARGO) check --workspace --exclude mae-gui
+	@echo "=== Check (GUI) ==="
+	$(CARGO) check --package mae-gui
+	@echo "=== Test ==="
+	$(CARGO) test --workspace --exclude mae-gui 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
+
 ## fmt: format all Rust sources in place
 fmt:
 	$(CARGO) fmt
@@ -134,6 +153,10 @@ ci: fmt-check
 	$(CARGO) check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
 	$(CARGO) test --workspace --exclude mae-gui --exclude mae-test-fixtures
 	@echo "CI passed ✓"
+
+## audit: run cargo-deny security + license scanning
+audit:
+	cargo deny check
 
 ## setup-hooks: configure git to use version-controlled hooks
 setup-hooks:
@@ -160,9 +183,64 @@ code-map:
 code-map-check:
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 
+## gen-fixtures: generate large test fixtures for perf benchmarking
+gen-fixtures:
+	bash assets/gen-large-org.sh
+	bash assets/gen-long-lines.sh
+
+## doctor: check build prerequisites and report status
+doctor:
+	@OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; WARN="\033[33m!\033[0m"; \
+	printf "MAE Build Prerequisites\n=======================\n\n"; \
+	if command -v rustc >/dev/null 2>&1; then \
+		V=$$(rustc --version | awk '{print $$2}'); \
+		printf "  $$OK rustc $$V\n"; \
+	else printf "  $$FAIL rustc not found — install via https://rustup.rs\n"; fi; \
+	if command -v cargo >/dev/null 2>&1; then \
+		printf "  $$OK cargo\n"; \
+	else printf "  $$FAIL cargo not found\n"; fi; \
+	if command -v clang >/dev/null 2>&1; then \
+		printf "  $$OK clang (GUI build)\n"; \
+	else printf "  $$WARN clang not found — needed for GUI build (make build-tui works without it)\n"; fi; \
+	if command -v pkg-config >/dev/null 2>&1; then \
+		printf "  $$OK pkg-config\n"; \
+	else printf "  $$WARN pkg-config not found — needed for GUI build\n"; fi; \
+	if pkg-config --exists fontconfig 2>/dev/null; then \
+		printf "  $$OK fontconfig headers\n"; \
+	else printf "  $$WARN fontconfig-devel not found — needed for GUI build\n"; fi; \
+	if pkg-config --exists freetype2 2>/dev/null; then \
+		printf "  $$OK freetype headers\n"; \
+	else printf "  $$WARN freetype-devel not found — needed for GUI build\n"; fi; \
+	printf "\n"; \
+	case ":$$PATH:" in *":$(HOME)/.local/bin:"*) \
+		printf "  $$OK ~/.local/bin is on PATH\n";; *) \
+		printf "  $$WARN ~/.local/bin is not on PATH — add to shell profile:\n"; \
+		printf "    export PATH=\"$$HOME/.local/bin:\$$PATH\"\n";; esac; \
+	printf "\nTUI-only (make build-tui) needs only rustc + cargo.\n"
+
 ## clean: remove all build artefacts
 clean:
 	$(CARGO) clean
+
+## docker-ci: run full CI pipeline in a container (no local toolchain needed)
+docker-ci:
+	docker compose run --rm --build ci
+
+## docker-new-user: validate new-user install flow in a clean container
+docker-new-user:
+	docker compose run --rm --build new-user
+
+## docker-smoke: quick binary smoke test in container
+docker-smoke:
+	docker compose run --rm --build smoke
+
+## docker-dev: interactive dev shell with full Rust toolchain
+docker-dev:
+	docker compose run --rm --build dev
+
+## docker-clean: remove MAE Docker images and build cache
+docker-clean:
+	docker compose down --rmi local --volumes
 
 ## help: print this help
 help:

@@ -34,19 +34,28 @@ jobs:
 
       - name: cargo check
         if: matrix.step == 'check'
-        run: cargo check --workspace --all-targets --exclude mae-gui
+        run: cargo check --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures
 
       - name: cargo test
         if: matrix.step == 'test'
-        run: cargo test --workspace --exclude mae-gui
+        run: |
+          cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures
+          cargo test --doc --workspace --exclude mae-gui --exclude mae-test-fixtures
 
       - name: cargo clippy
         if: matrix.step == 'clippy'
-        run: cargo clippy --workspace --all-targets --exclude mae-gui -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude mae-gui --exclude mae-test-fixtures -- -D warnings
 
       - name: cargo fmt
         if: matrix.step == 'fmt'
         run: cargo fmt --all --check
+
+  audit:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
 
   # E2E smoke test: build TUI binary and validate init.scm loads without errors.
   e2e:
@@ -57,6 +66,44 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build TUI binary
-        run: cargo build --release --workspace --exclude mae-gui
+        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
       - name: Validate init.scm
         run: ./target/release/mae --check-config
+
+  gui-build:
+    name: gui / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libfontconfig1-dev libfreetype6-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Build GUI binary
+        run: cargo build --release --features gui --package mae
+
+  container-smoke:
+    name: container / smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and smoke-test container
+        run: docker compose run --rm --build smoke
+
+  container-new-user:
+    name: container / new-user
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate new-user flow in clean container
+        run: docker compose run --rm --build new-user
+
+  code-map:
+    name: code-map freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check code-map is up to date
+        run: make code-map-check

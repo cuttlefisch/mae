@@ -24,4 +24,7 @@ pub enum MaeEvent {
     McpIdleTick,
     /// Periodic health check (~30s tick).
     HealthCheck,
+    /// Idle tick — fired when no input received for ~100ms.
+    /// Used for deferred background work (syntax reparse, swap files).
+    IdleTick,
 }

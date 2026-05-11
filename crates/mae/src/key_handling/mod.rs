@@ -100,7 +100,12 @@ pub fn crossterm_to_keypress(key: &KeyEvent) -> Option<KeyPress> {
         _ => return None,
     };
 
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // For character keys, shift is already encoded in the char itself ('G' vs 'g').
+    // Normalize to false so keymap lookups match (parse_key_seq("G") stores shift=false).
+    let shift = match mae_key {
+        Key::Char(_) => false,
+        _ => key.modifiers.contains(KeyModifiers::SHIFT),
+    };
     Some(KeyPress {
         key: mae_key,
         ctrl,
@@ -359,7 +364,7 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
     match source {
         Some(CommandSource::Builtin) => {
             debug!(command = name, source = "builtin", "dispatching command");
-            editor.dispatch_builtin(name);
+            editor.dispatch_with_multicursor(name);
         }
         Some(CommandSource::Scheme(fn_name)) => {
             debug!(command = name, scheme_fn = %fn_name, "dispatching scheme command");
@@ -400,7 +405,7 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
                             }
                         }
                     } else {
-                        editor.dispatch_builtin(name);
+                        editor.dispatch_with_multicursor(name);
                     }
                 }
                 Err(e) => {
@@ -410,7 +415,7 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
             }
         }
         None => {
-            if !editor.dispatch_builtin(name) {
+            if !editor.dispatch_with_multicursor(name) {
                 warn!(command = name, "unknown command");
                 editor.set_status(format!("Unknown command: {}", name));
             }

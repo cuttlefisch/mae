@@ -95,10 +95,21 @@ pub fn execute_terminal_spawn(editor: &mut Editor, args: &Value) -> Result<Strin
         .get("command")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let cwd = args.get("cwd").and_then(|v| v.as_str()).map(|s| {
+        let expanded = mae_core::file_picker::expand_tilde(s);
+        std::path::PathBuf::from(expanded)
+    });
 
     let buf = mae_core::Buffer::new_shell(&name);
     editor.buffers.push(buf);
     let idx = editor.buffers.len() - 1;
+
+    // Store CWD override if provided.
+    if let Some(dir) = cwd {
+        if dir.is_dir() {
+            editor.pending_shell_cwds.insert(idx, dir);
+        }
+    }
 
     if let Some(cmd) = command {
         editor.pending_agent_spawns.push((idx, cmd));
@@ -110,6 +121,42 @@ pub fn execute_terminal_spawn(editor: &mut Editor, args: &Value) -> Result<Strin
         editor.pending_shell_spawns.push(idx);
         Ok(format!("Interactive terminal spawning in buffer {}", idx))
     }
+}
+
+/// Open a terminal in the directory containing a file.
+pub fn execute_terminal_at_file(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let dir = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+        let expanded = mae_core::file_picker::expand_tilde(path_str);
+        let path = std::path::PathBuf::from(&expanded);
+        if path.is_dir() {
+            path
+        } else {
+            path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+        }
+    } else {
+        // Use current buffer's file path.
+        let idx = editor
+            .ai_target_buffer_idx
+            .unwrap_or_else(|| editor.active_buffer_idx());
+        editor.buffers[idx]
+            .file_path()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .or_else(|| editor.project.as_ref().map(|p| p.root.clone()))
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    };
+
+    if !dir.exists() {
+        return Err(format!("Directory does not exist: {}", dir.display()));
+    }
+
+    // Delegate to terminal_spawn with cwd set.
+    let spawn_args = serde_json::json!({
+        "name": format!("*Terminal {}*", editor.buffers.len()),
+        "cwd": dir.display().to_string(),
+    });
+    execute_terminal_spawn(editor, &spawn_args)
 }
 
 #[cfg(test)]

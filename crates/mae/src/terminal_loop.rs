@@ -67,6 +67,16 @@ pub(crate) async fn run_terminal_loop(
     let mut last_render = std::time::Instant::now() - MIN_FRAME_INTERVAL; // allow first render immediately
     let mut render_pending = false;
 
+    // Set initial layout area for per-window viewport height calculations.
+    if let Ok((w, h)) = renderer.size() {
+        editor.last_layout_area = mae_core::WinRect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h.saturating_sub(2),
+        };
+    }
+
     loop {
         // Heartbeat for watchdog — tick each loop iteration so the watchdog
         // thread knows the main thread is alive.
@@ -112,6 +122,9 @@ pub(crate) async fn run_terminal_loop(
         };
         let viewport_height = editor.focused_window_viewport_height(total_window_area);
         editor.viewport_height = viewport_height;
+        // TUI: 1 char = 1 cell (no pixel scaling).
+        editor.gui_cell_width = 1.0;
+        editor.gui_cell_height = 1.0;
         // Horizontal scroll + text_area_width
         {
             let (term_w, term_h) = renderer.size()?;
@@ -150,28 +163,47 @@ pub(crate) async fn run_terminal_loop(
             let cursor_row = editor.window_mgr.focused_window().cursor_row;
             let scroll = editor.window_mgr.focused_window().scroll_offset;
             let so = editor.scrolloff;
-            let range_start = scroll.min(cursor_row);
-            let range_end = (scroll.max(cursor_row) + viewport_height + 2)
+            // Pass tight needed range — populate_visual_rows_cache adds padding internally.
+            let cache_start = scroll.min(cursor_row).saturating_sub(1);
+            let cache_end = (scroll.max(cursor_row) + viewport_height + 2)
                 .min(editor.buffers[buf_idx].display_line_count());
-            let row_cache: Vec<(usize, usize)> = (range_start..range_end)
-                .map(|l| (l, editor.line_visual_rows(buf_idx, l)))
-                .collect();
+            editor.populate_visual_rows_cache(buf_idx, cache_start, cache_end);
 
-            editor
-                .window_mgr
-                .focused_window_mut()
-                .ensure_scroll_wrapped_with_margin(viewport_height, so, |line| {
-                    row_cache
-                        .iter()
-                        .find(|(l, _)| *l == line)
-                        .map(|(_, r)| *r)
-                        .unwrap_or(1)
+            // Snapshot cache Vec<u8> to avoid borrow conflict with window_mgr.
+            let (cache_rows, cache_line_start) = {
+                let buf = &editor.buffers[buf_idx];
+                match &buf.visual_rows_cache {
+                    Some(c) => (c.rows.clone(), c.line_start),
+                    None => (Vec::new(), 0),
+                }
+            };
+
+            let line_count = editor.buffers[buf_idx].display_line_count();
+            let win = editor.window_mgr.focused_window_mut();
+            if win.scroll_locked && win.cursor_row == win.scroll_locked_cursor {
+                // Cursor hasn't moved since scroll command; keep lock active
+            } else {
+                win.scroll_locked = false;
+                win.ensure_scroll_wrapped_with_margin(viewport_height, so, line_count, |line| {
+                    if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                        let v = cache_rows[line - cache_line_start] as usize;
+                        if v > 0 {
+                            v
+                        } else {
+                            1
+                        }
+                    } else {
+                        1
+                    }
                 });
+            }
         }
 
-        // Debounced syntax reparse: drain pending reparses after 50ms idle.
+        // Debounced syntax reparse: drain pending reparses after configured ms idle.
+        let reparse_debounce_ms = editor.syntax_reparse_debounce_ms;
         if !editor.syntax_reparse_pending.is_empty()
-            && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(50)
+            && editor.last_edit_time.elapsed()
+                >= std::time::Duration::from_millis(reparse_debounce_ms)
         {
             mae_core::syntax::drain_pending_reparses(editor);
             tui_dirty = true;
@@ -182,6 +214,11 @@ pub(crate) async fn run_terminal_loop(
             && editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
         {
             editor.lsp_request_document_highlight();
+        }
+
+        // Breadcrumbs: request/refresh on cursor idle.
+        if editor.show_breadcrumbs {
+            editor.request_breadcrumb_symbols();
         }
 
         if tui_dirty {
@@ -195,6 +232,25 @@ pub(crate) async fn run_terminal_loop(
                 if editor.debug_mode {
                     editor.perf_stats.sample_process_stats();
                 }
+                // Record frame snapshot for perf_profile tool.
+                if editor.event_recorder.is_recording() {
+                    let ps = &editor.perf_stats;
+                    let snapshot = mae_core::event_record::FrameSnapshot {
+                        offset_us: editor.event_recorder.duration_us(),
+                        frame_time_us: frame_elapsed,
+                        total_render_us: 0, // TUI: no separate render timing
+                        render_syntax_us: ps.render_syntax_us,
+                        render_layout_us: ps.render_layout_us,
+                        render_draw_us: ps.render_draw_us,
+                        redraw_level: format!("{:?}", editor.redraw_level),
+                        scroll_offset: editor.window_mgr.focused_window().scroll_offset,
+                        syntax_cache_hit: ps.syntax_cache_hits > 0 && ps.syntax_cache_misses == 0,
+                        visual_rows_cache_hit: ps.visual_rows_cache_hits > 0
+                            && ps.visual_rows_cache_misses == 0,
+                    };
+                    editor.event_recorder.record_frame_snapshot(snapshot);
+                }
+                editor.clear_redraw();
                 last_render = std::time::Instant::now();
                 tui_dirty = false;
                 render_pending = false;
@@ -210,9 +266,11 @@ pub(crate) async fn run_terminal_loop(
             // Fire app-exit hook.
             editor.fire_hook("app-exit");
 
-            // Persist history
-            if let Err(e) = save_history(editor) {
-                error!(error = %e, "failed to save history");
+            // Persist history (skipped in clean mode)
+            if !editor.clean_mode {
+                if let Err(e) = save_history(editor) {
+                    error!(error = %e, "failed to save history");
+                }
             }
 
             // If debug mode is enabled, save a tombstone dump.
@@ -315,10 +373,10 @@ pub(crate) async fn run_terminal_loop(
             }
         };
 
-        // Syntax reparse timer: fires 50ms after last edit when reparses are pending.
+        // Syntax reparse timer: fires after configured ms when reparses are pending.
         let has_pending_reparse = !editor.syntax_reparse_pending.is_empty();
         let reparse_sleep_dur = if has_pending_reparse {
-            let debounce = std::time::Duration::from_millis(50);
+            let debounce = std::time::Duration::from_millis(reparse_debounce_ms);
             debounce.checked_sub(editor.last_edit_time.elapsed())
         } else {
             None
@@ -370,6 +428,7 @@ pub(crate) async fn run_terminal_loop(
                             handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                         } else if key.kind == KeyEventKind::Press {
                             shell_pending_keys.clear();
+                            editor.mark_cursor_moved();
                             handle_key(editor, scheme, key, &mut pending_keys, ai_command_tx, &mut pending_interactive_event);
 
                             // Handle cancellation requested via command (e.g. SPC a c)
@@ -384,7 +443,63 @@ pub(crate) async fn run_terminal_loop(
                             }
                         }
                     }
-                    Some(Ok(Event::Resize(_w, _h))) => {
+                    Some(Ok(Event::Mouse(mouse))) => {
+                        use crossterm::event::{MouseButton as XButton, MouseEventKind};
+                        tui_dirty = true;
+                        match mouse.kind {
+                            MouseEventKind::Down(XButton::Left) => {
+                                let shift = mouse.modifiers.contains(crossterm::event::KeyModifiers::SHIFT);
+                                // Try focus window at click position first.
+                                editor.focus_window_at(mouse.column, mouse.row);
+                                editor.handle_mouse_click_shift(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Left,
+                                    shift,
+                                );
+                            }
+                            MouseEventKind::Down(XButton::Right) => {
+                                editor.handle_mouse_click(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Right,
+                                );
+                            }
+                            MouseEventKind::Down(XButton::Middle) => {
+                                editor.handle_mouse_click(
+                                    mouse.row as usize,
+                                    mouse.column as usize,
+                                    mae_core::MouseButton::Middle,
+                                );
+                            }
+                            MouseEventKind::Drag(XButton::Left) => {
+                                editor.handle_mouse_drag(mouse.row as usize, mouse.column as usize);
+                            }
+                            MouseEventKind::Up(XButton::Left) => {
+                                editor.handle_mouse_release(mouse.row as usize, mouse.column as usize);
+                            }
+                            MouseEventKind::ScrollUp => {
+                                editor.handle_mouse_scroll(1);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                editor.handle_mouse_scroll(-1);
+                            }
+                            MouseEventKind::ScrollLeft => {
+                                editor.handle_mouse_scroll_horizontal(-1);
+                            }
+                            MouseEventKind::ScrollRight => {
+                                editor.handle_mouse_scroll_horizontal(1);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(Event::Resize(w, h))) => {
+                        editor.last_layout_area = mae_core::WinRect {
+                            x: 0,
+                            y: 0,
+                            width: w,
+                            height: h.saturating_sub(2),
+                        };
                         tui_dirty = true;
                     }
                     Some(Err(e)) => {

@@ -19,10 +19,7 @@ impl Editor {
         if prev != buf_idx {
             self.alternate_buffer_idx = Some(prev);
         }
-        let win = self.window_mgr.focused_window_mut();
-        win.buffer_idx = buf_idx;
-        win.cursor_row = 0;
-        win.cursor_col = 0;
+        self.display_buffer(buf_idx);
         self.set_mode(crate::Mode::Normal);
     }
 
@@ -258,6 +255,26 @@ impl Editor {
                     &mut text,
                     &mut line_map,
                 );
+            }
+        }
+
+        // --- Watch Expressions section ---
+        if !state.watch_expressions.is_empty() {
+            text.push('\n');
+            line_map.push(DebugLineItem::Blank);
+            text.push_str(" Watch ─────────────────────────\n");
+            line_map.push(DebugLineItem::SectionHeader("Watch".into()));
+
+            for (i, watch) in state.watch_expressions.iter().enumerate() {
+                let value = if let Some(v) = &watch.last_value {
+                    v.as_str()
+                } else if let Some(e) = &watch.error {
+                    e.as_str()
+                } else {
+                    "<not evaluated>"
+                };
+                text.push_str(&format!("   [{}] {} = {}\n", i, watch.expression, value));
+                line_map.push(DebugLineItem::Blank);
             }
         }
 

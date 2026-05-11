@@ -89,6 +89,10 @@
 "markup.done" = { fg = "green" }
 "markup.checkbox" = { fg = "yellow", bold = true }
 "markup.checkbox.checked" = { fg = "green" }
+"markup.hr" = { fg = "gray" }
+"markup.priority.a" = { fg = "red", bold = true }
+"markup.priority.b" = { fg = "yellow", bold = true }
+"markup.priority.c" = { fg = "green" }
 "markup.code_block" = { bg = "#f0f0f0" }
 
 "diff.added" = { fg = "green" }

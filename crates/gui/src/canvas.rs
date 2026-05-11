@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::io;
 use std::num::NonZeroU32;
+use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use mae_core::Theme;
@@ -14,6 +16,13 @@ use winit::window::Window;
 
 use crate::text::StyledLine;
 use crate::theme::{self, fill_paint, DEFAULT_BG};
+
+/// A cached image: either a raster bitmap or an SVG DOM for vector rendering.
+#[derive(Clone)]
+pub enum CachedImage {
+    Raster(skia_safe::Image),
+    Svg(skia_safe::svg::Dom),
+}
 
 /// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
@@ -48,6 +57,12 @@ pub struct SkiaCanvas {
     /// Avoids cloning + `set_size()` on every bold/scaled character at 60fps.
     scaled_fonts: HashMap<u32, Font>,
     scaled_bold_fonts: HashMap<u32, Font>,
+    /// Cached glyph advance widths for scaled fonts. Key = `(scale * 1000.0) as u32`.
+    /// Avoids cloning the Skia Font and calling `measure_str("M")` every frame.
+    scaled_advance_cache: HashMap<u32, f32>,
+    /// Decoded image cache. Key = absolute path. Value = `None` if the image
+    /// failed to load or exceeded the 10MB size limit.
+    image_cache: HashMap<PathBuf, Option<CachedImage>>,
 }
 
 impl SkiaCanvas {
@@ -184,6 +199,8 @@ impl SkiaCanvas {
             fallback_cache: HashMap::new(),
             scaled_fonts: HashMap::new(),
             scaled_bold_fonts: HashMap::new(),
+            scaled_advance_cache: HashMap::new(),
+            image_cache: HashMap::new(),
         })
     }
 
@@ -215,6 +232,7 @@ impl SkiaCanvas {
         self.fallback_cache.clear();
         self.scaled_fonts.clear();
         self.scaled_bold_fonts.clear();
+        self.scaled_advance_cache.clear();
     }
 
     /// Return (cell_width, cell_height) in pixels.
@@ -260,6 +278,39 @@ impl SkiaCanvas {
         self.surface.canvas().clip_rect(rect, None, None);
     }
 
+    /// Run a closure with drawing clipped to the given cell rectangle.
+    /// Saves and restores the canvas state so the clip doesn't leak.
+    pub fn with_clip(
+        &mut self,
+        row: usize,
+        col: usize,
+        width: usize,
+        height: usize,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let (cw, ch) = self.cell_size();
+        let rect = skia_safe::Rect::from_xywh(
+            col as f32 * cw,
+            row as f32 * ch,
+            width as f32 * cw,
+            height as f32 * ch,
+        );
+        self.surface.canvas().save();
+        self.surface.canvas().clip_rect(rect, None, None);
+        f(self);
+        self.surface.canvas().restore();
+    }
+
+    /// Snapshot a pixel rectangle from the surface as a cacheable Image.
+    pub fn snapshot_region(&mut self, rect: skia_safe::IRect) -> Option<skia_safe::Image> {
+        self.surface.image_snapshot_with_bounds(rect)
+    }
+
+    /// Blit a cached image at the given pixel position.
+    pub fn draw_cached_image(&mut self, image: &skia_safe::Image, x: f32, y: f32) {
+        self.surface.canvas().draw_image(image, (x, y), None);
+    }
+
     /// Get a cached scaled font. Avoids clone + set_size on every call.
     fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
         let key = (scale * 1000.0) as u32;
@@ -292,9 +343,14 @@ impl SkiaCanvas {
         if scale == 1.0 {
             return self.cell_width;
         }
+        let key = (scale * 1000.0) as u32;
+        if let Some(&cached) = self.scaled_advance_cache.get(&key) {
+            return cached;
+        }
         // Measure bold advance since headings are rendered bold.
         let font = self.get_scaled_font(true, scale).clone();
         let (advance, _) = font.measure_str("M", None);
+        self.scaled_advance_cache.insert(key, advance);
         advance
     }
 
@@ -1149,6 +1205,83 @@ impl SkiaCanvas {
             (x + self.cell_width, underline_y),
             &paint,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Image rendering
+    // -----------------------------------------------------------------------
+
+    /// Load (and cache) an image from disk.
+    ///
+    /// Returns `Some(&CachedImage)` on success, `None` if the file exceeds 10MB,
+    /// cannot be read, or is in an unsupported format.
+    /// The result is cached by path so each file is decoded at most once.
+    fn load_cached_image(&mut self, path: &Path) -> Option<&CachedImage> {
+        const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
+
+        if !self.image_cache.contains_key(path) {
+            let result = (|| -> Option<CachedImage> {
+                let meta = std::fs::metadata(path).ok()?;
+                if meta.len() > MAX_BYTES {
+                    return None;
+                }
+                let bytes = std::fs::read(path).ok()?;
+                // SVG: parse into skia's native SVG DOM for vector rendering.
+                if path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("svg"))
+                    .unwrap_or(false)
+                {
+                    let dom = skia_safe::svg::Dom::from_bytes(&bytes, FontMgr::default()).ok()?;
+                    return Some(CachedImage::Svg(dom));
+                }
+                // Raster: decode with Skia.
+                let data = skia_safe::Data::new_copy(&bytes);
+                let img = skia_safe::Image::from_encoded(data)?;
+                Some(CachedImage::Raster(img))
+            })();
+            self.image_cache.insert(path.to_path_buf(), result);
+        }
+        self.image_cache.get(path).and_then(|v| v.as_ref())
+    }
+
+    /// Draw an image from the cache at the given pixel rectangle.
+    ///
+    /// Loads (and caches) the image if not already loaded. Uses a single method
+    /// to avoid double-borrowing `self` (load returns `&CachedImage`, draw needs `&mut`).
+    pub fn draw_image_from_cache(&mut self, path: &Path, x: f32, y: f32, w: f32, h: f32) -> bool {
+        // Load into cache first, then clone the ref-counted handle to avoid borrow conflict.
+        self.load_cached_image(path);
+        let cached = match self.image_cache.get(path).and_then(|v| v.as_ref()) {
+            Some(c) => c.clone(),
+            None => return false,
+        };
+        match cached {
+            CachedImage::Raster(ref img) => {
+                let dst = skia_safe::Rect::from_xywh(x, y, w, h);
+                let src = skia_safe::Rect::from_iwh(img.width(), img.height());
+                let sampling =
+                    skia_safe::SamplingOptions::from(skia_safe::CubicResampler::mitchell());
+                let paint = skia_safe::Paint::default();
+                self.surface.canvas().draw_image_rect_with_sampling_options(
+                    img,
+                    Some((&src, skia_safe::canvas::SrcRectConstraint::Fast)),
+                    dst,
+                    sampling,
+                    &paint,
+                );
+            }
+            CachedImage::Svg(mut dom) => {
+                let canvas = self.surface.canvas();
+                canvas.save();
+                canvas.translate((x, y));
+                dom.set_container_size((w, h));
+                dom.render(canvas);
+                canvas.restore();
+            }
+        }
+        true
     }
 
     /// End the frame: blit the Skia raster pixels to the OS window via softbuffer.

@@ -1,3 +1,5 @@
+//! File tree sidebar: expand, collapse, navigate, open.
+
 use crate::buffer::{Buffer, BufferKind};
 use crate::window::SplitDirection;
 
@@ -119,12 +121,23 @@ impl Editor {
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     if path.is_file() {
-                        // Focus a non-tree window to open the file in it.
+                        // Focus a non-tree, non-conversation window to open the file in.
                         let tree_win_id = self.file_tree_window_id;
+                        let buffers = &self.buffers;
+                        let conv_pair = &self.conversation_pair;
                         let target_win = self
                             .window_mgr
                             .iter_windows()
-                            .find(|w| Some(w.id) != tree_win_id)
+                            .find(|w| {
+                                Some(w.id) != tree_win_id && {
+                                    let bi = w.buffer_idx;
+                                    !(bi < buffers.len()
+                                        && (buffers[bi].kind == crate::BufferKind::Conversation
+                                            || conv_pair
+                                                .as_ref()
+                                                .is_some_and(|p| bi == p.input_buffer_idx)))
+                                }
+                            })
                             .map(|w| w.id);
                         if let Some(win_id) = target_win {
                             self.window_mgr.set_focused(win_id);
@@ -195,18 +208,26 @@ impl Editor {
                 Some(true)
             }
             "file-tree-delete" => {
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
                     .file_tree()
                     .and_then(|ft| ft.selected_path().map(|p| p.to_path_buf()));
                 if let Some(path) = path {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    self.set_status(format!("Delete {}? (y/n)", name));
-                    self.pending_file_delete = Some((path, false));
+                    self.mini_dialog = Some(MiniDialogState::confirm(
+                        format!("Delete {}?", name),
+                        MiniDialogContext::FileDelete {
+                            path,
+                            close_buffer: false,
+                        },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 }
                 Some(true)
             }
             "file-tree-rename" => {
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
                 let idx = self.active_buffer_idx();
                 let path = self.buffers[idx]
                     .file_tree()
@@ -217,17 +238,19 @@ impl Editor {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    self.file_tree_action = Some(crate::file_tree::FileTreeAction::Rename(path));
-                    self.set_mode(crate::Mode::Command);
-                    self.command_line = name;
-                    self.command_cursor = self.command_line.len();
-                    self.set_status("Rename to:");
+                    self.mini_dialog = Some(MiniDialogState::single_input(
+                        "Rename to",
+                        &name,
+                        "new name",
+                        MiniDialogContext::FileTreeRename { path },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 }
                 Some(true)
             }
             "file-tree-create" => {
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
                 let idx = self.active_buffer_idx();
-                // Use selected dir, or parent of selected file
                 let parent = self.buffers[idx].file_tree().and_then(|ft| {
                     ft.selected_path().map(|p| {
                         if p.is_dir() {
@@ -240,20 +263,29 @@ impl Editor {
                     })
                 });
                 if let Some(parent) = parent {
-                    self.file_tree_action = Some(crate::file_tree::FileTreeAction::Create(parent));
-                    self.set_mode(crate::Mode::Command);
-                    self.command_line = String::new();
-                    self.command_cursor = 0;
-                    self.set_status("Create (end with / for dir):");
+                    self.mini_dialog = Some(MiniDialogState::single_input(
+                        "Create (end with / for dir)",
+                        "",
+                        "filename",
+                        MiniDialogContext::FileTreeCreate { parent },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 }
                 Some(true)
             }
             "delete-this-file" => {
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
                 let idx = self.active_buffer_idx();
                 if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    self.set_status(format!("Delete {}? (y/n)", name));
-                    self.pending_file_delete = Some((path, true));
+                    self.mini_dialog = Some(MiniDialogState::confirm(
+                        format!("Delete {}?", name),
+                        MiniDialogContext::FileDelete {
+                            path,
+                            close_buffer: true,
+                        },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 } else {
                     self.set_status("Buffer has no file");
                 }

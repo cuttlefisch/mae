@@ -4,6 +4,7 @@ mod editor_tools;
 mod file;
 mod git;
 mod help;
+mod image;
 mod introspect;
 mod kb;
 pub(crate) mod lsp;
@@ -22,13 +23,15 @@ pub use dap::{
     execute_dap_select_thread, execute_dap_set_breakpoint, execute_dap_start, execute_dap_step,
 };
 pub use editor_tools::{
-    execute_command_list, execute_debug_state, execute_editor_restore_state,
-    execute_editor_save_state, execute_editor_state, execute_event_recording, execute_get_option,
-    execute_mouse_event, execute_org_cycle, execute_org_open_link, execute_org_todo_cycle,
-    execute_read_messages, execute_render_inspect, execute_set_option, execute_shell_scrollback,
-    execute_theme_inspect, execute_trigger_hook, execute_visual_buffer_add_circle,
-    execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
-    execute_visual_buffer_clear, execute_window_layout,
+    execute_audit_configuration, execute_babel_execute, execute_babel_tangle, execute_command_list,
+    execute_debug_state, execute_editor_restore_state, execute_editor_save_state,
+    execute_editor_state, execute_event_recording, execute_get_option, execute_kb_instances,
+    execute_mouse_event, execute_org_cycle, execute_org_export, execute_org_open_link,
+    execute_org_todo_cycle, execute_read_messages, execute_render_inspect, execute_set_option,
+    execute_shell_scrollback, execute_theme_inspect, execute_trigger_hook,
+    execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
+    execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
+    execute_window_layout,
 };
 pub use file::{
     execute_ai_load, execute_ai_save, execute_close_buffer, execute_create_file, execute_open_file,
@@ -41,6 +44,7 @@ pub use git::{
     execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
 };
 pub use help::execute_help_open;
+pub use image::{execute_image_info, execute_image_list};
 pub use introspect::execute_introspect;
 pub use kb::{
     execute_kb_get, execute_kb_graph, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
@@ -52,11 +56,20 @@ pub use project::{
     execute_save_memory, execute_switch_project, execute_update_plan,
 };
 pub use shell::{
-    execute_shell_list, execute_shell_read_output, execute_shell_send_input, execute_terminal_spawn,
+    execute_shell_list, execute_shell_read_output, execute_shell_send_input,
+    execute_terminal_at_file, execute_terminal_spawn,
 };
 pub use syntax::execute_syntax_tree;
 
+use mae_core::window::WindowId;
 use mae_core::Editor;
+
+/// Resolve the window to operate on: explicit AI target > focused window.
+pub fn resolve_active_window_id(editor: &Editor) -> WindowId {
+    editor
+        .ai_target_window_id
+        .unwrap_or_else(|| editor.window_mgr.focused_id())
+}
 
 /// Resolve a buffer reference: if `buffer_name` is provided, find that buffer;
 /// otherwise return the AI target buffer index (if set) or the active buffer index.

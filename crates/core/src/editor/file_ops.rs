@@ -150,8 +150,12 @@ impl Editor {
     }
 
     pub(crate) fn save_current_buffer(&mut self) {
-        self.fire_hook("before-save");
         let idx = self.active_buffer_idx();
+        if self.buffers[idx].kind == crate::BufferKind::Demo {
+            self.set_status("Demo buffer — changes are not saved");
+            return;
+        }
+        self.fire_hook("before-save");
         match self.buffers[idx].save() {
             Ok(()) => {
                 let name = self.buffers[idx].name.clone();
@@ -215,24 +219,26 @@ impl Editor {
             .iter()
             .position(|b| b.kind == crate::buffer::BufferKind::Messages);
 
-        if let Some(idx) = existing_idx {
-            self.window_mgr.focused_window_mut().buffer_idx = idx;
+        let msg_idx = if let Some(idx) = existing_idx {
+            idx
         } else {
             self.buffers.push(Buffer::new_messages());
-            let new_idx = self.buffers.len() - 1;
-            self.window_mgr.focused_window_mut().buffer_idx = new_idx;
-        }
+            self.buffers.len() - 1
+        };
+        self.display_buffer(msg_idx);
         self.sync_messages_rope();
         // Scroll to bottom so newest entries are visible.
-        // scroll_offset = first visible entry index.
         let total = self.message_log.len();
-        let vh = self.viewport_height;
-        self.window_mgr.focused_window_mut().scroll_offset = total.saturating_sub(vh);
-        // Also position cursor at the last line so yank etc. work from the bottom.
-        let buf_idx = self.active_buffer_idx();
-        let last_line = self.buffers[buf_idx].display_line_count().saturating_sub(1);
-        self.window_mgr.focused_window_mut().cursor_row = last_line;
-        self.window_mgr.focused_window_mut().cursor_col = 0;
+        let vh = self.focused_viewport_height();
+        // Find the window now showing messages and position it.
+        if let Some(win_id) = self.find_window_with_kind(crate::buffer::BufferKind::Messages) {
+            if let Some(win) = self.window_mgr.window_mut(win_id) {
+                win.scroll_offset = total.saturating_sub(vh);
+                let last_line = self.buffers[msg_idx].display_line_count().saturating_sub(1);
+                win.cursor_row = last_line;
+                win.cursor_col = 0;
+            }
+        }
         self.set_status(format!("{} log entries", total));
     }
 
@@ -373,7 +379,13 @@ impl Editor {
         // 7. Sync the output buffer's rope from conversation entries.
         self.sync_conversation_buffer_rope();
 
-        // 8. Record the pair.
+        // 8. Wrap the conversation windows as a group so splits respect the pair.
+        self.window_mgr.wrap_subtree_as_group(
+            &[output_window_id, input_window_id],
+            "conversation".to_string(),
+        );
+
+        // 9. Record the pair.
         self.conversation_pair = Some(super::ConversationPair {
             output_buffer_idx: output_idx,
             input_buffer_idx: input_idx,
@@ -927,7 +939,7 @@ impl Editor {
     fn complete_command_arg(&self, cmd: &str, prefix: &str) -> Vec<String> {
         match cmd {
             "e" => crate::file_picker::complete_path(prefix),
-            "help" | "describe-command" => {
+            "describe-command" => {
                 let mut matches: Vec<String> = self
                     .commands
                     .list_names()
@@ -936,6 +948,28 @@ impl Editor {
                     .map(|n| n.to_string())
                     .collect();
                 matches.sort();
+                matches
+            }
+            "help" => {
+                // Complete from all KB node IDs + bare names (without namespace prefix)
+                let mut matches: Vec<String> = self
+                    .kb
+                    .list_ids(None)
+                    .into_iter()
+                    .filter(|id| id.starts_with(prefix))
+                    .collect();
+                // Also match bare names (e.g. "buffer-insert" matches "scheme:buffer-insert")
+                if !prefix.contains(':') {
+                    for id in self.kb.list_ids(None) {
+                        if let Some(name) = id.split(':').nth(1) {
+                            if name.starts_with(prefix) && !matches.contains(&name.to_string()) {
+                                matches.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+                matches.sort();
+                matches.dedup();
                 matches
             }
             "set-theme" | "theme" => bundled_theme_names()
@@ -1035,7 +1069,7 @@ impl Editor {
         if let Some(new_idx) = self.open_file_hidden(path) {
             let prev_idx = self.active_buffer_idx();
             self.alternate_buffer_idx = Some(prev_idx);
-            self.window_mgr.focused_window_mut().buffer_idx = new_idx;
+            self.display_buffer(new_idx);
         }
     }
 
@@ -1136,6 +1170,14 @@ impl Editor {
                     }
                 } else {
                     self.set_status(format!("\"{}\" opened", name));
+                }
+                // Cache degradation status on open (avoids re-scanning every frame).
+                self.cache_degraded(new_idx);
+                if self.should_degrade_features(new_idx) {
+                    self.set_status(format!(
+                        "\"{}\" opened — large file mode (some features disabled)",
+                        name
+                    ));
                 }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();

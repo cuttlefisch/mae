@@ -139,6 +139,11 @@ pub fn wrap_line_display_rows(
     if text_width == 0 {
         return 1;
     }
+    // Fast path: ASCII-only line shorter than text_width fits in one row.
+    // byte length == char count for ASCII, and each ASCII char is 1 display column.
+    if line_text.len() <= text_width && line_text.is_ascii() {
+        return 1;
+    }
     let chars: Vec<char> = line_text
         .chars()
         .filter(|c| *c != '\n' && *c != '\r')

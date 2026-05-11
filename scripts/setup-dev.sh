@@ -88,19 +88,56 @@ install_debugpy() {
     fi
 }
 
+install_clang() {
+    if check_cmd clang; then
+        echo -e "  $OK clang already installed"
+        summary+=("clang: installed")
+        return
+    fi
+
+    echo "  Installing clang (required for GUI build — skia-safe)..."
+    if check_cmd dnf; then
+        sudo dnf install -y clang clang-devel
+    elif check_cmd apt-get; then
+        sudo apt-get install -y clang libclang-dev
+    elif check_cmd pacman; then
+        sudo pacman -S --noconfirm clang
+    elif check_cmd brew; then
+        echo -e "  $OK macOS Xcode CLI tools provide clang"
+        summary+=("clang: provided by Xcode")
+        return
+    else
+        echo -e "  $FAIL Unknown package manager — install clang manually"
+        summary+=("clang: MISSING (install manually)")
+        return
+    fi
+
+    if check_cmd clang; then
+        echo -e "  $OK clang installed"
+        summary+=("clang: installed")
+    else
+        echo -e "  $WARN clang install attempted but not found in PATH"
+        summary+=("clang: install failed (check PATH)")
+    fi
+}
+
 echo "MAE Development Dependencies"
 echo "============================"
 echo ""
 
-echo "[1/3] lldb-dap (DAP adapter for C/C++/Rust)"
+echo "[1/4] clang (required for GUI build — skia-safe FFI)"
+install_clang
+echo ""
+
+echo "[2/4] lldb-dap (DAP adapter for C/C++/Rust)"
 install_lldb
 echo ""
 
-echo "[2/3] rust-analyzer (LSP server for Rust)"
+echo "[3/4] rust-analyzer (LSP server for Rust)"
 install_rust_analyzer
 echo ""
 
-echo "[3/3] debugpy (DAP adapter for Python)"
+echo "[4/4] debugpy (DAP adapter for Python)"
 install_debugpy
 echo ""
 

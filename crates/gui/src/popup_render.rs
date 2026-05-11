@@ -69,10 +69,13 @@ pub fn render_completion_popup(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
     area_row: usize,
-    _area_col: usize,
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let items = &editor.completion_items;
     if items.is_empty() {
@@ -100,12 +103,23 @@ pub fn render_completion_popup(
         .min(50);
     let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
-    let popup_top = if cursor_screen_row + 1 + popup_height < area_height {
-        area_row + cursor_screen_row + 1
+    // Position relative to the focused window's screen rect.
+    let abs_row = win_row_offset + cursor_screen_row;
+    let popup_top = if cursor_screen_row + 1 + popup_height < win_height {
+        abs_row + 1
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_row.saturating_sub(popup_height)
     };
-    let popup_left = cursor_screen_col.min(area_width.saturating_sub(popup_width));
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+    let abs_col = win_col_offset + cursor_screen_col;
+    let popup_left = if abs_col + popup_width <= area_width {
+        abs_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let normal_fg = theme::ts_fg(editor, "ui.popup.text");
@@ -332,6 +346,12 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
 // ---------------------------------------------------------------------------
 
 pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize, rows: usize) {
+    // If a mini-dialog is active, render that instead of the fuzzy palette.
+    if let Some(ref dialog) = editor.mini_dialog {
+        render_mini_dialog(canvas, editor, dialog, cols, rows);
+        return;
+    }
+
     let palette = match &editor.command_palette {
         Some(p) => p,
         None => return,
@@ -385,6 +405,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {
         inner.width.saturating_sub(2)
@@ -564,6 +585,10 @@ pub fn render_hover_popup(
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let popup = match &editor.hover_popup {
         Some(p) => p,
@@ -571,36 +596,61 @@ pub fn render_hover_popup(
     };
 
     let win = editor.window_mgr.focused_window();
-    let cursor_screen_row = frame_layout
-        .and_then(|fl| fl.display_row_of(win.cursor_row))
-        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+    // Use the saved anchor position, not the live cursor, so the popup
+    // stays where the hover was requested.
+    let anchor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(popup.anchor_row))
+        .unwrap_or_else(|| popup.anchor_row.saturating_sub(win.scroll_offset));
 
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 78);
+    // Dynamic max width: up to full screen width minus 4 cols margin, at least 40 cols.
+    // This matches VS Code / Emacs lsp-ui-doc behavior — wide enough for type sigs.
+    // Popup may overflow the focused window bounds (intentional — content visibility
+    // takes priority over window containment).
+    let max_popup_cols = area_width.saturating_sub(4).max(40);
+    // Wrap width for content: leave 2 cols for border.
+    let wrap_width = max_popup_cols.saturating_sub(2);
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, wrap_width);
     if lines.is_empty() {
         return;
     }
 
     let max_visible = editor.hover_max_lines;
     let visible_count = lines.len().min(max_visible);
+    // Size popup to content, capped at available space (not a fixed 78).
     let popup_width = lines
         .iter()
         .take(visible_count)
         .map(|l| l.len())
         .max()
         .unwrap_or(20)
-        .min(78)
+        .min(max_popup_cols)
         + 2; // border
     let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
 
-    // Position below cursor with a 1-line gap so the trigger line stays visible.
-    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
-        area_row + cursor_screen_row + 2
-    } else if cursor_screen_row > popup_height {
-        area_row + cursor_screen_row.saturating_sub(popup_height + 1)
+    // Position below the anchor, offset by the focused window's screen position.
+    let abs_anchor_row = win_row_offset + anchor_screen_row;
+    let popup_top = if anchor_screen_row + 2 + popup_height < win_height {
+        abs_anchor_row + 2
+    } else if anchor_screen_row > popup_height {
+        abs_anchor_row.saturating_sub(popup_height + 1)
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_anchor_row.saturating_sub(popup_height)
     };
-    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+    // Clamp top to visible area.
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+
+    // Horizontal: position at anchor col within the window, clamped to screen.
+    let abs_anchor_col = win_col_offset + popup.anchor_col;
+    let popup_left = if abs_anchor_col + popup_width <= area_width {
+        abs_anchor_col
+    } else {
+        // Shift left to fit, but don't go past column 0.
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let text_fg = theme::ts_fg(editor, "ui.popup.text");
@@ -651,6 +701,10 @@ pub fn render_code_action_popup(
     area_width: usize,
     area_height: usize,
     frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
 ) {
     let menu = match &editor.code_action_menu {
         Some(m) => m,
@@ -682,12 +736,23 @@ pub fn render_code_action_popup(
         + 4; // padding + border
     let popup_height = visible_count + 2;
 
-    let popup_top = if cursor_screen_row + 2 + popup_height < area_height {
-        area_row + cursor_screen_row + 1
+    // Position relative to the focused window's screen rect.
+    let abs_row = win_row_offset + cursor_screen_row;
+    let popup_top = if cursor_screen_row + 2 + popup_height < win_height {
+        abs_row + 1
     } else {
-        area_row + cursor_screen_row.saturating_sub(popup_height)
+        abs_row.saturating_sub(popup_height)
     };
-    let popup_left = win.cursor_col.min(area_width.saturating_sub(popup_width));
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+    let abs_col = win_col_offset + win.cursor_col;
+    let popup_left = if abs_col + popup_width <= area_width {
+        abs_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
 
     let border_fg = theme::ts_fg(editor, "ui.window.border");
     let normal_fg = theme::ts_fg(editor, "ui.popup.text");
@@ -783,6 +848,451 @@ fn draw_border_titled(
     // Bottom border.
     let bottom = format!("└{}┘", "─".repeat(inner_w));
     canvas.draw_text_at(row + height - 1, col, &bottom, color);
+}
+
+// ---------------------------------------------------------------------------
+// Mini-dialog renderer (edit-link, rename, etc.)
+// ---------------------------------------------------------------------------
+
+fn render_mini_dialog(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    dialog: &mae_core::command_palette::MiniDialogState,
+    cols: usize,
+    rows: usize,
+) {
+    // Smaller dialog box than the full palette.
+    let dialog_width = 50.min(cols.saturating_sub(4));
+    let dialog_height = (4 + dialog.fields.len()).min(rows.saturating_sub(2));
+    let col = cols.saturating_sub(dialog_width) / 2;
+    let row = rows.saturating_sub(dialog_height) / 2;
+
+    let text_fg = theme::ts_fg(editor, "ui.text");
+    let prompt_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selection_bg = theme::ts_bg(editor, "ui.selection");
+    let border_fg = theme::ts_fg(editor, "ui.window.border.active");
+    let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(row, col, dialog_width, dialog_height, bg);
+    let title = format!(" {} ", dialog.title());
+    draw_border_titled(
+        canvas,
+        row,
+        col,
+        dialog_width,
+        dialog_height,
+        border_fg,
+        &title,
+    );
+
+    let inner_col = col + 2;
+    let inner_width = dialog_width.saturating_sub(4);
+
+    for (i, field) in dialog.fields.iter().enumerate() {
+        let field_row = row + 1 + i;
+        let is_active = i == dialog.active_field;
+
+        if is_active {
+            if let Some(bg) = selection_bg {
+                canvas.draw_rect_fill(field_row, col + 1, dialog_width - 2, 1, bg);
+            }
+        }
+
+        let label = format!("{}: ", field.label);
+        canvas.draw_text_at(field_row, inner_col, &label, prompt_fg);
+
+        let value_col = inner_col + label.len();
+        let max_value_len = inner_width.saturating_sub(label.len());
+        let display_value = if field.value.is_empty() {
+            &field.placeholder
+        } else {
+            &field.value
+        };
+        let fg = if field.value.is_empty() {
+            // Dim placeholder
+            theme::ts_fg(editor, "ui.popup.text")
+        } else {
+            text_fg
+        };
+        let truncated: String = display_value.chars().take(max_value_len).collect();
+        canvas.draw_text_at(field_row, value_col, &truncated, fg);
+
+        // Draw cursor for active field
+        if is_active && !field.value.is_empty() {
+            let cursor_col = value_col + field.value.len().min(max_value_len);
+            canvas.draw_text_at(field_row, cursor_col, "│", text_fg);
+        } else if is_active {
+            canvas.draw_text_at(field_row, value_col, "│", text_fg);
+        }
+    }
+
+    // Footer hint
+    let footer_row = row + 1 + dialog.fields.len();
+    if footer_row < row + dialog_height - 1 {
+        let hint = "Tab: next  Enter: apply  Esc: cancel";
+        let hint_col = inner_col;
+        canvas.draw_text_at(footer_row, hint_col, hint, prompt_fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Signature help popup
+// ---------------------------------------------------------------------------
+
+pub fn render_signature_help_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    win_height: usize,
+) {
+    let state = match &editor.signature_help {
+        Some(s) => s,
+        None => return,
+    };
+    if state.signatures.is_empty() {
+        return;
+    }
+
+    let sig = &state.signatures[state.active_signature.min(state.signatures.len() - 1)];
+    let label = &sig.label;
+
+    // Compute popup dimensions based on signature label.
+    let popup_width = (label.len() + 4).min(area_width.saturating_sub(2)).max(20);
+    let has_doc = sig.documentation.is_some();
+    let popup_height = if has_doc { 4 } else { 3 };
+
+    let win = editor.window_mgr.focused_window();
+    let anchor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(state.anchor_line))
+        .unwrap_or_else(|| state.anchor_line.saturating_sub(win.scroll_offset));
+
+    // Position above the cursor (signature help goes above, unlike completion below).
+    let abs_row = win_row_offset + anchor_screen_row;
+    let popup_top = if abs_row > popup_height {
+        abs_row.saturating_sub(popup_height)
+    } else if anchor_screen_row + 2 + popup_height < win_height {
+        abs_row + 1
+    } else {
+        0
+    };
+    let popup_top = popup_top.clamp(0, area_height.saturating_sub(popup_height));
+
+    let abs_col = win_col_offset + state.anchor_col;
+    let popup_left = if abs_col + popup_width <= area_width {
+        abs_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let highlight_fg = theme::ts_fg(editor, "ui.popup.key");
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " Signature ",
+    );
+
+    // Draw signature label with active parameter highlighted.
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    let active_param = state.active_parameter;
+    if active_param < sig.parameters.len() {
+        let (ps, pe) = sig.parameters[active_param];
+        // Draw in three segments: before, highlighted param, after.
+        let before: String = label.chars().take(ps).take(inner_width).collect();
+        let param: String = label[ps..pe]
+            .chars()
+            .take(inner_width.saturating_sub(before.len()))
+            .collect();
+        let after: String = label[pe..]
+            .chars()
+            .take(inner_width.saturating_sub(before.len() + param.len()))
+            .collect();
+        canvas.draw_text_at(inner_top, inner_left, &before, text_fg);
+        canvas.draw_text_at(inner_top, inner_left + before.len(), &param, highlight_fg);
+        canvas.draw_text_at(
+            inner_top,
+            inner_left + before.len() + param.len(),
+            &after,
+            text_fg,
+        );
+    } else {
+        let display: String = label.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top, inner_left, &display, text_fg);
+    }
+
+    // Optional documentation on second line.
+    if let Some(doc) = &sig.documentation {
+        let doc_line: String = doc
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(inner_width)
+            .collect();
+        canvas.draw_text_at(inner_top + 1, inner_left, &doc_line, text_fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Peek definition popup
+// ---------------------------------------------------------------------------
+
+pub fn render_peek_definition_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    win_height: usize,
+) {
+    let state = match &editor.peek_state {
+        Some(s) => s,
+        None => return,
+    };
+
+    let content_lines = &state.context_lines;
+    if content_lines.is_empty() {
+        return;
+    }
+
+    let max_width = content_lines.iter().map(|l| l.len()).max().unwrap_or(40);
+    let popup_width = (max_width + 4).min(area_width.saturating_sub(4)).max(40);
+    let popup_height = (content_lines.len() + 3).min(area_height.saturating_sub(2));
+
+    let win = editor.window_mgr.focused_window();
+    let cursor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(win.cursor_row))
+        .unwrap_or_else(|| win.cursor_row.saturating_sub(win.scroll_offset));
+
+    let abs_row = win_row_offset + cursor_screen_row;
+    let popup_top = if cursor_screen_row + 2 + popup_height < win_height {
+        abs_row + 1
+    } else {
+        abs_row.saturating_sub(popup_height)
+    };
+    let popup_top = popup_top.clamp(0, area_height.saturating_sub(popup_height));
+
+    let popup_left = win_col_offset;
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let highlight_bg = theme::ts_bg(editor, "ui.popup.key").unwrap_or(theme::DEFAULT_BG);
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+
+    // Title with file path.
+    let short_path = state
+        .file_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&state.file_path);
+    let title = format!(" {}:{} ", short_path, state.line + 1);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        &title,
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    let scroll = state.scroll_offset;
+    let visible = popup_height.saturating_sub(2);
+    for (i, line) in content_lines.iter().skip(scroll).take(visible).enumerate() {
+        let display: String = line.chars().take(inner_width).collect();
+        let row_idx = scroll + i;
+        if row_idx == state.highlight_line {
+            // Highlight the definition line.
+            canvas.draw_rect_fill(inner_top + i, inner_left, inner_width, 1, highlight_bg);
+        }
+        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
+    }
+
+    // Footer: Enter to jump, Esc to close.
+    let footer = "Enter:jump  Esc:close";
+    let fx = popup_left + popup_width.saturating_sub(footer.len() + 1);
+    canvas.draw_text_at(popup_top + popup_height - 1, fx, footer, border_fg);
+}
+
+// ---------------------------------------------------------------------------
+// Symbol outline popup (SPC c o)
+// ---------------------------------------------------------------------------
+
+pub fn render_symbol_outline_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_width: usize,
+    area_height: usize,
+) {
+    let state = match &editor.symbol_outline {
+        Some(s) => s,
+        None => return,
+    };
+
+    let rect = centered_popup_rect_from(area_width, area_height, 60, 60);
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let dim_fg = theme::ts_fg(editor, "comment");
+    let selected_fg = theme::ts_fg(editor, "ui.popup.key");
+    let selected_bg = theme::ts_bg(editor, "ui.popup.key");
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(rect.row, rect.col, rect.width, rect.height, bg);
+
+    let title = if state.filter.is_empty() {
+        " Symbol Outline ".to_string()
+    } else {
+        format!(" Outline: {} ", state.filter)
+    };
+    draw_border_titled(
+        canvas,
+        rect.row,
+        rect.col,
+        rect.width,
+        rect.height,
+        border_fg,
+        &title,
+    );
+
+    let inner_top = rect.row + 1;
+    let inner_left = rect.col + 1;
+    let inner_width = rect.width.saturating_sub(2);
+    let visible = rect.height.saturating_sub(2);
+
+    let indices = &state.filtered_indices;
+    if indices.is_empty() {
+        canvas.draw_text_at(inner_top, inner_left, "(no symbols)", dim_fg);
+        return;
+    }
+
+    // Scroll so selected is visible.
+    let scroll = if state.selected >= visible {
+        state.selected + 1 - visible
+    } else {
+        0
+    };
+
+    for (vi, &idx) in indices.iter().skip(scroll).take(visible).enumerate() {
+        let entry = &state.entries[idx];
+        let is_selected = scroll + vi == state.selected;
+
+        if is_selected {
+            if let Some(sbg) = selected_bg {
+                canvas.draw_rect_fill(inner_top + vi, inner_left, inner_width, 1, sbg);
+            }
+        }
+
+        let indent: String = "  ".repeat(entry.depth.min(4));
+        let line_num = format!(":{}", entry.line + 1);
+        let available = inner_width.saturating_sub(indent.len() + 2 + line_num.len());
+        let name: String = entry.name.chars().take(available).collect();
+        let text = format!("{}{} {}{}", indent, entry.kind_icon, name, line_num);
+
+        let fg = if is_selected { selected_fg } else { text_fg };
+        canvas.draw_text_at(inner_top + vi, inner_left, &text, fg);
+    }
+
+    // Footer.
+    let footer = format!(
+        "[{}/{}] Enter:jump  Esc:close",
+        state.selected + 1,
+        indices.len()
+    );
+    let fx = rect.col + rect.width.saturating_sub(footer.len() + 1);
+    canvas.draw_text_at(rect.row + rect.height - 1, fx, &footer, border_fg);
+}
+
+// ---------------------------------------------------------------------------
+// Blame gutter overlay
+// ---------------------------------------------------------------------------
+
+pub fn render_blame_gutter(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    win_row_offset: usize,
+    win_col_offset: usize,
+    win_height: usize,
+    visible_start_line: usize,
+) {
+    let overlay = match &editor.blame_overlay {
+        Some(o) if o.buffer_idx == editor.active_buffer_idx() => o,
+        _ => return,
+    };
+
+    let blame_fg = theme::ts_fg(editor, "comment");
+    let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
+
+    // Render blame annotations in the right margin.
+    let gutter_width = 30;
+
+    for row in 0..win_height {
+        let line = visible_start_line + row;
+        if let Some(entry) = overlay.entries.iter().find(|e| e.final_line == line) {
+            let age = format_relative_time(entry.timestamp);
+            let author: String = entry.author.chars().take(10).collect();
+            let text = format!("{} {} {}", &entry.commit_hash, author, age);
+            let display: String = text.chars().take(gutter_width).collect();
+            // Draw at the right side of the window.
+            let col = win_col_offset.saturating_sub(gutter_width + 1);
+            canvas.draw_rect_fill(win_row_offset + row, col, gutter_width, 1, bg);
+            canvas.draw_text_at(win_row_offset + row, col, &display, blame_fg);
+        }
+    }
+}
+
+fn format_relative_time(timestamp: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let diff = now - timestamp;
+    if diff < 0 {
+        return "future".to_string();
+    }
+    let diff = diff as u64;
+    if diff < 60 {
+        format!("{}s", diff)
+    } else if diff < 3600 {
+        format!("{}m", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h", diff / 3600)
+    } else if diff < 2592000 {
+        format!("{}d", diff / 86400)
+    } else if diff < 31536000 {
+        format!("{}mo", diff / 2592000)
+    } else {
+        format!("{}y", diff / 31536000)
+    }
 }
 
 #[cfg(test)]

@@ -340,6 +340,7 @@ fn mouse_click_dismisses_hover_popup() {
     let mut editor = Editor::new();
     editor.hover_popup = Some(crate::editor::HoverPopup {
         contents: "test hover".into(),
+        buffer_idx: 0,
         anchor_row: 0,
         anchor_col: 0,
         scroll_offset: 0,
@@ -363,6 +364,425 @@ fn mouse_click_dismisses_code_action_menu() {
         editor.code_action_menu.is_none(),
         "code action menu should be dismissed on click"
     );
+}
+
+// --- Multi-window mouse tests ---
+
+#[test]
+fn rect_contains_inside() {
+    let r = crate::window::Rect {
+        x: 5,
+        y: 10,
+        width: 20,
+        height: 15,
+    };
+    assert!(r.contains(5, 10)); // top-left corner
+    assert!(r.contains(10, 15)); // interior
+    assert!(r.contains(24, 24)); // just inside bottom-right
+}
+
+#[test]
+fn rect_contains_edge_exclusive() {
+    let r = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+    };
+    assert!(!r.contains(10, 5)); // right edge is exclusive
+    assert!(!r.contains(5, 10)); // bottom edge is exclusive
+    assert!(!r.contains(10, 10)); // bottom-right corner
+}
+
+#[test]
+fn rect_contains_outside() {
+    let r = crate::window::Rect {
+        x: 5,
+        y: 5,
+        width: 10,
+        height: 10,
+    };
+    assert!(!r.contains(0, 0)); // above and left
+    assert!(!r.contains(4, 5)); // just left
+    assert!(!r.contains(5, 4)); // just above
+    assert!(!r.contains(20, 20)); // far out
+}
+
+#[test]
+fn window_at_cell_single_window() {
+    let wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    assert_eq!(wm.window_at_cell(10, 5, area), Some(0));
+    assert_eq!(wm.window_at_cell(0, 0, area), Some(0));
+    assert_eq!(wm.window_at_cell(79, 23, area), Some(0));
+}
+
+#[test]
+fn window_at_cell_outside() {
+    let wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    assert_eq!(wm.window_at_cell(80, 5, area), None);
+    assert_eq!(wm.window_at_cell(5, 24, area), None);
+}
+
+#[test]
+fn window_at_cell_split_v() {
+    let mut wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_id = wm
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    // Left half should be window 0, right half should be new_id.
+    assert_eq!(wm.window_at_cell(5, 5, area), Some(0));
+    assert_eq!(wm.window_at_cell(60, 5, area), Some(new_id));
+}
+
+#[test]
+fn window_at_cell_split_h() {
+    let mut wm = crate::window::WindowManager::new(0);
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_id = wm
+        .split(crate::window::SplitDirection::Horizontal, 1, area)
+        .unwrap();
+    // Top half should be window 0, bottom half should be new_id.
+    assert_eq!(wm.window_at_cell(5, 2, area), Some(0));
+    assert_eq!(wm.window_at_cell(5, 20, area), Some(new_id));
+}
+
+#[test]
+fn focus_window_at_switches() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+    // Add a second buffer + split
+    editor.buffers.push(crate::buffer::Buffer::new());
+    let new_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+    // Click in the right half should switch focus.
+    let switched = editor.focus_window_at(60, 5);
+    assert!(switched);
+    assert_eq!(editor.window_mgr.focused_id(), new_id);
+}
+
+#[test]
+fn focus_window_at_same_window_noop() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+
+    let switched = editor.focus_window_at(10, 5);
+    assert!(!switched);
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+}
+
+#[test]
+fn scroll_in_window_preserves_focus() {
+    let mut editor = Editor::new();
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    editor.last_layout_area = area;
+    // Add content so scrolling is possible
+    for _ in 0..50 {
+        let win = editor.window_mgr.focused_window_mut();
+        editor.buffers[0].insert_char(win, '\n');
+    }
+    // Split
+    editor.buffers.push(crate::buffer::Buffer::new());
+    let new_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+    // Scroll in the other window — focus should stay on window 0.
+    editor.handle_mouse_scroll_in_window(new_id, -2);
+    assert_eq!(editor.window_mgr.focused_id(), 0);
+}
+
+#[test]
+fn mouse_options_defaults() {
+    let editor = Editor::new();
+    assert!(!editor.mouse_autoselect_window);
+    assert!(editor.mouse_wheel_follow_mouse);
+}
+
+#[test]
+fn mouse_options_set_via_set_option() {
+    let mut editor = Editor::new();
+
+    editor
+        .set_option("mouse_autoselect_window", "true")
+        .unwrap();
+    assert!(editor.mouse_autoselect_window);
+
+    editor
+        .set_option("mouse_wheel_follow_mouse", "false")
+        .unwrap();
+    assert!(!editor.mouse_wheel_follow_mouse);
+
+    // Alias lookup
+    editor
+        .set_option("mouse-autoselect-window", "false")
+        .unwrap();
+    assert!(!editor.mouse_autoselect_window);
+}
+
+#[test]
+fn idle_work_clears_pending_reparses() {
+    let mut editor = Editor::new();
+    // Mark buffer 0 for reparse.
+    editor.syntax_reparse_pending.insert(0);
+    assert!(!editor.syntax_reparse_pending.is_empty());
+    editor.idle_work();
+    assert!(editor.syntax_reparse_pending.is_empty());
+}
+
+// --- Multi-click tests ---
+
+#[test]
+fn click_counting_increments_to_3_then_resets() {
+    let mut editor = Editor::new();
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'H');
+    let win = editor.window_mgr.focused_window_mut();
+    editor.buffers[0].insert_char(win, 'i');
+
+    // First click
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 1);
+
+    // Second click same position
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 2);
+
+    // Third click
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 3);
+
+    // Fourth click wraps to 1
+    editor.handle_mouse_click(1, 5, crate::input::MouseButton::Left);
+    assert_eq!(editor.last_click.unwrap().3, 1);
+}
+
+#[test]
+fn double_click_selects_word() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world");
+    editor.show_line_numbers = false; // Simplify gutter
+
+    // First click positions cursor
+    editor.handle_mouse_click(1, 0, crate::input::MouseButton::Left);
+    // Second click selects word
+    editor.handle_mouse_click(1, 0, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
+        "double-click should enter visual char mode, got {:?}",
+        editor.mode
+    );
+}
+
+#[test]
+fn triple_click_selects_line() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world\nsecond line");
+    editor.show_line_numbers = false;
+
+    // Three clicks
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(1, 2, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Line)),
+        "triple-click should enter visual line mode, got {:?}",
+        editor.mode
+    );
+}
+
+#[test]
+fn shift_click_starts_selection() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world here");
+    editor.show_line_numbers = false;
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 0;
+
+    // Shift-click at col 5
+    editor.handle_mouse_click_shift(1, 5, crate::input::MouseButton::Left, true);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Visual(crate::VisualType::Char)),
+        "shift-click should enter visual char mode"
+    );
+    assert_eq!(editor.visual_anchor_row, 0);
+    assert_eq!(editor.visual_anchor_col, 0);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 5);
+}
+
+#[test]
+fn shift_click_extends_existing_selection() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world here");
+    editor.show_line_numbers = false;
+
+    // Enter visual mode manually
+    editor.visual_anchor_row = 0;
+    editor.visual_anchor_col = 2;
+    editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_col = 5;
+
+    // Shift-click at col 10 — should extend selection
+    editor.handle_mouse_click_shift(1, 10, crate::input::MouseButton::Left, true);
+
+    // Anchor unchanged, cursor moved
+    assert_eq!(editor.visual_anchor_col, 2);
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(win.cursor_col, 10);
+}
+
+#[test]
+fn single_click_exits_visual_mode() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello world");
+    editor.show_line_numbers = false;
+    editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+
+    editor.handle_mouse_click(1, 3, crate::input::MouseButton::Left);
+
+    assert!(
+        matches!(editor.mode, crate::Mode::Normal),
+        "single click should exit visual mode"
+    );
+}
+
+// --- Double-click edge cases ---
+
+#[test]
+fn double_click_empty_line() {
+    let mut editor = Editor::new();
+    editor.buffers[0].replace_contents("hello\n\nworld");
+    editor.show_line_numbers = false;
+
+    // Double-click on the empty line (row 1) — should not panic, no word selected.
+    // Screen row 2, col 0 (col 0 is gutter when line_numbers=false, so use 1).
+    editor.handle_mouse_click(2, 0, crate::input::MouseButton::Left);
+    editor.handle_mouse_click(2, 0, crate::input::MouseButton::Left);
+
+    // The key assertion is that this doesn't panic.
+    // With line_numbers=false, col 0 may be gutter-ignored, leaving cursor unchanged.
+    // We just verify no crash and cursor is within valid bounds.
+    let win = editor.window_mgr.focused_window();
+    assert!(win.cursor_row < 3); // within buffer bounds
+}
+
+// --- Shell scroll accumulator tests ---
+
+fn make_editor_with_conversation_buffer() -> Editor {
+    let mut editor = Editor::new();
+    // Create a conversation buffer (uses the same scroll path as Shell).
+    let mut buf = crate::buffer::Buffer::new();
+    buf.kind = crate::BufferKind::Conversation;
+    buf.name = "*test-conv*".to_string();
+    // Add some content so scrolling is possible.
+    for i in 0..50 {
+        buf.insert_text_at(buf.rope().len_chars(), &format!("line {}\n", i));
+    }
+    editor.buffers.push(buf);
+    let new_idx = editor.buffers.len() - 1;
+    editor.switch_to_buffer(new_idx);
+    editor.gui_cell_height = 20.0;
+    editor
+}
+
+#[test]
+fn shell_scroll_accumulates_fractional_lines() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Sub-cell-height delta: 5px < 20px cell height → no lines emitted, but returns true.
+    let moved = editor.handle_mouse_scroll_pixels(5.0);
+    assert!(moved, "should return true while accumulating");
+
+    // Accumulate more: 5+10=15 < 20 → still no lines, still true.
+    let moved = editor.handle_mouse_scroll_pixels(10.0);
+    assert!(moved, "should return true while accumulating");
+
+    // Push over threshold: 15+8=23 → 1 full line (23/20 = 1.trunc), residual 3px.
+    let moved = editor.handle_mouse_scroll_pixels(8.0);
+    assert!(moved, "should return true when emitting lines");
+
+    // Check residual is approximately 3.0.
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert!(
+        (acc - 3.0).abs() < 0.01,
+        "residual should be ~3.0, got {}",
+        acc
+    );
+}
+
+#[test]
+fn shell_scroll_returns_true_while_accumulating() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Single 1px delta — way below cell_height, but returns true to keep inertia alive.
+    let moved = editor.handle_mouse_scroll_pixels(1.0);
+    assert!(moved, "must return true to keep inertia alive");
+}
+
+#[test]
+fn shell_scroll_accumulator_resets_on_buffer_switch() {
+    let mut editor = make_editor_with_conversation_buffer();
+
+    // Accumulate some fractional scroll.
+    editor.handle_mouse_scroll_pixels(5.0);
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert!(acc.abs() > 0.01, "should have accumulated");
+
+    // Switch to original buffer (index 0).
+    editor.switch_to_buffer(0);
+    let acc = editor.window_mgr.focused_window().shell_scroll_accumulator;
+    assert_eq!(acc, 0.0, "should be reset after buffer switch");
 }
 
 // --- Debug mode tests ---

@@ -1,3 +1,5 @@
+//! File operations: open, save, close, rename, file picker.
+
 use crate::buffer::Buffer;
 use crate::file_picker::FilePicker;
 use crate::Mode;
@@ -29,11 +31,11 @@ impl Editor {
                 self.save_mode_to_buffer();
                 let prev_idx = self.active_buffer_idx();
                 let win = self.window_mgr.focused_window_mut();
-                win.buffer_idx = (win.buffer_idx + 1) % self.buffers.len();
-                win.cursor_row = 0;
-                win.cursor_col = 0;
+                win.save_view_state();
+                let new_idx = (win.buffer_idx + 1) % self.buffers.len();
+                win.restore_view_state(new_idx);
                 self.alternate_buffer_idx = Some(prev_idx);
-                let name = self.buffers[win.buffer_idx].name.clone();
+                let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();
             }
@@ -45,16 +47,15 @@ impl Editor {
                 let prev_idx = self.active_buffer_idx();
                 let count = self.buffers.len();
                 let win = self.window_mgr.focused_window_mut();
-                win.buffer_idx = (win.buffer_idx + count - 1) % count;
-                win.cursor_row = 0;
-                win.cursor_col = 0;
+                win.save_view_state();
+                let new_idx = (win.buffer_idx + count - 1) % count;
+                win.restore_view_state(new_idx);
                 self.alternate_buffer_idx = Some(prev_idx);
-                let name = self.buffers[win.buffer_idx].name.clone();
+                let name = self.buffers[new_idx].name.clone();
                 self.set_status(format!("Buffer: {}", name));
                 self.sync_mode_to_buffer();
             }
             "new-buffer" => {
-                let prev_idx = self.active_buffer_idx();
                 let mut buf = Buffer::new();
                 let n = self
                     .buffers
@@ -66,11 +67,7 @@ impl Editor {
                 }
                 let new_idx = self.buffers.len();
                 self.buffers.push(buf);
-                let win = self.window_mgr.focused_window_mut();
-                win.buffer_idx = new_idx;
-                win.cursor_row = 0;
-                win.cursor_col = 0;
-                self.alternate_buffer_idx = Some(prev_idx);
+                self.display_buffer_and_focus(new_idx);
                 self.set_status("New buffer");
             }
             "kill-buffer" => {
@@ -131,38 +128,44 @@ impl Editor {
                 }
             }
             "rename-file" => {
-                let path_str = self
-                    .active_buffer()
-                    .file_path()
-                    .map(|p| p.display().to_string());
-                if let Some(ps) = path_str {
-                    self.set_mode(crate::Mode::Command);
-                    self.command_line = format!("rename {}", ps);
-                    self.command_cursor = self.command_line.len();
-                    self.set_status("Rename file: edit path and press Enter");
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
+                if let Some(path) = self.active_buffer().file_path().map(|p| p.to_path_buf()) {
+                    let ps = path.display().to_string();
+                    self.mini_dialog = Some(MiniDialogState::single_input(
+                        "New path",
+                        &ps,
+                        "path",
+                        MiniDialogContext::FileRename { old_path: path },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 } else {
                     self.set_status("Buffer has no file path");
                 }
             }
             "copy-this-file" => {
-                let path_str = self
-                    .active_buffer()
-                    .file_path()
-                    .map(|p| p.display().to_string());
-                if let Some(ps) = path_str {
-                    self.set_mode(crate::Mode::Command);
-                    self.command_line = format!("copy {}", ps);
-                    self.command_cursor = self.command_line.len();
-                    self.set_status("Copy file to: edit path and press Enter");
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
+                if let Some(path) = self.active_buffer().file_path().map(|p| p.to_path_buf()) {
+                    let ps = path.display().to_string();
+                    self.mini_dialog = Some(MiniDialogState::single_input(
+                        "Copy to",
+                        &ps,
+                        "destination path",
+                        MiniDialogContext::FileCopy { src_path: path },
+                    ));
+                    self.set_mode(crate::Mode::CommandPalette);
                 } else {
                     self.set_status("Buffer has no file path");
                 }
             }
             "save-as" => {
-                self.set_mode(crate::Mode::Command);
-                self.command_line = "saveas ".to_string();
-                self.command_cursor = self.command_line.len();
-                self.set_status("Save as: enter path and press Enter");
+                use crate::command_palette::{MiniDialogContext, MiniDialogState};
+                self.mini_dialog = Some(MiniDialogState::single_input(
+                    "Save as",
+                    "",
+                    "path",
+                    MiniDialogContext::FileSaveAs,
+                ));
+                self.set_mode(crate::Mode::CommandPalette);
             }
             "kill-other-buffers" => {
                 let active = self.active_buffer_idx();
@@ -209,6 +212,7 @@ impl Editor {
             }
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

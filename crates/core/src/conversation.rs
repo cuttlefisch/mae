@@ -140,6 +140,7 @@ impl TokenUsage {
 pub struct ConversationEntry {
     pub role: ConversationRole,
     pub content: String,
+    #[serde(default)]
     pub collapsed: bool,
     /// Token usage for this message (populated from API response for assistant messages).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +208,12 @@ pub struct Conversation {
     pub link_descriptive: bool,
     /// Whether to render inline bold/italic/code spans.
     pub render_markup: bool,
+    /// Wire format version of the last-loaded conversation (0 if never loaded).
+    loaded_wire_version: u32,
+    /// When true, the user has scrolled up during streaming and we should
+    /// NOT auto-follow new content. Cleared on `scroll_to_bottom()`.
+    /// Emacs lesson: `comint-scroll-to-bottom-on-output`.
+    pub scroll_locked: bool,
 }
 
 impl Default for Conversation {
@@ -237,6 +244,8 @@ impl Conversation {
             rendered_links: Vec::new(),
             link_descriptive: true,
             render_markup: true,
+            loaded_wire_version: 0,
+            scroll_locked: false,
         };
         conv.rebuild_render_cache();
         conv
@@ -427,6 +436,13 @@ impl Conversation {
     const WIRE_VERSION: u32 = 2;
 
     pub fn to_json(&self) -> Result<String, String> {
+        if self.loaded_wire_version > Self::WIRE_VERSION {
+            tracing::warn!(
+                "Saving conversation as v{} (loaded as v{}) — some data may be lost",
+                Self::WIRE_VERSION,
+                self.loaded_wire_version
+            );
+        }
         #[derive(Serialize)]
         struct Wire<'a> {
             version: u32,
@@ -439,21 +455,28 @@ impl Conversation {
         .map_err(|e| e.to_string())
     }
 
-    /// Replace entries with those loaded from JSON. Supports v1 (legacy)
-    /// and v2 (ToolCallState) formats.
+    /// Replace entries with those loaded from JSON. Supports v1 (legacy),
+    /// v2 (ToolCallState), and forward-compatible loading of higher versions.
     pub fn load_json(&mut self, json: &str) -> Result<(), String> {
         #[derive(Deserialize)]
         struct Wire {
             version: u32,
+            #[serde(default)]
             entries: Vec<ConversationEntry>,
         }
         let wire: Wire = serde_json::from_str(json).map_err(|e| e.to_string())?;
-        if wire.version != 1 && wire.version != 2 {
-            return Err(format!(
-                "Unsupported conversation format version: {}",
-                wire.version
-            ));
+        if wire.version == 0 {
+            return Err("Conversation format version 0 is not supported".into());
         }
+        if wire.version > 2 {
+            // Forward-compatible: load what we can, warn about unknown fields.
+            // serde(default) on entries ensures missing/unknown fields don't fail.
+            tracing::warn!(
+                "Conversation v{} loaded by v2 parser — some data may be lost",
+                wire.version
+            );
+        }
+        self.loaded_wire_version = wire.version;
         self.entries = wire.entries;
         self.trim_entries();
         self.version += 1;
@@ -829,8 +852,12 @@ impl Conversation {
     // -----------------------------------------------------------------------
 
     /// Scroll conversation history up by `n` lines (toward older content).
+    /// If streaming, locks scroll so auto-follow doesn't yank the view away.
     pub fn scroll_up(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_add(n);
+        if self.streaming {
+            self.scroll_locked = true;
+        }
     }
 
     /// Scroll conversation history down by `n` lines (toward newer content).
@@ -841,6 +868,14 @@ impl Conversation {
     /// Jump to the bottom of the conversation (re-enables auto-scroll).
     pub fn scroll_to_bottom(&mut self) {
         self.scroll = 0;
+        self.scroll_locked = false;
+    }
+
+    /// True when the user scrolled up during streaming and new content
+    /// has arrived below their viewport. Used by renderers to show a
+    /// "↓ New content below" indicator.
+    pub fn has_new_content_below(&self) -> bool {
+        self.scroll_locked && self.scroll > 0
     }
 
     /// Jump to the top of the conversation history.
@@ -1220,11 +1255,52 @@ mod tests {
     }
 
     #[test]
-    fn load_json_rejects_unknown_version() {
-        let bad = r#"{"version": 99, "entries": []}"#;
+    fn load_json_accepts_future_version_with_warning() {
+        // Forward-compatible: higher versions load what we can parse.
+        let future = r#"{"version": 99, "entries": []}"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap(); // should succeed, not error
+        assert!(conv.entries.is_empty());
+        assert_eq!(conv.loaded_wire_version, 99);
+    }
+
+    #[test]
+    fn load_json_future_version_with_extra_fields() {
+        let future = r#"{
+            "version": 3,
+            "entries": [
+                {
+                    "role": "User",
+                    "content": "hello",
+                    "collapsed": false,
+                    "future_field": "should be ignored"
+                }
+            ]
+        }"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap();
+        assert_eq!(conv.entries.len(), 1);
+        assert_eq!(conv.entries[0].content, "hello");
+        assert_eq!(conv.loaded_wire_version, 3);
+    }
+
+    #[test]
+    fn save_after_loading_future_version_writes_current() {
+        let future =
+            r#"{"version": 5, "entries": [{"role": "User", "content": "hi", "collapsed": false}]}"#;
+        let mut conv = Conversation::new();
+        conv.load_json(future).unwrap();
+        let saved = conv.to_json().unwrap();
+        // Version is downgraded to current wire version (2)
+        assert!(saved.contains("\"version\": 2"), "saved: {saved}");
+    }
+
+    #[test]
+    fn load_json_rejects_version_zero() {
+        let bad = r#"{"version": 0, "entries": []}"#;
         let mut conv = Conversation::new();
         let err = conv.load_json(bad).unwrap_err();
-        assert!(err.contains("Unsupported"));
+        assert!(err.contains("version 0"));
     }
 
     #[test]
@@ -1649,5 +1725,56 @@ mod tests {
             !spans.iter().any(|s| s.theme_key == "markup.literal"),
             "expected no markup.literal when render_markup=false"
         );
+    }
+
+    #[test]
+    fn scroll_locked_set_on_scroll_up_during_streaming() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        assert!(!conv.scroll_locked);
+        conv.scroll_up(3);
+        assert!(conv.scroll_locked, "scroll_up during streaming should lock");
+        assert_eq!(conv.scroll, 3);
+    }
+
+    #[test]
+    fn scroll_locked_not_set_when_not_streaming() {
+        let mut conv = Conversation::new();
+        conv.scroll_up(3);
+        assert!(
+            !conv.scroll_locked,
+            "scroll_up without streaming should not lock"
+        );
+    }
+
+    #[test]
+    fn scroll_locked_cleared_on_scroll_to_bottom() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        conv.scroll_up(5);
+        assert!(conv.scroll_locked);
+        conv.scroll_to_bottom();
+        assert!(!conv.scroll_locked);
+        assert_eq!(conv.scroll, 0);
+    }
+
+    #[test]
+    fn has_new_content_below_true_when_locked_and_scrolled() {
+        let mut conv = Conversation::new();
+        conv.streaming = true;
+        conv.scroll_up(5);
+        // Still streaming — has_new_content_below is true (content arriving)
+        assert!(conv.has_new_content_below());
+        // After streaming ends, still true (content arrived while scrolled)
+        conv.end_streaming();
+        assert!(conv.has_new_content_below());
+    }
+
+    #[test]
+    fn has_new_content_below_false_when_at_bottom() {
+        let mut conv = Conversation::new();
+        conv.scroll_locked = true;
+        conv.scroll = 0; // at bottom
+        assert!(!conv.has_new_content_below());
     }
 }

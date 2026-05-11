@@ -1,8 +1,9 @@
 use mae_core::Editor;
 
 use crate::tool_impls::{
-    execute_ai_load, execute_ai_save, execute_create_plan, execute_event_recording,
-    execute_introspect, execute_mouse_event, execute_org_cycle, execute_org_open_link,
+    execute_ai_load, execute_ai_save, execute_babel_execute, execute_babel_tangle,
+    execute_create_plan, execute_event_recording, execute_introspect, execute_kb_instances,
+    execute_mouse_event, execute_org_cycle, execute_org_export, execute_org_open_link,
     execute_org_todo_cycle, execute_render_inspect, execute_save_memory, execute_theme_inspect,
     execute_trigger_hook, execute_update_plan, execute_visual_buffer_add_circle,
     execute_visual_buffer_add_line, execute_visual_buffer_add_rect, execute_visual_buffer_add_text,
@@ -32,6 +33,10 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "org_cycle" => execute_org_cycle(editor),
         "org_todo_cycle" => execute_org_todo_cycle(editor, &call.arguments),
         "org_open_link" => execute_org_open_link(editor),
+        "babel_execute" => execute_babel_execute(editor),
+        "babel_tangle" => execute_babel_tangle(editor),
+        "org_export" => execute_org_export(editor, &call.arguments),
+        "kb_instances" => execute_kb_instances(editor),
         "event_recording" => execute_event_recording(editor, &call.arguments),
         _ => return None,
     };

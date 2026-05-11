@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature Request
+    url: https://github.com/cuttlefisch/mae/issues/new?labels=enhancement&title=%5BFeature%5D+
+    about: Suggest a new feature or improvement
+  - name: Question / Support
+    url: https://github.com/cuttlefisch/mae/discussions
+    about: Ask questions or get help (if Discussions is enabled)

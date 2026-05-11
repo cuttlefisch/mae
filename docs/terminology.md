@@ -106,9 +106,9 @@ Emacs distinguishes:
 - **window** — a viewport inside the Emacs process (what you'd call a "pane")
 - **frame** — an OS-level window (what everyone else calls a "window")
 
-MAE runs in a terminal. There is exactly one terminal window. The concept of an
-Emacs "frame" does not exist in MAE. When GUI rendering is added (wgpu, future
-work), the concept will be introduced then.
+MAE supports both terminal and GUI modes. In the terminal there is exactly one
+terminal window. In the GUI (winit + Skia) there is one OS window. The concept
+of Emacs "frames" (multiple OS windows) does not exist in MAE yet.
 
 ---
 
@@ -296,9 +296,9 @@ complete the current prefix.
 
 | Concept | Why absent |
 |---------|-----------|
-| **Frame** (OS window) | Terminal-only for now; will be introduced with GPU renderer |
+| **Frame** (OS window) | Single OS window (terminal or GUI); multi-frame not yet supported |
 | **Tab** (buffer list view) | Splits + file picker cover the use case without UI complexity |
 | **Major/minor modes** (Emacs) | Scheme functions compose freely; there's no need for a mode layer |
 | **Global Interpreter Lock** | Rust ownership + concurrent Scheme GC from day one |
 | **Gap buffer** | Replaced by `ropey` rope for O(log n) edits anywhere |
-| **xdisp.c equivalent** | Renderer is a separate crate; platform code lives in ratatui/wgpu |
+| **xdisp.c equivalent** | Renderer is a separate crate; platform code lives in ratatui/Skia |

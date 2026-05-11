@@ -70,6 +70,8 @@ impl BufferMode for BufferKind {
             Self::Preview => "Preview",
             Self::Visual => "Visual",
             Self::Diff => "Diff",
+            Self::Agenda => "Agenda",
+            Self::Demo => "Demo",
         }
     }
 
@@ -79,6 +81,7 @@ impl BufferMode for BufferKind {
             Self::FileTree => Some("file-tree"),
             Self::Help => Some("help"),
             Self::Debug => Some("debug"),
+            Self::Agenda => Some("agenda"),
             _ => None,
         }
     }
@@ -95,6 +98,7 @@ impl BufferMode for BufferKind {
             Self::GitStatus => Some("Press ? for key help, SPC m for mode menu"),
             Self::Debug => Some("Press ? for key help"),
             Self::FileTree => Some("Press ? for key help"),
+            Self::Agenda => Some("Enter: goto  q: close  r: refresh  /: filter"),
             _ => None,
         }
     }
@@ -131,6 +135,7 @@ impl BufferMode for BufferKind {
                 | Self::FileTree
                 | Self::Shell
                 | Self::Diff
+                | Self::Agenda
         )
     }
 

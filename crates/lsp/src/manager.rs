@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::client::{LspClient, LspEvent, LspServerConfig};
 use crate::protocol::{
     CompletionItem, CompletionResponse, Diagnostic, Location, Notification, Position,
-    PublishDiagnosticsParams, Range,
+    PublishDiagnosticsParams, Range, TextEdit, WorkspaceEdit,
 };
 
 /// Commands the editor sends to the LSP task.
@@ -83,6 +83,34 @@ pub enum LspCommand {
         language_id: String,
         position: Position,
         generation: u64,
+    },
+    /// Request signature help at a position.
+    SignatureHelp {
+        uri: String,
+        language_id: String,
+        position: Position,
+    },
+    /// Request rename at the given position.
+    Rename {
+        uri: String,
+        language_id: String,
+        position: Position,
+        new_name: String,
+    },
+    /// Request prepare rename at the given position.
+    PrepareRename {
+        uri: String,
+        language_id: String,
+        position: Position,
+    },
+    /// Request document formatting.
+    Format { uri: String, language_id: String },
+    /// Request range formatting.
+    RangeFormat {
+        uri: String,
+        language_id: String,
+        start: Position,
+        end: Position,
     },
     /// Update workspace folders (late project detection).
     DidChangeWorkspaceFolders {
@@ -152,6 +180,26 @@ pub enum LspTaskEvent {
     DocumentHighlightResult {
         highlights: Vec<crate::protocol::DocumentHighlight>,
         generation: u64,
+    },
+    /// Signature help response.
+    SignatureHelpResult {
+        signatures: Vec<crate::protocol::SignatureInformation>,
+        active_signature: usize,
+        active_parameter: usize,
+    },
+    /// Rename result — workspace edit to apply.
+    RenameResult { edits: WorkspaceEdit },
+    /// Format result — text edits to apply to a single document.
+    FormatResult { uri: String, edits: Vec<TextEdit> },
+    /// Prepare rename result — range and placeholder for the rename prompt.
+    PrepareRenameResult {
+        range: Option<Range>,
+        placeholder: Option<String>,
+    },
+    /// Trigger characters from the completion provider.
+    TriggerCharacters {
+        language_id: String,
+        characters: Vec<String>,
     },
     /// An error happened during a request.
     Error { message: String },
@@ -329,6 +377,21 @@ impl LspManager {
         Ok(resp.actions)
     }
 
+    pub async fn signature_help(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<(Vec<crate::protocol::SignatureInformation>, usize, usize), String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_signature_help(uri, position).await?;
+        Ok((
+            resp.signatures,
+            resp.active_signature,
+            resp.active_parameter,
+        ))
+    }
+
     pub async fn document_highlight(
         &mut self,
         language_id: &str,
@@ -341,6 +404,50 @@ impl LspManager {
         };
         let resp = client.request_document_highlight(uri, position).await?;
         Ok(resp.highlights)
+    }
+
+    pub async fn rename(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+        new_name: &str,
+    ) -> Result<Option<WorkspaceEdit>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_rename(uri, position, new_name).await?;
+        Ok(resp.edit)
+    }
+
+    pub async fn prepare_rename(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        position: Position,
+    ) -> Result<(Option<Range>, Option<String>), String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_prepare_rename(uri, position).await?;
+        Ok((resp.range, resp.placeholder))
+    }
+
+    pub async fn formatting(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+    ) -> Result<Vec<TextEdit>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_formatting(uri, 4, true).await?;
+        Ok(resp.edits)
+    }
+
+    pub async fn range_formatting(
+        &mut self,
+        language_id: &str,
+        uri: &str,
+        range: Range,
+    ) -> Result<Vec<TextEdit>, String> {
+        let client = self.ensure_client(language_id).await?;
+        let resp = client.request_range_formatting(uri, range, 4, true).await?;
+        Ok(resp.edits)
     }
 
     /// Notify all running clients that workspace folders changed, and update
@@ -462,9 +569,33 @@ async fn handle_command(
             match manager.did_open(&language_id, &uri, &text).await {
                 Ok(()) => {
                     if started {
+                        // Extract trigger characters from server capabilities.
+                        let trigger_chars = manager
+                            .clients
+                            .get(&language_id)
+                            .and_then(|c| c.server_capabilities.as_ref())
+                            .and_then(|caps| caps.completion_provider.as_ref())
+                            .and_then(|cp| cp.get("triggerCharacters"))
+                            .and_then(|tc| tc.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
                         let _ = event_tx
-                            .send(LspTaskEvent::ServerStarted { language_id })
+                            .send(LspTaskEvent::ServerStarted {
+                                language_id: language_id.clone(),
+                            })
                             .await;
+                        if !trigger_chars.is_empty() {
+                            let _ = event_tx
+                                .send(LspTaskEvent::TriggerCharacters {
+                                    language_id,
+                                    characters: trigger_chars,
+                                })
+                                .await;
+                        }
                     }
                 }
                 Err(e) => {
@@ -625,6 +756,91 @@ async fn handle_command(
                 // Silently ignore highlight errors — they're not user-initiated.
             }
         },
+        LspCommand::SignatureHelp {
+            uri,
+            language_id,
+            position,
+        } => match manager.signature_help(&language_id, &uri, position).await {
+            Ok((signatures, active_sig, active_param)) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::SignatureHelpResult {
+                        signatures,
+                        active_signature: active_sig,
+                        active_parameter: active_param,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::Rename {
+            uri,
+            language_id,
+            position,
+            new_name,
+        } => match manager
+            .rename(&language_id, &uri, position, &new_name)
+            .await
+        {
+            Ok(Some(edits)) => {
+                let _ = event_tx.send(LspTaskEvent::RenameResult { edits }).await;
+            }
+            Ok(None) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::Error {
+                        message: "rename returned no edits".into(),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::PrepareRename {
+            uri,
+            language_id,
+            position,
+        } => match manager.prepare_rename(&language_id, &uri, position).await {
+            Ok((range, placeholder)) => {
+                let _ = event_tx
+                    .send(LspTaskEvent::PrepareRenameResult { range, placeholder })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+            }
+        },
+        LspCommand::Format { uri, language_id } => {
+            match manager.formatting(&language_id, &uri).await {
+                Ok(edits) => {
+                    let _ = event_tx
+                        .send(LspTaskEvent::FormatResult { uri, edits })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+                }
+            }
+        }
+        LspCommand::RangeFormat {
+            uri,
+            language_id,
+            start,
+            end,
+        } => {
+            let range = Range { start, end };
+            match manager.range_formatting(&language_id, &uri, range).await {
+                Ok(edits) => {
+                    let _ = event_tx
+                        .send(LspTaskEvent::FormatResult { uri, edits })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LspTaskEvent::Error { message: e }).await;
+                }
+            }
+        }
         LspCommand::DidChangeWorkspaceFolders { added } => {
             manager.did_change_workspace_folders(&added).await;
         }

@@ -168,28 +168,66 @@ impl LspClient {
 
     /// Send the initialize request and wait for the response.
     async fn initialize(&mut self, config: &LspServerConfig) -> Result<(), String> {
-        let params = InitializeParams {
-            process_id: Some(std::process::id() as i64),
-            root_uri: config.root_uri.clone(),
-            capabilities: ClientCapabilities {
-                text_document: Some(TextDocumentClientCapabilities {
-                    synchronization: Some(TextDocumentSyncClientCapabilities {
-                        did_save: true,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
+        // Build full client capabilities so servers advertise all features.
+        let text_document_caps = serde_json::json!({
+            "synchronization": {
+                "didSave": true,
+                "willSave": false,
+                "willSaveWaitUntil": false,
+                "dynamicRegistration": false
             },
-            client_info: Some(ClientInfo {
-                name: "MAE".into(),
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-            }),
-        };
+            "completion": {
+                "completionItem": {
+                    "snippetSupport": false,
+                    "deprecatedSupport": true
+                },
+                "dynamicRegistration": false
+            },
+            "hover": {
+                "contentFormat": ["plaintext"],
+                "dynamicRegistration": false
+            },
+            "definition": { "dynamicRegistration": false },
+            "references": { "dynamicRegistration": false },
+            "publishDiagnostics": {
+                "relatedInformation": true,
+                "tagSupport": { "valueSet": [1, 2] }
+            },
+            "rename": {
+                "prepareSupport": true,
+                "dynamicRegistration": false
+            },
+            "formatting": { "dynamicRegistration": false },
+            "rangeFormatting": { "dynamicRegistration": false },
+            "codeAction": { "dynamicRegistration": false },
+            "documentSymbol": {
+                "hierarchicalDocumentSymbolSupport": true,
+                "dynamicRegistration": false
+            },
+            "signatureHelp": {
+                "dynamicRegistration": false,
+                "signatureInformation": {
+                    "parameterInformation": { "labelOffsetSupport": true }
+                }
+            },
+            "documentHighlight": { "dynamicRegistration": false }
+        });
+        let params = serde_json::json!({
+            "processId": std::process::id() as i64,
+            "rootUri": config.root_uri,
+            "capabilities": {
+                "textDocument": text_document_caps
+            },
+            "clientInfo": {
+                "name": "MAE",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        });
 
         let response = self
             .request(
                 "initialize",
-                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                Some(params),
                 std::time::Duration::from_secs(30),
             )
             .await
@@ -464,6 +502,33 @@ impl LspClient {
         Ok(HoverResponse::from_value(result))
     }
 
+    /// textDocument/signatureHelp — returns active signature at `position`.
+    pub async fn request_signature_help(
+        &self,
+        uri: &str,
+        position: Position,
+    ) -> Result<SignatureHelpResponse, String> {
+        let params = TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+        };
+        let resp = self
+            .request(
+                "textDocument/signatureHelp",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(SignatureHelpResponse::from_value(result))
+    }
+
     /// workspace/symbol — search for symbols across the workspace.
     pub async fn request_workspace_symbol(
         &self,
@@ -566,6 +631,126 @@ impl LspClient {
         }
         let result = resp.result.unwrap_or(serde_json::Value::Null);
         Ok(CodeActionResponse::from_value(result))
+    }
+
+    /// textDocument/rename — rename the symbol at `position` to `new_name`.
+    pub async fn request_rename(
+        &self,
+        uri: &str,
+        position: Position,
+        new_name: &str,
+    ) -> Result<RenameResponse, String> {
+        let params = RenameParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+            new_name: new_name.to_string(),
+        };
+        let resp = self
+            .request(
+                "textDocument/rename",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(10),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(RenameResponse::from_value(result))
+    }
+
+    /// textDocument/prepareRename — check if the symbol at `position` is renameable.
+    pub async fn request_prepare_rename(
+        &self,
+        uri: &str,
+        position: Position,
+    ) -> Result<PrepareRenameResponse, String> {
+        let params = PrepareRenameParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            position,
+        };
+        let resp = self
+            .request(
+                "textDocument/prepareRename",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(PrepareRenameResponse::from_value(result))
+    }
+
+    /// textDocument/formatting — format the entire document.
+    pub async fn request_formatting(
+        &self,
+        uri: &str,
+        tab_size: u32,
+        insert_spaces: bool,
+    ) -> Result<FormattingResponse, String> {
+        let params = DocumentFormattingParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            options: FormattingOptions {
+                tab_size,
+                insert_spaces,
+            },
+        };
+        let resp = self
+            .request(
+                "textDocument/formatting",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(10),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(FormattingResponse::from_value(result))
+    }
+
+    /// textDocument/rangeFormatting — format a range within the document.
+    pub async fn request_range_formatting(
+        &self,
+        uri: &str,
+        range: Range,
+        tab_size: u32,
+        insert_spaces: bool,
+    ) -> Result<FormattingResponse, String> {
+        let params = DocumentRangeFormattingParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri.to_string(),
+            },
+            range,
+            options: FormattingOptions {
+                tab_size,
+                insert_spaces,
+            },
+        };
+        let resp = self
+            .request(
+                "textDocument/rangeFormatting",
+                Some(serde_json::to_value(&params).map_err(|e| e.to_string())?),
+                std::time::Duration::from_secs(10),
+            )
+            .await?;
+
+        if let Some(err) = resp.error {
+            return Err(format!("server error: {} ({})", err.message, err.code));
+        }
+        let result = resp.result.unwrap_or(serde_json::Value::Null);
+        Ok(FormattingResponse::from_value(result))
     }
 
     /// Send shutdown request and exit notification for graceful teardown.

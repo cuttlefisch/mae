@@ -188,9 +188,7 @@ pub fn handle_command_mode(
                     }
                     editor.set_status(parts.join(" | "));
                 } else {
-                    editor.set_status(
-                        "AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var.",
-                    );
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
                 }
                 return;
             }
@@ -213,8 +211,7 @@ pub fn handle_command_mode(
                     editor.set_status("[AI] Thinking...");
                 } else {
                     warn!("AI prompt submitted but no AI provider configured");
-                    editor
-                        .set_status("AI not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
                 }
                 return;
             }
@@ -243,7 +240,7 @@ pub fn handle_command_mode(
                     );
                     editor.set_status("[AI BUSY — Esc to cancel] Running self-test...");
                 } else {
-                    editor.set_status("AI not configured — cannot run self-test");
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
                 }
                 return;
             }

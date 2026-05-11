@@ -949,5 +949,1001 @@ fn get_new_options() {
     assert_eq!(editor.get_option("heading_scale_h1").unwrap().0, "1.5");
 }
 
+// --- Edit-link command ---
+
+#[test]
+fn edit_link_opens_mini_dialog() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("[Click here](http://example.com)\n"));
+    editor.buffers[idx].set_file_path(std::path::PathBuf::from("test.md"));
+    editor.buffers[idx].local_options.link_descriptive = Some(true);
+    editor.buffers[idx].recompute_display_regions(true);
+    // Cursor at col 0 (on the link region)
+    editor.dispatch_builtin("edit-link");
+    // Should open a mini-dialog in CommandPalette mode
+    assert_eq!(editor.mode, crate::Mode::CommandPalette);
+    assert!(editor.mini_dialog.is_some());
+    let dialog = editor.mini_dialog.as_ref().unwrap();
+    assert_eq!(dialog.fields.len(), 2);
+    assert_eq!(dialog.fields[0].label, "URL");
+    assert_eq!(dialog.fields[0].value, "http://example.com");
+    assert_eq!(dialog.fields[1].label, "Label");
+    assert_eq!(dialog.fields[1].value, "Click here");
+}
+
+#[test]
+fn edit_link_no_link_shows_status() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("plain text\n"));
+    editor.dispatch_builtin("edit-link");
+    // Should stay in normal mode
+    assert_eq!(editor.mode, crate::Mode::Normal);
+}
+
+// --- Image-aware line_visual_rows ---
+
+#[test]
+fn line_visual_rows_normal_line_unchanged() {
+    let editor = Editor::new();
+    let rows = editor.line_visual_rows(0, 0);
+    assert_eq!(rows, 1);
+}
+
+#[test]
+fn line_visual_rows_accounts_for_image() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("assets");
+    if !assets.join("test-image.png").exists() {
+        return;
+    }
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("![img](test-image.png)\nline 2\n"));
+    editor.buffers[idx].local_options.inline_images = Some(true);
+    editor.buffers[idx].set_file_path(assets.join("test.md"));
+    editor.buffers[idx].recompute_display_regions(true);
+    editor.text_area_width = 80;
+    let rows = editor.line_visual_rows(0, 0);
+    assert!(
+        rows > 1,
+        "image line should consume multiple visual rows, got {}",
+        rows
+    );
+    // Non-image line should still be 1
+    let rows2 = editor.line_visual_rows(0, 1);
+    assert_eq!(rows2, 1);
+}
+
+// ---- Window Group + Conversation tests ----
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conversation_creates_group() {
+    let mut ed = Editor::new();
+    ed.open_conversation_buffer();
+    let pair = ed.conversation_pair.as_ref().expect("pair should exist");
+    assert!(
+        ed.window_mgr.is_in_group(pair.output_window_id),
+        "output window should be in a group"
+    );
+    assert!(
+        ed.window_mgr.is_in_group(pair.input_window_id),
+        "input window should be in a group"
+    );
+    assert_eq!(
+        ed.window_mgr.group_label(pair.output_window_id),
+        Some("conversation")
+    );
+}
+
+#[test]
+fn split_from_conversation_wraps_group() {
+    let mut ed = Editor::new();
+    ed.open_conversation_buffer();
+    let pair = ed.conversation_pair.as_ref().unwrap().clone();
+    // Focus the input window and split to open a new buffer.
+    ed.window_mgr.set_focused(pair.input_window_id);
+    let area = ed.default_area();
+    let new_id = ed
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 0, area)
+        .expect("split should succeed");
+    // The new window should be outside the conversation group.
+    assert!(!ed.window_mgr.is_in_group(new_id));
+    // The conversation windows should still be in the group.
+    assert!(ed.window_mgr.is_in_group(pair.output_window_id));
+    assert!(ed.window_mgr.is_in_group(pair.input_window_id));
+}
+
+// Table navigation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn table_next_cell_moves_cursor() {
+    let mut ed = ed_with_text("| abc | def |\n| ghi | jkl |\n");
+    // Position cursor in first cell (col 2 = inside " abc ")
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 2;
+
+    ed.table_next_cell();
+
+    let win = ed.window_mgr.focused_window();
+    // Should be in the second cell of row 0
+    assert_eq!(win.cursor_row, 0);
+    // cursor_col should be inside second cell (past the pipe + space)
+    assert!(
+        win.cursor_col > 4,
+        "cursor should move to second cell, got col={}",
+        win.cursor_col
+    );
+}
+
+#[test]
+fn table_next_cell_wraps_row() {
+    let mut ed = ed_with_text("| a | b |\n|---|---|\n| c | d |\n");
+    // Position cursor in last cell of first row
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 6; // inside second cell
+
+    ed.table_next_cell();
+
+    let win = ed.window_mgr.focused_window();
+    // Should wrap to first cell of next data row (skipping separator at row 1)
+    assert_eq!(
+        win.cursor_row, 2,
+        "should wrap to row 2 (skipping separator)"
+    );
+}
+
+#[test]
+fn table_alignment_idempotent_via_editor() {
+    let mut ed = ed_with_text("| short | x |\n| a | longer |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 2;
+
+    // Align twice via table_next_cell (which aligns internally)
+    ed.table_align();
+    let text1: String = ed.buffers[0].rope().chars().collect();
+    ed.table_align();
+    let text2: String = ed.buffers[0].rope().chars().collect();
+
+    assert_eq!(text1, text2, "Double alignment must be idempotent");
+}
+
+// ---------------------------------------------------------------------------
+// Org table: S-Tab, separator detection, end-of-table insert, alignment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn blank_row_not_separator() {
+    // A row with only spaces and pipes must NOT be classified as a separator.
+    use crate::table;
+    let rope = ropey::Rope::from_str("|     |     |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    assert!(
+        !t.separators.contains(&0),
+        "blank row should not be a separator"
+    );
+}
+
+#[test]
+fn tab_end_of_table_inserts_data_row() {
+    // Tab at last cell should insert a blank data row that survives re-parse.
+    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 1;
+    win.cursor_col = 8; // last cell of last row
+
+    ed.table_next_cell();
+
+    // Should now have 3 data rows.
+    let text: String = ed.buffers[0].rope().chars().collect();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 3, "should have 3+ lines, got: {text}");
+
+    // Re-parse: the new row must be a data row, not a separator.
+    let t = crate::table::table_at_line(ed.buffers[0].rope(), 0).unwrap();
+    assert!(
+        !t.separators.contains(&2),
+        "new row must not be classified as separator"
+    );
+}
+
+#[test]
+fn tab_end_of_table_double_tap() {
+    // Two Tabs at end: first adds data row, second adds another (no dashes).
+    let mut ed = ed_with_text("| a | b |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 8;
+
+    ed.table_next_cell(); // adds row 1
+    ed.table_next_cell(); // should add row 2
+
+    let text: String = ed.buffers[0].rope().chars().collect();
+    // No line should contain only dashes (no accidental separator creation).
+    for line in text.lines() {
+        if line.trim().starts_with('|') {
+            let inner = &line.trim()[1..line.trim().len() - 1];
+            let has_non_dash_content = inner
+                .chars()
+                .any(|c| c != '-' && c != '+' && c != '|' && c != ' ' && c != ':');
+            let is_all_dashes = !inner.is_empty()
+                && inner.contains('-')
+                && inner
+                    .chars()
+                    .all(|c| c == '-' || c == '+' || c == '|' || c == ' ' || c == ':');
+            if is_all_dashes && !has_non_dash_content {
+                panic!("unexpected separator line created: {line}");
+            }
+        }
+    }
+}
+
+#[test]
+fn tab_inserts_before_trailing_hline() {
+    // If table ends with |---|, new row goes above it.
+    let mut ed = ed_with_text("| a | b |\n|---|---|\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 8; // last cell
+
+    ed.table_next_cell();
+
+    let text: String = ed.buffers[0].rope().chars().collect();
+    let lines: Vec<&str> = text.lines().collect();
+    // The last table line should still be a separator.
+    let last_table_line = lines.last().unwrap();
+    assert!(
+        last_table_line.contains("---"),
+        "trailing hline should be preserved at end, got: {text}"
+    );
+}
+
+#[test]
+fn alignment_parsed_from_separator() {
+    use crate::table::{self, ColumnAlignment};
+    let rope = ropey::Rope::from_str("| L | C | R |\n|:---|:---:|---:|\n| a | b | c |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    assert_eq!(t.alignments[0], ColumnAlignment::Left);
+    assert_eq!(t.alignments[1], ColumnAlignment::Center);
+    assert_eq!(t.alignments[2], ColumnAlignment::Right);
+}
+
+#[test]
+fn format_table_right_aligns() {
+    use crate::table;
+    let rope =
+        ropey::Rope::from_str("| Name | Price |\n|---|---:|\n| Apple | 1 |\n| Banana | 200 |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    // The "Price" column should be right-aligned: "  1" and "200" (right-justified).
+    let price_line = &formatted[2]; // "Apple" row
+                                    // In a right-aligned cell, content is at the right edge.
+    assert!(
+        price_line.contains("   1 |") || price_line.contains("  1 |"),
+        "expected right-aligned '1', got: {price_line}"
+    );
+}
+
+#[test]
+fn format_table_center_aligns() {
+    use crate::table;
+    let rope = ropey::Rope::from_str("| X |\n|:---:|\n| ab |\n| abcdef |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    // "ab" should be centered within a 6-char width column: "  ab  "
+    let ab_line = &formatted[2];
+    // Extract cell content between first pair of pipes
+    let inner = &ab_line[1..ab_line.rfind('|').unwrap()];
+    let trimmed = inner.trim();
+    assert_eq!(trimmed, "ab");
+    // Check padding is roughly balanced (allow off-by-one).
+    let left_spaces = inner.len() - inner.trim_start().len();
+    let right_spaces = inner.len() - inner.trim_end().len();
+    assert!(
+        (left_spaces as i32 - right_spaces as i32).abs() <= 1,
+        "center padding should be balanced: left={left_spaces} right={right_spaces} in '{inner}'"
+    );
+}
+
+#[test]
+fn alignment_markers_preserved_on_format() {
+    use crate::table;
+    let rope = ropey::Rope::from_str("| L | C | R |\n|:---|:---:|---:|\n| a | b | c |\n");
+    let t = table::table_at_line(&rope, 0).unwrap();
+    let formatted = table::format_table(&rope, &t);
+    let sep_line = &formatted[1]; // separator row
+                                  // Should contain alignment markers.
+    assert!(
+        sep_line.contains(":") && sep_line.contains("-"),
+        "separator should preserve alignment markers, got: {sep_line}"
+    );
+}
+
+#[test]
+fn shift_tab_navigates_prev_cell() {
+    // S-Tab on a table line should dispatch table_prev_cell, not global fold.
+    let mut ed = ed_with_text("| a | b |\n| c | d |\n");
+    ed.syntax.set_language(0, crate::syntax::Language::Org);
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 6; // in second cell
+
+    // heading_global_cycle is what S-Tab dispatches.
+    ed.heading_global_cycle(crate::syntax::Language::Org);
+
+    let win = ed.window_mgr.focused_window();
+    // Should have moved to first cell (col ~2), not folded headings.
+    assert_eq!(win.cursor_row, 0, "should stay on row 0");
+    assert!(
+        win.cursor_col < 5,
+        "should be in first cell, got col {}",
+        win.cursor_col
+    );
+}
+
+#[test]
+fn cursor_lands_on_content_right_aligned() {
+    // Tab into a right-aligned cell should place cursor on content, not padding.
+    let mut ed = ed_with_text("| Name | Price |\n|---|---:|\n| Apple | 1 |\n");
+    let win = ed.window_mgr.focused_window_mut();
+    win.cursor_row = 2;
+    win.cursor_col = 2; // in Name cell
+
+    ed.table_next_cell(); // move to Price cell
+
+    let win = ed.window_mgr.focused_window();
+    // Cursor should be on '1', not on leading padding space.
+    let line: String = ed.buffers[0].rope().line(win.cursor_row).chars().collect();
+    let ch = line.chars().nth(win.cursor_col).unwrap_or(' ');
+    assert_ne!(
+        ch,
+        ' ',
+        "cursor should land on content, not space; col={} line='{}'",
+        win.cursor_col,
+        line.trim()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Large document performance (Phase 8 M9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn should_degrade_features_small_buffer() {
+    let ed = Editor::new();
+    assert!(
+        !ed.should_degrade_features(0),
+        "empty buffer should not degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_large_buffer() {
+    let mut ed = Editor::new();
+    // Insert > 500K chars
+    let text = "a".repeat(600_000);
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        ed.should_degrade_features(0),
+        "600K char buffer should degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_long_line() {
+    let mut ed = Editor::new();
+    // Insert a line > 10K chars (small total chars)
+    let text = "x".repeat(15_000);
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        ed.should_degrade_features(0),
+        "15K char line should degrade"
+    );
+}
+
+#[test]
+fn should_degrade_features_normal_file() {
+    let mut ed = Editor::new();
+    // 1000 lines × 80 chars = 80K chars, max line 80 chars
+    let text: String = (0..1000)
+        .map(|i| format!("Line {:04}: {}\n", i, "x".repeat(70)))
+        .collect();
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(
+        !ed.should_degrade_features(0),
+        "80K normal file should not degrade"
+    );
+}
+
+#[test]
+fn fold_end_at_basic() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "a\nb\nc\nd\ne\n");
+    ed.buffers[0].folded_ranges.push((1, 4));
+    assert_eq!(ed.buffers[0].fold_end_at(1), Some(4));
+    assert_eq!(ed.buffers[0].fold_end_at(0), None);
+    assert_eq!(ed.buffers[0].fold_end_at(2), None);
+}
+
+#[test]
+fn code_block_cache_populated_after_set() {
+    let mut ed = Editor::new();
+    ed.buffers[0].insert_text_at(0, "```rust\nfn main() {}\n```\n");
+    ed.buffers[0].set_file_path(std::path::PathBuf::from("test.md"));
+    ed.syntax.set_language(0, crate::syntax::Language::Markdown);
+    let flavor = ed.effective_markup_flavor(0);
+    let gen = ed.buffers[0].generation;
+    let lines = crate::detect_code_block_lines(&ed.buffers[0], flavor);
+    ed.code_block_cache.insert(
+        0,
+        crate::syntax::ViewportCodeBlockCache {
+            generation: gen,
+            flavor,
+            line_start: 0,
+            line_end: ed.buffers[0].line_count(),
+            lines: lines.clone(),
+        },
+    );
+    let cached = ed.code_block_cache.get(&0).unwrap();
+    assert_eq!(cached.generation, gen);
+    assert_eq!(cached.lines, lines);
+}
+
+#[test]
+fn viewport_local_markup_spans_match_full_buffer() {
+    let mut ed = Editor::new();
+    let text = "* Heading\n\nSome *bold* text.\n\n#+begin_src rust\nfn main() {}\n#+end_src\n\nMore /italic/ text.\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Org;
+    // Full-buffer spans.
+    let source: String = ed.buffers[0].rope().chars().collect();
+    let full_spans = crate::compute_markup_spans(&source, flavor);
+    // Viewport-local spans covering the same range.
+    let rope = ed.buffers[0].rope().clone();
+    let line_count = rope.len_lines();
+    let (_, local_spans) = crate::compute_markup_spans_for_range(&rope, flavor, 0, line_count);
+    assert_eq!(full_spans.len(), local_spans.len());
+    for (f, l) in full_spans.iter().zip(local_spans.iter()) {
+        assert_eq!(f.byte_start, l.byte_start);
+        assert_eq!(f.byte_end, l.byte_end);
+        assert_eq!(f.theme_key, l.theme_key);
+    }
+}
+
+#[test]
+fn viewport_local_code_blocks_match_full_buffer() {
+    let mut ed = Editor::new();
+    let text = "Line 1\n```rust\nfn main() {}\n```\nLine 5\n```\nmore code\n```\nLine 9\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Markdown;
+    let full = crate::detect_code_block_lines(&ed.buffers[0], flavor);
+    // Viewport-local for middle range (lines 2..7).
+    let local = crate::detect_code_block_lines_for_range(&ed.buffers[0], flavor, 2, 7);
+    assert_eq!(local.len(), 5);
+    for (rel_idx, &flag) in local.iter().enumerate() {
+        assert_eq!(flag, full[2 + rel_idx], "mismatch at line {}", 2 + rel_idx);
+    }
+}
+
+#[test]
+fn viewport_local_code_blocks_backward_scan() {
+    let mut ed = Editor::new();
+    // Code block starts at line 1, continues through line 3.
+    let text = "Line 0\n#+begin_src rust\nfn foo() {}\n#+end_src\nLine 4\n";
+    ed.buffers[0].insert_text_at(0, text);
+    let flavor = crate::syntax::MarkupFlavor::Org;
+    // Request only lines 2..4 — backward scan must detect we're inside a code block.
+    let local = crate::detect_code_block_lines_for_range(&ed.buffers[0], flavor, 2, 4);
+    assert_eq!(local.len(), 2);
+    assert!(local[0], "line 2 should be inside code block");
+    assert!(
+        local[1],
+        "line 3 (#+end_src) should be marked as code block"
+    );
+}
+
+#[test]
+fn markup_cache_covers_method() {
+    let cache = crate::syntax::MarkupCache {
+        generation: 5,
+        flavor: crate::syntax::MarkupFlavor::Org,
+        line_start: 100,
+        line_end: 400,
+        byte_offset: 0,
+        spans: vec![],
+    };
+    assert!(cache.covers(5, crate::syntax::MarkupFlavor::Org, 150, 350));
+    assert!(cache.covers(5, crate::syntax::MarkupFlavor::Org, 100, 400));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Org, 50, 200));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Org, 300, 500));
+    assert!(!cache.covers(6, crate::syntax::MarkupFlavor::Org, 150, 350));
+    assert!(!cache.covers(5, crate::syntax::MarkupFlavor::Markdown, 150, 350));
+}
+
+// --- Heading statistics cookie tests ---
+
+#[test]
+fn todo_cycle_updates_parent_frac_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(
+        0,
+        "* Project [/]\n** TODO Task A\n** TODO Task B\n** TODO Task C\n",
+    );
+    // Cursor on line 1 (Task A), cycle TODO→DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[1/3]"),
+        "Parent cookie should be [1/3], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_updates_parent_pct_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [%]\n** TODO Task A\n** TODO Task B\n");
+    // Cycle Task A → DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[50%]"),
+        "Parent cookie should be [50%], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_all_done_updates_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [/]\n** TODO Task A\n** TODO Task B\n");
+    // Cycle both to DONE
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    editor.window_mgr.focused_window_mut().cursor_row = 2;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[2/2]"),
+        "Parent cookie should be [2/2], got: {parent}"
+    );
+}
+
+#[test]
+fn todo_cycle_done_back_to_todo_decrements_cookie() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(0, "* Project [/]\n** DONE Task A\n** TODO Task B\n");
+    // Cycle Task A DONE→TODO
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[0/2]"),
+        "Parent cookie should be [0/2], got: {parent}"
+    );
+}
+
+#[test]
+fn heading_cookie_ignores_sibling_headings() {
+    let mut editor = Editor::new();
+    editor.buffers[0].insert_text_at(
+        0,
+        "* Project [/]\n** TODO Task A\n* Other heading\n** TODO Task B\n",
+    );
+    // Cycle Task A → DONE (under Project)
+    editor.window_mgr.focused_window_mut().cursor_row = 1;
+    editor.org_todo_cycle();
+    let parent: String = editor.buffers[0].rope().line(0).chars().collect();
+    assert!(
+        parent.contains("[1/1]"),
+        "Should only count children under Project, got: {parent}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Configurable performance thresholds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn configurable_degrade_threshold() {
+    let mut ed = Editor::new();
+    // Insert 200K chars as 2500 lines of 80 chars — below default 500K threshold
+    let text: String = (0..2500).map(|_| "a".repeat(79) + "\n").collect();
+    ed.buffers[0].insert_text_at(0, &text);
+    assert!(!ed.should_degrade_features(0), "200K < 500K default");
+
+    // Lower the threshold
+    ed.degrade_threshold_chars = 100_000;
+    ed.buffers[0].degraded = None; // clear cache
+    assert!(
+        ed.should_degrade_features(0),
+        "200K > 100K custom threshold"
+    );
+}
+
+#[test]
+fn configurable_large_file_lines() {
+    let mut ed = Editor::new();
+    assert_eq!(ed.large_file_lines, 5_000);
+    ed.large_file_lines = 100;
+    assert_eq!(ed.large_file_lines, 100);
+}
+
+#[test]
+fn set_option_performance_thresholds() {
+    let mut ed = Editor::new();
+    ed.set_option("large_file_lines", "8000").unwrap();
+    assert_eq!(ed.large_file_lines, 8000);
+
+    ed.set_option("degrade_threshold_chars", "1000000").unwrap();
+    assert_eq!(ed.degrade_threshold_chars, 1_000_000);
+
+    ed.set_option("syntax_reparse_debounce_ms", "100").unwrap();
+    assert_eq!(ed.syntax_reparse_debounce_ms, 100);
+
+    ed.set_option("display_region_debounce_ms", "200").unwrap();
+    assert_eq!(ed.display_region_debounce_ms, 200);
+
+    ed.set_option("degrade_threshold_line_length", "20000")
+        .unwrap();
+    assert_eq!(ed.degrade_threshold_line_length, 20_000);
+}
+
+#[test]
+fn set_option_performance_aliases() {
+    let mut ed = Editor::new();
+    ed.set_option("large-file-lines", "3000").unwrap();
+    assert_eq!(ed.large_file_lines, 3000);
+
+    ed.set_option("syntax-reparse-debounce-ms", "75").unwrap();
+    assert_eq!(ed.syntax_reparse_debounce_ms, 75);
+}
+
+#[test]
+fn get_option_performance() {
+    let ed = Editor::new();
+    let (val, def) = ed.get_option("large_file_lines").unwrap();
+    assert_eq!(val, "5000");
+    assert_eq!(def.config_key, Some("performance.large_file_lines"));
+}
+
+#[test]
+fn viewport_local_syntax_spans() {
+    use crate::syntax::SyntaxMap;
+    let mut sm = SyntaxMap::new();
+    sm.set_language(0, crate::syntax::Language::Rust);
+
+    let source = "fn main() {\n    let x = 1;\n    let y = 2;\n}\nfn foo() {}\n";
+    let rope = ropey::Rope::from_str(source);
+    let gen = 1;
+
+    // Full-buffer parse
+    let spans_full = sm.spans_for(0, source, gen).map(|s| s.to_vec());
+    assert!(spans_full.is_some());
+
+    // Reset and do viewport-local parse for lines 0..3
+    sm.set_language(0, crate::syntax::Language::Rust);
+    let spans_vp = sm
+        .spans_for_viewport(0, &rope, gen, 0, 3)
+        .map(|s| s.to_vec());
+    assert!(spans_vp.is_some());
+
+    // Viewport spans should cover byte range of lines 0..padded_end.
+    // With padding (range_size/3 = 1), padded_end = min(3+1, 5) = 4.
+    let padded_end = (3 + (3 / 3)).min(rope.len_lines());
+    let byte_end_padded = rope.line_to_byte(padded_end);
+    let vp_spans = spans_vp.unwrap();
+    assert!(
+        vp_spans.iter().all(|s| s.byte_end <= byte_end_padded),
+        "viewport spans should be within padded range 0..{padded_end}"
+    );
+}
+
+#[test]
+fn viewport_covers_tracks_range() {
+    use crate::syntax::SyntaxMap;
+    let mut sm = SyntaxMap::new();
+    sm.set_language(0, crate::syntax::Language::Rust);
+
+    let source = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\nfn e() {}\n";
+    let rope = ropey::Rope::from_str(source);
+
+    sm.spans_for_viewport(0, &rope, 1, 1, 3);
+    assert!(sm.viewport_covers(0, 1, 3));
+    assert!(!sm.viewport_covers(0, 0, 3)); // 0 < viewport_line_start=1
+    assert!(!sm.viewport_covers(0, 1, 5)); // 5 > viewport_line_end=3
+}
+
+// --- Visual rows cache separation tests ---
+
+#[test]
+fn visual_rows_cache_survives_scroll_shift() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    // Insert 200 lines.
+    let content: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    // Initial populate.
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    assert!(editor.buffers[idx].visual_rows_cache.is_some());
+    let gen1 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .line_start;
+    // Shift by 1 — should NOT recompute (padding absorbs it).
+    editor.populate_visual_rows_cache(idx, 11, 61);
+    let gen2 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .line_start;
+    assert_eq!(gen1, gen2, "cache should survive single-line shift");
+}
+
+#[test]
+fn visual_rows_cache_recomputes_on_large_shift() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let content: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    // Jump 100 lines — must recompute.
+    editor.populate_visual_rows_cache(idx, 110, 160);
+    let cache = editor.buffers[idx].visual_rows_cache.as_ref().unwrap();
+    assert!(cache.line_start <= 110, "cache must cover needed_start=110");
+    assert!(
+        cache.line_start + cache.rows.len() >= 160,
+        "cache must cover needed_end=160"
+    );
+}
+
+#[test]
+fn visual_rows_cache_invalidates_on_width_change() {
+    let mut editor = Editor::new();
+    let idx = editor.active_buffer_idx();
+    let content: String = (0..100).map(|i| format!("line {i}\n")).collect();
+    editor.buffers[idx].insert_text_at(0, &content);
+    editor.viewport_height = 50;
+    editor.word_wrap = true;
+    editor.text_area_width = 80;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    let w1 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .text_width;
+    // Change width and repopulate.
+    editor.text_area_width = 60;
+    editor.populate_visual_rows_cache(idx, 10, 60);
+    let w2 = editor.buffers[idx]
+        .visual_rows_cache
+        .as_ref()
+        .unwrap()
+        .text_width;
+    assert_ne!(w1, w2, "cache must recompute on width change");
+}
+
+// --- Bug regression: AI-opened buffer triggers full redraw (syntax highlighting)
+#[test]
+fn switch_to_buffer_non_conversation_triggers_full_redraw() {
+    let mut editor = Editor::new();
+    // Create a second buffer to switch to.
+    editor.buffers.push(Buffer::new());
+    let new_idx = editor.buffers.len() - 1;
+
+    // Reset redraw level to None.
+    editor.clear_redraw();
+    assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::None);
+
+    // Simulate AI opening a buffer.
+    editor.switch_to_buffer_non_conversation(new_idx);
+
+    // Must escalate to Full so syntax spans are computed for the new buffer.
+    assert_eq!(
+        editor.redraw_level,
+        crate::redraw::RedrawLevel::Full,
+        "switch_to_buffer_non_conversation must trigger Full redraw for syntax highlighting"
+    );
+}
+
+// git_or_project_root tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn git_or_project_root_finds_git_above_subcrate() {
+    // Create a temp dir structure: root/.git + root/crates/core/Cargo.toml
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("crates/core")).unwrap();
+    fs::write(root.join("crates/core/Cargo.toml"), "[package]").unwrap();
+
+    let mut editor = Editor::new();
+    editor.project = Some(crate::project::Project {
+        name: "test".to_string(),
+        root: root.join("crates/core"),
+        config: None,
+    });
+
+    let result = editor.git_or_project_root().unwrap();
+    assert_eq!(result, root.to_path_buf());
+}
+
+#[test]
+fn git_or_project_root_falls_back_to_project_root_without_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("crates/core")).unwrap();
+
+    let mut editor = Editor::new();
+    editor.project = Some(crate::project::Project {
+        name: "test".to_string(),
+        root: root.join("crates/core"),
+        config: None,
+    });
+
+    let result = editor.git_or_project_root().unwrap();
+    assert_eq!(result, root.join("crates/core"));
+}
+
+// AI target dispatch tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ai_active_buffer_idx_defaults_to_focused() {
+    let editor = Editor::new();
+    assert_eq!(editor.ai_active_buffer_idx(), editor.active_buffer_idx());
+}
+
+#[test]
+fn ai_active_buffer_idx_uses_target_when_set() {
+    let mut editor = Editor::new();
+    // Add a second buffer
+    editor.buffers.push(Buffer::new());
+    editor.ai_target_buffer_idx = Some(1);
+    assert_eq!(editor.ai_active_buffer_idx(), 1);
+    assert_eq!(editor.active_buffer_idx(), 0); // focused is still 0
+}
+
+#[test]
+fn ai_cursor_row_defaults_to_focused_window() {
+    let mut editor = Editor::new();
+    editor.window_mgr.focused_window_mut().cursor_row = 5;
+    assert_eq!(editor.ai_cursor_row(), 5);
+}
+
+#[test]
+fn ai_cursor_row_uses_target_window() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    // Set cursor in the new window
+    if let Some(w) = editor
+        .window_mgr
+        .iter_windows_mut()
+        .find(|w| w.id == new_win_id)
+    {
+        w.cursor_row = 42;
+        w.buffer_idx = 1;
+    }
+    // Focus stays on original window
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    assert_eq!(editor.ai_cursor_row(), 42);
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0); // focused is still 0
+}
+
+#[test]
+fn dispatch_builtin_in_target_restores_focus() {
+    let mut editor = ed_with_text("line one\nline two\nline three");
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 1, area)
+        .unwrap();
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    // Dispatch move-down in the target window
+    editor.dispatch_builtin_in_target("move-down");
+
+    // Focus should be restored to original
+    assert_eq!(editor.window_mgr.focused_id(), original_id);
+}
+
+#[test]
+fn execute_command_respects_ai_target() {
+    let mut editor = ed_with_text("line one\nline two\nline three");
+    editor.buffers.push(Buffer::new());
+    let area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let new_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, 0, area)
+        .unwrap();
+    let original_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != new_win_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_id);
+    editor.ai_target_window_id = Some(new_win_id);
+
+    // Cursor in target window should be at 0 initially
+    let target_row_before = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id == new_win_id)
+        .unwrap()
+        .cursor_row;
+    assert_eq!(target_row_before, 0);
+
+    // Dispatch move-down in the target window
+    editor.dispatch_builtin_in_target("move-down");
+
+    // Target window cursor should have moved
+    let target_row_after = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id == new_win_id)
+        .unwrap()
+        .cursor_row;
+    assert_eq!(target_row_after, 1);
+
+    // Original window cursor should NOT have moved
+    assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

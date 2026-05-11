@@ -58,6 +58,8 @@ Source: `crates/core/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `agenda_view` | mod |
+| `babel` | mod |
 | `buffer` | mod |
 | `buffer_mode` | mod |
 | `buffer_view` | mod |
@@ -65,13 +67,16 @@ Source: `crates/core/src/lib.rs`
 | `command_palette` | mod |
 | `commands` | mod |
 | `conversation` | mod |
+| `cursor` | mod |
 | `dap_intent` | mod |
 | `debug` | mod |
 | `debug_view` | mod |
 | `diff` | mod |
+| `display_policy` | mod |
 | `display_region` | mod |
 | `editor` | mod |
 | `event_record` | mod |
+| `export` | mod |
 | `file_browser` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
@@ -80,6 +85,7 @@ Source: `crates/core/src/lib.rs`
 | `heading` | mod |
 | `help_view` | mod |
 | `hooks` | mod |
+| `image_meta` | mod |
 | `input` | mod |
 | `kb_seed` | mod |
 | `keymap` | mod |
@@ -94,11 +100,13 @@ Source: `crates/core/src/lib.rs`
 | `session` | mod |
 | `swap` | mod |
 | `syntax` | mod |
+| `table` | mod |
 | `theme` | mod |
 | `visual_buffer` | mod |
 | `window` | mod |
 | `word` | mod |
 | `wrap` | mod |
+| `redraw` | mod |
 | `VisualType` | enum |
 | `Mode` | enum |
 
@@ -129,10 +137,12 @@ Source: `crates/kb/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `federation` | mod |
 | `org` | mod |
 | `persist` | mod |
 | `watch` | mod |
 | `NodeKind` | enum |
+| `NodeSource` | enum |
 | `Node` | struct |
 | `parse_links` | fn |
 | `KnowledgeBase` | struct |
@@ -205,19 +215,45 @@ Source: `crates/shell/src/lib.rs`
 | `add-hook!` | `crates/scheme/src/runtime.rs` |
 | `remove-hook!` | `crates/scheme/src/runtime.rs` |
 | `set-option!` | `crates/scheme/src/runtime.rs` |
+| `set-local-option!` | `crates/scheme/src/runtime.rs` |
+| `display-buffer-policy` | `crates/scheme/src/runtime.rs` |
+| `set-display-rule!` | `crates/scheme/src/runtime.rs` |
 | `shell-send-input` | `crates/scheme/src/runtime.rs` |
 | `recent-files-add!` | `crates/scheme/src/runtime.rs` |
 | `recent-projects-add!` | `crates/scheme/src/runtime.rs` |
+| `agenda-add!` | `crates/scheme/src/runtime.rs` |
+| `agenda-remove!` | `crates/scheme/src/runtime.rs` |
+| `agenda-list` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-rect!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-clear!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-line!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-circle!` | `crates/scheme/src/runtime.rs` |
 | `visual-buffer-add-text!` | `crates/scheme/src/runtime.rs` |
+| `buffer-delete-range` | `crates/scheme/src/runtime.rs` |
+| `buffer-replace-range` | `crates/scheme/src/runtime.rs` |
+| `buffer-undo` | `crates/scheme/src/runtime.rs` |
+| `buffer-redo` | `crates/scheme/src/runtime.rs` |
+| `switch-to-buffer` | `crates/scheme/src/runtime.rs` |
+| `undefine-key!` | `crates/scheme/src/runtime.rs` |
+| `read-file` | `crates/scheme/src/runtime.rs` |
+| `file-exists?` | `crates/scheme/src/runtime.rs` |
+| `list-directory` | `crates/scheme/src/runtime.rs` |
+| `provide-feature` | `crates/scheme/src/runtime.rs` |
+| `featurep` | `crates/scheme/src/runtime.rs` |
+| `require-feature` | `crates/scheme/src/runtime.rs` |
+| `load-path` | `crates/scheme/src/runtime.rs` |
+| `add-to-load-path!` | `crates/scheme/src/runtime.rs` |
+| `autoload` | `crates/scheme/src/runtime.rs` |
 | `buffer-line` | `crates/scheme/src/runtime.rs` |
 | `shell-cwd` | `crates/scheme/src/runtime.rs` |
 | `shell-read-output` | `crates/scheme/src/runtime.rs` |
+| `buffer-text-range` | `crates/scheme/src/runtime.rs` |
+| `get-buffer-by-name` | `crates/scheme/src/runtime.rs` |
+| `get-option` | `crates/scheme/src/runtime.rs` |
+| `command-exists?` | `crates/scheme/src/runtime.rs` |
+| `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (377 built-in)
+## Commands (455 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -374,7 +410,8 @@ Source: `crates/shell/src/lib.rs`
 | `switch-buffer` | Switch to another buffer |
 | `new-buffer` | Create a new empty scratch buffer |
 | `force-kill-buffer` | Close current buffer without saving |
-| `ai-prompt` | Open AI conversation and prompt |
+| `ai-prompt` | AI Chat — built-in conversation with editor context (SPC a p) |
+| `ai-chat` | AI Chat — built-in conversation with editor context (SPC a p) |
 | `ai-cancel` | Cancel current AI operation |
 | `ai-accept` | Accept proposed AI changes |
 | `ai-reject` | Reject proposed AI changes |
@@ -455,9 +492,15 @@ Source: `crates/shell/src/lib.rs`
 | `dap-refresh` | Refresh DAP state and debug panel |
 | `debug-attach` | Attach debugger to a running process (:debug-attach <adapter> <pid>) |
 | `debug-eval` | Evaluate expression in debug context (:debug-eval <expression>) |
+| `debug-exceptions` | Toggle exception breakpoints (:debug-exceptions [caught|uncaught|all|none]) |
+| `debug-add-watch` | Add a watch expression (:debug-add-watch <expr>) |
+| `debug-remove-watch` | Remove a watch expression by index (:debug-remove-watch <index>) |
 | `lsp-goto-definition` | Jump to definition of symbol under cursor (gd) |
 | `lsp-find-references` | Find references to symbol under cursor (gr) |
 | `lsp-hover` | Show hover information for symbol under cursor (K) |
+| `dismiss-hover-popup` | Dismiss the LSP hover popup |
+| `hover-scroll-down` | Scroll the LSP hover popup down |
+| `hover-scroll-up` | Scroll the LSP hover popup up |
 | `lsp-next-diagnostic` | Jump to next diagnostic in buffer (]d) |
 | `lsp-prev-diagnostic` | Jump to previous diagnostic in buffer ([d) |
 | `lsp-show-diagnostics` | Show all diagnostics in a list buffer |
@@ -467,17 +510,45 @@ Source: `crates/shell/src/lib.rs`
 | `lsp-complete-next` | Select next completion item (Ctrl-n) |
 | `lsp-complete-prev` | Select previous completion item (Ctrl-p) |
 | `lsp-code-action` | Run LSP code action at cursor (SPC c a) |
+| `lsp-code-action-next` | Select next code action |
+| `lsp-code-action-prev` | Select previous code action |
+| `lsp-code-action-select` | Apply selected code action |
+| `lsp-code-action-dismiss` | Dismiss code action menu |
 | `lsp-rename` | Rename symbol under cursor via LSP (SPC c R) |
 | `lsp-format` | Format buffer via LSP (SPC c f) |
+| `lsp-range-format` | Format visual selection via LSP (SPC c F) |
+| `lsp-rename-apply` | Apply pending rename preview |
+| `lsp-rename-abort` | Abort pending rename preview |
+| `lsp-status` | Show LSP server status buffer (SPC c s) |
+| `lsp-signature-help` | Show function signature help |
+| `lsp-peek-definition` | Peek definition in floating preview (SPC l p) |
+| `toggle-lsp-diagnostics-inline` | Toggle inline diagnostic underlines (SPC t d) |
+| `lsp-symbol-outline` | Show symbol outline popup (SPC c o) |
+| `lsp-symbol-outline-next` | Select next outline symbol |
+| `lsp-symbol-outline-prev` | Select previous outline symbol |
+| `lsp-symbol-outline-select` | Jump to selected symbol |
+| `lsp-symbol-outline-dismiss` | Dismiss symbol outline |
+| `lsp-peek-references` | Peek references in floating preview (SPC l r) |
+| `lsp-peek-references-next` | Next peek reference |
+| `lsp-peek-references-prev` | Previous peek reference |
 | `toggle-fold` | Toggle fold at cursor (za) |
 | `close-all-folds` | Close all folds (zM) |
 | `open-all-folds` | Open all folds (zR) |
+| `mc-add-cursor-below` | Add cursor below (SPC m j) |
+| `mc-add-cursor-above` | Add cursor above (SPC m k) |
+| `mc-add-at-next-word` | Add cursor at next word match (SPC m d) |
+| `mc-add-all-word` | Add cursors at all word matches (SPC m a) |
+| `mc-skip-next` | Skip current match, find next (SPC m s) |
+| `mc-clear` | Remove all secondary cursors (SPC m c) |
+| `mc-align` | Align all cursors to primary column (SPC m l) |
 | `org-cycle` | Cycle org heading visibility (Tab) |
 | `org-global-cycle` | Cycle all org headings (S-Tab) |
 | `org-todo-next` | Cycle org TODO state forward |
 | `org-todo-prev` | Cycle org TODO state backward |
 | `org-open-link` | Open org link under cursor |
+| `smart-enter` | Context-aware Enter: toggle checkbox, cycle TODO, or follow link |
 | `open-link-at-cursor` | Open URL or file path under cursor (gx) |
+| `edit-link` | Edit link at cursor — enter insert mode in link region (gl) |
 | `org-promote` | Promote org heading (M-Left) |
 | `org-demote` | Demote org heading (M-Right) |
 | `org-move-subtree-up` | Move org subtree up (M-Up) |
@@ -485,6 +556,30 @@ Source: `crates/shell/src/lib.rs`
 | `org-insert-heading` | Insert org heading after subtree (M-Enter) |
 | `org-narrow-subtree` | Narrow to org subtree |
 | `org-widen` | Widen from org narrow |
+| `org-priority-up` | Cycle org priority up (S-Up) |
+| `org-priority-down` | Cycle org priority down (S-Down) |
+| `org-set-tags` | Set org heading tags (SPC m t) |
+| `babel-execute` | Execute source block at cursor (C-c C-c / SPC m x) |
+| `babel-execute-all` | Execute all source blocks in buffer (SPC m X) |
+| `babel-tangle` | Tangle source blocks to files (SPC m T) |
+| `babel-kill-sessions` | Kill all babel session processes |
+| `org-export-html` | Export org buffer to HTML (SPC m e h) |
+| `org-export-markdown` | Export org buffer to Markdown (SPC m e m) |
+| `org-export-subtree` | Export subtree at cursor (SPC m e s) |
+| `kb-register` | Register org-roam directory as KB instance |
+| `kb-unregister` | Remove a registered KB instance |
+| `kb-reimport` | Re-import KB instance from org files |
+| `kb-instances` | List all registered KB instances |
+| `insert-newline-smart` | Insert newline with list continuation |
+| `table-next-cell` | Move to next table cell (Tab) |
+| `table-prev-cell` | Move to previous table cell (S-Tab) |
+| `table-align` | Align table columns (SPC m b a) |
+| `table-insert-row` | Insert table row below |
+| `table-delete-row` | Delete current table row |
+| `table-insert-column` | Insert table column after cursor |
+| `table-delete-column` | Delete table column at cursor |
+| `table-move-row-up` | Move table row up |
+| `table-move-row-down` | Move table row down |
 | `md-cycle` | Cycle markdown heading visibility (Tab) |
 | `md-global-cycle` | Cycle all markdown headings (S-Tab) |
 | `md-promote` | Promote markdown heading (M-Left) |
@@ -494,6 +589,18 @@ Source: `crates/shell/src/lib.rs`
 | `md-insert-heading` | Insert markdown heading after subtree (M-Enter) |
 | `md-narrow-subtree` | Narrow to markdown subtree |
 | `md-widen` | Widen from markdown narrow |
+| `open-agenda` | Open agenda view (:agenda, SPC o a) |
+| `agenda-goto` | Jump to source node from agenda (Enter) |
+| `agenda-refresh` | Refresh agenda view (r) |
+| `agenda-filter-todo` | Cycle TODO state filter (t) |
+| `agenda-filter-priority` | Cycle priority filter (p) |
+| `agenda-add` | Add path to agenda files (:agenda-add <path>) |
+| `agenda-remove` | Remove path from agenda files (:agenda-remove <path>) |
+| `agenda-list` | Show configured agenda file paths |
+| `agenda-ingest` | Re-ingest all agenda file paths |
+| `open-demo-tables` | Open interactive tables demo |
+| `open-demo-markup` | Open interactive markup demo |
+| `open-demo-agenda` | Open interactive agenda demo |
 | `narrow-to-subtree` | Narrow buffer to current subtree |
 | `widen` | Widen buffer from narrowed view |
 | `syntax-select-node` | Select the tree-sitter node at the cursor (SPC s s) |
@@ -509,12 +616,14 @@ Source: `crates/shell/src/lib.rs`
 | `rename-file` | Rename current file (SPC f R) |
 | `save-as` | Save buffer to new path (SPC f S) |
 | `edit-config` | Open init.scm config for editing (SPC f c) |
-| `edit-settings` | Open config.toml settings (SPC f C) |
+| `edit-settings` | Open config.toml settings (SPC f P) |
 | `setup-wizard` | Show how to re-run the first-run setup wizard |
 | `toggle-fps` | Toggle FPS overlay in status bar (SPC t F) |
 | `debug-mode` | Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D) |
-| `reload-config` | Reload config.toml and init.scm |
+| `reload-config` | Reload config.toml and re-evaluate init.scm |
 | `describe-option` | Show documentation for an editor option (SPC h o) |
+| `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
+| `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
 | `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |
@@ -522,6 +631,9 @@ Source: `crates/shell/src/lib.rs`
 | `toggle-line-numbers` | Toggle line number display (SPC t l) |
 | `toggle-relative-line-numbers` | Toggle relative line numbers (SPC t r) |
 | `toggle-word-wrap` | Toggle word wrap (SPC t w) |
+| `toggle-inline-images` | Toggle inline image display in current buffer (SPC t i) |
+| `toggle-image-at-point` | Collapse/expand the image at the cursor line |
+| `image-info-at-point` | Show image metadata for the image at cursor (SPC m i) |
 | `toggle-scrollbar` | Toggle scrollbar visibility (SPC t s) |
 | `git-status` | Show git status in scratch buffer (SPC g s) |
 | `git-blame` | Show git blame for current file (SPC g b) |
@@ -561,7 +673,9 @@ Source: `crates/shell/src/lib.rs`
 | `help-close` | Close help buffer |
 | `help-search` | Search help topics |
 | `help-reopen` | Reopen the last-closed help buffer |
+| `help-edit` | Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>) |
 | `terminal` | Open a terminal emulator buffer (:terminal) |
+| `terminal-here` | Open terminal in current buffer's file directory (SPC o T) |
 | `terminal-reset` | Reset/clear the current terminal emulator |
 | `terminal-close` | Close the current terminal and its shell process |
 | `shell-normal-mode` | Exit ShellInsert mode and return to Normal mode |
@@ -584,7 +698,7 @@ Source: `crates/shell/src/lib.rs`
 | `decrease-font-size` | Decrease GUI font size by 1pt |
 | `reset-font-size` | Reset GUI font size to configured default |
 | `debug-path` | Show current PATH environment variable |
-| `open-ai-agent` | Open AI agent in a shell terminal |
+| `open-ai-agent` | AI Agent — terminal shell (SPC a a) |
 | `tutor` | Open interactive MAE tutorial |
 | `session-save` | Save current session (open buffers + cursors) to .mae/session.json |
 | `session-load` | Restore session from .mae/session.json |

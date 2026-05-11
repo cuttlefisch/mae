@@ -140,6 +140,90 @@ impl Editor {
         }
     }
 
+    /// Queue a `textDocument/signatureHelp` request at the cursor.
+    pub fn lsp_request_signature_help(&mut self) {
+        if let Some((uri, language_id, line, character)) = self.lsp_context_at_cursor() {
+            self.pending_lsp_requests.push(LspIntent::SignatureHelp {
+                uri,
+                language_id,
+                line,
+                character,
+            });
+        }
+    }
+
+    /// Queue a `textDocument/definition` request for peek preview (no jump).
+    pub fn lsp_request_peek_definition(&mut self) {
+        match self.lsp_context_at_cursor() {
+            Some((uri, language_id, line, character)) => {
+                let suffix = self.lsp_starting_suffix(&language_id);
+                self.pending_lsp_requests.push(LspIntent::GotoDefinition {
+                    uri,
+                    language_id,
+                    line,
+                    character,
+                });
+                // Mark that we want peek, not jump. We reuse GotoDefinition intent
+                // and set a flag so the binary dispatches the result to peek_state.
+                self.peek_definition_pending = true;
+                self.set_status(format!("[LSP] peek definition...{}", suffix));
+            }
+            None => self.set_status("[LSP] no language server for this buffer"),
+        }
+    }
+
+    /// Store a signature help result from the LSP server.
+    pub fn apply_signature_help_result(
+        &mut self,
+        signatures: Vec<super::SignatureHelpInfo>,
+        active_signature: usize,
+        active_parameter: usize,
+    ) {
+        if signatures.is_empty() {
+            self.signature_help = None;
+            return;
+        }
+        let win = self.window_mgr.focused_window();
+        self.signature_help = Some(super::SignatureHelpState {
+            signatures,
+            active_signature,
+            active_parameter,
+            anchor_line: win.cursor_row,
+            anchor_col: win.cursor_col,
+        });
+    }
+
+    /// Store a peek definition result from the LSP server.
+    pub fn apply_peek_definition_result(&mut self, file_path: String, line: usize, col: usize) {
+        // Read context lines around the definition from the file.
+        let context_before = 5;
+        let context_after = 5;
+        let start_line = line.saturating_sub(context_before);
+        let mut context_lines = Vec::new();
+        let highlight_line;
+
+        if let Ok(content) = std::fs::read_to_string(&file_path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let end_line = (line + context_after + 1).min(lines.len());
+            for item in lines.iter().take(end_line).skip(start_line) {
+                context_lines.push(item.to_string());
+            }
+            highlight_line = line - start_line;
+        } else {
+            context_lines.push(format!("(cannot read {})", file_path));
+            highlight_line = 0;
+        }
+
+        self.peek_state = Some(super::PeekState {
+            file_path,
+            line,
+            col,
+            context_lines,
+            highlight_line,
+            scroll_offset: 0,
+        });
+    }
+
     /// Queue a `textDocument/completion` request at the cursor position.
     /// Silently ignored if the buffer has no known language.
     pub fn lsp_request_completion(&mut self) {
@@ -355,6 +439,310 @@ impl Editor {
         }
     }
 
+    /// Request document symbols for the symbol outline popup.
+    pub fn lsp_request_symbol_outline(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else {
+            self.set_status("[LSP] symbol outline: buffer has no file path");
+            return;
+        };
+        let Some(lang_id) = language_id_from_path(path) else {
+            self.set_status("[LSP] symbol outline: unsupported language");
+            return;
+        };
+        let uri = path_to_uri(path);
+        self.pending_lsp_requests
+            .push(crate::LspIntent::DocumentSymbols {
+                uri,
+                language_id: lang_id,
+            });
+        self.symbol_outline_pending = true;
+        self.set_status("[LSP] loading symbol outline\u{2026}");
+    }
+
+    /// Apply document symbol results to populate the symbol outline popup.
+    pub fn apply_symbol_outline_result(&mut self, symbols: &[crate::editor::SymbolOutlineEntry]) {
+        self.symbol_outline_pending = false;
+        // Cache symbols for breadcrumbs.
+        self.cached_doc_symbols = symbols.to_vec();
+        self.cached_doc_symbols_buf = Some(self.active_buffer_idx());
+        if symbols.is_empty() {
+            self.set_status("[LSP] no symbols in document");
+            return;
+        }
+        let len = symbols.len();
+        let all_indices: Vec<usize> = (0..len).collect();
+        self.symbol_outline = Some(super::SymbolOutlineState {
+            entries: symbols.to_vec(),
+            selected: 0,
+            filter: String::new(),
+            filtered_indices: all_indices,
+        });
+        self.set_status(format!(
+            "[LSP] {} symbols — j/k navigate, Enter jump, Esc dismiss",
+            len
+        ));
+    }
+
+    /// Apply document symbol results only for breadcrumbs (no popup).
+    pub fn apply_breadcrumb_symbols(&mut self, symbols: &[crate::editor::SymbolOutlineEntry]) {
+        self.breadcrumb_symbols_pending = false;
+        self.cached_doc_symbols = symbols.to_vec();
+        self.cached_doc_symbols_buf = Some(self.active_buffer_idx());
+        self.update_breadcrumbs();
+    }
+
+    /// Navigate the symbol outline popup down.
+    pub fn symbol_outline_next(&mut self) {
+        if let Some(ref mut state) = self.symbol_outline {
+            if !state.filtered_indices.is_empty() {
+                state.selected = (state.selected + 1) % state.filtered_indices.len();
+            }
+        }
+    }
+
+    /// Navigate the symbol outline popup up.
+    pub fn symbol_outline_prev(&mut self) {
+        if let Some(ref mut state) = self.symbol_outline {
+            if !state.filtered_indices.is_empty() {
+                state.selected = state
+                    .selected
+                    .checked_sub(1)
+                    .unwrap_or(state.filtered_indices.len().saturating_sub(1));
+            }
+        }
+    }
+
+    /// Select the current symbol outline entry — jump to its line and dismiss.
+    pub fn symbol_outline_select(&mut self) {
+        let line = {
+            let state = match self.symbol_outline.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let idx = match state.filtered_indices.get(state.selected) {
+                Some(&i) => i,
+                None => return,
+            };
+            state.entries[idx].line
+        };
+        self.symbol_outline = None;
+        let buf_idx = self.active_buffer_idx();
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_row = line;
+        win.cursor_col = 0;
+        win.clamp_cursor(&self.buffers[buf_idx]);
+        let vh = self.viewport_height;
+        win.scroll_center(vh);
+    }
+
+    /// Dismiss the symbol outline popup.
+    pub fn symbol_outline_dismiss(&mut self) {
+        self.symbol_outline = None;
+    }
+
+    /// Update the filter on the symbol outline popup.
+    pub fn symbol_outline_filter_char(&mut self, ch: char) {
+        if let Some(ref mut state) = self.symbol_outline {
+            state.filter.push(ch);
+            let filter_lower = state.filter.to_lowercase();
+            state.filtered_indices = state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name.to_lowercase().contains(&filter_lower))
+                .map(|(i, _)| i)
+                .collect();
+            state.selected = 0;
+        }
+    }
+
+    /// Delete last char from symbol outline filter.
+    pub fn symbol_outline_filter_backspace(&mut self) {
+        if let Some(ref mut state) = self.symbol_outline {
+            state.filter.pop();
+            if state.filter.is_empty() {
+                state.filtered_indices = (0..state.entries.len()).collect();
+            } else {
+                let filter_lower = state.filter.to_lowercase();
+                state.filtered_indices = state
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.name.to_lowercase().contains(&filter_lower))
+                    .map(|(i, _)| i)
+                    .collect();
+            }
+            state.selected = 0;
+        }
+    }
+
+    /// Request references for the symbol at cursor, for peek display.
+    pub fn lsp_request_peek_references(&mut self) {
+        self.peek_references_pending = true;
+        self.lsp_request_references();
+    }
+
+    /// Navigate peek references forward.
+    pub fn peek_references_next(&mut self) {
+        if let Some(ref mut state) = self.peek_references {
+            if !state.locations.is_empty() {
+                state.current = (state.current + 1) % state.locations.len();
+                self.update_peek_references_preview();
+            }
+        }
+    }
+
+    /// Navigate peek references backward.
+    pub fn peek_references_prev(&mut self) {
+        if let Some(ref mut state) = self.peek_references {
+            if !state.locations.is_empty() {
+                state.current = state
+                    .current
+                    .checked_sub(1)
+                    .unwrap_or(state.locations.len().saturating_sub(1));
+                self.update_peek_references_preview();
+            }
+        }
+    }
+
+    /// Update the peek state to show the current reference location.
+    pub fn update_peek_references_preview(&mut self) {
+        let (path, line, col, ctx, current, total) = {
+            let state = match self.peek_references.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let loc = &state.locations[state.current];
+            (
+                loc.path.clone(),
+                loc.line,
+                loc.col,
+                loc.context.clone(),
+                state.current + 1,
+                state.locations.len(),
+            )
+        };
+        self.peek_state = Some(super::PeekState {
+            file_path: path.clone(),
+            line,
+            col,
+            context_lines: ctx,
+            highlight_line: 0,
+            scroll_offset: 0,
+        });
+        self.set_status(format!(
+            "[LSP] reference [{}/{}] {}:{}",
+            current,
+            total,
+            path.rsplit('/').next().unwrap_or(&path),
+            line + 1
+        ));
+    }
+
+    /// Check if the just-inserted character should trigger auto-completion.
+    /// Returns true if the char matches trigger characters for the active buffer's language,
+    /// or universal triggers (`.`).
+    pub fn should_auto_complete(&self, ch: char) -> bool {
+        if !self.auto_complete || !self.lsp_completion {
+            return false;
+        }
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let path = match buf.file_path() {
+            Some(p) => p,
+            None => return false,
+        };
+        let lang = match language_id_from_path(path) {
+            Some(l) => l,
+            None => return false,
+        };
+        // Check if any LSP server is connected for this language
+        let connected = self
+            .lsp_servers
+            .get(&lang)
+            .map(|info| info.status == LspServerStatus::Connected)
+            .unwrap_or(false);
+        if !connected {
+            return false;
+        }
+        let ch_str = ch.to_string();
+        // Check server-provided trigger characters first
+        if let Some(triggers) = self.lsp_trigger_characters.get(&lang) {
+            if triggers.iter().any(|t| t == &ch_str) {
+                return true;
+            }
+        }
+        // Universal fallback: `.` always triggers (all languages)
+        ch == '.'
+    }
+
+    /// Request document symbols for breadcrumb computation (idle trigger).
+    pub fn request_breadcrumb_symbols(&mut self) {
+        if !self.show_breadcrumbs || self.breadcrumb_symbols_pending {
+            return;
+        }
+        let idx = self.active_buffer_idx();
+        // If we already have cached symbols for this buffer, just update breadcrumbs.
+        if self.cached_doc_symbols_buf == Some(idx) && !self.cached_doc_symbols.is_empty() {
+            self.update_breadcrumbs();
+            return;
+        }
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else { return };
+        let Some(lang_id) = language_id_from_path(path) else {
+            return;
+        };
+        let uri = path_to_uri(path);
+        self.pending_lsp_requests
+            .push(crate::LspIntent::DocumentSymbols {
+                uri,
+                language_id: lang_id,
+            });
+        self.breadcrumb_symbols_pending = true;
+    }
+
+    /// Compute breadcrumb path from cached document symbols and cursor position.
+    pub fn update_breadcrumbs(&mut self) {
+        if !self.show_breadcrumbs {
+            self.breadcrumbs = None;
+            return;
+        }
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let filename = buf
+            .file_path()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "[buffer]".to_string());
+
+        if self.cached_doc_symbols_buf != Some(idx) || self.cached_doc_symbols.is_empty() {
+            self.breadcrumbs = Some(vec![filename]);
+            return;
+        }
+
+        let cursor_line = self.window_mgr.focused_window().cursor_row;
+
+        // Walk symbols to find ancestry path. Symbols are ordered by line with depth.
+        // Build a stack of (depth, name) tracking the current nesting.
+        let mut stack: Vec<(usize, String)> = Vec::new();
+        for sym in &self.cached_doc_symbols {
+            if sym.line > cursor_line {
+                break;
+            }
+            // Pop deeper or same-level entries (cursor moved past them).
+            while stack.last().map(|(d, _)| *d >= sym.depth).unwrap_or(false) {
+                stack.pop();
+            }
+            stack.push((sym.depth, sym.name.clone()));
+        }
+
+        let mut crumbs = vec![filename];
+        crumbs.extend(stack.into_iter().map(|(_, name)| name));
+        self.breadcrumbs = Some(crumbs);
+    }
+
     /// Queue a `textDocument/formatting` request for the active buffer.
     pub fn lsp_request_format(&mut self) {
         let idx = self.active_buffer_idx();
@@ -373,6 +761,193 @@ impl Editor {
             language_id: lang_id,
         });
         self.set_status("LSP format: awaiting server response");
+    }
+
+    /// Queue a `textDocument/rangeFormatting` request for the visual selection
+    /// or fall back to full-file formatting if not in visual mode.
+    pub fn lsp_request_range_format(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+        let Some(path) = buf.file_path() else {
+            self.set_status("LSP format: buffer has no file path");
+            return;
+        };
+        let Some(lang_id) = crate::lsp_intent::language_id_from_path(path) else {
+            self.set_status("LSP format: unsupported language");
+            return;
+        };
+        let uri = crate::lsp_intent::path_to_uri(path);
+
+        if let crate::Mode::Visual(_) = self.mode {
+            let win = self.window_mgr.focused_window();
+            let start_row = self.visual_anchor_row.min(win.cursor_row);
+            let end_row = self.visual_anchor_row.max(win.cursor_row);
+            let start_col = if start_row == self.visual_anchor_row {
+                self.visual_anchor_col
+            } else {
+                win.cursor_col
+            };
+            let end_col = if end_row == win.cursor_row {
+                win.cursor_col
+            } else {
+                self.visual_anchor_col
+            };
+            self.pending_lsp_requests
+                .push(crate::LspIntent::RangeFormat {
+                    uri,
+                    language_id: lang_id,
+                    start_line: start_row as u32,
+                    start_char: start_col as u32,
+                    end_line: end_row as u32,
+                    end_char: end_col as u32,
+                });
+            self.set_status("LSP range format: awaiting server response");
+        } else {
+            // Fall back to full-file format
+            self.pending_lsp_requests.push(crate::LspIntent::Format {
+                uri,
+                language_id: lang_id,
+            });
+            self.set_status("LSP format: awaiting server response");
+        }
+    }
+
+    /// Apply format edits from the LSP server. The `edits_json` is a
+    /// JSON-serialized `Vec<(uri, Vec<TextEditJson>)>` — same format as
+    /// `apply_workspace_edit_json` uses internally.
+    pub fn apply_format_edits_json(&mut self, edits_json: &str, count: usize) {
+        self.apply_workspace_edit_json(edits_json);
+        self.set_status(format!("[LSP] formatted: {} edit(s) applied", count));
+    }
+
+    /// Open a *Rename Preview* buffer showing the unified diff of all
+    /// affected locations. Called by the binary when a rename workspace edit
+    /// arrives and preview mode is active.
+    pub fn show_rename_preview(&mut self, edits_json: &str, new_name: &str) {
+        let Ok(edits) = serde_json::from_str::<Vec<(String, Vec<TextEditJson>)>>(edits_json) else {
+            self.set_status("[LSP] failed to parse rename preview");
+            return;
+        };
+
+        let mut diff_text = format!("Rename Preview → '{}'\n\n", new_name);
+        let mut total_changes = 0usize;
+
+        for (uri, text_edits) in &edits {
+            let path = uri.strip_prefix("file://").unwrap_or(uri);
+            diff_text.push_str(&format!("--- {}\n+++ {}\n", path, path));
+
+            // Read buffer content for context
+            let buf_idx = self
+                .buffers
+                .iter()
+                .position(|b| b.file_path().map(|p| p.to_string_lossy()) == Some(path.into()));
+
+            if let Some(idx) = buf_idx {
+                let buf = &self.buffers[idx];
+                for edit in text_edits {
+                    let line = edit.start_line as usize;
+                    if line < buf.rope().len_lines() {
+                        let line_text: String = buf.rope().line(line).chars().collect();
+                        let trimmed = line_text.trim_end_matches('\n');
+                        diff_text.push_str(&format!(
+                            "@@ -{},{} +{},{} @@\n",
+                            line + 1,
+                            1,
+                            line + 1,
+                            1
+                        ));
+                        diff_text.push_str(&format!("-{}\n", trimmed));
+                        // Show the line with the edit applied
+                        let start_c = edit.start_character as usize;
+                        let end_c = edit.end_character as usize;
+                        let mut new_line = String::new();
+                        for (i, ch) in trimmed.char_indices() {
+                            let char_idx = trimmed[..i].chars().count();
+                            if char_idx == start_c {
+                                new_line.push_str(&edit.new_text);
+                            }
+                            if char_idx < start_c || char_idx >= end_c {
+                                new_line.push(ch);
+                            }
+                        }
+                        // Handle case where edit is at end of line
+                        if start_c >= trimmed.chars().count() {
+                            new_line.push_str(&edit.new_text);
+                        }
+                        diff_text.push_str(&format!("+{}\n", new_line));
+                        total_changes += 1;
+                    }
+                }
+            } else {
+                diff_text.push_str(&format!("  (file not open: {})\n", path));
+                total_changes += text_edits.len();
+            }
+        }
+
+        diff_text.push_str(&format!(
+            "\n{} change(s) across {} file(s)",
+            total_changes,
+            edits.len()
+        ));
+        diff_text.push_str("\nPress Enter to apply, Esc to abort");
+
+        // Create or reuse the rename preview buffer
+        let preview_name = "*Rename Preview*";
+        let preview_idx = self.buffers.iter().position(|b| b.name == preview_name);
+        let idx = if let Some(idx) = preview_idx {
+            self.buffers[idx].replace_contents(&diff_text);
+            idx
+        } else {
+            let mut buf = crate::buffer::Buffer::new();
+            buf.name = preview_name.to_string();
+            buf.replace_contents(&diff_text);
+            buf.modified = false;
+            self.buffers.push(buf);
+            self.buffers.len() - 1
+        };
+
+        // Store the edits JSON for later application
+        self.pending_rename_edit = Some(edits_json.to_string());
+
+        // Display the preview buffer
+        self.display_buffer_and_focus(idx);
+        self.window_mgr.focused_window_mut().scroll_offset = 0;
+
+        self.set_status(format!(
+            "[LSP] Rename preview: {} change(s) — Enter to apply, Esc to abort",
+            total_changes
+        ));
+    }
+
+    /// Apply the pending rename edit and close the preview buffer.
+    pub fn apply_pending_rename(&mut self) {
+        let edits_json = match self.pending_rename_edit.take() {
+            Some(j) => j,
+            None => return,
+        };
+        self.apply_workspace_edit_json(&edits_json);
+        // Remove the preview buffer
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == "*Rename Preview*")
+        {
+            self.kill_buffer_at(idx);
+        }
+        self.set_status("[LSP] Rename applied");
+    }
+
+    /// Abort a pending rename and close the preview buffer.
+    pub fn abort_pending_rename(&mut self) {
+        self.pending_rename_edit = None;
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.name == "*Rename Preview*")
+        {
+            self.kill_buffer_at(idx);
+        }
+        self.set_status("[LSP] Rename aborted");
     }
 
     /// Queue a `textDocument/didOpen` notification for the active buffer
@@ -460,6 +1035,7 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             self.hover_popup = Some(HoverPopup {
                 contents,
+                buffer_idx: win.buffer_idx,
                 anchor_row: win.cursor_row,
                 anchor_col: win.cursor_col,
                 scroll_offset: 0,
@@ -527,7 +1103,7 @@ impl Editor {
             let line_count = self.buffers[idx].display_line_count();
             let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
             let target_col = loc.range.start_character as usize;
-            let vh = self.viewport_height;
+            let vh = self.focused_viewport_height();
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = target_row;
             win.cursor_col = target_col;
@@ -656,7 +1232,7 @@ impl Editor {
             self.buffers.push(buf);
             self.buffers.len() - 1
         };
-        self.window_mgr.focused_window_mut().buffer_idx = idx;
+        self.display_buffer(idx);
         let count = self.lsp_servers.len();
         self.set_status(format!("LSP: {} server(s) configured", count));
     }
@@ -1329,6 +1905,13 @@ mod tests {
         let text: String = (0..100).map(|i| format!("line{}\n", i)).collect();
         let mut ed = editor_with_file("/tmp/a.rs", &text);
         ed.viewport_height = 20;
+        // Match layout area so focused_viewport_height() uses fallback.
+        ed.last_layout_area = crate::window::Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
         let loc = LspLocation {
             uri: "file:///tmp/a.rs".into(),
             range: LspRange {

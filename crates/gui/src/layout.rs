@@ -12,12 +12,30 @@
 //! if the renderer sees different spans, line heights will not match.
 
 use std::hash::{Hash, Hasher};
-
-use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
-use mae_core::{Buffer, Editor, HighlightSpan, Window};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::buffer_render;
 use crate::gutter;
+use mae_core::wrap::{char_width, find_wrap_break, leading_indent_len};
+use mae_core::{Buffer, Editor, HighlightSpan, Window};
+
+/// Layout information for an inline image on a line.
+///
+/// When a `DisplayRegion` with `image: Some(...)` covers a line, `compute_layout`
+/// computes the display dimensions of the image and stores them here. The GUI
+/// renderer uses this to draw the image below the line's text area.
+#[derive(Debug, Clone)]
+pub struct ImageLayout {
+    /// Resolved absolute path to the image file.
+    pub path: PathBuf,
+    /// Display width in pixels (capped to text area width).
+    pub display_width: f32,
+    /// Display height in pixels (capped to 400px, aspect-ratio preserved).
+    pub display_height: f32,
+    /// Pixel X offset of the image's left edge (= text_col * cell_width).
+    pub pixel_x: f32,
+}
 
 /// Layout for one visible display row.
 ///
@@ -49,18 +67,22 @@ pub struct LineLayout {
     /// Character count in this segment.
     pub char_count: usize,
     /// Maps display char index -> rope char index when display regions are active.
-    /// `None` if no display regions affect this line.
-    pub display_map: Option<Vec<usize>>,
+    /// `None` if no display regions affect this line. Arc-shared across wrap segments.
+    pub display_map: Option<Arc<Vec<usize>>>,
     /// Display chars when display regions are active.
-    /// `None` if no display regions affect this line.
-    pub display_chars: Option<Vec<char>>,
+    /// `None` if no display regions affect this line. Arc-shared across wrap segments.
+    pub display_chars: Option<Arc<Vec<char>>>,
     /// Content hash for this line (chars + scale). Used to detect whether a
     /// line changed between frames for the tiered redisplay optimization.
     pub content_hash: u64,
+    /// Inline image layout, if this line contains an image display region.
+    /// Only set on the first (non-continuation) segment of the line.
+    pub image: Option<ImageLayout>,
 }
 
 /// Complete layout for one window's visible content area.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct FrameLayout {
     /// One entry per visible display row (including wrap continuations).
     pub lines: Vec<LineLayout>,
@@ -275,7 +297,9 @@ pub fn compute_layout(
         0
     };
 
-    let mut pixel_y = area_row as f32 * cell_height;
+    // Sub-line scroll: offset pixel_y upward to hide top rows of scroll_offset line.
+    let skip_px = win.scroll_pixel_offset;
+    let mut pixel_y = area_row as f32 * cell_height - skip_px;
     let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
 
     // Pre-compute effective display regions (org-appear: cursor reveals its region).
@@ -286,6 +310,10 @@ pub fn compute_layout(
 
     let mut lines: Vec<LineLayout> = Vec::with_capacity(area_height + 1);
     let mut line_idx = win.scroll_offset;
+
+    // Sequential rope offset cache: avoids O(log n) B-tree traversals per line.
+    // Stores (line_idx, char_start_of_next_line, byte_start_of_next_line).
+    let mut seq_cache: Option<(usize, usize, usize)> = None;
 
     // Narrow range: clamp to visible lines.
     let narrow = buf.narrowed_range;
@@ -306,20 +334,14 @@ pub fn compute_layout(
         }
 
         // Skip folded lines.
-        let mut is_folded = false;
-        for (start, end) in &buf.folded_ranges {
-            if line_idx > *start && line_idx < *end {
-                is_folded = true;
-                break;
-            }
-        }
-        if is_folded {
+        if buf.is_line_folded(line_idx) {
             line_idx += 1;
             continue;
         }
 
         // Compute heading scale using editor-configured values.
-        let org_heading_scale = if editor.heading_scale {
+        // Skip for degraded files — syntax spans may be empty or huge.
+        let org_heading_scale = if editor.heading_scale && !buf.degraded.unwrap_or(false) {
             buffer_render::line_heading_scale_with(
                 buf,
                 syntax_spans,
@@ -334,51 +356,156 @@ pub fn compute_layout(
 
         // Check if this line starts a fold.
         let fold_info = buf
-            .folded_ranges
-            .iter()
-            .find(|(s, _)| *s == line_idx)
-            .map(|(_, end)| end - line_idx - 1)
+            .fold_end_at(line_idx)
+            .map(|end| end - line_idx - 1)
             .unwrap_or(0);
         let is_fold_start = fold_info > 0;
 
-        let line_text = buf.rope().line(line_idx);
-        let rope_chars: Vec<char> = line_text
-            .chars()
-            .filter(|c| *c != '\n' && *c != '\r')
-            .collect();
+        // --- Sequential rope offset cache + chunk-based line extraction ---
+        // Avoids rope.line() (2 walks) by using chunk_at_byte (1 walk) + string scan.
+        let (line_char_start, line_byte_start) = match seq_cache {
+            Some((prev, ch, by)) if line_idx == prev + 1 => (ch, by),
+            _ => {
+                let ch = buf.rope().line_to_char(line_idx);
+                (ch, buf.rope().char_to_byte(ch))
+            }
+        };
 
-        // Apply display regions (link concealment) if any overlap this line.
-        let line_char_start = buf.rope().line_to_char(line_idx);
-        let line_byte_start = buf.rope().char_to_byte(line_char_start);
-        let line_byte_end = buf.rope().char_to_byte(line_char_start + rope_chars.len());
-        let has_display_regions = !effective_regions.is_empty()
-            && effective_regions
+        // Get chunk containing this line's start byte (1 tree walk, or 0 if same chunk).
+        let (chunk_str, chunk_byte_start, _, _) = buf.rope().chunk_at_byte(line_byte_start);
+        let offset_in_chunk = line_byte_start - chunk_byte_start;
+        let from_line_start = &chunk_str[offset_in_chunk..];
+
+        // Extract line content from chunk. Fast path: line fits in single chunk (>99%).
+        let (rope_chars, line_len_chars, line_len_bytes) =
+            if let Some(nl_pos) = from_line_start.find('\n') {
+                // Line ends within this chunk. Strip trailing \r for CRLF.
+                let has_cr = nl_pos > 0 && from_line_start.as_bytes()[nl_pos - 1] == b'\r';
+                let line_str = if has_cr {
+                    &from_line_start[..nl_pos - 1]
+                } else {
+                    &from_line_start[..nl_pos]
+                };
+                let chars: Vec<char> = line_str.chars().collect();
+                let eol_chars = if has_cr { 2 } else { 1 }; // \r\n = 2, \n = 1
+                let len_chars = chars.len() + eol_chars;
+                let len_bytes = nl_pos + 1; // +1 for \n byte
+                (chars, len_chars, len_bytes)
+            } else if line_idx + 1 >= total_lines {
+                // Last line of file (no trailing newline).
+                let chars: Vec<char> = from_line_start.chars().collect();
+                let len_chars = chars.len();
+                let len_bytes = from_line_start.len();
+                (chars, len_chars, len_bytes)
+            } else {
+                // Line spans chunks — fall back to rope.line() (rare: <1% of lines).
+                let line_text = buf.rope().line(line_idx);
+                let chars: Vec<char> = line_text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect();
+                let len_chars = line_text.len_chars();
+                let len_bytes = line_text.len_bytes();
+                (chars, len_chars, len_bytes)
+            };
+
+        // Cache next line's start offsets.
+        seq_cache = Some((
+            line_idx,
+            line_char_start + line_len_chars,
+            line_byte_start + line_len_bytes,
+        ));
+
+        // Byte end for display region overlap checks.
+        let line_byte_end =
+            line_byte_start + rope_chars.iter().map(|c| c.len_utf8()).sum::<usize>();
+        let has_display_regions = !effective_regions.is_empty() && {
+            // Binary search: find first region whose byte_end > line_byte_start.
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+            idx < effective_regions.len() && effective_regions[idx].byte_start < line_byte_end
+        };
+
+        // Check for an image display region covering this line (binary search).
+        let image_layout = {
+            let idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+            effective_regions[idx..]
                 .iter()
-                .any(|r| r.byte_start < line_byte_end && r.byte_end > line_byte_start);
+                .take_while(|r| r.byte_start < line_byte_end)
+                .find(|r| r.image.is_some())
+        }
+        .and_then(|r| r.image.as_ref())
+        .map(|attrs| {
+            let text_area_px = (text_width as f32) * cell_width;
+            let max_w = if let Some(explicit_w) = attrs.width {
+                (explicit_w as f32).min(text_area_px)
+            } else {
+                text_area_px
+            };
+            const MAX_H: f32 = 400.0;
+            // Use cached dimensions from ImageAttrs (populated at region creation).
+            // Fall back to disk read, then to a square if unreadable.
+            let (img_w, img_h) = if attrs.natural_width > 0 && attrs.natural_height > 0 {
+                (attrs.natural_width as f32, attrs.natural_height as f32)
+            } else {
+                image_natural_size(&attrs.path)
+            };
+            let (display_width, display_height) = if img_w > 0.0 && img_h > 0.0 {
+                let aspect = img_w / img_h;
+                let w = max_w;
+                let h = w / aspect;
+                if h <= MAX_H {
+                    (w, h)
+                } else {
+                    (MAX_H * aspect, MAX_H)
+                }
+            } else {
+                (max_w.min(MAX_H), max_w.min(MAX_H))
+            };
+            ImageLayout {
+                path: attrs.path.clone(),
+                display_width,
+                display_height,
+                pixel_x: text_col as f32 * cell_width,
+            }
+        });
 
-        let (display_chars_vec, display_map_vec) = if has_display_regions {
-            mae_core::display_region::apply_display_regions_to_line(
+        let (display_chars_arc, display_map_arc) = if has_display_regions {
+            let (chars_vec, map_vec) = mae_core::display_region::apply_display_regions_to_line(
                 &rope_chars,
                 line_byte_start,
                 line_byte_end,
                 &effective_regions,
-            )
+            );
+            (Some(Arc::new(chars_vec)), Some(Arc::new(map_vec)))
         } else {
-            (Vec::new(), Vec::new())
+            (None, None)
         };
 
-        let full_chars = if has_display_regions {
-            &display_chars_vec
+        let full_chars: &[char] = if let Some(ref arc) = display_chars_arc {
+            arc.as_slice()
         } else {
             &rope_chars
         };
         let full_count = full_chars.len();
 
         // Compute content hash (chars + scale) for tiered redisplay optimization.
+        // For long lines (>500 chars), hash only the visible window + margins
+        // to avoid O(line_length) hashing when only ~80 chars are on screen.
         let content_hash = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            for &ch in full_chars.iter() {
-                ch.hash(&mut hasher);
+            let hash_limit = 500;
+            if full_chars.len() > hash_limit && !wrap {
+                let col_offset = win.col_offset;
+                let hash_start = col_offset.saturating_sub(20).min(full_chars.len());
+                let hash_end = (col_offset + text_width + 20).min(full_chars.len());
+                col_offset.hash(&mut hasher);
+                for &ch in &full_chars[hash_start..hash_end] {
+                    ch.hash(&mut hasher);
+                }
+            } else {
+                for &ch in full_chars.iter() {
+                    ch.hash(&mut hasher);
+                }
             }
             org_heading_scale.to_bits().hash(&mut hasher);
             hasher.finish()
@@ -450,17 +577,10 @@ pub fn compute_layout(
                     folded_line_count: if is_first { fold_info } else { 0 },
                     char_start: pos,
                     char_count: end - pos,
-                    display_map: if has_display_regions {
-                        Some(display_map_vec.clone())
-                    } else {
-                        None
-                    },
-                    display_chars: if has_display_regions {
-                        Some(display_chars_vec.clone())
-                    } else {
-                        None
-                    },
+                    display_map: display_map_arc.clone(),
+                    display_chars: display_chars_arc.clone(),
                     content_hash,
+                    image: if is_first { image_layout.clone() } else { None },
                 });
 
                 pixel_y += seg_height;
@@ -469,6 +589,10 @@ pub fn compute_layout(
                 if pos >= full_count {
                     break;
                 }
+            }
+            // Reserve vertical space for inline image below the text line.
+            if let Some(ref img) = image_layout {
+                pixel_y += img.display_height;
             }
         } else {
             // No wrap — single entry per line.
@@ -517,20 +641,17 @@ pub fn compute_layout(
                 folded_line_count: fold_info,
                 char_start: visible_start,
                 char_count: visible_end - visible_start,
-                display_map: if has_display_regions {
-                    Some(display_map_vec.clone())
-                } else {
-                    None
-                },
-                display_chars: if has_display_regions {
-                    Some(display_chars_vec.clone())
-                } else {
-                    None
-                },
+                display_map: display_map_arc.clone(),
+                display_chars: display_chars_arc.clone(),
                 content_hash,
+                image: image_layout.clone(),
             });
 
             pixel_y += line_height;
+            // Reserve vertical space for inline image below the text line.
+            if let Some(ref img) = image_layout {
+                pixel_y += img.display_height;
+            }
         }
 
         line_idx += 1;
@@ -550,6 +671,39 @@ pub fn compute_layout(
         scrollbar_col,
         total_lines: buf.display_line_count(),
         scroll_offset: win.scroll_offset,
+    }
+}
+
+/// Read the natural (pixel) dimensions of an image file.
+///
+/// Uses Skia's image decoding to avoid an extra dependency. Returns `(0.0, 0.0)`
+/// on any error (file not found, unsupported format, I/O failure).
+fn image_natural_size(path: &std::path::Path) -> (f32, f32) {
+    // Handle SVG via skia's native SVG DOM parser.
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false)
+    {
+        if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(dom) = skia_safe::svg::Dom::from_bytes(&bytes, skia_safe::FontMgr::default())
+            {
+                let size = dom.root().intrinsic_size();
+                return (size.width, size.height);
+            }
+        }
+        return (0.0, 0.0);
+    }
+    // Raster path: decode with Skia.
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return (0.0, 0.0),
+    };
+    let skia_data = skia_safe::Data::new_copy(&data);
+    match skia_safe::Image::from_encoded(skia_data) {
+        Some(img) => (img.width() as f32, img.height() as f32),
+        None => (0.0, 0.0),
     }
 }
 

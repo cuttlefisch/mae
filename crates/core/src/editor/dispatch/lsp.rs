@@ -1,3 +1,5 @@
+//! LSP commands: definition, references, hover, complete, rename, format.
+
 use super::super::Editor;
 
 impl Editor {
@@ -89,6 +91,35 @@ impl Editor {
             "lsp-format" => {
                 self.lsp_request_format();
             }
+            "lsp-range-format" => {
+                self.lsp_request_range_format();
+            }
+            "lsp-rename-apply" => {
+                self.apply_pending_rename();
+            }
+            "lsp-rename-abort" => {
+                self.abort_pending_rename();
+            }
+            "lsp-signature-help" => {
+                self.lsp_request_signature_help();
+            }
+            "lsp-peek-definition" => {
+                self.record_jump();
+                self.lsp_request_peek_definition();
+            }
+            "lsp-symbol-outline" => {
+                self.lsp_request_symbol_outline();
+            }
+            "lsp-symbol-outline-next" => self.symbol_outline_next(),
+            "lsp-symbol-outline-prev" => self.symbol_outline_prev(),
+            "lsp-symbol-outline-select" => self.symbol_outline_select(),
+            "lsp-symbol-outline-dismiss" => self.symbol_outline_dismiss(),
+            "lsp-peek-references" => {
+                self.record_jump();
+                self.lsp_request_peek_references();
+            }
+            "lsp-peek-references-next" => self.peek_references_next(),
+            "lsp-peek-references-prev" => self.peek_references_prev(),
             "syntax-select-node" => {
                 self.syntax_select_node();
             }
@@ -100,6 +131,7 @@ impl Editor {
             }
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

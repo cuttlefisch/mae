@@ -1,3 +1,5 @@
+mod agenda_ops;
+mod babel_ops;
 mod changes;
 mod command;
 mod dap_ops;
@@ -15,6 +17,7 @@ mod keymaps;
 mod lsp_ops;
 mod macros;
 mod marks;
+mod multicursor;
 pub mod perf;
 mod project_ops;
 mod register_ops;
@@ -22,6 +25,7 @@ mod scheme_ops;
 mod search_ops;
 mod surround;
 mod syntax_ops;
+mod table_ops;
 mod text_objects;
 mod visual;
 
@@ -103,12 +107,80 @@ pub struct CompletionItem {
 pub struct HoverPopup {
     /// Raw markdown from LSP.
     pub contents: String,
+    /// Buffer index where hover was requested.
+    pub buffer_idx: usize,
     /// Buffer row where K was pressed.
     pub anchor_row: usize,
     /// Buffer col where K was pressed.
     pub anchor_col: usize,
     /// Scroll offset for long content.
     pub scroll_offset: usize,
+}
+
+/// Floating popup showing LSP signature help near the cursor.
+#[derive(Debug, Clone)]
+pub struct SignatureHelpState {
+    /// Signatures from LSP.
+    pub signatures: Vec<SignatureHelpInfo>,
+    /// Which signature is active.
+    pub active_signature: usize,
+    /// Which parameter is active (highlighted).
+    pub active_parameter: usize,
+    /// Anchor position where the call started.
+    pub anchor_line: usize,
+    pub anchor_col: usize,
+}
+
+/// A single signature for display.
+#[derive(Debug, Clone)]
+pub struct SignatureHelpInfo {
+    /// Full signature label (e.g. "fn foo(x: i32, y: &str) -> bool").
+    pub label: String,
+    /// Parameter byte offset ranges in `label`.
+    pub parameters: Vec<(usize, usize)>,
+    /// Documentation for this signature.
+    pub documentation: Option<String>,
+}
+
+/// Inline preview of a definition without navigating away.
+#[derive(Debug, Clone)]
+pub struct PeekState {
+    /// File path of the definition.
+    pub file_path: String,
+    /// Line number of the definition (0-indexed).
+    pub line: usize,
+    /// Column of the definition.
+    pub col: usize,
+    /// Context lines around the definition.
+    pub context_lines: Vec<String>,
+    /// Which line in context_lines is the definition itself.
+    pub highlight_line: usize,
+    /// Scroll offset within the peek window.
+    pub scroll_offset: usize,
+}
+
+/// Per-line blame annotation from `git blame`.
+#[derive(Debug, Clone)]
+pub struct BlameEntry {
+    /// Short commit hash (8 chars).
+    pub commit_hash: String,
+    /// Author name.
+    pub author: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+    /// First line of commit message.
+    pub summary: String,
+    /// 0-indexed line in buffer.
+    pub final_line: usize,
+}
+
+/// Blame overlay for the active buffer.
+#[derive(Debug, Clone)]
+pub struct BlameOverlay {
+    /// Which buffer this blame is for.
+    pub buffer_idx: usize,
+    /// Blame entries, one per line.
+    pub entries: Vec<BlameEntry>,
 }
 
 /// A single item in the LSP code action popup menu.
@@ -127,6 +199,53 @@ pub struct CodeActionItem {
 pub struct CodeActionMenu {
     pub items: Vec<CodeActionItem>,
     pub selected: usize,
+}
+
+/// A single entry in the symbol outline popup.
+#[derive(Debug, Clone)]
+pub struct SymbolOutlineEntry {
+    pub name: String,
+    /// Human-readable kind (e.g. "function", "struct").
+    pub kind: String,
+    /// Single-char icon for the kind.
+    pub kind_icon: char,
+    /// Line number (0-based) of the symbol.
+    pub line: usize,
+    /// Nesting depth (0 = top-level).
+    pub depth: usize,
+    /// Optional detail (e.g. type signature).
+    pub detail: Option<String>,
+}
+
+/// Symbol outline popup state (SPC c o).
+#[derive(Debug, Clone)]
+pub struct SymbolOutlineState {
+    pub entries: Vec<SymbolOutlineEntry>,
+    pub selected: usize,
+    pub filter: String,
+    pub filtered_indices: Vec<usize>,
+}
+
+/// Peek references state — cycling through reference locations inline.
+#[derive(Debug, Clone)]
+pub struct PeekReferencesState {
+    /// All reference locations.
+    pub locations: Vec<PeekReferenceLocation>,
+    /// Currently shown index.
+    pub current: usize,
+}
+
+/// A single reference location for peek.
+#[derive(Debug, Clone)]
+pub struct PeekReferenceLocation {
+    /// File path.
+    pub path: String,
+    /// Line number (0-indexed).
+    pub line: usize,
+    /// Column (0-indexed).
+    pub col: usize,
+    /// Context lines around the reference.
+    pub context: Vec<String>,
 }
 
 /// Record of a repeatable edit for dot-repeat (`.`).
@@ -241,6 +360,10 @@ pub struct Editor {
     /// Viewport height in lines, updated each frame from the renderer.
     /// Used by scroll commands (Ctrl-U/D/F/B, H/M/L, zz/zt/zb).
     pub viewport_height: usize,
+    /// Last known layout area (cell units), updated on resize events.
+    /// Used by `scroll_output_to_bottom()` to compute per-window viewport heights
+    /// without adding per-frame overhead.
+    pub last_layout_area: Rect,
     /// Text area width in columns (after gutter), updated each frame.
     /// Used by word-wrap aware cursor movement (gj/gk).
     pub text_area_width: usize,
@@ -250,6 +373,8 @@ pub struct Editor {
     pub file_browser: Option<crate::FileBrowser>,
     /// Fuzzy command palette state. Some when the palette overlay is active.
     pub command_palette: Option<CommandPalette>,
+    /// Mini-dialog state for interactive commands (edit-link, rename, etc.).
+    pub mini_dialog: Option<crate::command_palette::MiniDialogState>,
     /// Tab completion matches for command mode (:e path).
     pub tab_completions: Vec<String>,
     pub tab_completion_idx: usize,
@@ -290,6 +415,8 @@ pub struct Editor {
     /// The core cannot call async LSP code directly; instead, commands push
     /// intents here and `main.rs` forwards them to `run_lsp_task`.
     pub pending_lsp_requests: Vec<LspIntent>,
+    /// LSP trigger characters per language (populated from server capabilities).
+    pub lsp_trigger_characters: std::collections::HashMap<String, Vec<String>>,
     /// Signal for the binary to send `workspace/didChangeWorkspaceFolders`
     /// when a project root is first detected after LSP has already started
     /// (e.g. launched from app launcher with `cwd = $HOME`).
@@ -302,6 +429,9 @@ pub struct Editor {
     /// Buffer indices of newly created shell buffers that need PTY spawning.
     /// The binary drains this and creates `ShellTerminal` instances.
     pub pending_shell_spawns: Vec<usize>,
+    /// Working directory overrides for shell spawns: buffer_idx → dir.
+    /// Drained together with `pending_shell_spawns` by the binary.
+    pub pending_shell_cwds: HashMap<usize, std::path::PathBuf>,
     /// Agent shell spawns: (buf_idx, command). The binary spawns these with
     /// `spawn_command` so the PTY exits when the agent command exits.
     pub pending_agent_spawns: Vec<(usize, String)>,
@@ -379,6 +509,12 @@ pub struct Editor {
     /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
+    /// Babel: prompt before executing blocks (default true).
+    pub babel_confirm: bool,
+    /// Babel: trusted file patterns that skip confirmation.
+    pub babel_trust_paths: Vec<String>,
+    /// Babel: execution timeout in seconds (default 30).
+    pub babel_timeout: u64,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_help_state: Option<crate::help_view::HelpView>,
@@ -476,16 +612,18 @@ pub struct Editor {
     /// instead of the human-focused active buffer. This allows the AI to
     /// edit files while the human watches the *AI* conversation.
     pub ai_target_buffer_idx: Option<usize>,
+    /// AI's target window context. When set, cursor/scroll tools operate on
+    /// this window instead of the focused window. Set via `set_ai_target` tool.
+    pub ai_target_window_id: Option<crate::window::WindowId>,
     /// Linked output+input buffer pair for the split-view conversation UI.
     /// `None` until the user opens the conversation buffer.
     pub conversation_pair: Option<ConversationPair>,
     /// Window ID of the file tree sidebar, if open. Used to track and close it.
     pub file_tree_window_id: Option<crate::window::WindowId>,
-    /// Pending file deletion: (path, close_buffer_after_delete).
-    /// Set by `file-tree-delete` or `delete-this-file`, consumed by `y`/`n` key handler.
-    pub pending_file_delete: Option<(std::path::PathBuf, bool)>,
     /// Pending file tree action (rename/create). The command-line submit
     /// path checks this after the user types a new name.
+    /// NOTE: Mostly replaced by MiniDialog — retained only for backward compat
+    /// with any remaining callers during migration.
     pub file_tree_action: Option<crate::file_tree::FileTreeAction>,
     /// Toggle: show frame timing in the status bar. Default false.
     /// Toggled via `:set show_fps true` or `(set-option! "show_fps" "true")`.
@@ -509,6 +647,10 @@ pub struct Editor {
     /// Debug mode: show RSS/CPU/frame time in status bar. Toggled via
     /// `--debug` CLI flag, `:debug-mode`, or `SPC t D`.
     pub debug_mode: bool,
+    /// Debug init mode: verbose init file loading. Set via `--debug-init`.
+    pub debug_init: bool,
+    /// Clean mode: skip user config, init.scm, history on startup; skip history save on exit.
+    pub clean_mode: bool,
     /// Rolling performance statistics (frame time, RSS, CPU).
     pub perf_stats: perf::PerfStats,
     /// Clipboard integration mode: "unnamedplus" (system clipboard for paste),
@@ -540,6 +682,10 @@ pub struct Editor {
     pub scrolloff: usize,
     pub scrollbar: bool,
     pub nyan_mode: bool,
+    /// Emacs `mouse-autoselect-window`: focus follows mouse hover. Default false.
+    pub mouse_autoselect_window: bool,
+    /// Emacs `mouse-wheel-follow-mouse`: scroll targets window under pointer. Default true.
+    pub mouse_wheel_follow_mouse: bool,
     /// Mouse scroll speed multiplier. Default 3.
     pub scroll_speed: usize,
     /// Max items in LSP completion popup. Default 10.
@@ -572,12 +718,40 @@ pub struct Editor {
     pub lsp_hover_popup: bool,
     /// Active hover popup (shown via K when lsp_hover_popup=true).
     pub hover_popup: Option<HoverPopup>,
+    /// Active signature help popup (triggered on `(` and `,` in insert mode).
+    pub signature_help: Option<SignatureHelpState>,
+    /// Peek definition preview (shown via SPC l p).
+    pub peek_state: Option<PeekState>,
+    /// When true, the next GotoDefinition result goes to peek_state instead of jumping.
+    pub peek_definition_pending: bool,
+    /// Peek references state (SPC l r) — cycle through reference locations in a preview.
+    pub peek_references: Option<PeekReferencesState>,
+    /// When true, the next FindReferences result populates peek_references.
+    pub peek_references_pending: bool,
+    /// Git blame overlay for current buffer.
+    pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
     pub lsp_diagnostics_inline: bool,
     /// Show diagnostic messages as virtual text at end of line. Default true.
     pub lsp_diagnostics_virtual_text: bool,
     /// Enable LSP auto-completion popup in insert mode. Default true.
     pub lsp_completion: bool,
+    /// Auto-trigger completion on trigger characters (e.g. `.`, `::`). Default true.
+    pub auto_complete: bool,
+    /// Symbol outline popup state (SPC c o).
+    pub symbol_outline: Option<SymbolOutlineState>,
+    /// Whether a document symbol request is pending for the outline popup.
+    pub symbol_outline_pending: bool,
+    /// Show breadcrumb bar (file > symbol ancestry). Default false.
+    pub show_breadcrumbs: bool,
+    /// Current breadcrumb path (file > module > fn).
+    pub breadcrumbs: Option<Vec<String>>,
+    /// Cached document symbols for breadcrumb computation (from last symbol request).
+    pub cached_doc_symbols: Vec<SymbolOutlineEntry>,
+    /// Buffer index the cached symbols belong to.
+    pub cached_doc_symbols_buf: Option<usize>,
+    /// Whether a document symbol request is pending for breadcrumbs (not outline popup).
+    pub breadcrumb_symbols_pending: bool,
     /// Active code action menu (shown via SPC c a).
     pub code_action_menu: Option<CodeActionMenu>,
     /// Symbol occurrence highlights from `textDocument/documentHighlight`.
@@ -621,13 +795,53 @@ pub struct Editor {
     /// from the current buffer's overlay keymap. Set by `show-buffer-keys`,
     /// cleared on the next keypress.
     pub buffer_keys_popup: bool,
+    /// Display policy: maps BufferKind → DisplayAction for buffer placement.
+    /// Governs how buffers become visible (replace, avoid conversation, reuse/split, hidden).
+    pub display_policy: crate::display_policy::DisplayPolicy,
     /// Tiered redraw level — how much work the renderer needs to do this frame.
     /// Set by event handlers, cleared after render.
     pub redraw_level: crate::redraw::RedrawLevel,
     /// Dirty line range (start_line, end_line inclusive) for PartialLines redraws.
     pub dirty_line_range: Option<(usize, usize)>,
-    /// Double-click detection: (timestamp, row, col) of last left-click.
-    pub last_click: Option<(std::time::Instant, usize, usize)>,
+    /// Click detection: (timestamp, row, col, click_count) of last left-click.
+    pub last_click: Option<(std::time::Instant, usize, usize, u8)>,
+    /// Pending rename workspace edit JSON — stored while the *Rename Preview*
+    /// buffer is shown. Apply with `apply_pending_rename()`, discard with
+    /// `abort_pending_rename()`.
+    pub pending_rename_edit: Option<String>,
+    /// GUI cell width in pixels (set by GUI after font init). Default 8.0.
+    /// TUI should set to 1.0 (1 char = 1 cell).
+    pub gui_cell_width: f32,
+    /// GUI cell height in pixels (set by GUI after font init). Default 16.0.
+    /// TUI should set to 1.0.
+    pub gui_cell_height: f32,
+    /// When true, dashboard windows are closed when any non-dashboard buffer
+    /// is displayed via a split path. Default false (Doom parity: dashboard stays).
+    pub dashboard_dismiss_on_split: bool,
+    /// Line count threshold for viewport-local syntax highlighting (default 5000).
+    pub large_file_lines: usize,
+    /// Character count above which all features degrade (default 500_000).
+    pub degrade_threshold_chars: usize,
+    /// Maximum line length before degradation triggers (default 10_000).
+    pub degrade_threshold_line_length: usize,
+    /// Milliseconds to debounce display region recomputation (default 150).
+    pub display_region_debounce_ms: u64,
+    /// Milliseconds to debounce syntax reparse after edits (default 50).
+    pub syntax_reparse_debounce_ms: u64,
+    /// Per-buffer markup span cache, keyed by buffer index. Avoids recomputing
+    /// regex-based markup spans every frame for org/markdown buffers.
+    pub markup_cache: HashMap<usize, crate::syntax::MarkupCache>,
+    /// Per-buffer code-block-lines cache, keyed by buffer index.
+    /// Viewport-local for large files, full-buffer for small files.
+    pub code_block_cache: HashMap<usize, crate::syntax::ViewportCodeBlockCache>,
+    /// Persistent list of org directories/files to scan for agenda items.
+    /// Stored in config.toml as `[org] agenda_files = [...]`.
+    pub org_agenda_files: Vec<String>,
+    /// Whether an AI provider was successfully configured at startup.
+    /// Set by `setup_ai()` in bootstrap.rs. Used by the UI layer to
+    /// show guidance when the user tries to open an AI conversation
+    /// without credentials.
+    pub ai_configured: bool,
 }
 
 impl Default for Editor {
@@ -670,10 +884,17 @@ impl Editor {
             visual_anchor_row: 0,
             visual_anchor_col: 0,
             viewport_height: 24,
+            last_layout_area: Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
             text_area_width: 80,
             file_picker: None,
             file_browser: None,
             command_palette: None,
+            mini_dialog: None,
             tab_completions: Vec::new(),
             tab_completion_idx: 0,
             last_edit: None,
@@ -691,9 +912,11 @@ impl Editor {
             command_history_idx: None,
             command_cursor: 0,
             pending_lsp_requests: Vec::new(),
+            lsp_trigger_characters: std::collections::HashMap::new(),
             pending_lsp_root_change: None,
             pending_dap_intents: Vec::new(),
             pending_shell_spawns: Vec::new(),
+            pending_shell_cwds: HashMap::new(),
             pending_agent_spawns: Vec::new(),
             pending_shell_resets: Vec::new(),
             pending_shell_closes: Vec::new(),
@@ -731,6 +954,9 @@ impl Editor {
             last_visual: None,
             pending_scheme_eval: Vec::new(),
             kb,
+            babel_confirm: true,
+            babel_trust_paths: Vec::new(),
+            babel_timeout: 30,
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,
@@ -760,9 +986,9 @@ impl Editor {
             ai_current_round: 0,
             ai_transaction_start_idx: None,
             ai_target_buffer_idx: None,
+            ai_target_window_id: None,
             conversation_pair: None,
             file_tree_window_id: None,
-            pending_file_delete: None,
             file_tree_action: None,
             show_fps: false,
             renderer_name: "terminal".to_string(),
@@ -778,6 +1004,8 @@ impl Editor {
             option_registry: OptionRegistry::new(),
             splash_selection: 0,
             debug_mode: false,
+            debug_init: false,
+            clean_mode: false,
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             restore_session: false,
@@ -788,6 +1016,8 @@ impl Editor {
             scrolloff: 5,
             scrollbar: true,
             nyan_mode: false,
+            mouse_autoselect_window: false,
+            mouse_wheel_follow_mouse: true,
             scroll_speed: 3,
             completion_max_items: 10,
             hover_max_lines: 15,
@@ -804,9 +1034,23 @@ impl Editor {
             render_markup: true,
             lsp_hover_popup: true,
             hover_popup: None,
+            signature_help: None,
+            peek_state: None,
+            peek_definition_pending: false,
+            peek_references: None,
+            peek_references_pending: false,
+            blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,
             lsp_completion: true,
+            auto_complete: true,
+            symbol_outline: None,
+            symbol_outline_pending: false,
+            show_breadcrumbs: false,
+            breadcrumbs: None,
+            cached_doc_symbols: Vec::new(),
+            cached_doc_symbols_buf: None,
+            breadcrumb_symbols_pending: false,
             code_action_menu: None,
             highlight_ranges: Vec::new(),
             highlight_generation: 0,
@@ -823,9 +1067,23 @@ impl Editor {
             swap_file: true,
             swap_directory: String::new(),
             buffer_keys_popup: false,
+            display_policy: crate::display_policy::DisplayPolicy::default(),
             redraw_level: crate::redraw::RedrawLevel::Full,
             dirty_line_range: None,
             last_click: None,
+            pending_rename_edit: None,
+            gui_cell_width: 8.0,
+            gui_cell_height: 16.0,
+            dashboard_dismiss_on_split: false,
+            large_file_lines: 5_000,
+            degrade_threshold_chars: 500_000,
+            degrade_threshold_line_length: 10_000,
+            display_region_debounce_ms: 150,
+            syntax_reparse_debounce_ms: 50,
+            markup_cache: HashMap::new(),
+            code_block_cache: HashMap::new(),
+            org_agenda_files: Vec::new(),
+            ai_configured: false,
         }
     }
 
@@ -974,6 +1232,27 @@ impl Editor {
         self.project.as_ref().map(|p| p.root.as_path())
     }
 
+    /// Returns the git repository root, falling back to the project root.
+    /// Walks up from the current project root looking for `.git`.
+    /// This gives the VCS-level root rather than a subcrate Cargo.toml directory.
+    pub fn git_or_project_root(&self) -> Option<std::path::PathBuf> {
+        let start = self
+            .project
+            .as_ref()
+            .map(|p| p.root.as_path())
+            .or_else(|| self.active_buffer().project_root.as_deref())?;
+        let mut dir = start.to_path_buf();
+        loop {
+            if dir.join(".git").exists() {
+                return Some(dir);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        Some(start.to_path_buf())
+    }
+
     // -- Per-buffer option accessors (Emacs buffer-local / Vim setlocal) ------
     // Check the active buffer's local override first, then fall back to the
     // global Editor default.  Use these instead of reading `self.word_wrap`
@@ -1066,6 +1345,80 @@ impl Editor {
         crate::syntax::MarkupFlavor::None
     }
 
+    /// Detect whether a buffer is too large for full feature rendering.
+    /// Returns true for files exceeding `degrade_threshold_chars` or any line
+    /// exceeding `degrade_threshold_line_length` (both user-configurable).
+    /// Callers should skip markup spans, display regions, code block
+    /// detection, and heading scale for such buffers (Emacs `so-long` pattern).
+    ///
+    /// Result is cached per buffer (`buffer.degraded`). The cache is set on
+    /// first access and on file open — degradation status is monotonic during
+    /// normal editing so re-scanning every frame is unnecessary.
+    pub fn should_degrade_features(&self, buf_idx: usize) -> bool {
+        if buf_idx >= self.buffers.len() {
+            return false;
+        }
+        if let Some(cached) = self.buffers[buf_idx].degraded {
+            return cached;
+        }
+        let buf = &self.buffers[buf_idx];
+        let rope = buf.rope();
+        if rope.len_chars() > self.degrade_threshold_chars {
+            return true;
+        }
+        // Sample first 200 lines + last 50 for long-line detection (avoid O(n) full scan).
+        let lc = rope.len_lines();
+        let check_lines = (0..200.min(lc)).chain(lc.saturating_sub(50)..lc);
+        for li in check_lines {
+            let line = rope.line(li);
+            if line.len_chars() > self.degrade_threshold_line_length {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Compute and cache the degradation status for a buffer.
+    pub fn cache_degraded(&mut self, buf_idx: usize) {
+        let degraded = self.should_degrade_features(buf_idx);
+        self.buffers[buf_idx].degraded = Some(degraded);
+    }
+
+    /// Get or compute cached markup spans for a buffer. Returns empty if
+    /// flavor is None. The cache is keyed by buffer generation so editing
+    /// invalidates it but pure scrolling reuses cached spans.
+    pub fn get_or_compute_markup_spans(
+        &mut self,
+        buf_idx: usize,
+        flavor: crate::syntax::MarkupFlavor,
+    ) -> Vec<crate::syntax::HighlightSpan> {
+        if flavor == crate::syntax::MarkupFlavor::None {
+            return Vec::new();
+        }
+        let gen = self.buffers[buf_idx].generation;
+        if let Some(cached) = self.markup_cache.get(&buf_idx) {
+            if cached.generation == gen && cached.flavor == flavor {
+                return cached.spans.clone();
+            }
+        }
+        let rope = self.buffers[buf_idx].rope();
+        let line_count = rope.len_lines();
+        let source: String = rope.chars().collect();
+        let spans = crate::syntax::compute_markup_spans(&source, flavor);
+        self.markup_cache.insert(
+            buf_idx,
+            crate::syntax::MarkupCache {
+                generation: gen,
+                flavor,
+                line_start: 0,
+                line_end: line_count,
+                byte_offset: 0,
+                spans: spans.clone(),
+            },
+        );
+        spans
+    }
+
     /// Set a buffer-local option on the active buffer (:setlocal).
     pub fn set_local_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
@@ -1078,6 +1431,7 @@ impl Editor {
         match def_name {
             "word_wrap" => {
                 opts.word_wrap = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "line_numbers" => {
                 opts.line_numbers = Some(crate::options::parse_option_bool(value)?);
@@ -1087,12 +1441,15 @@ impl Editor {
             }
             "break_indent" => {
                 opts.break_indent = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "show_break" => {
                 opts.show_break = Some(value.to_string());
+                self.buffers[idx].visual_rows_cache = None;
             }
             "heading_scale" => {
                 opts.heading_scale = Some(crate::options::parse_option_bool(value)?);
+                self.buffers[idx].visual_rows_cache = None;
             }
             "link_descriptive" => {
                 opts.link_descriptive = Some(crate::options::parse_option_bool(value)?);
@@ -1153,6 +1510,10 @@ impl Editor {
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
             "lsp_completion" => self.lsp_completion.to_string(),
+            "auto_complete" => self.auto_complete.to_string(),
+            "show_breadcrumbs" => self.show_breadcrumbs.to_string(),
+            "mouse_autoselect_window" => self.mouse_autoselect_window.to_string(),
+            "mouse_wheel_follow_mouse" => self.mouse_wheel_follow_mouse.to_string(),
             "scroll_speed" => self.scroll_speed.to_string(),
             "completion_max_items" => self.completion_max_items.to_string(),
             "hover_max_lines" => self.hover_max_lines.to_string(),
@@ -1165,6 +1526,13 @@ impl Editor {
             "heading_scale_h1" => self.heading_scale_h1.to_string(),
             "heading_scale_h2" => self.heading_scale_h2.to_string(),
             "heading_scale_h3" => self.heading_scale_h3.to_string(),
+            "dashboard_dismiss_on_split" => self.dashboard_dismiss_on_split.to_string(),
+            "large_file_lines" => self.large_file_lines.to_string(),
+            "degrade_threshold_chars" => self.degrade_threshold_chars.to_string(),
+            "degrade_threshold_line_length" => self.degrade_threshold_line_length.to_string(),
+            "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
+            "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
+            "org_agenda_files" => self.org_agenda_files.join(", "),
             _ => return None,
         };
         Some((value, def))
@@ -1186,12 +1554,21 @@ impl Editor {
             }
             "word_wrap" => {
                 self.word_wrap = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "break_indent" => {
                 self.break_indent = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "show_break" => {
                 self.show_break = value.to_string();
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "org_hide_emphasis_markers" => {
                 self.org_hide_emphasis_markers = parse_option_bool(value)?;
@@ -1292,6 +1669,9 @@ impl Editor {
             }
             "heading_scale" => {
                 self.heading_scale = parse_option_bool(value)?;
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "ignorecase" => {
                 self.ignorecase = parse_option_bool(value)?;
@@ -1340,6 +1720,18 @@ impl Editor {
             }
             "lsp_completion" => {
                 self.lsp_completion = parse_option_bool(value)?;
+            }
+            "auto_complete" => {
+                self.auto_complete = parse_option_bool(value)?;
+            }
+            "show_breadcrumbs" => {
+                self.show_breadcrumbs = parse_option_bool(value)?;
+            }
+            "mouse_autoselect_window" => {
+                self.mouse_autoselect_window = parse_option_bool(value)?;
+            }
+            "mouse_wheel_follow_mouse" => {
+                self.mouse_wheel_follow_mouse = parse_option_bool(value)?;
             }
             "scroll_speed" => {
                 let v: usize = value
@@ -1397,18 +1789,63 @@ impl Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h1 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "heading_scale_h2" => {
                 let v: f32 = value
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h2 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
             }
             "heading_scale_h3" => {
                 let v: f32 = value
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.heading_scale_h3 = v.clamp(0.5, 3.0);
+                for buf in &mut self.buffers {
+                    buf.visual_rows_cache = None;
+                }
+            }
+            "dashboard_dismiss_on_split" => {
+                self.dashboard_dismiss_on_split = parse_option_bool(value)?;
+            }
+            "large_file_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.large_file_lines = v.clamp(100, 1_000_000);
+            }
+            "degrade_threshold_chars" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.degrade_threshold_chars = v.clamp(10_000, 100_000_000);
+            }
+            "degrade_threshold_line_length" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.degrade_threshold_line_length = v.clamp(100, 1_000_000);
+            }
+            "display_region_debounce_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.display_region_debounce_ms = v.clamp(0, 5000);
+            }
+            "syntax_reparse_debounce_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
+            }
+            "org_agenda_files" => {
+                return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -1547,7 +1984,179 @@ impl Editor {
 
         let buf_idx = self.buffers.len();
         self.buffers.push(buf);
-        self.window_mgr.focused_window_mut().buffer_idx = buf_idx;
+        self.display_buffer(buf_idx);
+    }
+
+    /// Generate a configuration health report and open it in a read-only buffer.
+    pub fn show_configuration_report(&mut self) {
+        fn find_on_path(cmd: &str) -> bool {
+            std::process::Command::new("which")
+                .arg(cmd)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+        let mut lines = vec![
+            "MAE Configuration Report".to_string(),
+            "========================".to_string(),
+            String::new(),
+            "AI Agent (SPC a a):".to_string(),
+        ];
+        let ai_cmd = if self.ai_editor.is_empty() {
+            "claude"
+        } else {
+            &self.ai_editor
+        };
+        let ai_found = find_on_path(ai_cmd);
+        lines.push(format!(
+            "  Command: {:<20} [{}]",
+            ai_cmd,
+            if ai_found {
+                "found on PATH"
+            } else {
+                "not found"
+            }
+        ));
+        lines.push(String::new());
+
+        // AI Chat
+        lines.push("AI Chat (SPC a p):".to_string());
+        let provider = if self.ai_provider.is_empty() {
+            "(not configured)"
+        } else {
+            &self.ai_provider
+        };
+        lines.push(format!("  Provider: {}", provider));
+        if !self.ai_model.is_empty() {
+            lines.push(format!("  Model: {}", self.ai_model));
+        }
+        // Check API key from env
+        let key_env = match provider {
+            "claude" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            "openai" => std::env::var("OPENAI_API_KEY").ok(),
+            "gemini" => std::env::var("GEMINI_API_KEY").ok(),
+            "deepseek" => std::env::var("DEEPSEEK_API_KEY").ok(),
+            _ => None,
+        };
+        if let Some(key) = &key_env {
+            let masked = if key.len() > 4 {
+                format!("****...{}", &key[key.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            lines.push(format!("  API Key: {}", masked));
+        } else if !self.ai_api_key_command.is_empty() {
+            lines.push(format!(
+                "  API Key: via command `{}`",
+                self.ai_api_key_command
+            ));
+        } else {
+            lines.push("  API Key: [not set]".to_string());
+        }
+        lines.push(String::new());
+
+        // LSP Servers
+        lines.push("LSP Servers:".to_string());
+        for (lang, cmd) in &[
+            ("rust", "rust-analyzer"),
+            ("python", "pyright"),
+            ("typescript", "typescript-language-server"),
+            ("go", "gopls"),
+        ] {
+            let found = find_on_path(cmd);
+            lines.push(format!(
+                "  {:<28} [{}]  {}",
+                cmd,
+                if found {
+                    "found on PATH"
+                } else {
+                    "not found    "
+                },
+                if found { "✓" } else { "✗" }
+            ));
+            let _ = lang; // suppress unused
+        }
+        lines.push(String::new());
+
+        // DAP Adapters
+        lines.push("DAP Adapters:".to_string());
+        for cmd in &["lldb-dap", "debugpy"] {
+            let found = find_on_path(cmd);
+            lines.push(format!(
+                "  {:<28} [{}]  {}",
+                cmd,
+                if found {
+                    "found on PATH"
+                } else {
+                    "not found    "
+                },
+                if found { "✓" } else { "✗" }
+            ));
+        }
+        lines.push(String::new());
+
+        // Init files
+        lines.push("Init Files:".to_string());
+        // Check user init
+        let user_config_dir = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".config"))
+            });
+        if let Some(ref dir) = user_config_dir {
+            let user_init = dir.join("mae").join("init.scm");
+            let exists = user_init.exists();
+            lines.push(format!(
+                "  {:<40} [{}]",
+                user_init.display(),
+                if exists { "found" } else { "not found" }
+            ));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let project_init = cwd.join(".mae").join("init.scm");
+            let exists = project_init.exists();
+            lines.push(format!(
+                "  {:<40} [{}]",
+                project_init.display(),
+                if exists { "found" } else { "not found" }
+            ));
+        }
+        lines.push(String::new());
+
+        // Modified options
+        let mut modified = Vec::new();
+        for def in self.option_registry.list() {
+            if let Some((val, _)) = self.get_option(def.name) {
+                if val != def.default_value {
+                    modified.push(def.name.to_string());
+                }
+            }
+        }
+        if modified.is_empty() {
+            lines.push("Options Modified: (none)".to_string());
+        } else {
+            lines.push(format!(
+                "Options Modified: {} ({})",
+                modified.len(),
+                modified.join(", ")
+            ));
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Configuration*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
     }
 
     /// Clamp all window cursors to their buffer bounds. Safety net against
@@ -1620,6 +2229,24 @@ impl Editor {
         self.window_mgr.focused_window().buffer_idx
     }
 
+    /// AI-aware buffer index: returns `ai_target_buffer_idx` if set,
+    /// otherwise falls back to `active_buffer_idx()`.
+    pub fn ai_active_buffer_idx(&self) -> usize {
+        self.ai_target_buffer_idx
+            .unwrap_or_else(|| self.active_buffer_idx())
+    }
+
+    /// AI-aware cursor row: reads cursor from the AI target window if set,
+    /// otherwise from the focused window.
+    pub fn ai_cursor_row(&self) -> usize {
+        if let Some(win_id) = self.ai_target_window_id {
+            if let Some(win) = self.window_mgr.iter_windows().find(|w| w.id == win_id) {
+                return win.cursor_row;
+            }
+        }
+        self.window_mgr.focused_window().cursor_row
+    }
+
     pub fn active_buffer(&self) -> &Buffer {
         let idx = self.active_buffer_idx();
         assert!(
@@ -1640,6 +2267,24 @@ impl Editor {
             self.buffers.len()
         );
         &mut self.buffers[idx]
+    }
+
+    /// Per-window viewport height from cached layout. Falls back to global.
+    pub fn window_viewport_height(&self, win_id: WindowId) -> usize {
+        if self.last_layout_area.width > 0 && self.last_layout_area.height > 0 {
+            let rects = self.window_mgr.layout_rects(self.last_layout_area);
+            for (id, rect) in &rects {
+                if *id == win_id && rect.height >= 3 {
+                    return (rect.height as usize).saturating_sub(2); // status + border
+                }
+            }
+        }
+        self.viewport_height // fallback (startup, tests, zero-area)
+    }
+
+    /// Focused window's viewport height (convenience).
+    pub fn focused_viewport_height(&self) -> usize {
+        self.window_viewport_height(self.window_mgr.focused_id())
     }
 
     /// Save current editor state (buffer list, window layout, focus, mode)
@@ -1853,9 +2498,18 @@ impl Editor {
         // Check for external file changes before showing the buffer.
         self.check_and_reload_buffer(idx);
         let win = self.window_mgr.focused_window_mut();
-        win.buffer_idx = idx;
-        win.cursor_row = 0;
-        win.cursor_col = 0;
+        win.save_view_state();
+        win.restore_view_state(idx);
+        // Clamp cursor to buffer bounds (file may have changed on disk).
+        let line_count = self.buffers[idx].line_count();
+        let win = self.window_mgr.focused_window_mut();
+        if win.cursor_row >= line_count {
+            win.cursor_row = line_count.saturating_sub(1);
+        }
+        let line_len = self.buffers[idx].line_len(win.cursor_row);
+        if win.cursor_col > line_len {
+            win.cursor_col = line_len;
+        }
         // Recompute search matches for the new buffer so highlights and
         // `n`/`N` navigation are correct.
         self.recompute_search_matches();
@@ -1923,6 +2577,7 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
+            self.mark_full_redraw();
             return true;
         }
 
@@ -1948,7 +2603,10 @@ impl Editor {
             .window_mgr
             .split(crate::window::SplitDirection::Vertical, idx, area)
         {
-            Ok(_new_id) => true,
+            Ok(_new_id) => {
+                self.mark_full_redraw();
+                true
+            }
             Err(_) => {
                 // Too small to split — if we are in conversation, we HAVE to steal focus
                 // but we try to avoid it.
@@ -1958,6 +2616,136 @@ impl Editor {
                     // Not in conversation, so just keep focus where it is.
                     true
                 }
+            }
+        }
+    }
+
+    /// Policy-aware buffer display: routes the buffer to the right window
+    /// based on its `BufferKind` and the active `DisplayPolicy`.
+    ///
+    /// This is the primary entry point for making a buffer visible. It replaces
+    /// direct `focused_window_mut().buffer_idx = idx` assignments throughout
+    /// the codebase, adding conversation protection and side-window reuse.
+    pub fn display_buffer(&mut self, buf_idx: usize) {
+        if buf_idx >= self.buffers.len() {
+            return;
+        }
+        let kind = self.buffers[buf_idx].kind;
+        let action = self.display_policy.action_for(kind);
+        match action {
+            crate::display_policy::DisplayAction::ReplaceFocused => {
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
+                    self.switch_to_buffer_non_conversation(buf_idx);
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    win.buffer_idx = buf_idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+            }
+            crate::display_policy::DisplayAction::AvoidConversation => {
+                if self.is_conversation_buffer(self.active_buffer_idx()) {
+                    self.switch_to_buffer_non_conversation(buf_idx);
+                } else {
+                    let win = self.window_mgr.focused_window_mut();
+                    win.buffer_idx = buf_idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+            }
+            crate::display_policy::DisplayAction::ReuseOrSplit { direction, ratio } => {
+                // Side-window pattern: reuse existing window of same kind.
+                let reuse_win_id = self.find_window_with_kind(kind);
+                if let Some(win_id) = reuse_win_id {
+                    if let Some(win) = self.window_mgr.window_mut(win_id) {
+                        win.buffer_idx = buf_idx;
+                        win.cursor_row = 0;
+                        win.cursor_col = 0;
+                    }
+                } else if self.dashboard_dismiss_on_split && kind != crate::BufferKind::Dashboard {
+                    // Replace dashboard windows instead of splitting alongside them.
+                    let dashboard_win = self
+                        .window_mgr
+                        .iter_windows()
+                        .find(|w| {
+                            w.buffer_idx < self.buffers.len()
+                                && self.buffers[w.buffer_idx].kind == crate::BufferKind::Dashboard
+                        })
+                        .map(|w| w.id);
+                    if let Some(dw_id) = dashboard_win {
+                        // Replace the dashboard window's buffer directly.
+                        if let Some(win) = self.window_mgr.window_mut(dw_id) {
+                            win.buffer_idx = buf_idx;
+                            win.cursor_row = 0;
+                            win.cursor_col = 0;
+                        }
+                    } else {
+                        self.display_buffer_split(buf_idx, direction, ratio);
+                    }
+                } else {
+                    self.display_buffer_split(buf_idx, direction, ratio);
+                }
+            }
+            crate::display_policy::DisplayAction::Hidden => {}
+        }
+        self.mark_full_redraw();
+    }
+
+    /// Like `display_buffer` but also sets focus to the window showing the buffer.
+    /// Use this when opening a buffer that the user wants to interact with immediately
+    /// (e.g. terminal, agenda). Also sets `alternate_buffer_idx`.
+    pub fn display_buffer_and_focus(&mut self, buf_idx: usize) {
+        if buf_idx >= self.buffers.len() {
+            return;
+        }
+        let prev_idx = self.active_buffer_idx();
+        self.display_buffer(buf_idx);
+        // Find the window now showing buf_idx and focus it.
+        let win_id = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == buf_idx)
+            .map(|w| w.id);
+        if let Some(id) = win_id {
+            self.window_mgr.set_focused(id);
+        }
+        if prev_idx != buf_idx {
+            self.alternate_buffer_idx = Some(prev_idx);
+        }
+    }
+
+    /// Find a window showing a buffer of the given kind (non-conversation).
+    fn find_window_with_kind(&self, kind: crate::BufferKind) -> Option<crate::window::WindowId> {
+        for w in self.window_mgr.iter_windows() {
+            if w.buffer_idx < self.buffers.len()
+                && self.buffers[w.buffer_idx].kind == kind
+                && !self.is_conversation_buffer(w.buffer_idx)
+            {
+                return Some(w.id);
+            }
+        }
+        None
+    }
+
+    /// Split helper for display_buffer: creates a new split.
+    /// Group-aware: if focused inside a conversation group, the split wraps the
+    /// entire group rather than splitting within it.
+    fn display_buffer_split(
+        &mut self,
+        buf_idx: usize,
+        direction: crate::window::SplitDirection,
+        ratio: f32,
+    ) {
+        let area = self.default_area();
+        match self
+            .window_mgr
+            .split_with_ratio(direction, buf_idx, area, ratio)
+        {
+            Ok(new_win_id) => {
+                self.window_mgr.set_focused(new_win_id);
+            }
+            Err(_) => {
+                self.switch_to_buffer_non_conversation(buf_idx);
             }
         }
     }
@@ -2047,6 +2835,11 @@ impl Editor {
         }
     }
 
+    /// Replay a cursor operation at all secondary cursors (multi-cursor editing).
+    pub fn mc_replay_op(&mut self, op: &crate::cursor::CursorOp) {
+        multicursor::replay_at_secondaries(self, op);
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
         if !s.is_empty() {
@@ -2087,31 +2880,282 @@ impl Editor {
         if buf.is_line_folded(line) {
             return 0;
         }
+        if line >= buf.rope().len_lines() {
+            return 1;
+        }
+
+        // Check visual rows cache for text rows.
+        let text_rows = if let Some(ref cache) = buf.visual_rows_cache {
+            if cache.generation == buf.generation
+                && cache.display_regions_gen == buf.display_regions_gen
+                && cache.text_width == self.text_area_width
+                && cache.break_indent == self.break_indent
+                && cache.show_break_width == self.show_break.chars().count()
+                && cache.heading_scale == self.heading_scale
+                && line >= cache.line_start
+                && line < cache.line_start + cache.rows.len()
+            {
+                let v = cache.rows[line - cache.line_start] as usize;
+                if v > 0 {
+                    Some(v)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let text_rows = text_rows.unwrap_or_else(|| self.line_text_visual_rows(buf_idx, line));
+
+        // Account for inline image display height.
+        let image_rows = if buf.local_options.inline_images.unwrap_or(false) {
+            self.image_extra_rows(buf, line)
+        } else {
+            0
+        };
+
+        text_rows + image_rows
+    }
+
+    /// Compute the text-only visual rows for a line, applying display regions
+    /// (link concealment) before wrapping — matching what `compute_layout()` does.
+    fn line_text_visual_rows(&self, buf_idx: usize, line: usize) -> usize {
+        let buf = &self.buffers[buf_idx];
         let rope = buf.rope();
         if line >= rope.len_lines() {
             return 1;
         }
-        let chars: Vec<char> = rope
-            .line(line)
+
+        let line_slice = rope.line(line);
+        let line_char_count = line_slice.len_chars();
+        let line_byte_count = line_slice.len_bytes();
+        // Content length excluding trailing newline.
+        let content_len = if line_char_count > 0 && line_slice.char(line_char_count - 1) == '\n' {
+            line_char_count - 1
+        } else {
+            line_char_count
+        };
+
+        // Fast path: no wrap, no heading scale, no display regions — skip char collection.
+        // byte_len == char_count implies all single-byte (ASCII) chars, so
+        // content_len == display_width.
+        let is_ascii = line_byte_count == line_char_count;
+        let has_display_regions = !buf.display_regions.is_empty();
+
+        if !self.word_wrap_for(buf_idx) || self.text_area_width == 0 {
+            // Still need heading rows for non-wrapped headings.
+            if !self.heading_scale {
+                return 1;
+            }
+            // Only collect chars for heading detection.
+            let rope_chars: Vec<char> = line_slice
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .collect();
+            let heading_level = crate::heading::heading_level_from_chars(&rope_chars);
+            if heading_level == 0 {
+                return 1;
+            }
+            return crate::heading::heading_scale_for_level_with(
+                heading_level,
+                self.heading_scale_h1,
+                self.heading_scale_h2,
+                self.heading_scale_h3,
+            )
+            .ceil() as usize;
+        }
+
+        // Fast path: short ASCII line, no heading scale, no display regions →
+        // guaranteed to fit in one row, skip all allocation.
+        if is_ascii
+            && content_len <= self.text_area_width
+            && !self.heading_scale
+            && !has_display_regions
+        {
+            return 1;
+        }
+
+        let rope_chars: Vec<char> = line_slice
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
 
-        let heading_rows = crate::heading::line_heading_visual_rows(&chars, self.heading_scale);
-
-        if self.word_wrap_for(buf_idx) && self.text_area_width > 0 {
-            let text: String = chars.iter().collect();
-            let sb_w = self.show_break.chars().count();
-            crate::wrap::wrap_line_display_rows(
-                &text,
-                self.text_area_width,
-                self.break_indent,
-                sb_w,
+        let heading_level = crate::heading::heading_level_from_chars(&rope_chars);
+        let heading_scale_factor = if self.heading_scale && heading_level > 0 {
+            crate::heading::heading_scale_for_level_with(
+                heading_level,
+                self.heading_scale_h1,
+                self.heading_scale_h2,
+                self.heading_scale_h3,
             )
-            .max(heading_rows)
         } else {
-            heading_rows
+            1.0
+        };
+        let heading_rows = heading_scale_factor.ceil() as usize;
+
+        // Apply display regions (link concealment) to match compute_layout() behavior.
+        let effective_regions = crate::display_region::regions_with_cursor_reveal(
+            &buf.display_regions,
+            buf.display_reveal_cursor,
+        );
+
+        let line_byte_start = rope.line_to_byte(line);
+        let next_line_byte = if line + 1 < rope.len_lines() {
+            rope.line_to_byte(line + 1)
+        } else {
+            rope.len_bytes()
+        };
+
+        // Check if any display regions overlap this line (binary search).
+        let start_idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+        let has_regions = effective_regions
+            .get(start_idx)
+            .is_some_and(|r| r.byte_start < next_line_byte);
+
+        let chars_for_wrap = if has_regions {
+            let (display_chars, _) = crate::display_region::apply_display_regions_to_line(
+                &rope_chars,
+                line_byte_start,
+                next_line_byte,
+                &effective_regions,
+            );
+            display_chars
+        } else {
+            rope_chars
+        };
+
+        // For headings with scale > 1, reduce wrap width to match GUI layout.
+        // compute_layout() does: (text_area_width / scale).floor()
+        let wrap_width = if heading_scale_factor > 1.0 {
+            (self.text_area_width as f32 / heading_scale_factor).floor() as usize
+        } else {
+            self.text_area_width
+        };
+
+        let text: String = chars_for_wrap.iter().collect();
+        let sb_w = self.show_break.chars().count();
+        let wrap_rows =
+            crate::wrap::wrap_line_display_rows(&text, wrap_width, self.break_indent, sb_w);
+
+        // Heading wrap correctness: first wrap segment gets heading scale,
+        // continuation rows are normal height. Total cell rows =
+        // heading_rows (ceil of scale) + (wrap_count - 1) continuation rows.
+        (wrap_rows - 1) + heading_rows
+    }
+
+    /// Pre-compute visual row counts for a contiguous line range and store in the
+    /// buffer's cache. Subsequent `line_visual_rows()` calls hit the cache.
+    /// Pre-compute visual row counts for a contiguous needed range and store
+    /// in the buffer's cache.
+    ///
+    /// **Fix A**: The cache is checked against the `needed_start..needed_end`
+    /// range, but on miss it computes a wider padded range to absorb future
+    /// scroll shifts without re-computation.
+    pub fn populate_visual_rows_cache(
+        &mut self,
+        buf_idx: usize,
+        needed_start: usize,
+        needed_end: usize,
+    ) {
+        let buf = &self.buffers[buf_idx];
+        let gen = buf.generation;
+        let dr_gen = buf.display_regions_gen;
+        let text_width = self.text_area_width;
+        let break_indent = self.break_indent;
+        let sb_w = self.show_break.chars().count();
+        let hs = self.heading_scale;
+
+        // Check if existing cache covers the NEEDED range (not padded).
+        if let Some(ref cache) = buf.visual_rows_cache {
+            if cache.generation == gen
+                && cache.display_regions_gen == dr_gen
+                && cache.text_width == text_width
+                && cache.break_indent == break_indent
+                && cache.show_break_width == sb_w
+                && cache.heading_scale == hs
+                && cache.line_start <= needed_start
+                && cache.line_start + cache.rows.len() >= needed_end
+            {
+                self.perf_stats.visual_rows_cache_hits += 1;
+                return;
+            }
         }
+        self.perf_stats.visual_rows_cache_misses += 1;
+
+        // Miss — compute with padding to absorb future scroll shifts.
+        let total = buf.display_line_count();
+        let pad = self.focused_viewport_height();
+        let compute_start = needed_start.saturating_sub(pad);
+        let compute_end = (needed_end + pad).min(total);
+
+        let mut rows = Vec::with_capacity(compute_end.saturating_sub(compute_start));
+        for line in compute_start..compute_end {
+            let r = self.line_text_visual_rows(buf_idx, line);
+            rows.push(r.min(255) as u8);
+        }
+
+        self.buffers[buf_idx].visual_rows_cache = Some(crate::buffer::VisualRowsCache {
+            generation: gen,
+            display_regions_gen: dr_gen,
+            text_width,
+            break_indent,
+            show_break_width: sb_w,
+            heading_scale: hs,
+            line_start: compute_start,
+            rows,
+        });
+    }
+
+    /// Estimate extra visual rows consumed by an inline image on this line.
+    /// Uses the same sizing logic as GUI layout (MAX_H=400, aspect-ratio fit).
+    fn image_extra_rows(&self, buf: &crate::buffer::Buffer, line: usize) -> usize {
+        let rope = buf.rope();
+        if line >= rope.len_lines() {
+            return 0;
+        }
+        let line_byte_start = rope.line_to_byte(line);
+        let line_byte_end = if line + 1 < rope.len_lines() {
+            rope.line_to_byte(line + 1)
+        } else {
+            rope.len_bytes()
+        };
+        for region in &buf.display_regions {
+            if region.byte_start >= line_byte_end {
+                break;
+            }
+            if region.byte_end <= line_byte_start {
+                continue;
+            }
+            if let Some(ref img) = region.image {
+                // Mirror GUI layout sizing: MAX_H=400, text_area_width for max_w.
+                // Use actual cell dimensions pushed by the GUI (or 8.0/16.0 defaults).
+                let text_area_px = (self.text_area_width as f32) * self.gui_cell_width;
+                let max_w = if let Some(w) = img.width {
+                    (w as f32).min(text_area_px)
+                } else {
+                    text_area_px
+                };
+                const MAX_H: f32 = 400.0;
+                // Use cached dimensions from ImageAttrs (populated at region creation time).
+                let (img_w, img_h) = if img.natural_width > 0 && img.natural_height > 0 {
+                    (img.natural_width as f32, img.natural_height as f32)
+                } else {
+                    (max_w, max_w)
+                };
+                let display_h = if img_w > 0.0 && img_h > 0.0 {
+                    let h = max_w / (img_w / img_h);
+                    h.min(MAX_H)
+                } else {
+                    max_w.min(MAX_H)
+                };
+                let cell_h = self.gui_cell_height;
+                return (display_h / cell_h).ceil() as usize;
+            }
+        }
+        0
     }
 
     /// Calculate the actual inner height (text rows) for the focused window.
@@ -2164,6 +3208,27 @@ impl Editor {
         col: usize,
         button: crate::input::MouseButton,
     ) {
+        self.handle_mouse_click_inner(row, col, button, false);
+    }
+
+    /// Handle a mouse click with optional shift modifier for selection extension.
+    pub fn handle_mouse_click_shift(
+        &mut self,
+        row: usize,
+        col: usize,
+        button: crate::input::MouseButton,
+        shift_held: bool,
+    ) {
+        self.handle_mouse_click_inner(row, col, button, shift_held);
+    }
+
+    fn handle_mouse_click_inner(
+        &mut self,
+        row: usize,
+        col: usize,
+        button: crate::input::MouseButton,
+        shift_held: bool,
+    ) {
         use crate::input::MouseButton;
 
         // Dismiss stale popups on any mouse click.
@@ -2205,92 +3270,93 @@ impl Editor {
                 let max_row = line_count.saturating_sub(1);
                 let target_row = buf_row.min(max_row);
 
-                // Double-click detection
-                let is_double_click = if let Some((prev_time, prev_row, prev_col)) = self.last_click
-                {
-                    prev_row == target_row
-                        && prev_col == text_col
-                        && prev_time.elapsed() < std::time::Duration::from_millis(400)
-                } else {
-                    false
-                };
-                self.last_click = Some((std::time::Instant::now(), target_row, text_col));
-
-                if is_double_click {
-                    // Double-click: attempt link following
-
-                    // Check display regions (concealed links in markup buffers).
-                    let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if !buf.display_regions.is_empty() {
-                        let line_byte_start =
-                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
-                        let cursor_byte = line_byte_start + {
-                            let line_str: String = buf
-                                .rope()
-                                .line(target_row)
-                                .chars()
-                                .filter(|c| *c != '\n' && *c != '\r')
-                                .collect();
-                            line_str
-                                .char_indices()
-                                .nth(text_col)
-                                .map(|(b, _)| b)
-                                .unwrap_or(line_str.len())
-                        };
-                        if let Some(region) = buf
-                            .display_regions
-                            .iter()
-                            .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+                // Click counting: same position within 400ms increments count
+                let click_count =
+                    if let Some((prev_time, prev_row, prev_col, prev_count)) = self.last_click {
+                        if prev_row == target_row
+                            && prev_col == text_col
+                            && prev_time.elapsed() < std::time::Duration::from_millis(400)
                         {
-                            if let Some(ref target) = region.link_target {
-                                let target = target.clone();
-                                self.handle_link_click(&target);
-                                return;
+                            if prev_count >= 3 {
+                                1
+                            } else {
+                                prev_count + 1
                             }
+                        } else {
+                            1
                         }
-                    }
+                    } else {
+                        1
+                    };
+                self.last_click =
+                    Some((std::time::Instant::now(), target_row, text_col, click_count));
 
-                    // Check pre-populated link_spans
+                // --- Shift-click: extend or start selection ---
+                if shift_held {
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if !buf.link_spans.is_empty() {
-                        let line_start_byte =
-                            buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
-                        let click_byte = line_start_byte + text_col;
-                        if let Some(link) = buf
-                            .link_spans
-                            .iter()
-                            .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
-                        {
-                            let target = link.target.clone();
-                            self.handle_link_click(&target);
-                            return;
-                        }
+                    let line_len = buf.line_len(target_row);
+                    let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+
+                    if !matches!(self.mode, crate::Mode::Visual(_)) {
+                        // Start new visual selection from current cursor to click pos
+                        let cur_row = self.window_mgr.focused_window().cursor_row;
+                        let cur_col = self.window_mgr.focused_window().cursor_col;
+                        self.visual_anchor_row = cur_row;
+                        self.visual_anchor_col = cur_col;
+                        self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+                    }
+                    // Move cursor to click position (anchor stays)
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = target_row;
+                    win.cursor_col = target_col;
+                    return;
+                }
+
+                // --- Triple-click: select line ---
+                if click_count == 3 {
+                    self.visual_anchor_row = target_row;
+                    self.visual_anchor_col = 0;
+                    self.set_mode(crate::Mode::Visual(crate::VisualType::Line));
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = target_row;
+                    win.cursor_col = 0;
+                    return;
+                }
+
+                // --- Double-click: try link following, then word select ---
+                if click_count == 2 {
+                    // Try link following first (existing behavior)
+                    if self.try_link_follow_at(target_row, text_col) {
+                        return;
                     }
 
-                    // On-the-fly link detection
+                    // No link — select word at cursor
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    if target_row < buf.rope().len_lines() {
-                        let line_text: String = buf.rope().line(target_row).chars().collect();
-                        let links = crate::link_detect::detect_links(&line_text);
-                        for link in &links {
-                            let link_char_start = line_text[..link.byte_start].chars().count();
-                            let link_char_end = line_text[..link.byte_end].chars().count();
-                            if text_col >= link_char_start && text_col < link_char_end {
-                                let target = link.target.clone();
-                                self.handle_link_click(&target);
-                                return;
-                            }
-                        }
+                    let offset = buf.char_offset_at(target_row, text_col);
+                    let word_start = crate::word::word_start_backward(buf.rope(), offset);
+                    let word_end = crate::word::word_end_forward(buf.rope(), offset);
+                    // word_end is inclusive (on last char of word)
+                    if word_start <= word_end {
+                        let (start_row, start_col) = buf.row_col_from_offset(word_start);
+                        let (end_row, end_col) = buf.row_col_from_offset(word_end);
+                        self.visual_anchor_row = start_row;
+                        self.visual_anchor_col = start_col;
+                        self.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+                        let win = self.window_mgr.focused_window_mut();
+                        win.cursor_row = end_row;
+                        win.cursor_col = end_col;
                     }
-
-                    // No link found — select word at cursor
-                    // (just position cursor for now, word selection is future work)
+                    return;
                 }
 
                 // Single-click: just position cursor
                 let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
                 let line_len = buf.line_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+                // Exit visual mode on single click
+                if matches!(self.mode, crate::Mode::Visual(_)) {
+                    self.set_mode(crate::Mode::Normal);
+                }
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = target_row;
                 win.cursor_col = target_col;
@@ -2303,6 +3369,73 @@ impl Editor {
                 self.dispatch_builtin("paste-after");
             }
         }
+    }
+
+    /// Attempt link following at (row, col). Returns true if a link was found and followed.
+    fn try_link_follow_at(&mut self, target_row: usize, text_col: usize) -> bool {
+        // Check display regions (concealed links in markup buffers).
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if !buf.display_regions.is_empty() {
+            let line_byte_start = buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+            let cursor_byte = line_byte_start + {
+                let line_str: String = buf
+                    .rope()
+                    .line(target_row)
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect();
+                line_str
+                    .char_indices()
+                    .nth(text_col)
+                    .map(|(b, _)| b)
+                    .unwrap_or(line_str.len())
+            };
+            if let Some(region) = buf
+                .display_regions
+                .iter()
+                .find(|r| cursor_byte >= r.byte_start && cursor_byte < r.byte_end)
+            {
+                if let Some(ref target) = region.link_target {
+                    let target = target.clone();
+                    self.handle_link_click(&target);
+                    return true;
+                }
+            }
+        }
+
+        // Check pre-populated link_spans
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if !buf.link_spans.is_empty() {
+            let line_start_byte = buf.rope().char_to_byte(buf.rope().line_to_char(target_row));
+            let click_byte = line_start_byte + text_col;
+            if let Some(link) = buf
+                .link_spans
+                .iter()
+                .find(|s| click_byte >= s.byte_start && click_byte < s.byte_end)
+            {
+                let target = link.target.clone();
+                self.handle_link_click(&target);
+                return true;
+            }
+        }
+
+        // On-the-fly link detection
+        let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
+        if target_row < buf.rope().len_lines() {
+            let line_text: String = buf.rope().line(target_row).chars().collect();
+            let links = crate::link_detect::detect_links(&line_text);
+            for link in &links {
+                let link_char_start = line_text[..link.byte_start].chars().count();
+                let link_char_end = line_text[..link.byte_end].chars().count();
+                if text_col >= link_char_start && text_col < link_char_end {
+                    let target = link.target.clone();
+                    self.handle_link_click(&target);
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Handle a link click: open file paths in the editor, URLs externally.
@@ -2414,7 +3547,7 @@ impl Editor {
             let total = rope.len_lines();
             let win = self.window_mgr.focused_window();
             let start = win.scroll_offset;
-            let end = (start + self.viewport_height + 1).min(total);
+            let end = (start + self.focused_viewport_height() + 1).min(total);
             let mut max_w = 0usize;
             for i in start..end {
                 let line = rope.line(i);
@@ -2443,6 +3576,66 @@ impl Editor {
     ///
     /// Vim-style: scroll moves the viewport and clamps the cursor into the
     /// visible area, so `ensure_scroll` on the next frame is a no-op.
+    /// Perform background housekeeping when the editor is idle (~100ms no input).
+    /// Called from the event loop's IdleTick handler.
+    pub fn idle_work(&mut self) {
+        // 1. Reparse dirty non-visible buffers (tree-sitter incremental).
+        //    Visible buffers are reparsed during render; this catches background ones.
+        let pending: Vec<usize> = self.syntax_reparse_pending.drain().collect();
+        for buf_idx in pending {
+            if buf_idx < self.buffers.len() {
+                let gen = self.buffers[buf_idx].generation;
+                let source: String = self.buffers[buf_idx].rope().chars().collect();
+                let _ = self.syntax.spans_for(buf_idx, &source, gen);
+            }
+        }
+
+        // 2. Write swap files for dirty buffers.
+        if self.swap_file {
+            let custom_dir = if self.swap_directory.is_empty() {
+                None
+            } else {
+                Some(std::path::Path::new(&self.swap_directory))
+            };
+            for buf in &self.buffers {
+                if buf.modified {
+                    if let Some(path) = buf.file_path() {
+                        let _ = crate::swap::write_swap(path, buf.rope(), custom_dir);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Switch focus to whichever window contains the given cell coordinates.
+    /// Returns `true` if focus actually changed.
+    pub fn focus_window_at(&mut self, col: u16, row: u16) -> bool {
+        let area = self.last_layout_area;
+        if let Some(win_id) = self.window_mgr.window_at_cell(col, row, area) {
+            if win_id != self.window_mgr.focused_id() {
+                self.window_mgr.set_focused(win_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_in_window(&mut self, target_id: WindowId, delta: i16) {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        self.handle_mouse_scroll(delta);
+        self.window_mgr.set_focused(original);
+    }
+
+    /// Horizontal-scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_horizontal_in_window(&mut self, target_id: WindowId, delta: i16) {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        self.handle_mouse_scroll_horizontal(delta);
+        self.window_mgr.set_focused(original);
+    }
+
     pub fn handle_mouse_scroll(&mut self, delta: i16) {
         let lines = delta.unsigned_abs() as usize;
         if lines == 0 {
@@ -2457,7 +3650,7 @@ impl Editor {
                 // Conversation buffers use win.scroll_offset (rope line index)
                 // via the standard FrameLayout pipeline.
                 let total = self.buffers[buf_idx].display_line_count();
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let amount = lines * scroll_speed;
                 let win = self.window_mgr.focused_window_mut();
                 if delta > 0 {
@@ -2466,6 +3659,8 @@ impl Editor {
                     let max = total.saturating_sub(vh);
                     win.scroll_offset = (win.scroll_offset + amount).min(max);
                 }
+                win.scroll_locked = true;
+                win.scroll_locked_cursor = win.cursor_row;
             }
             crate::BufferKind::Shell => {
                 let amount = if delta > 0 {
@@ -2473,11 +3668,12 @@ impl Editor {
                 } else {
                     -(lines as i32 * scroll_speed as i32)
                 };
-                self.pending_shell_scroll = Some(amount);
+                let prev = self.pending_shell_scroll.unwrap_or(0);
+                self.pending_shell_scroll = Some(prev + amount);
             }
             crate::BufferKind::Messages => {
                 let total = self.message_log.len();
-                let vh = self.viewport_height;
+                let vh = self.focused_viewport_height();
                 let win = self.window_mgr.focused_window_mut();
                 if delta > 0 {
                     win.scroll_offset = win.scroll_offset.saturating_sub(lines * scroll_speed);
@@ -2488,52 +3684,108 @@ impl Editor {
             }
             _ => {
                 let buf_line_count = self.buffers[buf_idx].display_line_count();
-                let viewport_height = self.viewport_height;
+                let viewport_height = self.focused_viewport_height();
+                let steps = lines * scroll_speed;
 
-                // Phase 1: Fold-aware scroll stepping (needs &mut win + &buf).
+                // Phase 1: Sub-line-aware scroll stepping.
+                // Pre-compute visual rows for the range around scroll_offset.
                 {
+                    let scroll = self.window_mgr.focused_window().scroll_offset;
+                    let range_start = scroll.saturating_sub(2);
+                    let range_end = (scroll + viewport_height + 2).min(buf_line_count);
+                    self.populate_visual_rows_cache(buf_idx, range_start, range_end);
+                    let (cache_rows, cache_line_start) =
+                        match &self.buffers[buf_idx].visual_rows_cache {
+                            Some(c) => (c.rows.clone(), c.line_start),
+                            None => (Vec::new(), 0),
+                        };
+                    let lvr = |line: usize| -> usize {
+                        if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                            let v = cache_rows[line - cache_line_start] as usize;
+                            if v > 0 {
+                                v
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
+                    };
+
+                    let cell_h = self.gui_cell_height;
                     let buf = &self.buffers[buf_idx];
                     let win = self.window_mgr.focused_window_mut();
-                    let steps = lines * scroll_speed;
                     if delta > 0 {
+                        // Scroll up (reveal lines above).
                         for _ in 0..steps {
-                            let prev = buf.prev_visible_line(win.scroll_offset);
-                            if prev >= win.scroll_offset {
-                                break;
+                            if win.scroll_pixel_offset >= cell_h {
+                                win.scroll_pixel_offset -= cell_h;
+                            } else {
+                                let prev = buf.prev_visible_line(win.scroll_offset);
+                                if prev >= win.scroll_offset {
+                                    break;
+                                }
+                                let prev_rows = lvr(prev);
+                                win.scroll_offset = prev;
+                                win.scroll_pixel_offset = if prev_rows > 1 {
+                                    (prev_rows as f32 - 2.0) * cell_h
+                                } else {
+                                    0.0
+                                };
+                                if win.scroll_pixel_offset < 0.0 {
+                                    win.scroll_pixel_offset = 0.0;
+                                }
                             }
-                            win.scroll_offset = prev;
                         }
                     } else {
+                        // Scroll down (hide lines above).
                         let max_scroll = buf_line_count.saturating_sub(viewport_height);
                         for _ in 0..steps {
                             if win.scroll_offset >= max_scroll {
                                 break;
                             }
-                            let next = buf.next_visible_line(win.scroll_offset);
-                            if next <= win.scroll_offset {
-                                break;
+                            let top_rows = lvr(win.scroll_offset);
+                            let line_height = top_rows as f32 * cell_h;
+                            if win.scroll_pixel_offset + cell_h < line_height {
+                                win.scroll_pixel_offset += cell_h;
+                            } else {
+                                let next = buf.next_visible_line(win.scroll_offset);
+                                if next <= win.scroll_offset {
+                                    break;
+                                }
+                                win.scroll_offset = next.min(max_scroll);
+                                win.scroll_pixel_offset = 0.0;
                             }
-                            win.scroll_offset = next.min(max_scroll);
                         }
                     }
                 }
 
                 // Phase 2: Compute bottom visible row using canonical line_visual_rows.
-                // (needs &self for line_visual_rows — no mutable borrow active)
                 let scroll_off = self.window_mgr.focused_window().scroll_offset;
+                let skip = self
+                    .window_mgr
+                    .focused_window()
+                    .scroll_skip_rows(self.gui_cell_height);
                 let bottom = {
                     let buf = &self.buffers[buf_idx];
                     let max_row = buf_line_count.saturating_sub(1);
                     let mut visual = 0;
                     let mut last_fit = scroll_off;
                     let mut line = scroll_off;
+                    let mut first = true;
                     while line <= max_row {
                         let rows = self.line_visual_rows(buf_idx, line);
                         if rows > 0 {
-                            if visual + rows > viewport_height {
+                            let effective = if first {
+                                rows.saturating_sub(skip)
+                            } else {
+                                rows
+                            };
+                            first = false;
+                            if visual + effective > viewport_height {
                                 break;
                             }
-                            visual += rows;
+                            visual += effective;
                             last_fit = line;
                         }
                         line = buf.next_visible_line(line);
@@ -2544,7 +3796,7 @@ impl Editor {
                     last_fit
                 };
 
-                // Phase 3: Clamp cursor (needs &mut win again).
+                // Phase 3: Clamp cursor.
                 let buf = &self.buffers[buf_idx];
                 let win = self.window_mgr.focused_window_mut();
                 if win.cursor_row < scroll_off {
@@ -2554,7 +3806,201 @@ impl Editor {
                     win.cursor_row = bottom;
                 }
                 win.clamp_cursor(buf);
+                win.scroll_locked = true;
+                win.scroll_locked_cursor = win.cursor_row;
             }
         }
+    }
+
+    /// Pixel-precise scroll: directly adjusts `scroll_pixel_offset` by a
+    /// floating-point pixel amount, crossing line boundaries as needed.
+    /// Returns `true` if the scroll position actually changed (for inertia cancellation at bounds).
+    pub fn handle_mouse_scroll_pixels(&mut self, delta_px: f32) -> bool {
+        if delta_px.abs() < 0.01 {
+            return false;
+        }
+        let buf_idx = self.active_buffer_idx();
+        let kind = self.buffers[buf_idx].kind;
+
+        // Non-text buffers: accumulate fractional lines, emit when threshold crossed.
+        match kind {
+            crate::BufferKind::Shell
+            | crate::BufferKind::Conversation
+            | crate::BufferKind::Messages => {
+                let cell_h = self.gui_cell_height;
+                if cell_h <= 0.0 {
+                    return false;
+                }
+                let win = self.window_mgr.focused_window_mut();
+                win.shell_scroll_accumulator += delta_px;
+                let lines = (win.shell_scroll_accumulator / cell_h).trunc() as i16;
+                win.shell_scroll_accumulator -= lines as f32 * cell_h;
+                if lines != 0 {
+                    self.handle_mouse_scroll(lines);
+                }
+                // Keep inertia alive while accumulator has residual fractional pixels.
+                let acc = self.window_mgr.focused_window().shell_scroll_accumulator;
+                return acc.abs() > 0.01 || lines != 0;
+            }
+            _ => {}
+        }
+
+        let buf_line_count = self.buffers[buf_idx].display_line_count();
+        let viewport_height = self.focused_viewport_height();
+        let cell_h = self.gui_cell_height;
+        if cell_h <= 0.0 {
+            return false;
+        }
+
+        // Pre-compute visual rows cache around scroll region.
+        {
+            let scroll = self.window_mgr.focused_window().scroll_offset;
+            let range_start = scroll.saturating_sub(viewport_height);
+            let range_end = (scroll + viewport_height * 2).min(buf_line_count);
+            self.populate_visual_rows_cache(buf_idx, range_start, range_end);
+        }
+
+        let (cache_rows, cache_line_start) = match &self.buffers[buf_idx].visual_rows_cache {
+            Some(c) => (c.rows.clone(), c.line_start),
+            None => (Vec::new(), 0),
+        };
+        let lvr = |line: usize| -> usize {
+            if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                let v = cache_rows[line - cache_line_start] as usize;
+                if v > 0 {
+                    v
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        };
+
+        let old_scroll = self.window_mgr.focused_window().scroll_offset;
+        let old_pixel = self.window_mgr.focused_window().scroll_pixel_offset;
+
+        if delta_px > 0.0 {
+            // Scroll up (reveal content above).
+            let mut remaining = delta_px;
+            let win = self.window_mgr.focused_window_mut();
+            while remaining > 0.0 {
+                if win.scroll_pixel_offset >= remaining {
+                    win.scroll_pixel_offset -= remaining;
+                    remaining = 0.0;
+                } else {
+                    remaining -= win.scroll_pixel_offset;
+                    win.scroll_pixel_offset = 0.0;
+                    // Move to previous line.
+                    let prev = self.buffers[buf_idx].prev_visible_line(win.scroll_offset);
+                    if prev >= win.scroll_offset {
+                        // At top.
+                        win.scroll_pixel_offset = 0.0;
+                        break;
+                    }
+                    win.scroll_offset = prev;
+                    let prev_rows = lvr(prev);
+                    let line_height = prev_rows as f32 * cell_h;
+                    win.scroll_pixel_offset = line_height - 0.01; // position at bottom of prev line
+                }
+            }
+            // Ensure pixel offset is non-negative.
+            let win = self.window_mgr.focused_window_mut();
+            if win.scroll_pixel_offset < 0.0 {
+                win.scroll_pixel_offset = 0.0;
+            }
+        } else {
+            // Scroll down (reveal content below).
+            let max_scroll = buf_line_count.saturating_sub(viewport_height);
+            let mut remaining = -delta_px; // positive magnitude
+            let win = self.window_mgr.focused_window_mut();
+            while remaining > 0.0 && win.scroll_offset < max_scroll {
+                let top_rows = lvr(win.scroll_offset);
+                let line_height = top_rows as f32 * cell_h;
+                let space_in_line = line_height - win.scroll_pixel_offset;
+                if remaining < space_in_line {
+                    win.scroll_pixel_offset += remaining;
+                    remaining = 0.0;
+                } else {
+                    remaining -= space_in_line;
+                    let next = self.buffers[buf_idx].next_visible_line(win.scroll_offset);
+                    if next <= win.scroll_offset {
+                        break;
+                    }
+                    win.scroll_offset = next.min(max_scroll);
+                    win.scroll_pixel_offset = 0.0;
+                }
+            }
+            // Clamp at max.
+            let win = self.window_mgr.focused_window_mut();
+            if win.scroll_offset >= max_scroll {
+                win.scroll_offset = max_scroll;
+                // Allow sub-line offset within last visible range but don't exceed.
+            }
+        }
+
+        // Phase 2: Compute bottom visible line for cursor clamping.
+        let scroll_off = self.window_mgr.focused_window().scroll_offset;
+        let skip = self.window_mgr.focused_window().scroll_skip_rows(cell_h);
+        let bottom = {
+            let buf = &self.buffers[buf_idx];
+            let max_row = buf_line_count.saturating_sub(1);
+            let mut visual = 0;
+            let mut last_fit = scroll_off;
+            let mut line = scroll_off;
+            let mut first = true;
+            while line <= max_row {
+                let rows = self.line_visual_rows(buf_idx, line);
+                if rows > 0 {
+                    let effective = if first {
+                        rows.saturating_sub(skip)
+                    } else {
+                        rows
+                    };
+                    first = false;
+                    if visual + effective > viewport_height {
+                        break;
+                    }
+                    visual += effective;
+                    last_fit = line;
+                }
+                line = buf.next_visible_line(line);
+                if line <= last_fit {
+                    break;
+                }
+            }
+            last_fit
+        };
+
+        // Phase 3: Clamp cursor.
+        let buf = &self.buffers[buf_idx];
+        let win = self.window_mgr.focused_window_mut();
+        if win.cursor_row < scroll_off {
+            win.cursor_row = scroll_off;
+        }
+        if win.cursor_row > bottom {
+            win.cursor_row = bottom;
+        }
+        win.clamp_cursor(buf);
+        win.scroll_locked = true;
+        win.scroll_locked_cursor = win.cursor_row;
+
+        // Return whether scroll actually moved.
+        let new_scroll = self.window_mgr.focused_window().scroll_offset;
+        let new_pixel = self.window_mgr.focused_window().scroll_pixel_offset;
+        new_scroll != old_scroll || (new_pixel - old_pixel).abs() > 0.01
+    }
+
+    /// Pixel-scroll a specific window without permanently changing focus.
+    pub fn handle_mouse_scroll_pixels_in_window(
+        &mut self,
+        target_id: WindowId,
+        delta_px: f32,
+    ) -> bool {
+        let original = self.window_mgr.focused_id();
+        self.window_mgr.set_focused(target_id);
+        let moved = self.handle_mouse_scroll_pixels(delta_px);
+        self.window_mgr.set_focused(original);
+        moved
     }
 }

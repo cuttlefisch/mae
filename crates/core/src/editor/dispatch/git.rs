@@ -1,3 +1,5 @@
+//! Git porcelain: status, stage, commit, blame, diff, log.
+
 use super::super::Editor;
 
 impl Editor {
@@ -97,6 +99,7 @@ impl Editor {
             "git-diff" => self.git_diff(),
             _ => return None,
         }
+        self.mark_full_redraw();
         Some(true)
     }
 }

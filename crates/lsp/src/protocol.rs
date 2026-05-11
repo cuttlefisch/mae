@@ -195,6 +195,20 @@ pub struct ServerCapabilities {
     pub references_provider: bool,
     #[serde(default)]
     pub document_highlight_provider: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_formatting_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_range_formatting_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_action_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_symbol_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_help_provider: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inlay_hint_provider: Option<serde_json::Value>,
 }
 
 /// Initialize response result.
@@ -688,6 +702,116 @@ pub struct CompletionParams {
 }
 
 // ---------------------------------------------------------------------------
+// Signature Help (textDocument/signatureHelp)
+// ---------------------------------------------------------------------------
+
+/// A single parameter of a signature.
+#[derive(Debug, Clone)]
+pub struct ParameterInformation {
+    /// Label of this parameter (byte offset range in the signature label).
+    pub label_start: usize,
+    pub label_end: usize,
+}
+
+/// A single signature returned from signatureHelp.
+#[derive(Debug, Clone)]
+pub struct SignatureInformation {
+    /// The label of this signature (e.g. "fn foo(x: i32, y: &str) -> bool").
+    pub label: String,
+    /// Documentation for this signature.
+    pub documentation: Option<String>,
+    /// Parameters with byte offset ranges into `label`.
+    pub parameters: Vec<ParameterInformation>,
+}
+
+/// Parsed `textDocument/signatureHelp` response.
+#[derive(Debug, Clone)]
+pub struct SignatureHelpResponse {
+    pub signatures: Vec<SignatureInformation>,
+    pub active_signature: usize,
+    pub active_parameter: usize,
+}
+
+impl SignatureHelpResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return SignatureHelpResponse {
+                signatures: vec![],
+                active_signature: 0,
+                active_parameter: 0,
+            };
+        }
+        let obj = v.as_object();
+        let active_signature = obj
+            .and_then(|o| o.get("activeSignature"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let active_parameter = obj
+            .and_then(|o| o.get("activeParameter"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let signatures = obj
+            .and_then(|o| o.get("signatures"))
+            .and_then(|s| s.as_array())
+            .map(|arr| arr.iter().filter_map(parse_signature_information).collect())
+            .unwrap_or_default();
+        SignatureHelpResponse {
+            signatures,
+            active_signature,
+            active_parameter,
+        }
+    }
+}
+
+fn parse_signature_information(v: &serde_json::Value) -> Option<SignatureInformation> {
+    let obj = v.as_object()?;
+    let label = obj.get("label")?.as_str()?.to_string();
+    let documentation = obj.get("documentation").and_then(|d| {
+        if let Some(s) = d.as_str() {
+            Some(s.to_string())
+        } else {
+            d.get("value").and_then(|v| v.as_str()).map(String::from)
+        }
+    });
+    let parameters = obj
+        .get("parameters")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let po = p.as_object()?;
+                    let label_val = po.get("label")?;
+                    if let Some(arr) = label_val.as_array() {
+                        // [start, end] byte offsets
+                        let start = arr.first()?.as_u64()? as usize;
+                        let end = arr.get(1)?.as_u64()? as usize;
+                        Some(ParameterInformation {
+                            label_start: start,
+                            label_end: end,
+                        })
+                    } else if let Some(s) = label_val.as_str() {
+                        // String label — find byte offset in parent label
+                        let start = label.find(s).unwrap_or(0);
+                        let end = start + s.len();
+                        Some(ParameterInformation {
+                            label_start: start,
+                            label_end: end,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SignatureInformation {
+        label,
+        documentation,
+        parameters,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Workspace Symbol (workspace/symbol)
 // ---------------------------------------------------------------------------
 
@@ -1085,6 +1209,134 @@ impl DocumentHighlightResponse {
             return DocumentHighlightResponse { highlights };
         }
         DocumentHighlightResponse { highlights: vec![] }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rename (textDocument/rename, textDocument/prepareRename)
+// ---------------------------------------------------------------------------
+
+/// Params for `textDocument/rename`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+    pub new_name: String,
+}
+
+/// Params for `textDocument/prepareRename`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareRenameParams {
+    pub text_document: TextDocumentIdentifier,
+    pub position: Position,
+}
+
+/// Response from `textDocument/prepareRename` — range + placeholder text.
+#[derive(Debug, Clone)]
+pub struct PrepareRenameResponse {
+    pub range: Option<Range>,
+    pub placeholder: Option<String>,
+}
+
+impl PrepareRenameResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return PrepareRenameResponse {
+                range: None,
+                placeholder: None,
+            };
+        }
+        // Shape 1: { range, placeholder }
+        if let Some(obj) = v.as_object() {
+            let range = obj.get("range").and_then(parse_range);
+            let placeholder = obj
+                .get("placeholder")
+                .and_then(|s| s.as_str())
+                .map(String::from);
+            if range.is_some() || placeholder.is_some() {
+                return PrepareRenameResponse { range, placeholder };
+            }
+            // Shape 2: just a Range object
+            if let Some(r) = parse_range(&v) {
+                return PrepareRenameResponse {
+                    range: Some(r),
+                    placeholder: None,
+                };
+            }
+        }
+        PrepareRenameResponse {
+            range: None,
+            placeholder: None,
+        }
+    }
+}
+
+/// Response from `textDocument/rename` — a workspace edit.
+#[derive(Debug, Clone)]
+pub struct RenameResponse {
+    pub edit: Option<WorkspaceEdit>,
+}
+
+impl RenameResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return RenameResponse { edit: None };
+        }
+        let edit = parse_workspace_edit(&v);
+        RenameResponse { edit }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Formatting (textDocument/formatting, textDocument/rangeFormatting)
+// ---------------------------------------------------------------------------
+
+/// Formatting options.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattingOptions {
+    pub tab_size: u32,
+    pub insert_spaces: bool,
+}
+
+/// Params for `textDocument/formatting`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentFormattingParams {
+    pub text_document: TextDocumentIdentifier,
+    pub options: FormattingOptions,
+}
+
+/// Params for `textDocument/rangeFormatting`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentRangeFormattingParams {
+    pub text_document: TextDocumentIdentifier,
+    pub range: Range,
+    pub options: FormattingOptions,
+}
+
+/// Response from formatting — an array of TextEdits or null.
+#[derive(Debug, Clone)]
+pub struct FormattingResponse {
+    pub edits: Vec<TextEdit>,
+}
+
+impl FormattingResponse {
+    pub fn from_value(v: serde_json::Value) -> Self {
+        if v.is_null() {
+            return FormattingResponse { edits: vec![] };
+        }
+        if let Some(arr) = v.as_array() {
+            let edits = arr
+                .iter()
+                .filter_map(|e| serde_json::from_value(e.clone()).ok())
+                .collect();
+            return FormattingResponse { edits };
+        }
+        FormattingResponse { edits: vec![] }
     }
 }
 
@@ -1629,5 +1881,61 @@ mod tests {
     fn document_symbol_response_null() {
         let resp = DocumentSymbolResponse::from_value(serde_json::Value::Null);
         assert!(resp.symbols.is_empty());
+    }
+
+    #[test]
+    fn signature_help_response_parsed() {
+        let v = serde_json::json!({
+            "signatures": [{
+                "label": "fn foo(x: i32, y: &str) -> bool",
+                "parameters": [
+                    {"label": [7, 13]},
+                    {"label": [15, 22]}
+                ],
+                "documentation": {"kind": "markdown", "value": "Does foo things."}
+            }],
+            "activeSignature": 0,
+            "activeParameter": 1
+        });
+        let resp = SignatureHelpResponse::from_value(v);
+        assert_eq!(resp.signatures.len(), 1);
+        assert_eq!(resp.active_signature, 0);
+        assert_eq!(resp.active_parameter, 1);
+        let sig = &resp.signatures[0];
+        assert_eq!(sig.label, "fn foo(x: i32, y: &str) -> bool");
+        assert_eq!(sig.parameters.len(), 2);
+        assert_eq!(sig.parameters[0].label_start, 7);
+        assert_eq!(sig.parameters[0].label_end, 13);
+        assert_eq!(sig.parameters[1].label_start, 15);
+        assert_eq!(sig.parameters[1].label_end, 22);
+        assert_eq!(sig.documentation.as_deref(), Some("Does foo things."));
+    }
+
+    #[test]
+    fn signature_help_response_null() {
+        let resp = SignatureHelpResponse::from_value(serde_json::Value::Null);
+        assert!(resp.signatures.is_empty());
+    }
+
+    #[test]
+    fn signature_help_string_label_params() {
+        let v = serde_json::json!({
+            "signatures": [{
+                "label": "fn bar(name: String)",
+                "parameters": [
+                    {"label": "name: String"}
+                ]
+            }],
+            "activeSignature": 0,
+            "activeParameter": 0
+        });
+        let resp = SignatureHelpResponse::from_value(v);
+        assert_eq!(resp.signatures[0].parameters.len(), 1);
+        let p = &resp.signatures[0].parameters[0];
+        // String label should be found within the signature label.
+        assert_eq!(
+            &resp.signatures[0].label[p.label_start..p.label_end],
+            "name: String"
+        );
     }
 }

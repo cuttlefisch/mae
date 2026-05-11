@@ -48,6 +48,11 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "ai_permissions",
                     "args": {},
                     "assert": "Returns text with current auto-approve tier"
+                },
+                {
+                    "tool": "audit_configuration",
+                    "args": {},
+                    "assert": "Returns JSON with ai_agent, ai_chat, lsp_servers, dap_adapters, init_files, options_modified, issues fields"
                 }
             ]
         }));
@@ -257,6 +262,31 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "perf_benchmark",
                     "args": {"benchmark": "syntax_parse", "size": 1000},
                     "assert": "duration_us < 100000"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "scroll_stress", "size": 50},
+                    "assert": "p95_us < 50000 (no frame > 50ms during scroll)"
+                },
+                {
+                    "tool": "introspect",
+                    "args": {"section": "frame"},
+                    "assert": "Returns JSON with render_phase_us containing syntax, layout, draw fields"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "start"},
+                    "assert": "Returns JSON with status 'recording_started'"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "stop"},
+                    "assert": "Returns JSON with status 'recording_stopped'"
+                },
+                {
+                    "tool": "perf_profile",
+                    "args": {"action": "report"},
+                    "assert": "Returns JSON with total_frames, frame_stats, redraw_level_distribution, cache_stats, diagnosis fields"
                 }
             ]
         }));
@@ -331,6 +361,100 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                     "tool": "github_pr_status",
                     "args": {},
                     "assert": "Executes successfully (even if no PR exists, it should return a structured response from the gh cli)"
+                }
+            ]
+        }));
+    }
+
+    if include("scrolling") {
+        categories.push(serde_json::json!({
+            "name": "scrolling",
+            "conditional": false,
+            "setup": [
+                "Open assets/markup-demo.md (contains images and links)"
+            ],
+            "tests": [
+                {
+                    "tool": "open_file",
+                    "args": {"path": "assets/markup-demo.md"},
+                    "assert": "Buffer opened"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "move-to-last-line"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "cursor_row should be > 10 (file has many lines)"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "move-to-first-line"},
+                    "assert": "Success"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "cursor_row == 0, scroll_offset == 0"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "scroll-down-line"},
+                    "assert": "Success (repeat 5 times)"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "scroll_offset > 0"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "scroll-up-line"},
+                    "assert": "Success (repeat 5 times)"
+                },
+                {
+                    "tool": "cursor_info",
+                    "args": {},
+                    "assert": "scroll_offset back to 0 or close"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "scroll_stress", "size": 50},
+                    "assert": "p95_us < 50000 (no frame > 50ms during scroll)"
+                }
+            ],
+            "cleanup": [
+                "close_buffer(name: 'markup-demo.md', force: true), then switch_buffer(name: '*AI*')"
+            ]
+        }));
+    }
+
+    if include("babel") {
+        categories.push(serde_json::json!({
+            "name": "babel",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "babel_execute",
+                    "args": {},
+                    "assert": "Should report 'No source block at cursor' on a non-org buffer"
+                },
+                {
+                    "tool": "babel_tangle",
+                    "args": {},
+                    "assert": "Should report 'No blocks with :tangle directive' or similar"
+                },
+                {
+                    "tool": "org_export",
+                    "args": {"format": "html"},
+                    "assert": "Should export or report an error (not crash)"
+                },
+                {
+                    "tool": "kb_instances",
+                    "args": {},
+                    "assert": "Should list KB instances"
                 }
             ]
         }));

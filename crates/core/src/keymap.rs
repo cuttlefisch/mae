@@ -77,6 +77,8 @@ pub struct WhichKeyEntry {
     pub key: KeyPress,
     pub label: String,
     pub is_group: bool,
+    /// Optional command doc string (from CommandRegistry), shown dimmed in popup.
+    pub doc: Option<String>,
 }
 
 /// A named keymap mapping key sequences to command names.
@@ -196,16 +198,18 @@ impl Keymap {
             let is_leaf = seq.len() == next_idx + 1;
 
             if is_leaf {
-                let label = commands
-                    .get(cmd_name)
+                let cmd_info = commands.get(cmd_name);
+                let label = cmd_info
                     .map(|c| c.which_key_label().to_string())
                     .unwrap_or_else(|| cmd_name.clone());
+                let doc = cmd_info.map(|c| c.doc.clone());
                 seen.insert(
                     sort_key,
                     WhichKeyEntry {
                         key: next_key.clone(),
                         label,
                         is_group: false,
+                        doc,
                     },
                 );
             } else {
@@ -223,6 +227,7 @@ impl Keymap {
                         key: next_key.clone(),
                         label,
                         is_group: true,
+                        doc: None,
                     },
                 );
             }
@@ -753,6 +758,45 @@ mod tests {
         let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
         assert!(labels.contains(&"Save current buffer"));
         assert!(labels.contains(&"Close current buffer"));
+    }
+
+    #[test]
+    fn which_key_entries_have_doc() {
+        use crate::commands::CommandRegistry;
+
+        let mut km = Keymap::new("normal");
+        km.bind(parse_key_seq_spaced("SPC b s"), "save");
+
+        let reg = CommandRegistry::with_builtins();
+        let prefix = parse_key_seq_spaced("SPC b");
+        let entries = km.which_key_entries(&prefix, &reg);
+
+        assert_eq!(entries.len(), 1);
+        // The doc field should be populated from the command registry
+        assert!(
+            entries[0].doc.is_some(),
+            "which-key entry should have doc field populated"
+        );
+        assert!(
+            entries[0].doc.as_ref().unwrap().contains("Save"),
+            "doc should contain command description"
+        );
+    }
+
+    #[test]
+    fn which_key_group_has_no_doc() {
+        use crate::commands::CommandRegistry;
+
+        let mut km = Keymap::new("normal");
+        km.bind(parse_key_seq_spaced("SPC b s"), "save");
+        km.set_group_name(parse_key_seq_spaced("SPC b"), "+buffer");
+
+        let reg = CommandRegistry::with_builtins();
+        let entries = km.which_key_entries(&parse_key_seq("SPC"), &reg);
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_group);
+        assert!(entries[0].doc.is_none(), "groups should not have doc");
     }
 
     #[test]

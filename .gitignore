@@ -1,7 +1,5 @@
 /target
 **/*.rs.bk
-Cargo.lock
-
 # Editor temp files
 *.swp
 *.swo
@@ -20,6 +18,10 @@ README.org
 
 # Test artifacts
 test_sandbox/
+
+# Generated test fixtures (perf benchmarking)
+assets/large_test.org
+assets/long_lines_test.txt
 
 # Standalone tool build artifacts
 tools/*/target/

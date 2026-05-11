@@ -59,14 +59,12 @@ pub fn line_heading_scale_with(
         .take_while(|s| s.byte_start < line_byte_end)
         .any(|s| s.theme_key == "markup.heading" && s.byte_start >= line_byte_start);
     if has_heading {
-        let line_chars: Vec<char> = rope.line(line_idx).chars().collect();
-        // Detect heading level: org uses `*`, markdown uses `#`
-        let level = if line_chars.first() == Some(&'*') {
-            line_chars.iter().take_while(|&&c| c == '*').count()
-        } else if line_chars.first() == Some(&'#') {
-            line_chars.iter().take_while(|&&c| c == '#').count()
-        } else {
-            0
+        // Detect heading level directly from rope iterator — no allocation.
+        let mut chars = rope.line(line_idx).chars();
+        let level = match chars.next() {
+            Some('*') => 1 + chars.take_while(|&c| c == '*').count(),
+            Some('#') => 1 + chars.take_while(|&c| c == '#').count(),
+            _ => 0,
         };
         org_heading_scale_for_level_with(level.min(255) as u8, h1, h2, h3)
     } else {
@@ -134,9 +132,12 @@ pub fn render_buffer_content(
     let (breakpoint_lines, stopped_line) = gutter::collect_breakpoints(buf, editor);
     let stopped_line_fg = theme::ts_fg(editor, "debug.current_line");
 
-    // Code block background detection (markdown/org fenced blocks).
-    let flavor = editor.effective_markup_flavor(win.buffer_idx);
-    let code_block_lines = mae_core::detect_code_block_lines(buf, flavor);
+    // Code block background: use pre-computed cache from render() mutable phase.
+    let (cb_line_start, code_block_lines): (usize, &[bool]) = editor
+        .code_block_cache
+        .get(&win.buffer_idx)
+        .map(|c| (c.line_start, c.lines.as_slice()))
+        .unwrap_or((0, &[]));
     let code_block_bg = {
         let cb_style = editor.theme.style("markup.code_block");
         cb_style.bg.map(|c| theme::theme_color_to_skia(&c))
@@ -154,6 +155,9 @@ pub fn render_buffer_content(
     // Hoisted allocations — reused across lines to avoid ~160 allocs/frame.
     let mut full_chars: Vec<char> = Vec::with_capacity(256);
     let mut char_styles: Vec<CharStyle> = Vec::with_capacity(256);
+    // Reusable draw buffers for draw_styled_at — avoids per-line Vec allocation.
+    let mut pixel_buf: Vec<f32> = Vec::with_capacity(256);
+    let mut col_buf: Vec<usize> = Vec::with_capacity(256);
 
     // Pre-compute cursor's display row for fold-aware relative line numbers.
     let cursor_display_row = frame_layout.display_row_of(win.cursor_row);
@@ -288,7 +292,7 @@ pub fn render_buffer_content(
                         &buf.display_regions,
                         buf.display_reveal_cursor,
                     );
-                    for region in &eff_regions {
+                    for region in eff_regions.iter() {
                         if region.byte_start >= line_byte_end || region.byte_end <= line_byte_start
                         {
                             continue;
@@ -415,7 +419,11 @@ pub fn render_buffer_content(
 
         // Code block tinted background (drawn before cursorline so cursorline overlays).
         if let Some(cb_bg) = code_block_bg {
-            let is_code_block = code_block_lines.get(line_idx).copied().unwrap_or(false);
+            let is_code_block = line_idx
+                .checked_sub(cb_line_start)
+                .and_then(|rel| code_block_lines.get(rel))
+                .copied()
+                .unwrap_or(false);
             if is_code_block {
                 canvas.draw_rect_at_y(pixel_y, text_col, text_width, line_height, cb_bg);
             }
@@ -466,6 +474,8 @@ pub fn render_buffer_content(
                 1.0,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
         } else if wrap {
             // First segment of a wrapped line.
@@ -509,6 +519,8 @@ pub fn render_buffer_content(
                 org_heading_scale,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
         } else {
             // No wrap: single segment per line.
@@ -553,6 +565,8 @@ pub fn render_buffer_content(
                 org_heading_scale,
                 line_height,
                 ll.glyph_advance,
+                &mut pixel_buf,
+                &mut col_buf,
             );
 
             // Fold indicator: show "... N lines" after fold start lines.
@@ -583,7 +597,35 @@ pub fn render_buffer_content(
         }
     }
 
-    // Pass 5: Diagnostic inline underlines (wavy) + virtual text.
+    // Pass 5 (image): Render inline images below their line's text.
+    for ll in frame_layout.lines.iter() {
+        if ll.is_wrap_continuation {
+            continue;
+        }
+        if let Some(ref img_layout) = ll.image {
+            let img_y = ll.pixel_y + ll.line_height;
+            // Draw the image from cache (loads on first access); fall back to placeholder.
+            let drawn = canvas.draw_image_from_cache(
+                &img_layout.path,
+                img_layout.pixel_x,
+                img_y,
+                img_layout.display_width,
+                img_layout.display_height,
+            );
+            if !drawn {
+                let placeholder_fg = theme::ts_fg(editor, "markup.image");
+                let filename = img_layout
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| img_layout.path.to_string_lossy().to_string());
+                let placeholder = format!("[Image: {}]", filename);
+                canvas.draw_text_at_y(img_y, text_col, &placeholder, placeholder_fg, 1.0);
+            }
+        }
+    }
+
+    // Pass 6: Diagnostic inline underlines (wavy) + virtual text.
     if editor.lsp_diagnostics_inline {
         if let Some(path) = buf.file_path() {
             let uri = mae_core::path_to_uri(path);
@@ -670,6 +712,8 @@ fn draw_styled_at(
     scale: f32,
     line_height: f32,
     glyph_advance: f32,
+    pixel_buf: &mut Vec<f32>,
+    col_buf: &mut Vec<usize>,
 ) {
     if chars.is_empty() {
         return;
@@ -680,27 +724,27 @@ fn draw_styled_at(
     // Pre-compute cumulative PIXEL offset for each char position.
     // For scale != 1.0, uses the font's actual glyph advance directly.
     let base_x = col as f32 * cw;
-    let mut pixel_offsets: Vec<f32> = Vec::with_capacity(chars.len() + 1);
+    pixel_buf.clear();
     if scale != 1.0 {
         let mut acc = 0.0f32;
         for &ch in chars {
-            pixel_offsets.push(acc);
+            pixel_buf.push(acc);
             acc += char_width(ch) as f32 * glyph_advance;
         }
-        pixel_offsets.push(acc);
+        pixel_buf.push(acc);
     } else {
         let mut acc = 0.0f32;
         for &ch in chars {
-            pixel_offsets.push(acc);
+            pixel_buf.push(acc);
             acc += char_width(ch) as f32 * cw;
         }
-        pixel_offsets.push(acc);
+        pixel_buf.push(acc);
     }
     // Integer col_offsets for scale==1.0 path (draw_text_run_at_y).
-    let col_offsets: Vec<usize> = pixel_offsets
-        .iter()
-        .map(|px| (px / cw).round() as usize)
-        .collect();
+    col_buf.clear();
+    col_buf.extend(pixel_buf.iter().map(|px| (px / cw).round() as usize));
+    let pixel_offsets = &*pixel_buf;
+    let col_offsets = &*col_buf;
     // Use pixel-precise rendering for scaled lines to avoid multi-run drift.
     let use_pixel = scale != 1.0;
 
