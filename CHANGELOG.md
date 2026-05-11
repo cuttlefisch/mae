@@ -4,9 +4,68 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Nightly clippy unnecessary_sort_by in perf.rs ([1298cc9](https://github.com/cuttlefisch/mae/commit/1298cc9a1e5d2496496147a921fa4b75acb785f4))
+- Make versioned file parsing idempotent and forward-compatible ([bb201e6](https://github.com/cuttlefisch/mae/commit/bb201e6e9660b8a90e458afe23c28bd2281f1797))
+
+### CI
+
+- Add GUI build job to validate release pipeline ([b6e3cb8](https://github.com/cuttlefisch/mae/commit/b6e3cb8c9879a5e91ddbc07f79c49b68ab1fe4ca))
+- Add containerized development and release validation ([a478739](https://github.com/cuttlefisch/mae/commit/a47873918ee3fc0f5078bd4df706ee62514f7250))
+
+### Documentation
+
+- FOSS project readiness + onboarding polish ([6a8d87b](https://github.com/cuttlefisch/mae/commit/6a8d87bf36068800f6ebedd488a38afb392c542a))
+- Remove manual test plan from tracked files ([578cd4b](https://github.com/cuttlefisch/mae/commit/578cd4bbcfb7bc8910cfc05c4e905bba587d6f77))
+- Accuracy audit + release pipeline fixes ([2d11cf4](https://github.com/cuttlefisch/mae/commit/2d11cf40230dd121fb61cd3287805809ce198047))
+- Pre-merge audit — kb_seed split, dispatch headers, security posture ([51e69c2](https://github.com/cuttlefisch/mae/commit/51e69c2e113d82edd078fbeaee11124bc7902b5f))
+
+## [0.6.1] - 2026-05-06
+
+### Bug Fixes
+
+- AI chat viewport scrolls past response — use real output window height ([c391b21](https://github.com/cuttlefisch/mae/commit/c391b2109359501d714419cc1427f87fe18fed3c))
+- Shell UX — auto-scroll on input, C-y paste, bracketed paste ([eae0272](https://github.com/cuttlefisch/mae/commit/eae0272a19bd7d4a8b925a9fd945100136f3f458))
+- Per-window inertia, shell scroll, terminal normal-mode keys, viewport height ([5720480](https://github.com/cuttlefisch/mae/commit/57204807cac9f71ba943b45cc330178b9dd3f59b))
+- Nightly clippy iter_kv_map in kb todo_nodes() ([a90a0b8](https://github.com/cuttlefisch/mae/commit/a90a0b8a7c31cc22af104a1d284e1e576f83fe54))
+
+### Documentation
+
+- V0.7.0 version bump + README rewrite for technical reviewers ([585c323](https://github.com/cuttlefisch/mae/commit/585c32348070352f1d68f29f8115c13cc846738b))
+
+### Features
+
+- M1 scheme docs + progressive tutorial + bugfixes (2,260 tests) ([f752f85](https://github.com/cuttlefisch/mae/commit/f752f85a929397f7cea3debd9d6798e3d3de1d02))
+- M2 contextual help — namespace fallback, Tab completion, which-key docs (2,264 tests) ([aad77d2](https://github.com/cuttlefisch/mae/commit/aad77d20bb385789ae812bd011d9d8daebf45ea2))
+- M3 user help nodes — ~/.config/mae/help/*.org + :help-edit (2,265 tests) ([de65887](https://github.com/cuttlefisch/mae/commit/de65887614ccef292f72a5bce3a42e32ec33960c))
+- Layered init.scm + after-load hook (2,269 tests) ([05da79f](https://github.com/cuttlefisch/mae/commit/05da79ffd58c32eb7e819da045a1e18d57f86837))
+- Config health — --debug-init, :describe-configuration, audit_configuration MCP tool (2,276 tests) ([27ce130](https://github.com/cuttlefisch/mae/commit/27ce13081e5125a54c3dacdc8300481c3616af43))
+- Display policy — enum-based buffer placement + conversation protection (2,286 tests) ([1a697a6](https://github.com/cuttlefisch/mae/commit/1a697a64563e8175cd4a7679b32d9e36c21f1b6c))
+- Mouse focus — click-to-focus, scroll-under-mouse, idle deferred work (2,299 tests) ([d51b666](https://github.com/cuttlefisch/mae/commit/d51b666f21cbf01759d01af531c61159a17ec6c0))
+- Rich content, multi-cursor, scroll fixes, TUI shift normalization (2,389 tests) ([2e0dfbe](https://github.com/cuttlefisch/mae/commit/2e0dfbe9b70eb8b933b281dd34bc2c36efa1ac17))
+- Smooth sub-line scrolling past images + viewport clipping (2,389 tests) ([d589100](https://github.com/cuttlefisch/mae/commit/d58910049f56cfa4b43ff3e24990c82a7dac5158))
+- Native SVG rendering via skia svg::Dom, remove resvg (2,389 tests) ([024d31e](https://github.com/cuttlefisch/mae/commit/024d31e54bb528db96a5ebca155ddc107dbfe21c))
+- Org core interactivity, large doc perf, heading statistics cookies ([3db92c3](https://github.com/cuttlefisch/mae/commit/3db92c386f794dde39bcf340a75192007b30d566))
+- Viewport-local syntax spans, configurable perf thresholds (2,464 tests) ([9853db2](https://github.com/cuttlefisch/mae/commit/9853db2c4c3728ec456cec0515ff910ee2c03a6a))
+- Per-window render caching, redraw level fixes, frame profiling (2,475 tests) ([c975b37](https://github.com/cuttlefisch/mae/commit/c975b37129e2d93e018fe0862cbd666c0632c833))
+- Inertial (kinetic) scrolling for GUI trackpad/mouse ([c82aced](https://github.com/cuttlefisch/mae/commit/c82aced5950cb1dac649fe6cb8b8d831879b2c5a))
+- I3-style window movement (SPC w H/J/K/L) ([f4caf6e](https://github.com/cuttlefisch/mae/commit/f4caf6e3257aeea6cdfc36e007568e8ccae48ac5))
+- AI target tool, undo-aware modified flag, popup split positioning ([1f5f482](https://github.com/cuttlefisch/mae/commit/1f5f4823cd779fc9042e3b3c1e3f48d9def1375a))
+- LSP+DAP polish, agent shell CWD fix ([6cebd07](https://github.com/cuttlefisch/mae/commit/6cebd071ad797cdef415466599e07c40a7d2288a))
+- Babel/export/federation + AI agent target dispatch ([984709a](https://github.com/cuttlefisch/mae/commit/984709af78a579d996c4db5b47028f3e394c45df))
+- --clean/-q flag + dashboard screenshot for README ([3d677a8](https://github.com/cuttlefisch/mae/commit/3d677a8241f14610efc635088d2f4aec34781c88))
+- PR polish — onboarding, config accuracy, AI-unconfigured UX ([c75dc32](https://github.com/cuttlefisch/mae/commit/c75dc3292ceac19d646c207c689e7f15a4361180))
+- CI gap closure + macOS release binaries ([11fa418](https://github.com/cuttlefisch/mae/commit/11fa4182af889835908f2dd3c03991d50ed6c975))
+
 ### Miscellaneous
 
 - *(deps)* Update skia-safe requirement in the rust-dependencies group ([26fb773](https://github.com/cuttlefisch/mae/commit/26fb7737d3ae8c327ae791d881cb6339fc14d685))
+- Bump version to 0.6.1 ([190ecd1](https://github.com/cuttlefisch/mae/commit/190ecd1fb2d352fdd724ccfa37c7a1a4e7ad29a5))
+
+### Performance
+
+- Eliminate rope.line() bottleneck in compute_layout() ([58a09fa](https://github.com/cuttlefisch/mae/commit/58a09faf4de2617b5ca76e671574bd336194ae7a))
 
 ## [0.6.0] - 2026-05-02
 
