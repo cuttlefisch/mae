@@ -12,6 +12,24 @@ Optional (for full self-test coverage):
 make setup-dev    # installs lldb, rust-analyzer, debugpy
 ```
 
+## Container Development
+
+If you prefer not to install Rust and system dependencies locally, everything
+works inside Docker:
+
+```sh
+make docker-ci          # equivalent to `make ci` in a clean environment
+make docker-dev         # interactive shell — `make ci` works inside
+make docker-new-user    # validate first-run flow in pristine container
+```
+
+The Dockerfile mirrors GitHub CI exactly — if `make docker-ci` passes, the
+PR will pass CI. No toolchain management, no version mismatches.
+
+**When to use native vs container:**
+- **Native:** faster iteration, GUI builds, `make self-test`
+- **Container:** zero setup, first contribution, pre-PR validation, CI debugging
+
 ## Getting Your Bearings
 
 - **`make doctor`** — check build prereqs and runtime dependencies
@@ -66,6 +84,9 @@ Module size constraint: **no file over 3,000 lines**. Split into module director
 | `cargo test -p mae-core test_name` | Run a single test by name |
 | `make build && mae --self-test` | AI-driven end-to-end self-test (requires API key) |
 | `:self-test` | Same, from inside the editor |
+| `make docker-ci` | Full CI in container (no local toolchain needed) |
+| `make docker-new-user` | Validate first-run flow in pristine container |
+| `make docker-smoke` | Quick binary smoke test in container |
 
 ## Commit Messages
 

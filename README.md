@@ -124,6 +124,19 @@ make build-tui                  # terminal-only (no clang/skia dependency)
 **macOS:** `make install PREFIX=/usr/local/bin` or add `~/.local/bin` to PATH.
 **WSL:** `make install-tui` (terminal-only, no X11 needed).
 
+### Container Build
+
+No Rust installation needed — everything runs inside Docker:
+
+```sh
+git clone git@github.com:cuttlefisch/mae.git && cd mae
+make docker-ci          # full CI pipeline (fmt + clippy + check + test)
+make docker-new-user    # validate first-run experience in clean environment
+make docker-dev         # interactive dev shell with Rust toolchain
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full container development workflow.
+
 ### AI Setup
 
 > [!CAUTION]

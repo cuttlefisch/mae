@@ -1,0 +1,13 @@
+target/
+.git/
+.mae/
+**/.mae/
+.claude/
+**/.claude/
+.gemini/
+**/.gemini/
+.cursor/
+**/.cursor/
+tools/*/target/
+assets/large_test.org
+assets/long_lines_test.txt

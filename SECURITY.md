@@ -53,7 +53,7 @@ MAE has several security-relevant subsystems. This section documents the current
 
 ### Known Limitations
 
-**No filesystem sandboxing** — The AI agent can read and write any file the user's process can access. There is no seccomp, landlock, or container-based isolation. If you run MAE with untrusted AI prompts or org files, consider running it inside a container.
+**No filesystem sandboxing** — The AI agent can read and write any file the user's process can access. There is no seccomp, landlock, or container-based isolation. If you run MAE with untrusted AI prompts or org files, run it inside a container (see below).
 
 **MCP socket** — The Unix socket at `/tmp/mae-{PID}.sock` is protected by filesystem permissions only. Any process running as the same user can connect. There is no per-client authentication or token-based auth.
 
@@ -67,6 +67,30 @@ MAE has several security-relevant subsystems. This section documents the current
 
 - **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key` in config.toml.
 - **Permission tier:** Set `permission_tier = "write"` unless your workflow requires shell access. Use `"readonly"` for review-only sessions.
-- **Untrusted files:** Run MAE in a container (Podman/Docker) when opening untrusted org files or working with untrusted AI prompts.
+- **Untrusted files:** Run MAE in a container when opening untrusted org files or working with untrusted AI prompts (see below).
 - **Transcripts:** Review files in `~/.local/share/mae/transcripts/` before sharing or committing them.
 - **MCP access:** The MCP socket is ephemeral (per-process PID). Only grant `mae-mcp-shim` access to tools appropriate for your trust level.
+
+### Running in a Container
+
+MAE includes a Dockerfile for isolated execution:
+
+```sh
+# Quick: run mae in a container with a project directory mounted read-only
+docker compose build runtime
+docker run --rm -it -v /path/to/project:/work:ro mae mae /work/file.org
+
+# Persistent config across runs
+docker run --rm -it \
+  -v ~/.config/mae:/home/mae/.config/mae \
+  -v /path/to/project:/work \
+  mae mae /work/file.org
+
+# Maximum isolation (no network)
+docker run --rm -it --network=none \
+  -v /path/to/project:/work:ro \
+  mae mae /work/untrusted.org
+```
+
+The container runs as a non-root `mae` user with pre-created XDG directories.
+Terminal mode only — GUI requires display forwarding (X11/Wayland).

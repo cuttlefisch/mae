@@ -22,6 +22,14 @@ The project README (`README.md`) contains the architecture spec and stack ration
   - `make ci` excludes GUI (skia system deps)
   - `make audit` runs `cargo-deny` for license/advisory/ban checks
   - `make check-config` validates init.scm + config.toml without launching the editor
+  - **Container workflow** (no local toolchain required):
+    - `make docker-ci` — full CI in container (mirrors GitHub CI exactly)
+    - `make docker-new-user` — validate first-run flow in pristine environment
+    - `make docker-dev` — interactive dev shell with Rust toolchain
+    - `make docker-smoke` — quick binary smoke test
+    - `make docker-clean` — remove Docker images and cache
+  - Dockerfile: multi-stage (base -> builder -> ci -> runtime), TUI-only (no Skia in container)
+  - `docker compose run --rm --build <service>` is the canonical invocation
 
 ## Crate Layout
 

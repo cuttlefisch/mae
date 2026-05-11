@@ -1,0 +1,26 @@
+services:
+  # Full CI pipeline — build IS the test (fmt+clippy+test run as RUN steps)
+  ci:
+    build: { context: ., target: ci }
+    entrypoint: ["echo", "CI passed"]
+
+  # Clean-room new-user simulation
+  new-user:
+    build: { context: ., target: runtime }
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mae --init-config && mae --check-config && echo 'New-user flow validated'"]
+
+  # Quick binary smoke test
+  smoke:
+    build: { context: ., target: runtime }
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mae --version && mae --check-config && echo 'Smoke test passed'"]
+
+  # Interactive dev shell with full toolchain (source mounted from host)
+  dev:
+    build: { context: ., target: base }
+    command: bash
+    stdin_open: true
+    tty: true
+    volumes: [".:/workspace"]
+    working_dir: /workspace

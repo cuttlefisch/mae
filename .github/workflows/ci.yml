@@ -82,6 +82,22 @@ jobs:
       - name: Build GUI binary
         run: cargo build --release --features gui --package mae
 
+  container-smoke:
+    name: container / smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and smoke-test container
+        run: docker compose run --rm --build smoke
+
+  container-new-user:
+    name: container / new-user
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate new-user flow in clean container
+        run: docker compose run --rm --build new-user
+
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest

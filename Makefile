@@ -44,7 +44,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help
+.PHONY: all build build-tui dev install install-tui uninstall run test check fmt fmt-check clippy clean ci audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean
 
 # Default target: release build
 all: build
@@ -221,6 +221,26 @@ doctor:
 ## clean: remove all build artefacts
 clean:
 	$(CARGO) clean
+
+## docker-ci: run full CI pipeline in a container (no local toolchain needed)
+docker-ci:
+	docker compose run --rm --build ci
+
+## docker-new-user: validate new-user install flow in a clean container
+docker-new-user:
+	docker compose run --rm --build new-user
+
+## docker-smoke: quick binary smoke test in container
+docker-smoke:
+	docker compose run --rm --build smoke
+
+## docker-dev: interactive dev shell with full Rust toolchain
+docker-dev:
+	docker compose run --rm --build dev
+
+## docker-clean: remove MAE Docker images and build cache
+docker-clean:
+	docker compose down --rmi local --volumes
 
 ## help: print this help
 help:
