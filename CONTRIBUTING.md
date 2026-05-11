@@ -103,6 +103,26 @@ test(lsp): add rename integration tests
 
 Scope = crate name without `mae-` prefix: `core`, `gui`, `ai`, `lsp`, `dap`, `scheme`, `shell`, `kb`, `mcp`, `renderer`.
 
+## Versioning
+
+Versions are managed automatically. **Do not manually edit `VERSION` or the version in `Cargo.toml`.**
+
+On PR merge, the `version-bump.yml` workflow:
+1. Reads the current version from `VERSION`
+2. Determines bump type from PR labels (preferred) or commit messages (fallback)
+3. Bumps the version, updates `Cargo.toml` + `VERSION`, generates a changelog
+4. Commits, tags, and pushes — which triggers the release pipeline
+
+| PR Label | Commit Prefix | Bump |
+|----------|---------------|------|
+| `release:patch` | `fix(...):`  | patch (0.8.0 -> 0.8.1) |
+| `release:minor` | `feat(...):` | minor (0.8.0 -> 0.9.0) |
+| `release:major` | `feat(...)!:` | major (0.8.0 -> 1.0.0) |
+
+**Labels take precedence** over commit scanning. If your PR has `feat` commits but should only bump patch (e.g., docs or CI changes), add the `release:patch` label.
+
+**For development:** don't bump the version in your branch to "preview" a version number. The version in `main` always reflects the last release. If you need to test with a specific version string locally, use `cargo build` flags or a local override — don't commit it.
+
 ## What Makes a Good PR
 
 - Feature branch from `main`

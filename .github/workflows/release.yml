@@ -42,30 +42,6 @@ jobs:
           name: mae-linux-x86_64
           path: dist/mae-linux-x86_64
 
-  build-macos-x86:
-    name: Build macos-x86_64
-    runs-on: macos-13  # last Intel runner
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build TUI binary
-        run: cargo build --release --package mae
-
-      - name: Prepare artifact
-        run: |
-          mkdir -p dist
-          cp target/release/mae dist/mae-macos-x86_64
-          chmod +x dist/mae-macos-x86_64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mae-macos-x86_64
-          path: dist/mae-macos-x86_64
-
   build-linux-gui:
     name: Build linux-x86_64-gui
     runs-on: ubuntu-latest
@@ -119,7 +95,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [build-linux, build-linux-gui, build-macos-x86, build-macos-arm]
+    needs: [build-linux, build-linux-gui, build-macos-arm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -165,6 +141,5 @@ jobs:
           files: |
             dist/mae-linux-x86_64
             dist/mae-linux-x86_64-gui
-            dist/mae-macos-x86_64
             dist/mae-macos-aarch64
           fail_on_unmatched_files: true
