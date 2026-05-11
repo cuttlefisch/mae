@@ -74,24 +74,7 @@ impl Editor {
         normal.bind(parse_key_seq(","), "repeat-find-reverse");
         // Reselect visual (gv)
         normal.bind(parse_key_seq("gv"), "reselect-visual");
-        // Search
-        normal.bind(parse_key_seq("/"), "search-forward-start");
-        normal.bind(parse_key_seq("?"), "search-backward-start");
-        normal.bind(parse_key_seq("n"), "search-next");
-        normal.bind(parse_key_seq("N"), "search-prev");
-        normal.bind(parse_key_seq("*"), "search-word-under-cursor");
-        normal.bind(parse_key_seq("#"), "search-word-under-cursor-backward");
-        // gn / gN — select next/prev search match as visual selection.
-        // Operator variants: dgn, cgn, ygn (and capital-N backward equivalents).
-        // Practical Vim tip 86: `cgn<text><Esc>` + `.` for single-key global replace.
-        normal.bind(parse_key_seq("gn"), "visual-select-next-match");
-        normal.bind(parse_key_seq("gN"), "visual-select-prev-match");
-        normal.bind(parse_key_seq("dgn"), "delete-next-match");
-        normal.bind(parse_key_seq("dgN"), "delete-prev-match");
-        normal.bind(parse_key_seq("cgn"), "change-next-match");
-        normal.bind(parse_key_seq("cgN"), "change-prev-match");
-        normal.bind(parse_key_seq("ygn"), "yank-next-match");
-        normal.bind(parse_key_seq("ygN"), "yank-prev-match");
+        // Search (/, ?, n, N, *, #, gn/gN) — moved to modules/search/autoloads.scm
         // Editing
         normal.bind(parse_key_seq("x"), "delete-char-forward");
         normal.bind(parse_key_seq("dd"), "delete-line");
@@ -131,12 +114,7 @@ impl Editor {
         // gl — edit link at cursor (jump into link region + insert mode)
         normal.bind(parse_key_seq("gl"), "edit-link");
         // Marks (m/') — moved to modules/marks-jumps/autoloads.scm
-        // Macros (q<letter> records, @<letter> replays, @@ repeats last).
-        // @@ is handled by dispatch_char_motion: if the register char is '@',
-        // last_macro_register is used. This avoids the keymap prefix conflict
-        // that would arise from binding both "@" (exact) and "@@" (longer).
-        normal.bind(parse_key_seq("q"), "start-recording-await");
-        normal.bind(parse_key_seq("@"), "replay-macro-await");
+        // Macros (q, @) — moved to modules/macros/autoloads.scm
         // Join, indent, dedent
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
@@ -169,10 +147,7 @@ impl Editor {
         normal.bind(parse_key_seq("yy"), "yank-line");
         normal.bind(parse_key_seq("p"), "paste-after");
         normal.bind(parse_key_seq("P"), "paste-before");
-        // Register prompt: `"<char>` selects the register for the next
-        // yank/delete/paste. Resolved by the key-handling layer via
-        // `pending_register_prompt` — dispatch just arms the flag.
-        normal.bind(parse_key_seq("\""), "prompt-register");
+        // Register prompt (") — moved to modules/registers/autoloads.scm
         // Surrounds (vim-surround) — keybindings moved to modules/surround/autoloads.scm
         // Commands remain registered as builtins; keys come from the module.
         // Undo/Redo
@@ -286,15 +261,11 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
         normal.bind(parse_key_seq_spaced("SPC q s"), "save-and-quit");
         normal.bind(parse_key_seq_spaced("SPC q S"), "save-all-and-quit");
-        // +search/syntax (tree-sitter structural selection + search)
-        normal.bind(parse_key_seq_spaced("SPC s s"), "search-buffer");
+        // +search/syntax — search keys moved to modules/search/autoloads.scm
+        // Syntax selection stays in kernel (tree-sitter bridge)
         normal.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
         normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
-        normal.bind(parse_key_seq_spaced("SPC s p"), "project-search");
-        normal.bind(parse_key_seq_spaced("SPC s h"), "clear-search-highlight");
-        // SPC / — Doom shortcut for project search
-        normal.bind(parse_key_seq_spaced("SPC /"), "project-search");
         // +eval (Scheme REPL / lisp machine)
         normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
         normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
@@ -353,9 +324,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
         normal.bind(parse_key_seq_spaced("SPC o a"), "open-agenda");
         normal.bind(parse_key_seq_spaced("SPC o A"), "agenda-add");
-        // +register
-        normal.bind(parse_key_seq_spaced("SPC r r"), "show-registers");
-        normal.bind(parse_key_seq_spaced("SPC r y"), "paste-from-yank");
+        // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
         // +code (LSP shortcuts)
@@ -392,14 +361,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
         normal.set_group_name(parse_key_seq_spaced("SPC m"), "+multicursor");
 
-        // Multi-cursor (SPC m group)
-        normal.bind(parse_key_seq_spaced("SPC m j"), "mc-add-cursor-below");
-        normal.bind(parse_key_seq_spaced("SPC m k"), "mc-add-cursor-above");
-        normal.bind(parse_key_seq_spaced("SPC m d"), "mc-add-at-next-word");
-        normal.bind(parse_key_seq_spaced("SPC m a"), "mc-add-all-word");
-        normal.bind(parse_key_seq_spaced("SPC m s"), "mc-skip-next");
-        normal.bind(parse_key_seq_spaced("SPC m c"), "mc-clear");
-        normal.bind(parse_key_seq_spaced("SPC m l"), "mc-align");
+        // Multi-cursor (SPC m) — moved to modules/multicursor/autoloads.scm
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -486,8 +448,7 @@ impl Editor {
         // Repeat find in visual mode
         visual.bind(parse_key_seq(";"), "repeat-find");
         visual.bind(parse_key_seq(","), "repeat-find-reverse");
-        // Register prompt (same as Normal: `"<char>` routes the next op).
-        visual.bind(parse_key_seq("\""), "prompt-register");
+        // Register prompt (") — moved to modules/registers/autoloads.scm
         // Surround visual (S) — moved to modules/surround/autoloads.scm
         // Block visual insert (I inserts at left edge on all rows)
         visual.bind(parse_key_seq("I"), "block-visual-insert");
@@ -633,11 +594,7 @@ impl Editor {
         org.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
         org.bind(parse_key_seq_spaced("SPC m t"), "org-set-tags");
         // Table commands
-        org.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
-        org.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
-        org.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
-        org.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
-        org.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
+        // Table bindings (SPC m b) — moved to modules/tables/autoloads.scm
         // Babel commands
         org.bind(parse_key_seq_spaced("SPC m x"), "babel-execute");
         org.bind(parse_key_seq_spaced("SPC m X"), "babel-execute-all");
@@ -762,12 +719,7 @@ impl Editor {
         markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
         markdown.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
-        // Table commands
-        markdown.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
-        markdown.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
-        markdown.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
-        markdown.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
-        markdown.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
+        // Table bindings (SPC m b) — moved to modules/tables/autoloads.scm
         markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
         markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
         markdown.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");

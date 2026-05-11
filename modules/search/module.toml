@@ -1,0 +1,10 @@
+[module]
+name = "search"
+version = "0.1.0"
+description = "Search and highlight — /, ?, n, N, *, #, gn/gN"
+mae_version = ">=0.8.0"
+category = "editor"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

@@ -1,7 +1,6 @@
 use super::*;
 use crate::buffer::Buffer;
-use crate::keymap::parse_key_seq;
-use crate::{LookupResult, Mode};
+use crate::Mode;
 use std::fs;
 
 #[test]
@@ -387,18 +386,12 @@ fn reg_command_aliases_show_registers() {
     assert!(editor.buffers.iter().any(|b| b.name == "*Registers*"));
 }
 
+// Register prompt keybindings moved to modules/registers/autoloads.scm.
+// Verify the command remains registered as a kernel builtin.
 #[test]
-fn dq_key_is_bound_to_prompt_register_in_normal_and_visual() {
+fn prompt_register_command_registered() {
     let editor = Editor::new();
-    for kmap in ["normal", "visual"] {
-        let km = editor.keymaps.get(kmap).unwrap();
-        assert_eq!(
-            km.lookup(&parse_key_seq("\"")),
-            LookupResult::Exact("prompt-register"),
-            "`\"` binding missing in {}",
-            kmap
-        );
-    }
+    assert!(editor.commands.contains("prompt-register"));
 }
 
 #[test]

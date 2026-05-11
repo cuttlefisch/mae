@@ -361,27 +361,13 @@ mod tests {
         );
     }
 
+    // Register keybindings moved to modules/registers/autoloads.scm.
+    // Verify commands remain registered as kernel builtins.
     #[test]
-    fn spc_r_r_resolves_to_show_registers() {
+    fn register_commands_registered() {
         let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
-        use crate::keymap::parse_key_seq_spaced;
-        let result = normal.lookup(&parse_key_seq_spaced("SPC r r"));
-        assert!(
-            matches!(result, crate::keymap::LookupResult::Exact(cmd) if cmd == "show-registers"),
-            "SPC r r should bind to show-registers"
-        );
-    }
-
-    #[test]
-    fn spc_r_y_resolves_to_paste_from_yank() {
-        let ed = Editor::new();
-        let normal = ed.keymaps.get("normal").unwrap();
-        use crate::keymap::parse_key_seq_spaced;
-        let result = normal.lookup(&parse_key_seq_spaced("SPC r y"));
-        assert!(
-            matches!(result, crate::keymap::LookupResult::Exact(cmd) if cmd == "paste-from-yank"),
-            "SPC r y should bind to paste-from-yank"
-        );
+        assert!(ed.commands.contains("show-registers"));
+        assert!(ed.commands.contains("paste-from-yank"));
+        assert!(ed.commands.contains("prompt-register"));
     }
 }

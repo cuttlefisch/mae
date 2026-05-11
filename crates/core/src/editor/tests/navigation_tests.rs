@@ -691,29 +691,14 @@ fn file_browser_command_registered() {
     assert!(editor.commands.contains("file-browser"));
 }
 
+// gn/gN keybindings moved to modules/search/autoloads.scm.
+// Verify commands remain registered as kernel builtins.
 #[test]
-fn gn_keybindings_registered() {
+fn gn_commands_registered() {
     let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::LookupResult;
-    assert_eq!(
-        normal.lookup(&parse_key_seq("gn")),
-        LookupResult::Exact("visual-select-next-match")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("gN")),
-        LookupResult::Exact("visual-select-prev-match")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("cgn")),
-        LookupResult::Exact("change-next-match")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("dgn")),
-        LookupResult::Exact("delete-next-match")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("ygn")),
-        LookupResult::Exact("yank-next-match")
-    );
+    assert!(editor.commands.contains("visual-select-next-match"));
+    assert!(editor.commands.contains("visual-select-prev-match"));
+    assert!(editor.commands.contains("change-next-match"));
+    assert!(editor.commands.contains("delete-next-match"));
+    assert!(editor.commands.contains("yank-next-match"));
 }
