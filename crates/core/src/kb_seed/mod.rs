@@ -768,6 +768,34 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_MCP_DEVELOPMENT,
         )
         .with_tags(["mcp", "ai", "tools", "development"]),
+        Node::new(
+            "concept:modules",
+            "Concept: Module System",
+            NodeKind::Concept,
+            CONCEPT_MODULES,
+        )
+        .with_tags(["modules", "extensibility", "packages"]),
+        Node::new(
+            "concept:flags",
+            "Concept: Module Flags",
+            NodeKind::Concept,
+            CONCEPT_FLAGS,
+        )
+        .with_tags(["modules", "flags", "configuration"]),
+        Node::new(
+            "concept:design-philosophy",
+            "Concept: Design Philosophy",
+            NodeKind::Concept,
+            CONCEPT_DESIGN_PHILOSOPHY,
+        )
+        .with_tags(["modules", "architecture", "extensibility"]),
+        Node::new(
+            "guide:extension-authoring",
+            "Guide: Extension Authoring",
+            NodeKind::Concept,
+            GUIDE_EXTENSION_AUTHORING,
+        )
+        .with_tags(["modules", "guide", "extensibility"]),
     ]
 }
 
@@ -810,6 +838,10 @@ mod tests {
             "concept:dap-attach",
             "concept:introspect",
             "concept:ai-modes",
+            "concept:modules",
+            "concept:flags",
+            "concept:design-philosophy",
+            "guide:extension-authoring",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
