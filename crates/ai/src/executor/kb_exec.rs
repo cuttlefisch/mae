@@ -1,7 +1,7 @@
 use mae_core::Editor;
 
 use crate::tool_impls::{
-    execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_links_from,
+    execute_help_open, execute_kb_get, execute_kb_graph, execute_kb_health, execute_kb_links_from,
     execute_kb_links_to, execute_kb_list, execute_kb_search,
 };
 use crate::types::ToolCall;
@@ -16,6 +16,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_links_from" => execute_kb_links_from(editor, &call.arguments),
         "kb_links_to" => execute_kb_links_to(editor, &call.arguments),
         "kb_graph" => execute_kb_graph(editor, &call.arguments),
+        "kb_health" => execute_kb_health(editor),
         "help_open" => execute_help_open(editor, &call.arguments),
         _ => return None,
     };

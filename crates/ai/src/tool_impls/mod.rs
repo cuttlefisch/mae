@@ -26,10 +26,10 @@ pub use editor_tools::{
     execute_audit_configuration, execute_babel_execute, execute_babel_tangle, execute_command_list,
     execute_debug_state, execute_editor_restore_state, execute_editor_save_state,
     execute_editor_state, execute_event_recording, execute_get_option, execute_kb_instances,
-    execute_mouse_event, execute_org_cycle, execute_org_export, execute_org_open_link,
-    execute_org_todo_cycle, execute_read_messages, execute_render_inspect, execute_set_option,
-    execute_shell_scrollback, execute_theme_inspect, execute_trigger_hook,
-    execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
+    execute_list_modules, execute_mouse_event, execute_org_cycle, execute_org_export,
+    execute_org_open_link, execute_org_todo_cycle, execute_pkg_command, execute_read_messages,
+    execute_render_inspect, execute_set_option, execute_shell_scrollback, execute_theme_inspect,
+    execute_trigger_hook, execute_visual_buffer_add_circle, execute_visual_buffer_add_line,
     execute_visual_buffer_add_rect, execute_visual_buffer_add_text, execute_visual_buffer_clear,
     execute_window_layout,
 };
@@ -47,8 +47,8 @@ pub use help::execute_help_open;
 pub use image::{execute_image_info, execute_image_list};
 pub use introspect::execute_introspect;
 pub use kb::{
-    execute_kb_get, execute_kb_graph, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
-    execute_kb_search,
+    execute_kb_get, execute_kb_graph, execute_kb_health, execute_kb_links_from,
+    execute_kb_links_to, execute_kb_list, execute_kb_search,
 };
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{

@@ -206,5 +206,177 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
 }
 
 // ---------------------------------------------------------------------------
+// shell-select-mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_select_mode_creates_temp_buffer() {
+    let mut editor = Editor::new();
+    // Create a shell buffer with viewport data.
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor.shell_viewports.insert(
+        shell_idx,
+        vec!["$ echo hello".into(), "hello".into(), "$ ".into()],
+    );
+
+    editor.dispatch_builtin("shell-select-mode");
+
+    // A *shell-select* buffer should now exist and be displayed.
+    let select_idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.name == "*shell-select*")
+        .expect("*shell-select* buffer should exist");
+    assert!(editor.buffers[select_idx].read_only);
+    // BufferKind should be ShellSelect with its own keymap.
+    assert_eq!(
+        editor.buffers[select_idx].kind,
+        crate::BufferKind::ShellSelect
+    );
+    // Content should be the joined viewport lines.
+    let text: String = editor.buffers[select_idx].rope().to_string();
+    assert!(text.contains("echo hello"));
+    assert!(text.contains("hello"));
+    // Cursor should be at the last line.
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(
+        win.cursor_row,
+        editor.buffers[select_idx]
+            .display_line_count()
+            .saturating_sub(1)
+    );
+}
+
+#[test]
+fn shell_select_non_shell_buffer_shows_error() {
+    let mut editor = Editor::new();
+    // Active buffer is [scratch] (Text), not a shell.
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.status_msg.contains("Not a shell buffer"));
+}
+
+#[test]
+fn shell_select_empty_shows_error() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    // No viewport data inserted → empty content.
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.status_msg.contains("No shell output to select"));
+}
+
+#[test]
+fn shell_select_mode_reuses_existing_buffer() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["first".into()]);
+
+    editor.dispatch_builtin("shell-select-mode");
+    let count_after_first = editor.buffers.len();
+
+    // Switch back to the shell buffer and run again with updated content.
+    editor.switch_to_buffer(shell_idx);
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["second".into()]);
+    editor.dispatch_builtin("shell-select-mode");
+
+    // Should reuse the buffer, not create another one.
+    assert_eq!(editor.buffers.len(), count_after_first);
+    let select_idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.name == "*shell-select*")
+        .unwrap();
+    let text: String = editor.buffers[select_idx].rope().to_string();
+    assert!(text.contains("second"));
+}
+
+// ---------------------------------------------------------------------------
+// close-shell-select
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_select_q_closes_and_returns() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["output".into()]);
+
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.buffers.iter().any(|b| b.name == "*shell-select*"));
+
+    editor.dispatch_builtin("close-shell-select");
+    // Buffer should be removed.
+    assert!(!editor.buffers.iter().any(|b| b.name == "*shell-select*"));
+    // Focus should return to the shell buffer.
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Shell);
+}
+
+#[test]
+fn shell_select_keymap_has_q_and_esc_bindings() {
+    use crate::keymap::{parse_key_seq, Key, KeyPress, LookupResult};
+    let editor = Editor::new();
+    let km = editor
+        .keymaps
+        .get("shell-select")
+        .expect("shell-select keymap must exist");
+    assert_eq!(
+        km.lookup(&parse_key_seq("q")),
+        LookupResult::Exact("close-shell-select")
+    );
+    assert_eq!(
+        km.lookup(&[KeyPress::special(Key::Escape)]),
+        LookupResult::Exact("close-shell-select")
+    );
+    assert_eq!(
+        km.lookup(&parse_key_seq("?")),
+        LookupResult::Exact("show-buffer-keys")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// shell-normal keymap resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_buffer_normal_mode_uses_shell_normal_keymap() {
+    use crate::buffer_mode::BufferMode;
+    use crate::keymap::LookupResult;
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    editor.mode = Mode::Normal;
+    // Resolve keymap for Shell buffer in Normal mode — should be "shell-normal".
+    let km_name = editor.active_buffer().kind.keymap_name();
+    assert_eq!(km_name, Some("shell-normal"));
+    let km = editor.keymaps.get("shell-normal").unwrap();
+    // `v` should map to shell-select-mode (not visual mode from parent).
+    assert_eq!(
+        km.lookup(&crate::keymap::parse_key_seq("v")),
+        LookupResult::Exact("shell-select-mode")
+    );
+    // `q` should map to enter-insert-mode (returns to ShellInsert).
+    assert_eq!(
+        km.lookup(&crate::keymap::parse_key_seq("q")),
+        LookupResult::Exact("enter-insert-mode")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Mouse handling (Phase 8 — Step 8)
 // ---------------------------------------------------------------------------

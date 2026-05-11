@@ -488,14 +488,16 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_BUFFER,
         )
-        .with_tags(["data-model", "core"]),
+        .with_tags(["data-model", "core"])
+        .with_aliases(["file", "tab", "document"]),
         Node::new(
             "concept:window",
             "Concept: Window",
             NodeKind::Concept,
             CONCEPT_WINDOW,
         )
-        .with_tags(["data-model", "core"]),
+        .with_tags(["data-model", "core"])
+        .with_aliases(["pane", "split", "panel"]),
         Node::new(
             "concept:mode",
             "Concept: Mode",
@@ -516,7 +518,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_AI_AS_PEER,
         )
-        .with_tags(["ai", "architecture"]),
+        .with_tags(["ai", "architecture"])
+        .with_aliases(["copilot", "assistant", "llm", "chatbot"]),
         Node::new(
             "concept:knowledge-base",
             "Concept: Knowledge Base",
@@ -551,7 +554,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_TERMINAL,
         )
-        .with_tags(["terminal", "shell", "phase-6"]),
+        .with_tags(["terminal", "shell", "phase-6"])
+        .with_aliases(["console", "command-line", "bash"]),
         Node::new(
             "concept:hooks",
             "Concept: Hooks",
@@ -586,7 +590,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_DEBUGGING,
         )
-        .with_tags(["dap", "debugging", "ai"]),
+        .with_tags(["dap", "debugging", "ai"])
+        .with_aliases(["debugger", "breakpoints", "stepping"]),
         Node::new(
             "concept:gui",
             "Concept: GUI Backend",
@@ -628,7 +633,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_RENDER_PROFILING,
         )
-        .with_tags(["performance", "rendering", "observability"]),
+        .with_tags(["performance", "rendering", "observability"])
+        .with_aliases(["display", "graphics", "skia"]),
         Node::new(
             "concept:git-status",
             "Concept: Git Status (Magit-lite)",
@@ -740,7 +746,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_SCHEME_API,
         )
-        .with_tags(["extensibility", "scheme", "api"]),
+        .with_tags(["extensibility", "scheme", "api"])
+        .with_aliases(["lisp", "scripting", "extension-api", "elisp"]),
         Node::new(
             "concept:ai-modes",
             "Concept: AI Agent vs AI Chat",
@@ -775,7 +782,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_MODULES,
         )
-        .with_tags(["modules", "extensibility", "packages"]),
+        .with_tags(["modules", "extensibility", "packages"])
+        .with_aliases(["plugins", "packages", "extensions", "addons"]),
         Node::new(
             "concept:flags",
             "Concept: Module Flags",

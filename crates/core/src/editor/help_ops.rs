@@ -185,8 +185,31 @@ impl Editor {
         let target = if self.kb.contains(node_id) {
             node_id.to_string()
         } else {
-            self.set_status(format!("No help node: {}  — showing index", node_id));
-            "index".to_string()
+            // Try namespace prefix expansion: "buffer" → "concept:buffer", "save" → "cmd:save"
+            let mut found = None;
+            for prefix in self.kb.namespace_prefixes() {
+                let expanded = format!("{}{}", prefix, node_id);
+                if self.kb.contains(&expanded) {
+                    found = Some(expanded);
+                    break;
+                }
+            }
+            // Fall back to fuzzy search top result.
+            if found.is_none() {
+                let results = self.kb.search(node_id);
+                if let Some(first) = results.into_iter().next() {
+                    if first != "index" {
+                        found = Some(first);
+                    }
+                }
+            }
+            match found {
+                Some(resolved) => resolved,
+                None => {
+                    self.set_status(format!("No help node: {}  — showing index", node_id));
+                    "index".to_string()
+                }
+            }
         };
         let prev_idx = self.active_buffer_idx();
         let idx = self.ensure_help_buffer_idx(&target);

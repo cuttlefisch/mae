@@ -58,6 +58,21 @@ use crate::theme::{default_theme, Theme};
 use crate::window::{Rect, WindowId, WindowManager};
 use crate::Mode;
 
+/// Module information exposed to the editor and AI tools.
+/// This is a projection of the richer `ModuleManifest` that lives in the binary crate.
+#[derive(Debug, Clone, Default)]
+pub struct ModuleInfo {
+    pub name: String,
+    pub version: String,
+    pub status: String,
+    pub category: String,
+    pub description: String,
+    pub commands: Vec<String>,
+    pub options: Vec<String>,
+    pub flags: Vec<(String, String)>,
+    pub path: String,
+}
+
 /// Links the output `*AI*` buffer and input `*ai-input*` buffer in a
 /// split-view pair. The output pane is read-only (conversation history);
 /// the input pane is a normal Text buffer with full vi editing.
@@ -842,12 +857,15 @@ pub struct Editor {
     /// show guidance when the user tries to open an AI conversation
     /// without credentials.
     pub ai_configured: bool,
-    /// Active modules: (name, version, status). Populated by the module
-    /// loader in bootstrap.rs. Used by `:describe-module`.
-    pub active_modules: Vec<(String, String, String)>,
+    /// Active modules. Populated by the module loader in bootstrap.rs.
+    /// Used by `:describe-module`, `list_modules` MCP tool, and `audit_configuration`.
+    pub active_modules: Vec<ModuleInfo>,
     /// Pending module reload requests. Drained by the binary which owns
     /// the SchemeRuntime and ModuleRegistry.
     pub pending_module_reloads: Vec<String>,
+    /// Pending package management commands (sync, upgrade, doctor).
+    /// Drained by the binary crate in the event loop.
+    pub pending_pkg_commands: Vec<String>,
 }
 
 impl Default for Editor {
@@ -1092,6 +1110,7 @@ impl Editor {
             ai_configured: false,
             active_modules: Vec::new(),
             pending_module_reloads: Vec::new(),
+            pending_pkg_commands: Vec::new(),
         }
     }
 
@@ -2006,10 +2025,19 @@ impl Editor {
         if self.active_modules.is_empty() {
             lines.push("No modules loaded.".to_string());
         } else {
-            lines.push(format!("{:<25} {:<12} {}", "Module", "Version", "Status"));
-            lines.push(format!("{:<25} {:<12} {}", "------", "-------", "------"));
-            for (name, version, status) in &self.active_modules {
-                lines.push(format!("{:<25} {:<12} {}", name, version, status));
+            lines.push(format!(
+                "{:<25} {:<12} {:<10} {}",
+                "Module", "Version", "Status", "Category"
+            ));
+            lines.push(format!(
+                "{:<25} {:<12} {:<10} {}",
+                "------", "-------", "------", "--------"
+            ));
+            for m in &self.active_modules {
+                lines.push(format!(
+                    "{:<25} {:<12} {:<10} {}",
+                    m.name, m.version, m.status, m.category
+                ));
             }
             lines.push(String::new());
             lines.push(format!("Total: {} modules", self.active_modules.len()));
@@ -2018,6 +2046,67 @@ impl Editor {
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();
         buf.name = "*Modules*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
+    pub fn show_kb_health_report(&mut self) {
+        let report = self.kb.health_report();
+        let mut lines = Vec::new();
+        lines.push("KB Health Report".to_string());
+        lines.push("================".to_string());
+        lines.push(String::new());
+        lines.push(format!("Total nodes: {}", report.total_nodes));
+        lines.push(format!("Total links: {}", report.total_links));
+        if report.total_nodes > 0 {
+            lines.push(format!(
+                "Avg links/node: {:.1}",
+                report.total_links as f64 / report.total_nodes as f64
+            ));
+        }
+        lines.push(String::new());
+
+        // Namespace counts.
+        lines.push("Namespace Counts".to_string());
+        lines.push("----------------".to_string());
+        let mut ns: Vec<_> = report.namespace_counts.iter().collect();
+        ns.sort_by(|a, b| b.1.cmp(a.1));
+        for (name, count) in &ns {
+            lines.push(format!("  {:<20} {}", name, count));
+        }
+        lines.push(String::new());
+
+        // Orphan nodes.
+        lines.push(format!("Orphan Nodes ({})", report.orphan_ids.len()));
+        lines.push("------------".to_string());
+        if report.orphan_ids.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for id in &report.orphan_ids {
+                lines.push(format!("  {}", id));
+            }
+        }
+        lines.push(String::new());
+
+        // Broken links.
+        lines.push(format!("Broken Links ({})", report.broken_links.len()));
+        lines.push("------------".to_string());
+        if report.broken_links.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for (src, target) in &report.broken_links {
+                lines.push(format!("  {} → {}", src, target));
+            }
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*KB Health*".to_string();
         buf.replace_contents(&content);
         buf.modified = false;
         buf.read_only = true;
@@ -2648,14 +2737,18 @@ impl Editor {
         }
     }
 
-    /// Sync the rope of the first buffer containing a conversation.
+    /// Sync the rope of the first conversation buffer.
+    /// Only escalates to `Full` redraw when the rope content actually changed,
+    /// avoiding unnecessary syntax recomputation on no-op AI events.
     pub fn sync_conversation_buffer_rope(&mut self) {
         if let Some(buf) = self
             .buffers
             .iter_mut()
             .find(|b| b.kind == crate::buffer::BufferKind::Conversation)
         {
-            buf.sync_conversation_rope();
+            if buf.sync_conversation_rope() {
+                self.mark_full_redraw();
+            }
         }
     }
 
@@ -3869,22 +3962,6 @@ impl Editor {
         let kind = self.buffers[buf_idx].kind;
 
         match kind {
-            crate::BufferKind::Conversation => {
-                // Conversation buffers use win.scroll_offset (rope line index)
-                // via the standard FrameLayout pipeline.
-                let total = self.buffers[buf_idx].display_line_count();
-                let vh = self.focused_viewport_height();
-                let amount = lines * scroll_speed;
-                let win = self.window_mgr.focused_window_mut();
-                if delta > 0 {
-                    win.scroll_offset = win.scroll_offset.saturating_sub(amount);
-                } else {
-                    let max = total.saturating_sub(vh);
-                    win.scroll_offset = (win.scroll_offset + amount).min(max);
-                }
-                win.scroll_locked = true;
-                win.scroll_locked_cursor = win.cursor_row;
-            }
             crate::BufferKind::Shell => {
                 let amount = if delta > 0 {
                     lines as i32 * scroll_speed as i32
@@ -4047,9 +4124,7 @@ impl Editor {
 
         // Non-text buffers: accumulate fractional lines, emit when threshold crossed.
         match kind {
-            crate::BufferKind::Shell
-            | crate::BufferKind::Conversation
-            | crate::BufferKind::Messages => {
+            crate::BufferKind::Shell | crate::BufferKind::Messages => {
                 let cell_h = self.gui_cell_height;
                 if cell_h <= 0.0 {
                     return false;

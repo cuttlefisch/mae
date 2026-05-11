@@ -31,7 +31,22 @@ impl Editor {
                 }
             }
             "close-window" => {
-                if self
+                let focused = self.window_mgr.focused_id();
+                if self.window_mgr.is_in_group(focused) {
+                    // Group-aware close: close all members of the group
+                    let buf_indices = self.window_mgr.close_group(focused);
+                    if buf_indices.is_empty() {
+                        self.set_status("Cannot close last window");
+                    }
+                    // Clear conversation pair if we closed its windows
+                    if let Some(ref pair) = self.conversation_pair {
+                        if buf_indices.contains(&pair.output_buffer_idx)
+                            || buf_indices.contains(&pair.input_buffer_idx)
+                        {
+                            self.conversation_pair = None;
+                        }
+                    }
+                } else if self
                     .window_mgr
                     .close(self.window_mgr.focused_id())
                     .is_none()

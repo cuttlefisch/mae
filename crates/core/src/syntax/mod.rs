@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn markdown_produces_spans() {
-        let src = "# Heading\n\nSome ```code``` and `inline` and [a link](https://example.com).\n\n```rust\nfn main() {}\n```\n";
+        let src = "# Heading\n\nSome ```code``` and `inline` and [a link](https://mae.invalid).\n\n```rust\nfn main() {}\n```\n";
         let spans = languages::compute_spans(Language::Markdown, src);
         assert!(
             spans.iter().any(|s| s.theme_key == "markup.heading"),
@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn org_highlighter_detects_structure() {
-        let src = "#+TITLE: Notes\n* TODO Write docs :urgent:\n** Details\n- item 1\n- [[https://example.com][example]]\n*bold* and /italic/ and ~code~ and =verbatim=\n<2026-04-16 Thu>\n";
+        let src = "#+TITLE: Notes\n* TODO Write docs :urgent:\n** Details\n- item 1\n- [[https://mae.invalid][example]]\n*bold* and /italic/ and ~code~ and =verbatim=\n<2026-04-16 Thu>\n";
         let spans = languages::compute_spans(Language::Org, src);
         assert!(spans.iter().any(|s| s.theme_key == "markup.heading"));
         assert!(

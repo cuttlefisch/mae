@@ -162,6 +162,26 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
+pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
+    let report = editor.kb.health_report();
+    let broken: Vec<serde_json::Value> = report
+        .broken_links
+        .iter()
+        .map(|(src, dst)| serde_json::json!({"source": src, "target": dst}))
+        .collect();
+    let out = serde_json::json!({
+        "total_nodes": report.total_nodes,
+        "total_links": report.total_links,
+        "avg_links_per_node": if report.total_nodes > 0 {
+            (report.total_links as f64) / (report.total_nodes as f64)
+        } else { 0.0 },
+        "orphan_nodes": report.orphan_ids,
+        "broken_links": broken,
+        "namespace_counts": report.namespace_counts,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +355,45 @@ mod tests {
             execute_kb_graph(&editor, &serde_json::json!({"id": "index", "depth": 99})).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["depth"], 3);
+    }
+
+    #[test]
+    fn kb_health_returns_json() {
+        let editor = Editor::new();
+        let result = execute_kb_health(&editor).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(v["total_nodes"].as_u64().unwrap() > 0);
+        assert!(v["total_links"].as_u64().unwrap() > 0);
+        assert!(v["namespace_counts"].is_object());
+        assert!(v["orphan_nodes"].is_array());
+        assert!(v["broken_links"].is_array());
+        assert!(v["avg_links_per_node"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn seed_nodes_broken_links_are_only_cmd_refs() {
+        // Concept nodes reference `cmd:*` and other nodes that are only
+        // created at runtime from CommandRegistry. Only non-cmd broken
+        // links indicate a real problem in seed data.
+        let editor = Editor::new();
+        let report = editor.kb.health_report();
+        let non_cmd: Vec<_> = report
+            .broken_links
+            .iter()
+            .filter(|(_, target)| !target.starts_with("cmd:"))
+            .collect();
+        // A few known false positives: "link" from org-mode example,
+        // "other-node" from KB concept example, "target][label" from
+        // option:link_descriptive markup example.
+        let known_false = ["link", "other-node", "target][label"];
+        let real_broken: Vec<_> = non_cmd
+            .iter()
+            .filter(|(_, target)| !known_false.contains(&target.as_str()))
+            .collect();
+        assert!(
+            real_broken.is_empty(),
+            "unexpected broken links in seed KB: {:?}",
+            real_broken
+        );
     }
 }

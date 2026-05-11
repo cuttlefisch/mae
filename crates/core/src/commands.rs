@@ -926,6 +926,10 @@ impl CommandRegistry {
             "Show a configuration health report (AI, LSP, DAP status)",
         );
         reg.register_builtin(
+            "kb-health",
+            "Show KB health report (orphans, broken links, namespace counts)",
+        );
+        reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
         );
@@ -1095,6 +1099,14 @@ impl CommandRegistry {
         reg.register_builtin(
             "shell-scroll-to-bottom",
             "Scroll shell terminal to latest output",
+        );
+        reg.register_builtin(
+            "shell-select-mode",
+            "Copy mode — snapshot shell output for selection (SPC y)",
+        );
+        reg.register_builtin(
+            "close-shell-select",
+            "Close the shell-select buffer and return to the shell",
         );
 
         // Ex-command parity: commands that were only inline in execute_command()

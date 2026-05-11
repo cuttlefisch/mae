@@ -80,7 +80,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "syntax_tree"
         | "switch_project"
         | "toggle_file_tree"
-        | "audit_configuration" => ToolTier::Core,
+        | "audit_configuration"
+        | "list_modules" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }

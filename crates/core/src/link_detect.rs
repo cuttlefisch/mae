@@ -372,9 +372,9 @@ mod tests {
 
     #[test]
     fn detect_urls_in_text() {
-        let links = detect_links("See https://example.com/foo for details.");
+        let links = detect_links("See https://mae.invalid/foo for details.");
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "https://example.com/foo");
+        assert_eq!(links[0].target, "https://mae.invalid/foo");
         assert_eq!(links[0].byte_start, 4);
     }
 
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn link_span_covers_label_text() {
-        let text = "[Click here](https://example.com)";
+        let text = "[Click here](https://mae.invalid)";
         let links = detect_markdown_links(text);
         assert_eq!(links.len(), 1);
         assert_eq!(&text[links[0].byte_start..links[0].byte_end], text);
@@ -435,8 +435,8 @@ mod tests {
 
     #[test]
     fn url_strips_trailing_punctuation() {
-        let links = detect_links("Visit https://example.com. Done.");
-        assert_eq!(links[0].target, "https://example.com");
+        let links = detect_links("Visit https://mae.invalid. Done.");
+        assert_eq!(links[0].target, "https://mae.invalid");
     }
 
     #[test]
@@ -505,10 +505,10 @@ mod tests {
 
     #[test]
     fn render_segments_plain_url() {
-        let segs = render_segments("Visit https://example.com for info");
+        let segs = render_segments("Visit https://mae.invalid for info");
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].text, "Visit ");
-        assert_eq!(segs[1].text, "https://example.com");
+        assert_eq!(segs[1].text, "https://mae.invalid");
         assert!(segs[1].link_target.is_some());
         assert_eq!(segs[2].text, " for info");
     }

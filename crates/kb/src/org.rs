@@ -447,7 +447,7 @@ mod tests {
 #+filetags: :foo:bar:
 
 Body with [[id:def-456][Another]] and [[id:ghi-789]] and
-a regular [[https://example.com][link]] that we keep.
+a regular [[https://mae.invalid][link]] that we keep.
 ";
 
     #[test]
@@ -466,8 +466,8 @@ a regular [[https://example.com][link]] that we keep.
         assert!(node.body.contains("[[ghi-789]]"));
         // External links are rewritten to "display (url)" so they don't
         // collide with our internal [[target]] scanner.
-        assert!(node.body.contains("link (https://example.com)"));
-        assert!(!node.body.contains("[[https://example.com"));
+        assert!(node.body.contains("link (https://mae.invalid)"));
+        assert!(!node.body.contains("[[https://mae.invalid"));
         // Outgoing links should be only the id-refs.
         assert_eq!(node.links(), vec!["def-456", "ghi-789"]);
     }

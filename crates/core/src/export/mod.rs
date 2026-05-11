@@ -790,17 +790,17 @@ mod tests {
     #[test]
     fn inline_link_html() {
         let result =
-            convert_inline_markup_str("see [[https://example.com][Example]]", InlineTarget::Html);
-        assert!(result.contains("<a href=\"https://example.com\">Example</a>"));
+            convert_inline_markup_str("see [[https://mae.invalid][Example]]", InlineTarget::Html);
+        assert!(result.contains("<a href=\"https://mae.invalid\">Example</a>"));
     }
 
     #[test]
     fn inline_link_markdown() {
         let result = convert_inline_markup_str(
-            "see [[https://example.com][Example]]",
+            "see [[https://mae.invalid][Example]]",
             InlineTarget::Markdown,
         );
-        assert!(result.contains("[Example](https://example.com)"));
+        assert!(result.contains("[Example](https://mae.invalid)"));
     }
 
     #[test]

@@ -491,10 +491,10 @@ fn open_link_at_cursor_no_link() {
 #[test]
 fn open_link_at_cursor_detects_url() {
     let mut ed = Editor::new();
-    ed.buffers[0].insert_text_at(0, "visit https://example.com for info");
+    ed.buffers[0].insert_text_at(0, "visit https://mae.invalid for info");
     // Move cursor to the URL
     let win = ed.window_mgr.focused_window_mut();
-    win.cursor_col = 10; // within "https://example.com"
+    win.cursor_col = 10; // within "https://mae.invalid"
     ed.dispatch_builtin("open-link-at-cursor");
     // URL opens externally, status shows "Opening ..."
     assert!(ed.status_msg.contains("Opening"));
@@ -955,7 +955,7 @@ fn get_new_options() {
 fn edit_link_opens_mini_dialog() {
     let mut editor = Editor::new();
     let idx = editor.active_buffer_idx();
-    editor.buffers[idx].replace_rope(ropey::Rope::from_str("[Click here](http://example.com)\n"));
+    editor.buffers[idx].replace_rope(ropey::Rope::from_str("[Click here](http://mae.invalid)\n"));
     editor.buffers[idx].set_file_path(std::path::PathBuf::from("test.md"));
     editor.buffers[idx].local_options.link_descriptive = Some(true);
     editor.buffers[idx].recompute_display_regions(true);
@@ -967,7 +967,7 @@ fn edit_link_opens_mini_dialog() {
     let dialog = editor.mini_dialog.as_ref().unwrap();
     assert_eq!(dialog.fields.len(), 2);
     assert_eq!(dialog.fields[0].label, "URL");
-    assert_eq!(dialog.fields[0].value, "http://example.com");
+    assert_eq!(dialog.fields[0].value, "http://mae.invalid");
     assert_eq!(dialog.fields[1].label, "Label");
     assert_eq!(dialog.fields[1].value, "Click here");
 }

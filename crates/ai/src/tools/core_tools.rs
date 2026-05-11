@@ -1200,5 +1200,46 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Module tools ---
+        ToolDefinition {
+            name: "list_modules".into(),
+            description: "List all active modules with full details (name, version, status, category, description, commands, options, flags, path). MAE has a Doom-style module system — use this to discover available modules.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "pkg_sync".into(),
+            description: "Synchronize packages — clone missing modules and update lockfile. Equivalent to `mae pkg sync`. Requires restart to apply.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "pkg_upgrade".into(),
+            description: "Upgrade all packages to latest versions. Equivalent to `mae pkg upgrade`. Requires restart to apply.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "pkg_doctor".into(),
+            description: "Run package health checks — verify lockfile integrity, detect missing modules, check for version conflicts. Equivalent to `mae pkg doctor`.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }

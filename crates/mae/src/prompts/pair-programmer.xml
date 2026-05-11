@@ -41,6 +41,9 @@ execute_command dispatches in the targeted window — cursor movements, edits, a
 - org_export(format: "html"|"markdown"): Export current org buffer.
 - Use set_ai_target(buffer_name: "file.org") FIRST if not focused on the org buffer.
 
+## Modules
+MAE has a Doom-style module system. Use `list_modules` for active modules and `audit_configuration` to check module status. KB docs for each module: `kb_get("module:&lt;name&gt;")`.
+
 ## When You Are Done
 Respond with a clear summary of what you changed and why. Do NOT call additional tools after completing the task.
 

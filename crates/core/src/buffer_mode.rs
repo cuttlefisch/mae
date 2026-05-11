@@ -72,6 +72,7 @@ impl BufferMode for BufferKind {
             Self::Diff => "Diff",
             Self::Agenda => "Agenda",
             Self::Demo => "Demo",
+            Self::ShellSelect => "Shell Select",
         }
     }
 
@@ -82,6 +83,8 @@ impl BufferMode for BufferKind {
             Self::Help => Some("help"),
             Self::Debug => Some("debug"),
             Self::Agenda => Some("agenda"),
+            Self::Shell => Some("shell-normal"),
+            Self::ShellSelect => Some("shell-select"),
             _ => None,
         }
     }
@@ -99,6 +102,7 @@ impl BufferMode for BufferKind {
             Self::Debug => Some("Press ? for key help"),
             Self::FileTree => Some("Press ? for key help"),
             Self::Agenda => Some("Enter: goto  q: close  r: refresh  /: filter"),
+            Self::ShellSelect => Some("v to select, y to yank, q/Esc to exit, ? for help"),
             _ => None,
         }
     }
@@ -134,6 +138,7 @@ impl BufferMode for BufferKind {
                 | Self::GitStatus
                 | Self::FileTree
                 | Self::Shell
+                | Self::ShellSelect
                 | Self::Diff
                 | Self::Agenda
         )
@@ -169,6 +174,8 @@ mod tests {
         assert_eq!(BufferKind::FileTree.keymap_name(), Some("file-tree"));
         assert_eq!(BufferKind::Help.keymap_name(), Some("help"));
         assert_eq!(BufferKind::Debug.keymap_name(), Some("debug"));
+        assert_eq!(BufferKind::Shell.keymap_name(), Some("shell-normal"));
+        assert_eq!(BufferKind::ShellSelect.keymap_name(), Some("shell-select"));
         assert_eq!(BufferKind::Text.keymap_name(), None);
         assert_eq!(BufferKind::Conversation.keymap_name(), None);
     }

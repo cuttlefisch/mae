@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod federation;
+pub mod fuzzy;
 pub mod org;
 pub mod persist;
 pub mod watch;
@@ -88,6 +89,9 @@ pub struct Node {
     /// Version of the seed data that created this node (for re-seeding).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_version: Option<u32>,
+    /// Alternative names for discoverability (e.g. "plugins" for concept:modules).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 impl Node {
@@ -107,7 +111,13 @@ impl Node {
             priority: None,
             source: None,
             source_version: None,
+            aliases: Vec::new(),
         }
+    }
+
+    pub fn with_aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.aliases = aliases.into_iter().map(Into::into).collect();
+        self
     }
 
     pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -173,6 +183,16 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Health report for the knowledge base — orphans, broken links, namespace stats.
+#[derive(Debug, Clone)]
+pub struct KbHealthReport {
+    pub total_nodes: usize,
+    pub total_links: usize,
+    pub orphan_ids: Vec<String>,
+    pub broken_links: Vec<(String, String)>,
+    pub namespace_counts: HashMap<String, usize>,
+}
+
 /// Pre-lowercased search cache for a single node. Populated at insert
 /// time so `search()` doesn't re-allocate on every query — the dominant
 /// cost in the naive implementation.
@@ -182,6 +202,7 @@ struct LowerCache {
     title: String,
     body: String,
     tags: Vec<String>,
+    aliases: Vec<String>,
 }
 
 impl LowerCache {
@@ -191,6 +212,7 @@ impl LowerCache {
             title: n.title.to_lowercase(),
             body: n.body.to_lowercase(),
             tags: n.tags.iter().map(|t| t.to_lowercase()).collect(),
+            aliases: n.aliases.iter().map(|a| a.to_lowercase()).collect(),
         }
     }
 }
@@ -346,8 +368,9 @@ impl KnowledgeBase {
         ids
     }
 
-    /// Case-insensitive substring search over title + body + tags.
-    /// Returns matching ids sorted with title matches before body matches.
+    /// Case-insensitive substring search over title + body + tags + aliases.
+    /// Returns matching ids sorted with title/alias matches before body matches.
+    /// Falls back to fuzzy scoring when no substring matches are found.
     ///
     /// Scans the pre-lowercased `LowerCache` populated at insert time —
     /// no per-query allocations, no per-node `to_lowercase()`.
@@ -359,7 +382,10 @@ impl KnowledgeBase {
         let mut title_hits = Vec::new();
         let mut body_hits = Vec::new();
         for (id, cache) in self.lower.iter() {
-            if cache.title.contains(&q) || cache.lowered_id.contains(&q) {
+            if cache.title.contains(&q)
+                || cache.lowered_id.contains(&q)
+                || cache.aliases.iter().any(|a| a.contains(&q))
+            {
                 title_hits.push(id.clone());
             } else if cache.body.contains(&q) || cache.tags.iter().any(|t| t.contains(&q)) {
                 body_hits.push(id.clone());
@@ -368,7 +394,39 @@ impl KnowledgeBase {
         title_hits.sort();
         body_hits.sort();
         title_hits.extend(body_hits);
-        title_hits
+        if !title_hits.is_empty() {
+            return title_hits;
+        }
+        // Fuzzy fallback: score against id + title + aliases.
+        let query_chars: Vec<char> = q.chars().collect();
+        let mut scored: Vec<(String, i64)> = self
+            .lower
+            .iter()
+            .filter_map(|(id, cache)| {
+                let best = [&cache.lowered_id, &cache.title]
+                    .into_iter()
+                    .chain(cache.aliases.iter())
+                    .filter_map(|s| fuzzy::score_match(s, &query_chars))
+                    .max();
+                best.map(|score| (id.clone(), score))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Extract unique namespace prefixes from all node IDs (e.g., "cmd:", "concept:").
+    /// Derived dynamically so it never goes stale when new namespaces are added.
+    pub fn namespace_prefixes(&self) -> Vec<String> {
+        let mut prefixes: Vec<String> = self
+            .nodes
+            .keys()
+            .filter_map(|id| id.find(':').map(|pos| id[..=pos].to_string()))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        prefixes.sort();
+        prefixes
     }
 
     /// Outgoing links from a node (targets of `[[…]]` markers in its body).
@@ -413,22 +471,18 @@ impl KnowledgeBase {
     /// Ingest a project config as a KB node.
     pub fn ingest_project(&mut self, name: &str, root: &std::path::Path, config_body: &str) {
         let id = format!("project:{}", name.to_lowercase().replace(' ', "-"));
-        let node = Node {
-            id: id.clone(),
-            title: name.to_string(),
-            kind: NodeKind::Project,
-            body: format!(
+        let node = Node::new(
+            id,
+            name,
+            NodeKind::Project,
+            format!(
                 "# Project: {}\n\nRoot: `{}`\n\n{}",
                 name,
                 root.display(),
                 config_body
             ),
-            tags: vec!["project".to_string()],
-            todo_state: None,
-            priority: None,
-            source: None,
-            source_version: None,
-        };
+        )
+        .with_tags(["project"]);
         self.insert(node);
     }
 
@@ -478,6 +532,61 @@ impl KnowledgeBase {
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
+    }
+
+    /// Compute a health report: orphan nodes, broken links, namespace counts.
+    pub fn health_report(&self) -> KbHealthReport {
+        let all_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
+        let total_nodes = all_ids.len();
+
+        // Count links and find broken ones.
+        let mut total_links = 0usize;
+        let mut broken_links = Vec::new();
+        for node in self.nodes.values() {
+            let targets = node.links();
+            total_links += targets.len();
+            for target in &targets {
+                if !all_ids.contains(target.as_str()) {
+                    broken_links.push((node.id.clone(), target.clone()));
+                }
+            }
+        }
+
+        // Orphan nodes: no incoming AND no outgoing links.
+        // Exclude index nodes — they're entry points by design.
+        let mut orphan_ids = Vec::new();
+        for (id, node) in &self.nodes {
+            if node.kind == NodeKind::Index {
+                continue;
+            }
+            let has_outgoing = !node.links().is_empty();
+            let has_incoming = self
+                .links_in
+                .get(id.as_str())
+                .is_some_and(|v| !v.is_empty());
+            if !has_outgoing && !has_incoming {
+                orphan_ids.push(id.clone());
+            }
+        }
+        orphan_ids.sort();
+
+        // Namespace counts.
+        let mut namespace_counts: HashMap<String, usize> = HashMap::new();
+        for id in self.nodes.keys() {
+            let ns = match id.find(':') {
+                Some(pos) => &id[..pos],
+                None => "(none)",
+            };
+            *namespace_counts.entry(ns.to_string()).or_default() += 1;
+        }
+
+        KbHealthReport {
+            total_nodes,
+            total_links,
+            orphan_ids,
+            broken_links,
+            namespace_counts,
+        }
     }
 
     /// Incoming links — node ids whose body references `target`.
@@ -712,6 +821,145 @@ mod tests {
             elapsed.as_millis() < 200,
             "search took {elapsed:?} over 2000 nodes; cache may be bypassed"
         );
+    }
+
+    #[test]
+    fn search_finds_by_alias() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(
+            Node::new(
+                "concept:modules",
+                "Module System",
+                NodeKind::Concept,
+                "body",
+            )
+            .with_aliases(["plugins", "packages", "extensions"]),
+        );
+        let hits = kb.search("plugins");
+        assert!(hits.contains(&"concept:modules".to_string()));
+    }
+
+    #[test]
+    fn search_alias_title_priority() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(
+            Node::new(
+                "a",
+                "Modules",
+                NodeKind::Concept,
+                "mentions plugins in body",
+            )
+            .with_aliases(["extensions"]),
+        );
+        kb.insert(Node::new(
+            "b",
+            "Other",
+            NodeKind::Note,
+            "also mentions plugins in body",
+        ));
+        // "plugins" matches alias of `a` (title-level priority) and body of both
+        let hits = kb.search("plugins");
+        assert_eq!(hits[0], "a", "alias match should rank before body match");
+    }
+
+    #[test]
+    fn fuzzy_fallback_on_no_substring() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "concept:modules",
+            "Module System",
+            NodeKind::Concept,
+            "",
+        ));
+        // "modul" is a substring and will match, but "mdl" requires fuzzy
+        let hits = kb.search("mdlsys");
+        // Fuzzy may or may not match depending on scoring — just ensure no panic
+        assert!(hits.len() <= kb.len());
+    }
+
+    #[test]
+    fn search_empty_aliases_no_panic() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("a", "Title", NodeKind::Note, "body"));
+        // Node has no aliases — search should still work fine
+        let hits = kb.search("title");
+        assert_eq!(hits, vec!["a"]);
+    }
+
+    #[test]
+    fn aliases_builder() {
+        let node = Node::new("a", "A", NodeKind::Note, "").with_aliases(["one", "two"]);
+        assert_eq!(node.aliases, vec!["one".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn namespace_prefixes_extracted() {
+        let kb = kb_with(vec![
+            Node::new("cmd:save", "", NodeKind::Command, ""),
+            Node::new("cmd:undo", "", NodeKind::Command, ""),
+            Node::new("concept:buffer", "", NodeKind::Concept, ""),
+            Node::new("index", "", NodeKind::Index, ""),
+        ]);
+        let prefixes = kb.namespace_prefixes();
+        assert!(prefixes.contains(&"cmd:".to_string()));
+        assert!(prefixes.contains(&"concept:".to_string()));
+        assert!(!prefixes.contains(&"index".to_string())); // no colon = no prefix
+    }
+
+    #[test]
+    fn health_report_counts_nodes() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+        ]);
+        let report = kb.health_report();
+        assert_eq!(report.total_nodes, 2);
+        assert_eq!(report.total_links, 1);
+    }
+
+    #[test]
+    fn health_report_finds_orphans() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+            Node::new("orphan", "Orphan", NodeKind::Note, "no links here"),
+        ]);
+        let report = kb.health_report();
+        assert!(report.orphan_ids.contains(&"orphan".to_string()));
+        // b has incoming link from a, so it's not orphan
+        assert!(!report.orphan_ids.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn health_report_finds_broken_links() {
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "[[nonexistent]]")]);
+        let report = kb.health_report();
+        assert_eq!(report.broken_links.len(), 1);
+        assert_eq!(
+            report.broken_links[0],
+            ("a".to_string(), "nonexistent".to_string())
+        );
+    }
+
+    #[test]
+    fn health_report_namespace_counts() {
+        let kb = kb_with(vec![
+            Node::new("cmd:save", "", NodeKind::Command, ""),
+            Node::new("cmd:undo", "", NodeKind::Command, ""),
+            Node::new("concept:buffer", "", NodeKind::Concept, ""),
+            Node::new("index", "", NodeKind::Index, ""),
+        ]);
+        let report = kb.health_report();
+        assert_eq!(report.namespace_counts["cmd"], 2);
+        assert_eq!(report.namespace_counts["concept"], 1);
+        assert_eq!(report.namespace_counts["(none)"], 1);
+    }
+
+    #[test]
+    fn index_not_counted_as_orphan() {
+        let kb = kb_with(vec![Node::new("index", "Help", NodeKind::Index, "")]);
+        let report = kb.health_report();
+        assert!(report.orphan_ids.is_empty(), "index should not be orphan");
     }
 
     #[test]

@@ -225,6 +225,97 @@ impl Editor {
             "shell-scroll-to-bottom" => {
                 self.pending_shell_scroll = Some(0);
             }
+            "shell-select-mode" => {
+                let buf_idx = self.active_buffer_idx();
+                if self.buffers[buf_idx].kind != crate::BufferKind::Shell {
+                    self.set_status("Not a shell buffer");
+                } else {
+                    // Read scrollback from cached shell viewport data.
+                    let content = if let Some(viewport) = self.shell_viewports.get(&buf_idx) {
+                        viewport.join("\n")
+                    } else {
+                        String::new()
+                    };
+
+                    if content.is_empty() {
+                        self.set_status("No shell output to select");
+                    } else {
+                        // Reuse an existing *shell-select* buffer or create one.
+                        let existing = self.buffers.iter().position(|b| b.name == "*shell-select*");
+                        let new_idx = if let Some(i) = existing {
+                            self.buffers[i].replace_contents(&content);
+                            self.buffers[i].read_only = true;
+                            self.buffers[i].kind = crate::BufferKind::ShellSelect;
+                            i
+                        } else {
+                            let mut buf = crate::buffer::Buffer::new();
+                            buf.replace_contents(&content);
+                            buf.name = "*shell-select*".into();
+                            buf.kind = crate::BufferKind::ShellSelect;
+                            buf.modified = false;
+                            buf.read_only = true;
+                            self.buffers.push(buf);
+                            self.buffers.len() - 1
+                        };
+
+                        // Record the shell buffer as alternate so close returns to it.
+                        self.alternate_buffer_idx = Some(buf_idx);
+                        self.display_buffer(new_idx);
+                        // Move cursor to end of buffer so user sees most recent output.
+                        let line_count = self.buffers[new_idx].display_line_count();
+                        if line_count > 0 {
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = line_count.saturating_sub(1);
+                        }
+                        self.mark_full_redraw();
+                        self.set_status(
+                            "Shell select mode — use v to select, y to yank, q/Esc to exit",
+                        );
+                    }
+                }
+            }
+            "close-shell-select" => {
+                let select_idx = self
+                    .buffers
+                    .iter()
+                    .position(|b| b.kind == crate::BufferKind::ShellSelect);
+                if let Some(idx) = select_idx {
+                    // Switch to alternate buffer (the shell), or first non-select buffer.
+                    let dest = self
+                        .alternate_buffer_idx
+                        .filter(|&i| i != idx && i < self.buffers.len())
+                        .or_else(|| {
+                            self.buffers
+                                .iter()
+                                .position(|b| b.kind != crate::BufferKind::ShellSelect)
+                        })
+                        .unwrap_or(0);
+                    for win in self.window_mgr.iter_windows_mut() {
+                        if win.buffer_idx == idx {
+                            win.buffer_idx = dest;
+                            win.cursor_row = 0;
+                            win.cursor_col = 0;
+                        }
+                    }
+                    self.buffers.remove(idx);
+                    self.syntax.shift_after_remove(idx);
+                    self.adjust_ai_target_after_remove(idx);
+                    for win in self.window_mgr.iter_windows_mut() {
+                        if win.buffer_idx > idx {
+                            win.buffer_idx -= 1;
+                        }
+                    }
+                    if let Some(alt) = self.alternate_buffer_idx {
+                        self.alternate_buffer_idx = match alt {
+                            i if i == idx => None,
+                            i if i > idx => Some(i - 1),
+                            i => Some(i),
+                        };
+                    }
+                    self.sync_mode_to_buffer();
+                    self.mark_full_redraw();
+                }
+            }
             "send-to-shell" => {
                 self.send_line_to_shell();
             }
@@ -309,6 +400,9 @@ For full setup guide: :help ai-setup";
             }
             "describe-configuration" => {
                 self.show_configuration_report();
+            }
+            "kb-health" => {
+                self.show_kb_health_report();
             }
             "describe-bindings" => {
                 self.show_bindings_report();
@@ -957,7 +1051,7 @@ const DEMO_MARKUP: &str = "\
 
 ** Links
   See [[concept:buffer]] for buffer docs.
-  External: https://example.com
+  External: https://github.com/cuttlefisch/mae
 ";
 
 const DEMO_AGENDA: &str = "\

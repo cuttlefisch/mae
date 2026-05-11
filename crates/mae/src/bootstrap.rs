@@ -395,7 +395,11 @@ pub fn setup_ai(
             .unwrap_or_else(|| mae_ai::context_limits::tier(&model));
         info!(tier = effective_tier.as_str(), "selected prompt tier");
 
-        let mut prompt = build_system_prompt("pair-programmer", effective_tier);
+        let mut prompt = build_system_prompt_with_modules(
+            "pair-programmer",
+            effective_tier,
+            &editor.active_modules,
+        );
 
         // Inject provider-specific hints for non-Claude models
         let provider_hint = mae_ai::context_limits::ProviderHint::from_model(&model);
@@ -436,6 +440,14 @@ pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
 }
 
 pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTier) -> String {
+    build_system_prompt_with_modules(profile, tier, &[])
+}
+
+pub fn build_system_prompt_with_modules(
+    profile: &str,
+    tier: mae_ai::context_limits::ModelTier,
+    modules: &[mae_core::editor::ModuleInfo],
+) -> String {
     let mut prompt = String::new();
 
     // 1. Load the profile-specific base from prioritized locations:
@@ -578,6 +590,16 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
                 }
             }
         }
+        // Inject module context if any are loaded
+        if !modules.is_empty() {
+            prompt.push_str("\n## Modules\n");
+            prompt
+                .push_str("MAE has a Doom-style module system. Use `list_modules` for details.\n");
+            let names: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+            prompt.push_str(&format!("Active: {}\n", names.join(", ")));
+            prompt.push_str("KB docs: `kb_search \"module:\"` or `kb_get \"module:<name>\"`\n");
+        }
+
         prompt.push_str("</context>\n");
     }
 
@@ -711,17 +733,30 @@ pub fn load_modules(
 
     let mut all_modules = Vec::new();
 
-    // Built-in modules (shipped with MAE binary, relative to exe or repo root)
-    let builtin_dirs = [
+    // Built-in modules — search multiple locations so both dev builds
+    // (run from repo root) and installed binaries work.
+    let mut builtin_dirs = vec![
+        // 1. CWD/modules (dev: `cargo run` from repo root)
         PathBuf::from("modules"),
-        // Also check next to the executable
+        // 2. Next to the executable (installed: ~/.local/bin/../share/mae/modules)
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|d| d.join("modules")))
             .unwrap_or_default(),
     ];
+    // 3. XDG data dir: ~/.local/share/mae/modules (installed modules)
+    if let Some(data) = dirs_candidate("mae/modules") {
+        builtin_dirs.push(data);
+    }
+    // 4. Compile-time CARGO_MANIFEST_DIR (dev builds only)
+    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("modules"))
+        .unwrap_or_default();
+    builtin_dirs.push(manifest_modules);
     for dir in &builtin_dirs {
-        if dir.exists() {
+        if dir.exists() && all_modules.is_empty() {
             all_modules.extend(discover_modules(dir));
         }
     }
@@ -779,7 +814,7 @@ pub fn load_modules(
         }
     }
 
-    // Populate editor's active_modules for :describe-module
+    // Populate editor's active_modules for :describe-module, list_modules, audit
     editor.active_modules = registry
         .list()
         .iter()
@@ -790,7 +825,22 @@ pub fn load_modules(
                 crate::pkg::loader::ModuleStatus::Disabled => "disabled".to_string(),
                 crate::pkg::loader::ModuleStatus::Discovered => "discovered".to_string(),
             };
-            (m.name.clone(), m.version.clone(), status)
+            mae_core::editor::ModuleInfo {
+                name: m.name.clone(),
+                version: m.version.clone(),
+                status,
+                category: m.manifest.module.category.clone(),
+                description: m.manifest.module.description.clone(),
+                commands: m.commands.clone(),
+                options: m.options.clone(),
+                flags: m
+                    .manifest
+                    .flags
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.doc.clone()))
+                    .collect(),
+                path: m.path.display().to_string(),
+            }
         })
         .collect();
 
@@ -859,9 +909,16 @@ pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor
 
     // Find the module in known locations
     let mut found = None;
+    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("modules"))
+        .unwrap_or_default();
     let search_dirs = [
         std::path::PathBuf::from("modules"),
+        dirs_candidate("mae/modules").unwrap_or_default(),
         dirs_candidate("mae/packages").unwrap_or_default(),
+        manifest_modules,
     ];
     for dir in &search_dirs {
         if !dir.exists() {

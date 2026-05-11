@@ -29,7 +29,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_search".into(),
-            description: "Case-insensitive substring search over KB node titles, ids, bodies, and tags. Returns ids in relevance order (title/id matches before body matches). Empty query returns all ids.".into(),
+            description: "Case-insensitive search over KB node titles, ids, bodies, tags, and aliases. Returns ids in relevance order (title/id/alias matches before body matches). Falls back to fuzzy scoring when no substring matches are found. Empty query returns all ids.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([(
@@ -183,6 +183,16 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                 required: vec!["format".into()],
             },
             permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "kb_health".into(),
+            description: "Compute KB health report: orphan nodes (no links in or out), broken links (references to missing nodes), namespace counts, total stats.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
         },
         // --- KB federation tools ---
         ToolDefinition {

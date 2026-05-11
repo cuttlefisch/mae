@@ -653,6 +653,23 @@ impl Editor {
         maps.insert("visual".to_string(), visual);
         maps.insert("command".to_string(), Keymap::new("command"));
         maps.insert("shell-insert".to_string(), shell_insert);
+
+        // Shell-normal keymap: inherits normal mode, adds shell-specific bindings.
+        // `i` is inherited from parent `normal` (→ enter-insert-mode → ShellInsert).
+        let mut shell_normal = Keymap::with_parent("shell-normal", "normal");
+        shell_normal.bind(parse_key_seq("v"), "shell-select-mode");
+        shell_normal.bind(parse_key_seq("q"), "enter-insert-mode");
+        shell_normal.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("shell-normal".to_string(), shell_normal);
+
+        // Shell-select keymap: read-only vim buffer for shell scrollback.
+        // Inherits normal mode for motions; q/Esc exit back to the shell.
+        let mut shell_select = Keymap::with_parent("shell-select", "normal");
+        shell_select.bind(parse_key_seq("q"), "close-shell-select");
+        shell_select.bind(vec![KeyPress::special(Key::Escape)], "close-shell-select");
+        shell_select.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("shell-select".to_string(), shell_select);
+
         maps.insert("git-status".to_string(), git_status);
         maps.insert("org".to_string(), org);
 

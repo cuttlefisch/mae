@@ -24,6 +24,7 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
         "viewport_height": editor.viewport_height,
         "text_area_width": editor.text_area_width,
         "scrolloff": editor.scrolloff,
+        "modules": editor.active_modules.iter().map(|m| &m.name).collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
@@ -910,6 +911,20 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
     })
     .collect();
 
+    // Modules
+    let modules_json: Vec<serde_json::Value> = editor
+        .active_modules
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "version": m.version,
+                "status": m.status,
+                "category": m.category,
+            })
+        })
+        .collect();
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -925,12 +940,58 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "lsp_servers": lsp_json,
         "dap_adapters": dap_json,
         "init_files": init_files,
+        "modules": modules_json,
         "options_modified": options_modified,
         "display_policy": display_policy,
         "issues": issues,
     });
 
     serde_json::to_string_pretty(&report).map_err(|e| e.to_string())
+}
+
+pub fn execute_list_modules(editor: &Editor) -> Result<String, String> {
+    let modules: Vec<serde_json::Value> = editor
+        .active_modules
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "version": m.version,
+                "status": m.status,
+                "category": m.category,
+                "description": m.description,
+                "commands": m.commands,
+                "options": m.options,
+                "flags": m.flags.iter().map(|(k, v)| serde_json::json!({"name": k, "doc": v})).collect::<Vec<_>>(),
+                "path": m.path,
+            })
+        })
+        .collect();
+    if modules.is_empty() {
+        Ok("{\"modules\": [], \"count\": 0}".into())
+    } else {
+        let result = serde_json::json!({
+            "modules": modules,
+            "count": modules.len(),
+        });
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+    }
+}
+
+pub fn execute_pkg_command(editor: &mut Editor, command: &str) -> Result<String, String> {
+    // Package management runs git commands — queue as a pending operation.
+    // The binary crate drains these in the event loop where async I/O is available.
+    let action = match command {
+        "pkg_sync" => "sync",
+        "pkg_upgrade" => "upgrade",
+        "pkg_doctor" => "doctor",
+        _ => return Err(format!("Unknown pkg command: {}", command)),
+    };
+    editor.pending_pkg_commands.push(action.to_string());
+    Ok(format!(
+        "Package {} queued — restart to apply changes",
+        action
+    ))
 }
 
 #[cfg(test)]
@@ -976,5 +1037,77 @@ mod tests {
             ToolTier::Core,
             "audit_configuration should be Core tier"
         );
+    }
+
+    #[test]
+    fn audit_configuration_includes_modules() {
+        let mut editor = Editor::new();
+        editor.active_modules.push(mae_core::editor::ModuleInfo {
+            name: "test-mod".into(),
+            version: "0.1.0".into(),
+            status: "loaded".into(),
+            category: "editor".into(),
+            ..Default::default()
+        });
+        let result = execute_audit_configuration(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let modules = json["modules"].as_array().unwrap();
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0]["name"], "test-mod");
+        assert_eq!(modules[0]["status"], "loaded");
+    }
+
+    #[test]
+    fn editor_state_includes_modules() {
+        let mut editor = Editor::new();
+        editor.active_modules.push(mae_core::editor::ModuleInfo {
+            name: "surround".into(),
+            ..Default::default()
+        });
+        let result = execute_editor_state(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let mods = json["modules"].as_array().unwrap();
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0], "surround");
+    }
+
+    #[test]
+    fn list_modules_returns_structured_json() {
+        let mut editor = Editor::new();
+        editor.active_modules.push(mae_core::editor::ModuleInfo {
+            name: "dashboard".into(),
+            version: "0.2.0".into(),
+            status: "loaded".into(),
+            category: "ui".into(),
+            description: "Startup dashboard".into(),
+            commands: vec!["dashboard".into()],
+            ..Default::default()
+        });
+        let result = execute_list_modules(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["count"], 1);
+        let m = &json["modules"][0];
+        assert_eq!(m["name"], "dashboard");
+        assert_eq!(m["category"], "ui");
+        assert!(!m["commands"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_modules_empty_when_no_modules() {
+        let editor = Editor::new();
+        let result = execute_list_modules(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["count"], 0);
+        assert!(json["modules"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn pkg_tools_are_extended_tier() {
+        use crate::tools::{classify_tool_tier, ToolTier};
+        // pkg_sync and pkg_upgrade require Shell permission (set in tool definition)
+        // but are Extended in the tool-tier classification
+        assert_eq!(classify_tool_tier("pkg_sync"), ToolTier::Extended);
+        assert_eq!(classify_tool_tier("pkg_upgrade"), ToolTier::Extended);
+        assert_eq!(classify_tool_tier("pkg_doctor"), ToolTier::Extended);
     }
 }

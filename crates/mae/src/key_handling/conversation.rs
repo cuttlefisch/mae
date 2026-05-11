@@ -61,8 +61,13 @@ pub fn scroll_output_to_bottom(editor: &mut Editor) {
             );
 
             if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
-                win.cursor_row = total_lines.saturating_sub(1);
-                win.scroll_offset = total_lines.saturating_sub(output_vh);
+                let last_line = total_lines.saturating_sub(1);
+                win.cursor_row = last_line;
+                // Set scroll_offset intentionally high — the render cycle's
+                // ensure_scroll_wrapped_with_margin() will clamp it correctly,
+                // accounting for word-wrapped visual rows.
+                win.scroll_offset = last_line;
+                win.scroll_pixel_offset = 0.0;
             }
         }
         // Also reset conversation scroll to bottom.
@@ -401,17 +406,17 @@ mod tests {
         let total = editor.buffers[pair.output_buffer_idx].display_line_count();
         let win = editor.window_mgr.window(pair.output_window_id).unwrap();
 
-        // If the old bug were present (using viewport_height=5), scroll_offset
-        // would be total-5, leaving only 5 lines visible. With the real output
-        // window height (~18+ rows from the split), many more lines should be visible.
-        let visible_lines = total - win.scroll_offset;
+        // scroll_output_to_bottom sets cursor_row and scroll_offset to last_line.
+        // The render cycle's ensure_scroll_wrapped_with_margin() will clamp
+        // scroll_offset to account for word wrap. Here we verify the intent:
+        // cursor is at the last line, and scroll_offset is set high enough
+        // that the render clamp will position the view at the bottom.
+        assert_eq!(win.cursor_row, total.saturating_sub(1));
         assert!(
-            visible_lines > 10,
-            "Only {} lines visible (scroll_offset={}, total={}); \
-             output window height should be used, not viewport_height=5",
-            visible_lines,
+            win.scroll_offset >= total.saturating_sub(1),
+            "scroll_offset ({}) should be >= last line ({}) for render-cycle clamping",
             win.scroll_offset,
-            total
+            total.saturating_sub(1),
         );
     }
 

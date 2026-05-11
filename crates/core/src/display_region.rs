@@ -1021,15 +1021,15 @@ mod tests {
 
     #[test]
     fn parse_md_link_basic() {
-        let (url, label) = parse_md_link("[Click](http://example.com)").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_md_link("[Click](http://mae.invalid)").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, "Click");
     }
 
     #[test]
     fn parse_md_link_empty_label() {
-        let (url, label) = parse_md_link("[](http://example.com)").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_md_link("[](http://mae.invalid)").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, "");
     }
 
@@ -1041,15 +1041,15 @@ mod tests {
 
     #[test]
     fn parse_org_link_with_label() {
-        let (url, label) = parse_org_link("[[http://example.com][Click]]").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_org_link("[[http://mae.invalid][Click]]").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, Some("Click".to_string()));
     }
 
     #[test]
     fn parse_org_link_no_label() {
-        let (url, label) = parse_org_link("[[http://example.com]]").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_org_link("[[http://mae.invalid]]").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, None);
     }
 

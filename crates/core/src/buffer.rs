@@ -47,6 +47,9 @@ pub enum BufferKind {
     Agenda,
     /// Interactive demo buffer — editable but not saveable.
     Demo,
+    /// Shell select buffer — read-only snapshot of shell scrollback for
+    /// vim-style selection and yanking.
+    ShellSelect,
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -1120,10 +1123,16 @@ impl Buffer {
 
     /// Rebuild the buffer's rope from the flattened conversation text.
     /// This allows standard motions and visual mode to work on the AI history.
-    pub fn sync_conversation_rope(&mut self) {
+    /// Returns `true` if the rope content actually changed (length differs),
+    /// allowing callers to skip expensive redraw escalation on no-op syncs.
+    pub fn sync_conversation_rope(&mut self) -> bool {
         if let Some(conv) = self.view.conversation() {
             let flat = conv.flat_text();
+            let old_len = self.rope.len_chars();
             self.rope = Rope::from_str(&flat);
+            self.rope.len_chars() != old_len
+        } else {
+            false
         }
     }
 

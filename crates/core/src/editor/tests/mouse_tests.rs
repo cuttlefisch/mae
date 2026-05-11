@@ -719,12 +719,12 @@ fn double_click_empty_line() {
 
 // --- Shell scroll accumulator tests ---
 
-fn make_editor_with_conversation_buffer() -> Editor {
+fn make_editor_with_shell_buffer() -> Editor {
     let mut editor = Editor::new();
-    // Create a conversation buffer (uses the same scroll path as Shell).
+    // Create a shell buffer (uses the accumulator scroll path).
     let mut buf = crate::buffer::Buffer::new();
-    buf.kind = crate::BufferKind::Conversation;
-    buf.name = "*test-conv*".to_string();
+    buf.kind = crate::BufferKind::Shell;
+    buf.name = "*test-shell*".to_string();
     // Add some content so scrolling is possible.
     for i in 0..50 {
         buf.insert_text_at(buf.rope().len_chars(), &format!("line {}\n", i));
@@ -738,7 +738,7 @@ fn make_editor_with_conversation_buffer() -> Editor {
 
 #[test]
 fn shell_scroll_accumulates_fractional_lines() {
-    let mut editor = make_editor_with_conversation_buffer();
+    let mut editor = make_editor_with_shell_buffer();
 
     // Sub-cell-height delta: 5px < 20px cell height → no lines emitted, but returns true.
     let moved = editor.handle_mouse_scroll_pixels(5.0);
@@ -763,7 +763,7 @@ fn shell_scroll_accumulates_fractional_lines() {
 
 #[test]
 fn shell_scroll_returns_true_while_accumulating() {
-    let mut editor = make_editor_with_conversation_buffer();
+    let mut editor = make_editor_with_shell_buffer();
 
     // Single 1px delta — way below cell_height, but returns true to keep inertia alive.
     let moved = editor.handle_mouse_scroll_pixels(1.0);
@@ -772,7 +772,7 @@ fn shell_scroll_returns_true_while_accumulating() {
 
 #[test]
 fn shell_scroll_accumulator_resets_on_buffer_switch() {
-    let mut editor = make_editor_with_conversation_buffer();
+    let mut editor = make_editor_with_shell_buffer();
 
     // Accumulate some fractional scroll.
     editor.handle_mouse_scroll_pixels(5.0);

@@ -348,6 +348,24 @@ mod tests {
     }
 
     #[test]
+    fn prompt_mentions_modules() {
+        let full = include_str!("../../../mae/src/prompts/pair-programmer.xml");
+        assert!(
+            full.contains("module") || full.contains("list_modules"),
+            "full prompt should mention modules or list_modules"
+        );
+    }
+
+    #[test]
+    fn list_modules_tool_defined() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert!(
+            tools.iter().any(|t| t.name == "list_modules"),
+            "list_modules tool should be defined"
+        );
+    }
+
+    #[test]
     fn compact_prompt_has_guardrails() {
         let compact = include_str!("../../../mae/src/prompts/pair-programmer-compact.xml");
         assert!(compact.contains("When You Are Stuck"));
