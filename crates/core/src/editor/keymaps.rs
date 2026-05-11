@@ -236,6 +236,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
         normal.bind(parse_key_seq_spaced("SPC h d"), "dashboard");
         normal.bind(parse_key_seq_spaced("SPC h B"), "describe-bindings");
+        normal.bind(parse_key_seq_spaced("SPC h m"), "describe-mode");
         normal.bind(parse_key_seq_spaced("SPC h D"), "describe-display-policy");
         // +scratch
         normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");

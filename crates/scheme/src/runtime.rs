@@ -95,6 +95,11 @@ struct SharedState {
     pending_command_unregisters: Vec<String>,
     /// Pending option unregistrations (for module unload).
     pending_option_unregisters: Vec<String>,
+    /// Deprecated function warnings: old_name → (new_name, since_version).
+    /// Warnings emitted on first call.
+    deprecated_functions: HashMap<String, (String, String)>,
+    /// Already-warned deprecated function names (to warn only once).
+    deprecated_warned: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -700,6 +705,43 @@ impl SchemeRuntime {
         engine.register_fn("unload-feature", move |name: String| {
             let removed = s.lock().unwrap().loaded_features.remove(&name);
             SteelVal::BoolV(removed)
+        });
+
+        // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
+        // Registers a deprecation warning. When OLD-NAME is called,
+        // a warning is emitted once and the call is logged.
+        let s = shared.clone();
+        engine.register_fn(
+            "deprecate-function!",
+            move |old_name: String, new_name: String, since: String| {
+                s.lock()
+                    .unwrap()
+                    .deprecated_functions
+                    .insert(old_name, (new_name, since));
+                SteelVal::Void
+            },
+        );
+
+        // (check-deprecated NAME) — check if a function name is deprecated,
+        // log a warning (once), return #t if deprecated, #f otherwise.
+        let s = shared.clone();
+        engine.register_fn("check-deprecated", move |name: String| {
+            let mut state = s.lock().unwrap();
+            if let Some((new_name, since)) = state.deprecated_functions.get(&name).cloned() {
+                if state.deprecated_warned.insert(name.clone()) {
+                    warn!(
+                        "'{}' is deprecated since v{}, use '{}' instead",
+                        name, since, new_name
+                    );
+                    state.pending_messages.push(format!(
+                        "Warning: '{}' is deprecated since v{}, use '{}' instead",
+                        name, since, new_name
+                    ));
+                }
+                SteelVal::BoolV(true)
+            } else {
+                SteelVal::BoolV(false)
+            }
         });
 
         // Register default values for state-injected variables.
@@ -2703,6 +2745,32 @@ mod tests {
             result.contains("f"),
             "expected false (already removed), got: {}",
             result
+        );
+    }
+
+    #[test]
+    fn deprecation_warns_once() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(deprecate-function! "old-fn" "new-fn" "0.9.0")"#)
+            .unwrap();
+
+        // First check-deprecated returns true
+        let result = rt.eval(r#"(check-deprecated "old-fn")"#).unwrap();
+        assert!(result.contains("t"), "expected true, got: {}", result);
+
+        // Non-deprecated returns false
+        let result = rt.eval(r#"(check-deprecated "new-fn")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        // Verify a warning message was queued
+        let state = rt.shared.lock().unwrap();
+        assert!(
+            state
+                .pending_messages
+                .iter()
+                .any(|m| m.contains("deprecated")),
+            "expected deprecation warning in messages"
         );
     }
 }

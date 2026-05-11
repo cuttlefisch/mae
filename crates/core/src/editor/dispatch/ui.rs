@@ -316,6 +316,9 @@ For full setup guide: :help ai-setup";
             "describe-module" => {
                 self.show_module_report();
             }
+            "describe-mode" => {
+                self.show_mode_report();
+            }
             "module-reload" => {
                 // Module name comes from the command line argument.
                 let arg = self.command_line.trim().to_string();

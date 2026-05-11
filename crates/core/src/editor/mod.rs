@@ -2027,6 +2027,73 @@ impl Editor {
         self.display_buffer(buf_idx);
     }
 
+    /// Show current buffer's mode, keymap, and active options.
+    pub fn show_mode_report(&mut self) {
+        let mode = self.mode;
+        let (primary_map, parent_map) = self.current_keymap_names().unwrap_or(("normal", None));
+
+        let buf_idx = self.active_buffer_idx();
+        let buf = &self.buffers[buf_idx];
+        let buf_name = buf.name.clone();
+        let buf_kind = format!("{:?}", buf.kind);
+        let buf_modified = buf.modified;
+        let buf_read_only = buf.read_only;
+        let line_count = buf.line_count();
+
+        let mut lines = Vec::new();
+        lines.push("Mode Report".to_string());
+        lines.push("===========".to_string());
+        lines.push(String::new());
+        lines.push(format!("Mode:      {:?}", mode));
+        lines.push(format!("Keymap:    {}", primary_map));
+        if let Some(parent) = parent_map {
+            lines.push(format!("Parent:    {}", parent));
+        }
+        lines.push(String::new());
+        lines.push("Buffer".to_string());
+        lines.push("------".to_string());
+        lines.push(format!("Name:      {}", buf_name));
+        lines.push(format!("Kind:      {}", buf_kind));
+        lines.push(format!("Lines:     {}", line_count));
+        lines.push(format!("Modified:  {}", buf_modified));
+        lines.push(format!("Read-only: {}", buf_read_only));
+        lines.push(String::new());
+
+        // Show active modules
+        if !self.active_modules.is_empty() {
+            lines.push(format!("Modules: {} loaded", self.active_modules.len()));
+        }
+
+        // Show a few key options
+        lines.push(String::new());
+        lines.push("Options (selected)".to_string());
+        lines.push("------------------".to_string());
+        for name in &[
+            "line_numbers",
+            "relative_line_numbers",
+            "word_wrap",
+            "tab_width",
+            "theme",
+            "auto_complete",
+            "show_breadcrumbs",
+        ] {
+            if let Some((val, _def)) = self.get_option(name) {
+                lines.push(format!("  {:<25} = {}", name, val));
+            }
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = "*Mode*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
     /// Show all keybindings for the current mode in a read-only buffer.
     pub fn show_bindings_report(&mut self) {
         use crate::Key;

@@ -935,6 +935,10 @@ impl CommandRegistry {
         );
         reg.register_builtin("describe-module", "Show active modules and their status");
         reg.register_builtin(
+            "describe-mode",
+            "Show current buffer's mode, keymap, and active options",
+        );
+        reg.register_builtin(
             "module-reload",
             "Reload a module's autoloads (:module-reload <name>)",
         );
