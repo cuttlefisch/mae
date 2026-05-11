@@ -315,39 +315,51 @@ pub fn write_init_template(force: bool) -> io::Result<PathBuf> {
 
 /// Starter init.scm template (Doom-style sections).
 fn default_init_template() -> &'static str {
-    r#";; MAE init.scm — Scheme configuration loaded on startup.
+    r#";; MAE init.scm — Module declarations + configuration.
 ;; This is a real Scheme program, not a settings file.
-;; Docs: :help config
+;; Docs: :help guide:extension-authoring
+
+;; ── Modules ──────────────────────────────────────────────
+;; Uncomment modules to enable. Run `mae sync` after changes.
+(mae!
+  :editor
+    "surround"          ; vim-surround (ds, cs, ys, S)
+    "search"            ; /, ?, n, N, *, #
+    "registers"         ; named registers (" in normal/visual)
+    "macros"            ; macro recording (q, @)
+    "marks-jumps"       ; marks, jump list, change list
+    ;; (list "multicursor" "+align")  ; multi-cursor editing
+
+  :ui
+    "dashboard"         ; splash screen
+    "file-tree"         ; project sidebar
+
+  :lang
+    "tables"            ; table manipulation in org/markdown
+)
+
+;; ── Third-party packages ─────────────────────────────────
+;; Declare packages here, then run `mae sync` to install.
+;; (package! "org-roam" :source "github:user/mae-org-roam")
+;; (package! "my-theme" :source "github:user/mae-theme" :pin "abc123")
+;; (package! "dashboard" :disable #t)  ; disable a built-in module
 
 ;; ── Appearance ──────────────────────────────────────────
-;; Available themes: default, dark-ansi, light-ansi, gruvbox-dark,
-;;   gruvbox-light, dracula, catppuccin-mocha, solarized-dark, one-dark
 (set-option! "theme" "default")
-
-;; Font size for GUI mode (6.0–72.0)
 ;; (set-option! "font-size" "14.0")
 
 ;; ── Editing ─────────────────────────────────────────────
 ;; (set-option! "relative-line-numbers" "true")
 ;; (set-option! "word-wrap" "true")
-;; (set-option! "scrolloff" "8")
 
 ;; ── AI ──────────────────────────────────────────────────
-;; Provider and model can also be set here (overrides config.toml).
 ;; (set-option! "ai-provider" "claude")
-;; (set-option! "ai-model" "claude-sonnet-4-20250514")
 
 ;; ── Keybindings ─────────────────────────────────────────
 ;; (define-key "normal" "SPC t t" "cycle-theme")
-;; (define-key "normal" "SPC g p" "git-push")
 
 ;; ── Hooks ───────────────────────────────────────────────
 ;; (add-hook! "before-save" "my-format-fn")
-;; (add-hook! "after-load" "my-setup-fn")
-
-;; ── Custom Functions ────────────────────────────────────
-;; (define (my-format-fn)
-;;   (run-cmd "lsp-format"))
 "#
 }
 

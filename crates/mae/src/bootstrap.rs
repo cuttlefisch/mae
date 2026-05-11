@@ -738,12 +738,17 @@ pub fn load_modules(
         return ModuleRegistry::new();
     }
 
-    // For now, enable all discovered built-in modules with no flags.
-    // TODO: Parse mae! block from init.scm for selective enable + flags.
-    let enabled: HashMap<String, Vec<String>> = all_modules
-        .iter()
-        .map(|(_, m)| (m.name().to_string(), vec![]))
-        .collect();
+    // Use declared modules from (mae! ...) if present; otherwise enable all.
+    let declared = scheme.declared_modules();
+    let enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
+        // No mae! block — enable all discovered modules (backward compat).
+        all_modules
+            .iter()
+            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .collect()
+    } else {
+        declared
+    };
 
     let resolved = match resolve_load_order(&all_modules, &enabled) {
         Ok(r) => r,
@@ -788,6 +793,44 @@ pub fn load_modules(
             (m.name.clone(), m.version.clone(), status)
         })
         .collect();
+
+    // Generate module:* KB nodes from loaded module data
+    {
+        use mae_core::kb_seed::modules::{install_module_nodes, ModuleKbData};
+        let module_data: Vec<ModuleKbData> = registry
+            .list()
+            .iter()
+            .map(|m| ModuleKbData {
+                name: m.name.clone(),
+                version: m.version.clone(),
+                category: m.manifest.module.category.clone(),
+                description: m.manifest.module.description.clone(),
+                status: match &m.status {
+                    crate::pkg::loader::ModuleStatus::Loaded => "loaded".to_string(),
+                    crate::pkg::loader::ModuleStatus::Failed(e) => format!("failed: {}", e),
+                    crate::pkg::loader::ModuleStatus::Disabled => "disabled".to_string(),
+                    crate::pkg::loader::ModuleStatus::Discovered => "discovered".to_string(),
+                },
+                flags: m
+                    .manifest
+                    .flags
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.doc.clone()))
+                    .collect(),
+                commands: m.commands.clone(),
+                options: m.options.clone(),
+                path: m.path.display().to_string(),
+            })
+            .collect();
+        install_module_nodes(&mut editor.kb, &module_data);
+    }
+
+    // Also drain any KB nodes registered from Scheme during module autoloads
+    for (id, title, body) in scheme.drain_kb_nodes() {
+        let node = mae_core::KbNode::new(id, title, mae_core::KbNodeKind::Note, body)
+            .with_tags(["scheme"]);
+        editor.kb.insert(node);
+    }
 
     let loaded_count = resolved
         .iter()

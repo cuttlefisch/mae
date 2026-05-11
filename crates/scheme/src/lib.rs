@@ -1,3 +1,3 @@
 pub mod runtime;
 
-pub use runtime::{SchemeError, SchemeErrorSnapshot, SchemeRuntime};
+pub use runtime::{DeclaredPackage, SchemeError, SchemeErrorSnapshot, SchemeRuntime};

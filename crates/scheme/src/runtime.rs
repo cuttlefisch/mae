@@ -91,6 +91,12 @@ struct SharedState {
     pending_dynamic_options: Vec<(String, String, String, String)>,
     /// Active modules: name → version.
     active_modules: HashMap<String, String>,
+    /// Declared modules from `(mae! ...)`: name → enabled flags.
+    declared_modules: HashMap<String, Vec<String>>,
+    /// Declared packages from `(package! ...)`.
+    declared_packages: Vec<DeclaredPackage>,
+    /// KB nodes registered from Scheme via `(define-kb-node! ID TITLE BODY)`.
+    pending_kb_nodes: Vec<(String, String, String)>,
     /// Pending command unregistrations (for module unload).
     pending_command_unregisters: Vec<String>,
     /// Pending option unregistrations (for module unload).
@@ -135,6 +141,15 @@ pub enum VisualOp {
         color: String,
     },
     Clear,
+}
+
+/// A declared third-party package from `(package! ...)` in init.scm.
+#[derive(Debug, Clone)]
+pub struct DeclaredPackage {
+    pub name: String,
+    pub source: Option<String>,
+    pub pin: Option<String>,
+    pub disable: bool,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -686,6 +701,127 @@ impl SchemeRuntime {
             SteelVal::ListV(vec![].into())
         });
 
+        // --- Declarative package management (mae!, package!) ---
+
+        // (mae-declare-module! NAME . FLAGS) — declare a module with optional flags.
+        // Called by the Scheme-level mae! helper for each module entry.
+        let s = shared.clone();
+        engine.register_fn(
+            "mae-declare-module!",
+            move |name: String, flags: Vec<String>| {
+                s.lock().unwrap().declared_modules.insert(name, flags);
+                SteelVal::Void
+            },
+        );
+
+        // (mae-declared-modules) — return list of declared module names (for introspection).
+        let s = shared.clone();
+        engine.register_fn("mae-declared-modules", move || {
+            let state = s.lock().unwrap();
+            SteelVal::ListV(
+                state
+                    .declared_modules
+                    .keys()
+                    .map(|k| SteelVal::StringV(k.clone().into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        // (package! NAME . KWARGS) — declare a third-party package.
+        // Keyword args: :source STRING, :pin STRING, :disable BOOL
+        // Implemented as a multi-arity function; kwargs parsed by Scheme wrapper.
+        let s = shared.clone();
+        engine.register_fn(
+            "mae-declare-package!",
+            move |name: String, source: String, pin: String, disable: bool| {
+                s.lock().unwrap().declared_packages.push(DeclaredPackage {
+                    name,
+                    source: if source.is_empty() {
+                        None
+                    } else {
+                        Some(source)
+                    },
+                    pin: if pin.is_empty() { None } else { Some(pin) },
+                    disable,
+                });
+                SteelVal::Void
+            },
+        );
+
+        // Define mae! and package! Scheme-level wrappers.
+        // mae! accepts category labels (:editor, :ui, :lang) and module entries.
+        // Categories are informational only — they don't affect behavior.
+        // Module entries can be bare names or (name +flag1 +flag2).
+        //
+        // Steel doesn't have Clojure-style keywords. We pre-define category
+        // symbols as strings so they can be used unquoted in mae! blocks.
+        engine
+            .run(
+                r#"
+;; Pre-define category labels so they're valid identifiers.
+;; Their values are strings starting with ":" — mae! skips them.
+(define :editor ":editor")
+(define :ui ":ui")
+(define :lang ":lang")
+(define :tools ":tools")
+(define :completion ":completion")
+(define :emacs ":emacs")
+(define :term ":term")
+(define :os ":os")
+(define :app ":app")
+(define :config ":config")
+(define :input ":input")
+
+;; (mae! :category1 "mod1" ("mod2" "+flag") :category2 "mod3" ...)
+;; Category labels (strings starting with ":") are ignored.
+;; String entries declare a module with no flags.
+;; List entries declare a module (first string) with flags (remaining strings).
+(define (mae! . args)
+  (for-each
+    (lambda (item)
+      (cond
+        ;; Skip category strings (starting with ":")
+        ((and (string? item)
+              (> (string-length item) 0)
+              (equal? (substring item 0 1) ":"))
+         #f)
+        ;; List entry: ("module-name" "+flag1" "+flag2" ...)
+        ((list? item)
+         (mae-declare-module! (car item) (cdr item)))
+        ;; String entry: module with no flags
+        ((string? item)
+         (mae-declare-module! item '()))
+        ;; Symbol entry: convert to string
+        ((symbol? item)
+         (mae-declare-module! (symbol->string item) '()))
+        (else #f)))
+    args))
+
+;; Keyword symbols for package! kwargs.
+(define :source ":source")
+(define :pin ":pin")
+(define :disable ":disable")
+
+;; (package! NAME :source SRC :pin SHA :disable BOOL)
+;; All keyword args are optional.
+(define (package! name . kwargs)
+  (define (kwarg-ref key default)
+    (let loop ((rest kwargs))
+      (cond
+        ((null? rest) default)
+        ((and (>= (length rest) 2)
+              (equal? (car rest) key))
+         (cadr rest))
+        (else (loop (cdr rest))))))
+  (mae-declare-package! name
+                        (kwarg-ref ":source" "")
+                        (kwarg-ref ":pin" "")
+                        (if (kwarg-ref ":disable" #f) #t #f)))
+"#,
+            )
+            .ok();
+
         // (undefine-command! NAME) — remove a command (for module unload)
         let s = shared.clone();
         engine.register_fn("undefine-command!", move |name: String| {
@@ -706,6 +842,16 @@ impl SchemeRuntime {
             let removed = s.lock().unwrap().loaded_features.remove(&name);
             SteelVal::BoolV(removed)
         });
+
+        // (define-kb-node! ID TITLE BODY) — register a KB node from Scheme.
+        let s = shared.clone();
+        engine.register_fn(
+            "define-kb-node!",
+            move |id: String, title: String, body: String| {
+                s.lock().unwrap().pending_kb_nodes.push((id, title, body));
+                SteelVal::Void
+            },
+        );
 
         // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
         // Registers a deprecation warning. When OLD-NAME is called,
@@ -786,6 +932,23 @@ impl SchemeRuntime {
             load_path: default_load_path,
             loaded_features: HashSet::new(),
         })
+    }
+
+    /// Return declared modules from `(mae! ...)` — name → enabled flags.
+    /// Empty if no `mae!` block was evaluated.
+    pub fn declared_modules(&self) -> HashMap<String, Vec<String>> {
+        self.shared.lock().unwrap().declared_modules.clone()
+    }
+
+    /// Return declared packages from `(package! ...)`.
+    pub fn declared_packages(&self) -> Vec<DeclaredPackage> {
+        self.shared.lock().unwrap().declared_packages.clone()
+    }
+
+    /// Drain pending KB nodes registered via `(define-kb-node! ...)`.
+    pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_nodes)
     }
 
     /// Evaluate a Scheme expression and return the result as a string.
@@ -1256,6 +1419,14 @@ impl SchemeRuntime {
                     ));
                 }
             }
+        }
+
+        // Apply KB nodes registered from Scheme via (define-kb-node! ID TITLE BODY)
+        for (id, title, body) in state.pending_kb_nodes.drain(..) {
+            let node = mae_core::KbNode::new(id.clone(), title, mae_core::KbNodeKind::Note, body)
+                .with_tags(["scheme"]);
+            editor.kb.insert(node);
+            debug!(id = %id, "kb node registered from scheme");
         }
 
         // Apply editor options via the OptionRegistry (single source of truth)
@@ -2772,5 +2943,92 @@ mod tests {
                 .any(|m| m.contains("deprecated")),
             "expected deprecation warning in messages"
         );
+    }
+
+    // ── mae! / package! declarative config tests ────────────────
+
+    #[test]
+    fn mae_bang_parses_modules() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround" "search")"#).unwrap();
+        let decl = rt.declared_modules();
+        assert!(decl.contains_key("surround"), "expected surround");
+        assert!(decl.contains_key("search"), "expected search");
+        assert_eq!(decl.len(), 2);
+    }
+
+    #[test]
+    fn mae_bang_parses_flags() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor (list "multicursor" "+align" "+fancy"))"#)
+            .unwrap();
+        let decl = rt.declared_modules();
+        let flags = decl.get("multicursor").unwrap();
+        assert!(flags.contains(&"+align".to_string()));
+        assert!(flags.contains(&"+fancy".to_string()));
+    }
+
+    #[test]
+    fn mae_bang_categories_are_labels() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround" :ui "dashboard" :lang "tables")"#)
+            .unwrap();
+        let decl = rt.declared_modules();
+        assert_eq!(decl.len(), 3);
+        assert!(decl.contains_key("surround"));
+        assert!(decl.contains_key("dashboard"));
+        assert!(decl.contains_key("tables"));
+    }
+
+    #[test]
+    fn package_bang_basic() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "org-roam" :source "github:user/mae-org-roam")"#)
+            .unwrap();
+        let pkgs = rt.declared_packages();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "org-roam");
+        assert_eq!(pkgs[0].source.as_deref(), Some("github:user/mae-org-roam"));
+        assert!(!pkgs[0].disable);
+    }
+
+    #[test]
+    fn package_bang_pin() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "my-theme" :source "github:u/r" :pin "abc123")"#)
+            .unwrap();
+        let pkgs = rt.declared_packages();
+        assert_eq!(pkgs[0].pin.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn package_bang_disable() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "dashboard" :disable #t)"#).unwrap();
+        let pkgs = rt.declared_packages();
+        assert!(pkgs[0].disable);
+    }
+
+    #[test]
+    fn define_kb_node_from_scheme() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(define-kb-node! "module:test:guide" "Test Guide" "Some body text")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+
+        let node = editor.kb.get("module:test:guide");
+        assert!(node.is_some(), "expected kb node to be registered");
+        assert_eq!(node.unwrap().title, "Test Guide");
+    }
+
+    #[test]
+    fn undeclared_modules_not_in_declared() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround")"#).unwrap();
+        let decl = rt.declared_modules();
+        assert!(!decl.contains_key("dashboard"), "dashboard not declared");
+        assert!(decl.contains_key("surround"), "surround declared");
     }
 }

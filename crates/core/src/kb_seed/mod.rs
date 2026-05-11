@@ -18,6 +18,7 @@
 mod concepts;
 mod keys;
 mod lessons;
+pub mod modules;
 mod scheme_api;
 mod terminology;
 mod tutorials;

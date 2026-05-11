@@ -1,39 +1,54 @@
 //! # Module: pkg/cli.rs — Package manager CLI
 //!
-//! Implements `mae pkg <subcommand>` for offline module management.
-//! These commands run without starting the editor.
+//! Implements both `mae pkg <subcommand>` (legacy) and flat top-level
+//! subcommands: `mae sync`, `mae upgrade`, `mae purge`, `mae list`,
+//! `mae info`, `mae create`, `mae doctor`.
 
+use super::git::PackageSource;
+use super::lockfile::{sha256_hex, Lockfile};
 use super::manifest::discover_modules;
 use std::path::PathBuf;
 
-/// Run the `mae pkg` CLI. Returns exit code.
+/// Run the `mae pkg` CLI (legacy entry point). Returns exit code.
 pub fn run_pkg_cli(args: &[String]) -> i32 {
     let subcmd = args.first().map(|s| s.as_str()).unwrap_or("help");
+    dispatch_subcmd(subcmd, &args[1..])
+}
 
+/// Dispatch a flat top-level subcommand. Returns exit code.
+pub fn dispatch_subcmd(subcmd: &str, args: &[String]) -> i32 {
     match subcmd {
         "list" => cmd_list(),
-        "info" => cmd_info(args.get(1).map(|s| s.as_str())),
-        "create" => cmd_create(args.get(1).map(|s| s.as_str())),
-        "doctor" => cmd_doctor(args.get(1).map(|s| s.as_str())),
+        "info" => cmd_info(args.first().map(|s| s.as_str())),
+        "create" => cmd_create(args.first().map(|s| s.as_str())),
+        "doctor" => cmd_doctor(args.first().map(|s| s.as_str())),
+        "sync" => cmd_sync(),
+        "upgrade" => cmd_upgrade(),
+        "purge" => cmd_purge(),
         "help" | "--help" | "-h" => {
             print_help();
             0
         }
         other => {
             eprintln!("Unknown subcommand: {}", other);
-            eprintln!("Run `mae pkg help` for usage.");
+            eprintln!("Run `mae help` for usage.");
             1
         }
     }
 }
 
 fn print_help() {
-    println!("mae pkg — Module package manager");
+    println!("mae — Module and package management");
     println!();
     println!("USAGE:");
-    println!("  mae pkg <subcommand>");
+    println!("  mae <subcommand> [args]");
     println!();
     println!("SUBCOMMANDS:");
+    println!(
+        "  sync              Materialize declared state (clone/update packages, write lockfile)"
+    );
+    println!("  upgrade           Fetch latest for all packages, update lockfile SHAs");
+    println!("  purge             Remove packages not declared in init.scm");
     println!("  list              List discovered modules and their status");
     println!("  info <NAME>       Show detailed information about a module");
     println!("  create <NAME>     Scaffold a new module directory");
@@ -48,6 +63,267 @@ fn module_search_dirs() -> Vec<PathBuf> {
     }
     dirs
 }
+
+fn packages_dir() -> PathBuf {
+    crate::bootstrap::dirs_candidate("mae/packages").unwrap_or_else(|| PathBuf::from("packages"))
+}
+
+/// Parse init.scm to extract declared packages.
+/// Uses a minimal SchemeRuntime eval — no editor needed.
+fn parse_declared_packages() -> Vec<mae_scheme::DeclaredPackage> {
+    let Ok(mut scheme) = mae_scheme::SchemeRuntime::new() else {
+        eprintln!("Failed to initialize Scheme runtime");
+        return vec![];
+    };
+
+    // Find init.scm
+    let init_path = crate::bootstrap::dirs_candidate("mae/init.scm")
+        .unwrap_or_else(|| PathBuf::from("init.scm"));
+
+    if !init_path.exists() {
+        eprintln!("No init.scm found at {}", init_path.display());
+        return vec![];
+    }
+
+    if let Err(e) = scheme.load_file(&init_path) {
+        eprintln!("Error loading init.scm: {}", e);
+        return vec![];
+    }
+
+    scheme.declared_packages()
+}
+
+// ── sync ──────────────────────────────────────────────────────────
+
+fn cmd_sync() -> i32 {
+    println!("mae sync — materializing declared state...");
+
+    let packages = parse_declared_packages();
+    let pkg_dir = packages_dir();
+    let lockfile_path = Lockfile::default_path();
+    let mut lockfile = Lockfile::load(&lockfile_path);
+    let mut synced = 0;
+    let mut errors = 0;
+
+    for pkg in &packages {
+        if pkg.disable {
+            continue;
+        }
+        let Some(ref source_spec) = pkg.source else {
+            continue; // Built-in module override, no clone needed
+        };
+
+        let source = match PackageSource::parse(source_spec) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  {} — {}", pkg.name, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        let target = pkg_dir.join(&pkg.name);
+
+        if !target.exists() {
+            // Clone
+            print!("  Cloning {}...", pkg.name);
+            if let Err(e) = std::fs::create_dir_all(&pkg_dir) {
+                eprintln!(" failed to create packages dir: {}", e);
+                errors += 1;
+                continue;
+            }
+            match super::git::shallow_clone(&source.clone_url(), &target) {
+                Ok(()) => println!(" done"),
+                Err(e) => {
+                    eprintln!(" {}", e);
+                    errors += 1;
+                    continue;
+                }
+            }
+        } else if let Some(ref pin) = pkg.pin {
+            // Pinned — checkout specific SHA
+            print!("  Pinning {} to {}...", pkg.name, &pin[..pin.len().min(8)]);
+            match super::git::checkout_sha(&target, pin) {
+                Ok(()) => println!(" done"),
+                Err(e) => {
+                    eprintln!(" {}", e);
+                    errors += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Get current SHA and update lockfile
+        match super::git::head_sha(&target) {
+            Ok(sha) => {
+                let manifest_path = target.join("module.toml");
+                let integrity = if manifest_path.exists() {
+                    std::fs::read(manifest_path)
+                        .map(|data| sha256_hex(&data))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
+                synced += 1;
+            }
+            Err(e) => {
+                eprintln!("  {} — failed to read SHA: {}", pkg.name, e);
+            }
+        }
+    }
+
+    // Also run doctor validation
+    let mut all_modules = Vec::new();
+    for dir in module_search_dirs() {
+        if dir.exists() {
+            all_modules.extend(discover_modules(&dir));
+        }
+    }
+
+    // Write lockfile
+    if let Err(e) = lockfile.save(&lockfile_path) {
+        eprintln!("Failed to write lockfile: {}", e);
+        errors += 1;
+    }
+
+    println!();
+    println!(
+        "{} modules discovered, {} packages synced",
+        all_modules.len(),
+        synced
+    );
+    if errors > 0 {
+        println!("{} error(s)", errors);
+        1
+    } else {
+        0
+    }
+}
+
+// ── upgrade ───────────────────────────────────────────────────────
+
+fn cmd_upgrade() -> i32 {
+    println!("mae upgrade — fetching latest for all packages...");
+
+    let packages = parse_declared_packages();
+    let pkg_dir = packages_dir();
+    let lockfile_path = Lockfile::default_path();
+    let mut lockfile = Lockfile::load(&lockfile_path);
+    let mut updated = 0;
+
+    for pkg in &packages {
+        if pkg.disable || pkg.source.is_none() {
+            continue;
+        }
+        let source_spec = pkg.source.as_ref().unwrap();
+        let target = pkg_dir.join(&pkg.name);
+
+        if !target.exists() {
+            println!("  {} — not installed (run `mae sync` first)", pkg.name);
+            continue;
+        }
+
+        let old_sha = super::git::head_sha(&target).unwrap_or_default();
+
+        print!("  Fetching {}...", pkg.name);
+        if let Err(e) = super::git::fetch_latest(&target) {
+            eprintln!(" {}", e);
+            continue;
+        }
+
+        // Reset to origin/HEAD (for shallow clones)
+        let _ = std::process::Command::new("git")
+            .args(["reset", "--hard", "origin/HEAD"])
+            .current_dir(&target)
+            .output();
+
+        match super::git::head_sha(&target) {
+            Ok(new_sha) => {
+                if new_sha != old_sha {
+                    println!(
+                        " {} → {}",
+                        &old_sha[..old_sha.len().min(8)],
+                        &new_sha[..new_sha.len().min(8)]
+                    );
+                    let manifest_path = target.join("module.toml");
+                    let integrity = if manifest_path.exists() {
+                        std::fs::read(manifest_path)
+                            .map(|data| sha256_hex(&data))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    lockfile.pin(&pkg.name, source_spec, &new_sha, &integrity);
+                    updated += 1;
+                } else {
+                    println!(" already up to date");
+                }
+            }
+            Err(e) => eprintln!(" failed to read SHA: {}", e),
+        }
+    }
+
+    if let Err(e) = lockfile.save(&lockfile_path) {
+        eprintln!("Failed to write lockfile: {}", e);
+    }
+
+    println!();
+    println!("{} package(s) updated", updated);
+    0
+}
+
+// ── purge ─────────────────────────────────────────────────────────
+
+fn cmd_purge() -> i32 {
+    println!("mae purge — removing orphaned packages...");
+
+    let packages = parse_declared_packages();
+    let pkg_dir = packages_dir();
+    let lockfile_path = Lockfile::default_path();
+    let mut lockfile = Lockfile::load(&lockfile_path);
+
+    let declared_names: std::collections::HashSet<&str> =
+        packages.iter().map(|p| p.name.as_str()).collect();
+
+    let mut removed = 0;
+
+    if pkg_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&pkg_dir) {
+            for entry in entries.flatten() {
+                if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !declared_names.contains(name.as_str()) {
+                    print!("  Removing {}...", name);
+                    match std::fs::remove_dir_all(entry.path()) {
+                        Ok(()) => {
+                            println!(" done");
+                            lockfile.unpin(&name);
+                            removed += 1;
+                        }
+                        Err(e) => eprintln!(" failed: {}", e),
+                    }
+                }
+            }
+        }
+    }
+
+    if let Err(e) = lockfile.save(&lockfile_path) {
+        eprintln!("Failed to write lockfile: {}", e);
+    }
+
+    println!();
+    if removed > 0 {
+        println!("{} package(s) removed", removed);
+    } else {
+        println!("No orphaned packages found");
+    }
+    0
+}
+
+// ── list ──────────────────────────────────────────────────────────
 
 fn cmd_list() -> i32 {
     let mut all_modules = Vec::new();
@@ -83,13 +359,14 @@ fn cmd_list() -> i32 {
     0
 }
 
+// ── create ────────────────────────────────────────────────────────
+
 fn cmd_create(name: Option<&str>) -> i32 {
     let Some(name) = name else {
-        eprintln!("Usage: mae pkg create <NAME>");
+        eprintln!("Usage: mae create <NAME>");
         return 1;
     };
 
-    // Determine target directory
     let target = if let Some(user_pkg) = crate::bootstrap::dirs_candidate("mae/packages") {
         user_pkg.join(name)
     } else {
@@ -172,13 +449,15 @@ autoloads = "autoloads.scm"
         "  2. Edit {}/autoloads.scm — add keybindings and commands",
         name
     );
-    println!("  3. Run `mae pkg doctor {}` to validate", name);
+    println!("  3. Run `mae doctor {}` to validate", name);
     0
 }
 
+// ── info ──────────────────────────────────────────────────────────
+
 fn cmd_info(name: Option<&str>) -> i32 {
     let Some(name) = name else {
-        eprintln!("Usage: mae pkg info <NAME>");
+        eprintln!("Usage: mae info <NAME>");
         return 1;
     };
 
@@ -232,7 +511,6 @@ fn cmd_info(name: Option<&str>) -> i32 {
         }
     }
 
-    // Show autoloads.scm contents summary (keybindings defined)
     let autoloads_path = path.join(&manifest.entry.autoloads);
     if autoloads_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&autoloads_path) {
@@ -262,6 +540,8 @@ fn cmd_info(name: Option<&str>) -> i32 {
     0
 }
 
+// ── doctor ────────────────────────────────────────────────────────
+
 fn cmd_doctor(name_filter: Option<&str>) -> i32 {
     let mut all_modules = Vec::new();
     for dir in module_search_dirs() {
@@ -288,13 +568,11 @@ fn cmd_doctor(name_filter: Option<&str>) -> i32 {
 
         println!("Checking {} ({})...", name, path.display());
 
-        // Check mae_version constraint
         if let Err(e) = manifest.check_mae_version(current_version) {
             println!("  WARNING: {}", e);
             errors += 1;
         }
 
-        // Check entry points exist
         let autoloads = path.join(&manifest.entry.autoloads);
         if !autoloads.exists() {
             println!(
@@ -309,7 +587,6 @@ fn cmd_doctor(name_filter: Option<&str>) -> i32 {
             errors += 1;
         }
 
-        // Check required fields
         if manifest.module.version.is_empty() {
             println!("  WARNING: no version specified");
             errors += 1;
@@ -356,7 +633,6 @@ mod tests {
 
     #[test]
     fn pkg_list_returns_zero() {
-        // May find modules or not depending on working directory
         let code = run_pkg_cli(&["list".to_string()]);
         assert_eq!(code, 0);
     }
@@ -377,5 +653,15 @@ mod tests {
     #[test]
     fn pkg_create_no_name_returns_one() {
         assert_eq!(run_pkg_cli(&["create".to_string()]), 1);
+    }
+
+    #[test]
+    fn dispatch_subcmd_help() {
+        assert_eq!(dispatch_subcmd("help", &[]), 0);
+    }
+
+    #[test]
+    fn dispatch_subcmd_unknown() {
+        assert_eq!(dispatch_subcmd("nonexistent", &[]), 1);
     }
 }

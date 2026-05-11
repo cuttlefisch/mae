@@ -2,8 +2,8 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-2%2C629%20passing-brightgreen.svg)](#)
-[![Lines of Code](https://img.shields.io/badge/lines-~130k-informational.svg)](#)
+[![Tests](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/cuttlefisch/6f6375e4dc527a9953e6898124329f4c/raw/mae-tests.json)](#)
+[![Lines of Code](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/cuttlefisch/6f6375e4dc527a9953e6898124329f4c/raw/mae-loc.json)](#)
 [![Built with AI](https://img.shields.io/badge/Built%20with-Claude%20+%20Gemini%20+%20DeepSeek-blueviolet.svg)](https://github.com/cuttlefisch/mae)
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling

@@ -14,7 +14,9 @@
 //! - `ModuleRegistry` — tracks all discovered and loaded modules
 
 pub mod cli;
+pub mod git;
 pub mod loader;
+pub mod lockfile;
 pub mod manifest;
 pub mod resolver;
 

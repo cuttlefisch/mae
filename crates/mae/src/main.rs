@@ -90,8 +90,13 @@ fn main() -> io::Result<()> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
-        println!("  doctor                  Check prerequisites, config, LSP/DAP, AI provider");
-        println!("  pkg <subcommand>        Module package manager (list, doctor, help)");
+        println!("  sync                    Materialize declared state (clone/update packages)");
+        println!("  upgrade                 Fetch latest for all packages");
+        println!("  purge                   Remove packages not declared in init.scm");
+        println!("  list                    List all discovered modules");
+        println!("  info <NAME>             Show module details");
+        println!("  create <NAME>           Scaffold a new module");
+        println!("  doctor [NAME]           Validate manifests, check LSP/DAP, AI provider");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -114,6 +119,17 @@ fn main() -> io::Result<()> {
     if args.get(1).is_some_and(|a| a == "pkg") {
         let code = pkg::cli::run_pkg_cli(&args[2..]);
         std::process::exit(code);
+    }
+    // Flat top-level subcommands (Doom-style): mae sync, mae upgrade, mae purge, etc.
+    if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
+        match subcmd {
+            "sync" | "upgrade" | "purge" | "list" | "info" | "create" => {
+                let rest: Vec<String> = args[2..].to_vec();
+                let code = pkg::cli::dispatch_subcmd(subcmd, &rest);
+                std::process::exit(code);
+            }
+            _ => {}
+        }
     }
     if args.iter().any(|a| a == "doctor" || a == "--doctor") {
         let code = doctor::run_doctor();
