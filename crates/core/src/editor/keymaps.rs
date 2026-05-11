@@ -191,7 +191,7 @@ impl Editor {
         // vim/dirvish convention, but it's already bound to
         // `move-line-prev-non-blank` — keep the motion primitive.)
         normal.bind(parse_key_seq_spaced("SPC f d"), "file-browser");
-        normal.bind(parse_key_seq_spaced("SPC f t"), "file-tree-toggle");
+        // SPC f t (file-tree-toggle) — moved to modules/file-tree/autoloads.scm
         normal.bind(parse_key_seq_spaced("SPC f s"), "save");
         // +window
         normal.bind(parse_key_seq_spaced("SPC w v"), "split-vertical");
@@ -729,38 +729,7 @@ impl Editor {
 
         maps.insert("markdown".to_string(), markdown);
 
-        // File tree keymap (NERDTree-style)
-        let mut file_tree = Keymap::with_parent("file-tree", "normal");
-        // Navigation
-        file_tree.bind(parse_key_seq("j"), "file-tree-down");
-        file_tree.bind(parse_key_seq("k"), "file-tree-up");
-        file_tree.bind(parse_key_seq("gg"), "file-tree-first");
-        file_tree.bind(parse_key_seq("G"), "file-tree-last");
-        // Scroll
-        file_tree.bind(parse_key_seq("C-e"), "file-tree-scroll-down");
-        file_tree.bind(parse_key_seq("C-y"), "file-tree-scroll-up");
-        file_tree.bind(parse_key_seq("C-d"), "file-tree-half-page-down");
-        file_tree.bind(parse_key_seq("C-u"), "file-tree-half-page-up");
-        // Actions
-        file_tree.bind(vec![KeyPress::special(Key::Enter)], "file-tree-open");
-        file_tree.bind(parse_key_seq("o"), "file-tree-open");
-        file_tree.bind(parse_key_seq("s"), "file-tree-open-vsplit");
-        file_tree.bind(parse_key_seq("i"), "file-tree-open-hsplit");
-        file_tree.bind(vec![KeyPress::special(Key::Tab)], "file-tree-expand");
-        file_tree.bind(
-            vec![KeyPress::special(Key::BackTab)],
-            "file-tree-global-cycle",
-        );
-        file_tree.bind(parse_key_seq("x"), "file-tree-close-parent");
-        file_tree.bind(parse_key_seq("u"), "file-tree-parent");
-        file_tree.bind(parse_key_seq("C"), "file-tree-cd");
-        file_tree.bind(parse_key_seq("R"), "file-tree-refresh");
-        file_tree.bind(parse_key_seq("m a"), "file-tree-create");
-        file_tree.bind(parse_key_seq("d"), "file-tree-delete");
-        file_tree.bind(parse_key_seq("r"), "file-tree-rename");
-        file_tree.bind(parse_key_seq("q"), "file-tree-toggle");
-        file_tree.bind(parse_key_seq("?"), "show-buffer-keys");
-        maps.insert("file-tree".to_string(), file_tree);
+        // File tree keymap + bindings — moved to modules/file-tree/autoloads.scm
 
         // Help buffer keymap
         let mut help = Keymap::with_parent("help", "normal");
@@ -919,20 +888,15 @@ mod tests {
         ));
     }
 
+    // File-tree keymap + bindings moved to modules/file-tree/autoloads.scm.
+    // Verify commands remain registered as kernel builtins.
     #[test]
-    fn file_tree_keymap_exists_with_bindings() {
+    fn file_tree_commands_registered() {
         let ed = Editor::new();
-        let ft_map = ed.keymaps.get("file-tree").unwrap();
-        let j_key = parse_key_seq("j");
-        assert_eq!(
-            ft_map.lookup(&j_key),
-            crate::keymap::LookupResult::Exact("file-tree-down")
-        );
-        let q_key = parse_key_seq("q");
-        assert_eq!(
-            ft_map.lookup(&q_key),
-            crate::keymap::LookupResult::Exact("file-tree-toggle")
-        );
+        assert!(ed.commands.contains("file-tree-toggle"));
+        assert!(ed.commands.contains("file-tree-down"));
+        assert!(ed.commands.contains("file-tree-open"));
+        assert!(ed.commands.contains("file-tree-create"));
     }
 
     #[test]
@@ -1010,10 +974,7 @@ mod tests {
             ed.keymaps.get("markdown").unwrap().parent.as_deref(),
             Some("normal")
         );
-        assert_eq!(
-            ed.keymaps.get("file-tree").unwrap().parent.as_deref(),
-            Some("normal")
-        );
+        // file-tree keymap created by module, not at Editor construction
         assert!(ed.keymaps.get("normal").unwrap().parent.is_none());
     }
 
@@ -1032,7 +993,8 @@ mod tests {
     fn overlay_keymaps_have_show_buffer_keys() {
         let ed = Editor::new();
         let q_key = parse_key_seq("?");
-        for name in &["git-status", "help", "debug", "file-tree"] {
+        // file-tree keymap created by module, not at Editor construction
+        for name in &["git-status", "help", "debug"] {
             let km = ed.keymaps.get(*name).unwrap();
             assert_eq!(
                 km.lookup(&q_key),
