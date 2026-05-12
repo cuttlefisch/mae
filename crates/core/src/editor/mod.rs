@@ -327,6 +327,8 @@ pub struct Editor {
     pub mode: Mode,
     pub running: bool,
     pub status_msg: String,
+    /// Name of the command currently being dispatched (Emacs `this-command`).
+    pub current_command: String,
     pub command_line: String,
     pub commands: CommandRegistry,
     pub keymaps: HashMap<String, Keymap>,
@@ -920,6 +922,7 @@ impl Editor {
             mode: Mode::Normal,
             running: true,
             status_msg: String::new(),
+            current_command: String::new(),
             command_line: String::new(),
             commands,
             keymaps,

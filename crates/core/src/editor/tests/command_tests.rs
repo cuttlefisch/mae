@@ -681,24 +681,7 @@ fn debug_toggle_breakpoint() {
     assert!(editor.status_msg.contains("Breakpoint removed"));
 }
 
-#[test]
-fn debug_leader_bindings_exist() {
-    let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::{parse_key_seq_spaced, LookupResult};
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC d")),
-        LookupResult::Prefix
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC d s")),
-        LookupResult::Exact("debug-self")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq_spaced("SPC d b")),
-        LookupResult::Exact("debug-toggle-breakpoint")
-    );
-}
+// debug_leader_bindings_exist — SPC d bindings moved to modules/debug/
 
 // --- from keymap_tests ---
 

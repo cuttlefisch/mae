@@ -811,29 +811,8 @@ fn markdown_checkbox_toggle() {
     );
 }
 
-#[test]
-fn enter_in_org_keymap_maps_to_smart_enter() {
-    let ed = Editor::new();
-    let keymap = ed.keymaps.get("org").unwrap();
-    let result = keymap.lookup(&[crate::keymap::KeyPress::special(crate::keymap::Key::Enter)]);
-    assert!(
-        matches!(result, crate::LookupResult::Exact("smart-enter")),
-        "Enter in org keymap should map to smart-enter, got: {:?}",
-        result
-    );
-}
-
-#[test]
-fn enter_in_markdown_keymap_maps_to_smart_enter() {
-    let ed = Editor::new();
-    let keymap = ed.keymaps.get("markdown").unwrap();
-    let result = keymap.lookup(&[crate::keymap::KeyPress::special(crate::keymap::Key::Enter)]);
-    assert!(
-        matches!(result, crate::LookupResult::Exact("smart-enter")),
-        "Enter in markdown keymap should map to smart-enter, got: {:?}",
-        result
-    );
-}
+// enter_in_org_keymap_maps_to_smart_enter — org keymap moved to modules/org/
+// enter_in_markdown_keymap_maps_to_smart_enter — markdown keymap moved to modules/markdown/
 
 // --- TODO cycling tests ---
 

@@ -77,18 +77,28 @@ impl CommandRegistry {
 
     /// Register a Scheme-defined command.
     /// Logs a warning if overwriting an existing command.
+    /// Returns true if it overwrote a builtin (for the caller to surface).
     pub fn register_scheme(
         &mut self,
         name: impl Into<String>,
         doc: impl Into<String>,
         scheme_fn: impl Into<String>,
-    ) {
+    ) -> bool {
         let name = name.into();
-        if let Some(existing) = self.commands.get(&name) {
-            if existing.source != CommandSource::Builtin {
-                eprintln!("[warn] Command '{}' already registered (overwriting)", name);
+        let overwrote_builtin = if let Some(existing) = self.commands.get(&name) {
+            match &existing.source {
+                CommandSource::Builtin => {
+                    tracing::warn!(command = %name, "module overrides builtin command with Scheme function");
+                    true
+                }
+                _ => {
+                    tracing::info!(command = %name, "command overwritten by Scheme");
+                    false
+                }
             }
-        }
+        } else {
+            false
+        };
         self.commands.insert(
             name.clone(),
             Command {
@@ -97,6 +107,8 @@ impl CommandRegistry {
                 source: CommandSource::Scheme(scheme_fn.into()),
             },
         );
+
+        overwrote_builtin
     }
 
     /// Register a command that will `(require FEATURE)` on first invocation.

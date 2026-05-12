@@ -357,8 +357,27 @@ pub(crate) fn is_operator_command(cmd: &str) -> bool {
 }
 
 /// Dispatch a command by name, handling both builtins and Scheme commands.
+/// Fires command-pre/command-post hooks and per-command :before/:after advice.
 pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, name: &str) {
     let theme_before = editor.theme.name.clone();
+    editor.current_command = name.to_string();
+
+    // Fire command-pre hook
+    editor.fire_hook("command-pre");
+
+    // Fire :before advice for this command
+    let before_advice = editor
+        .hooks
+        .get_advice(name, mae_core::hooks::AdviceKind::Before);
+    for fn_name in &before_advice {
+        scheme.inject_editor_state(editor);
+        if let Err(e) = scheme.call_function(fn_name) {
+            warn!(command = name, advice = %fn_name, error = %e, "before-advice error");
+        } else {
+            scheme.apply_to_editor(editor);
+        }
+    }
+
     let source = editor.commands.get(name).map(|c| c.source.clone());
 
     match source {
@@ -421,6 +440,22 @@ pub(crate) fn dispatch_command(editor: &mut Editor, scheme: &mut SchemeRuntime, 
             }
         }
     }
+
+    // Fire :after advice for this command
+    let after_advice = editor
+        .hooks
+        .get_advice(name, mae_core::hooks::AdviceKind::After);
+    for fn_name in &after_advice {
+        scheme.inject_editor_state(editor);
+        if let Err(e) = scheme.call_function(fn_name) {
+            warn!(command = name, advice = %fn_name, error = %e, "after-advice error");
+        } else {
+            scheme.apply_to_editor(editor);
+        }
+    }
+
+    // Fire command-post hook
+    editor.fire_hook("command-post");
 
     // Persist theme change regardless of source (cycle-theme, set-theme, scheme).
     if editor.theme.name != theme_before {

@@ -97,6 +97,14 @@ struct SharedState {
     declared_packages: Vec<DeclaredPackage>,
     /// KB nodes registered from Scheme via `(define-kb-node! ID TITLE BODY)`.
     pending_kb_nodes: Vec<(String, String, String)>,
+    /// Pending buffer creation: (name).
+    pending_create_buffer: Option<String>,
+    /// Pending buffer kill by name.
+    pending_kill_buffer: Option<String>,
+    /// Pending advice-add: (command, kind, fn_name).
+    pending_advice_adds: Vec<(String, String, String)>,
+    /// Pending advice-remove: (command, fn_name).
+    pending_advice_removes: Vec<(String, String)>,
     /// Pending command unregistrations (for module unload).
     pending_command_unregisters: Vec<String>,
     /// Pending option unregistrations (for module unload).
@@ -868,6 +876,97 @@ impl SchemeRuntime {
             },
         );
 
+        // --- A5: String utilities (no editor state needed) ---
+
+        engine.register_fn("string-split", |s: String, sep: String| -> SteelVal {
+            SteelVal::ListV(
+                s.split(&sep)
+                    .map(|part| SteelVal::StringV(part.into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        engine.register_fn("string-join", |lst: Vec<String>, sep: String| -> String {
+            lst.join(&sep)
+        });
+
+        engine.register_fn("string-trim", |s: String| -> String {
+            s.trim().to_string()
+        });
+
+        engine.register_fn("string-contains?", |s: String, sub: String| -> bool {
+            s.contains(&sub)
+        });
+
+        engine.register_fn(
+            "string-replace",
+            |s: String, from: String, to: String| -> String { s.replace(&from, &to) },
+        );
+
+        engine.register_fn("string-upcase", |s: String| -> String { s.to_uppercase() });
+
+        engine.register_fn("string-downcase", |s: String| -> String {
+            s.to_lowercase()
+        });
+
+        // --- A4: Process execution ---
+
+        engine.register_fn("shell-command", |cmd: String| -> String {
+            use std::process::Command;
+            match Command::new("sh").arg("-c").arg(&cmd).output() {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if stdout.len() > 1_048_576 {
+                        stdout[..1_048_576].to_string()
+                    } else {
+                        stdout.into_owned()
+                    }
+                }
+                Err(e) => format!("ERROR: {}", e),
+            }
+        });
+
+        // --- A3: Buffer creation/kill (via SharedState) ---
+
+        let s = shared.clone();
+        engine.register_fn("create-buffer", move |name: String| {
+            s.lock().unwrap().pending_create_buffer = Some(name);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("kill-buffer-by-name", move |name: String| {
+            s.lock().unwrap().pending_kill_buffer = Some(name);
+            SteelVal::Void
+        });
+
+        // --- Phase E: Advice system ---
+
+        // (advice-add! COMMAND KIND FN-NAME)
+        // KIND is ":before" or ":after"
+        let s = shared.clone();
+        engine.register_fn(
+            "advice-add!",
+            move |command: String, kind: String, fn_name: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_advice_adds
+                    .push((command, kind, fn_name));
+                SteelVal::Void
+            },
+        );
+
+        // (advice-remove! COMMAND FN-NAME)
+        let s = shared.clone();
+        engine.register_fn("advice-remove!", move |command: String, fn_name: String| {
+            s.lock()
+                .unwrap()
+                .pending_advice_removes
+                .push((command, fn_name));
+            SteelVal::Void
+        });
+
         // (check-deprecated NAME) — check if a function name is deprecated,
         // log a warning (once), return #t if deprecated, #f otherwise.
         let s = shared.clone();
@@ -1109,6 +1208,79 @@ impl SchemeRuntime {
                     .unwrap_or_default()
             });
 
+        // *current-command* — name of the command currently being dispatched
+        self.engine.register_value(
+            "*current-command*",
+            SteelVal::StringV(editor.current_command.clone().into()),
+        );
+
+        // --- A1: Buffer introspection functions (callable forms) ---
+
+        let buf_name = buf.name.clone();
+        self.engine
+            .register_fn("current-buffer-name", move || buf_name.clone());
+
+        let file_path = buf.file_path().map(|p| p.display().to_string());
+        self.engine
+            .register_fn("current-buffer-file", move || -> SteelVal {
+                match &file_path {
+                    Some(p) => SteelVal::StringV(p.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        let line_num = (win.cursor_row + 1) as isize;
+        self.engine
+            .register_fn("current-line-number", move || line_num);
+
+        let col = win.cursor_col as isize;
+        self.engine.register_fn("current-column", move || col);
+
+        let cursor_offset = buf.char_offset_at(win.cursor_row, win.cursor_col) as isize;
+        self.engine.register_fn("point", move || cursor_offset);
+
+        self.engine.register_fn("point-min", || 0isize);
+
+        let max_chars = buf.rope().len_chars() as isize;
+        self.engine.register_fn("point-max", move || max_chars);
+
+        let line_begin = buf.rope().line_to_char(win.cursor_row) as isize;
+        self.engine
+            .register_fn("line-beginning-position", move || line_begin);
+
+        let line_end = if win.cursor_row + 1 < buf.line_count() {
+            buf.rope().line_to_char(win.cursor_row + 1) as isize - 1
+        } else {
+            buf.rope().len_chars() as isize
+        };
+        self.engine
+            .register_fn("line-end-position", move || line_end);
+
+        // --- A2: Selection / region access ---
+
+        let is_visual = matches!(editor.mode, mae_core::Mode::Visual(_));
+        self.engine.register_fn("region-active?", move || is_visual);
+
+        // Compute region bounds (valid only in visual mode, but safe to call anytime)
+        let (region_beg, region_end, selection_text) = if is_visual {
+            let anchor_offset =
+                buf.char_offset_at(editor.visual_anchor_row, editor.visual_anchor_col);
+            let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
+            let beg = anchor_offset.min(cursor_off);
+            let end = anchor_offset.max(cursor_off) + 1; // inclusive end
+            let end = end.min(buf.rope().len_chars());
+            let text: String = buf.rope().chars().skip(beg).take(end - beg).collect();
+            (beg as isize, end as isize, text)
+        } else {
+            (0isize, 0isize, String::new())
+        };
+        let rb = region_beg;
+        self.engine.register_fn("region-beginning", move || rb);
+        let re = region_end;
+        self.engine.register_fn("region-end", move || re);
+        let st = selection_text;
+        self.engine.register_fn("get-selection", move || st.clone());
+
         // --- Round 2: extended introspection ---
 
         // *buffer-char-count* — total chars in the active buffer
@@ -1335,8 +1507,16 @@ impl SchemeRuntime {
                     let prev = keymap.bind(seq, &cmd_name);
                     if let Some(ref prev_cmd) = prev {
                         if prev_cmd != &cmd_name {
-                            debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
-                                   previous = %prev_cmd, "scheme keybinding overwrites existing");
+                            warn!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                                   previous = %prev_cmd, "keybinding conflict: overwriting");
+                            editor.message_log.push(
+                                mae_core::MessageLevel::Warn,
+                                "keybinding",
+                                format!(
+                                    "Key conflict in '{}': {} was '{}', now '{}' (module load order)",
+                                    map_name, key_str, prev_cmd, cmd_name
+                                ),
+                            );
                         }
                     } else {
                         debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
@@ -1352,7 +1532,17 @@ impl SchemeRuntime {
         let cmd_count = state.command_defs.len();
         for (name, doc, scheme_fn) in state.command_defs.drain(..) {
             debug!(command = %name, scheme_fn = %scheme_fn, "registering scheme command");
-            editor.commands.register_scheme(&name, &doc, &scheme_fn);
+            let overwrote = editor.commands.register_scheme(&name, &doc, &scheme_fn);
+            if overwrote {
+                editor.message_log.push(
+                    mae_core::MessageLevel::Warn,
+                    "command",
+                    format!(
+                        "Module overrides builtin command '{}' with Scheme function '{}'",
+                        name, scheme_fn
+                    ),
+                );
+            }
         }
 
         // Register autoload commands
@@ -1508,6 +1698,52 @@ impl SchemeRuntime {
                 }
                 editor.buffers[idx].insert_text_at(start, &text);
             }
+        }
+
+        // (create-buffer NAME)
+        if let Some(name) = state.pending_create_buffer.take() {
+            let mut buf = mae_core::Buffer::new();
+            buf.name = name;
+            editor.buffers.push(buf);
+            let new_idx = editor.buffers.len() - 1;
+            editor.display_buffer(new_idx);
+        }
+
+        // (kill-buffer-by-name NAME)
+        if let Some(name) = state.pending_kill_buffer.take() {
+            if let Some(idx) = editor.buffers.iter().position(|b| b.name == name) {
+                if editor.buffers.len() > 1 {
+                    editor.buffers.remove(idx);
+                    // Adjust window buffer indices
+                    for w in editor.window_mgr.iter_windows_mut() {
+                        if w.buffer_idx == idx {
+                            w.buffer_idx = 0;
+                        } else if w.buffer_idx > idx {
+                            w.buffer_idx -= 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply advice registrations
+        for (command, kind_str, fn_name) in state.pending_advice_adds.drain(..) {
+            let kind = match kind_str.as_str() {
+                ":before" | "before" => mae_core::hooks::AdviceKind::Before,
+                ":after" | "after" => mae_core::hooks::AdviceKind::After,
+                other => {
+                    warn!(kind = %other, "advice-add! unknown kind, defaulting to :before");
+                    mae_core::hooks::AdviceKind::Before
+                }
+            };
+            editor.hooks.add_advice(&command, kind, &fn_name);
+            debug!(command = %command, kind = %kind_str, fn_name = %fn_name, "advice registered");
+        }
+
+        // Apply advice removals
+        for (command, fn_name) in state.pending_advice_removes.drain(..) {
+            editor.hooks.remove_advice(&command, &fn_name);
+            debug!(command = %command, fn_name = %fn_name, "advice removed");
         }
 
         // (buffer-undo)
@@ -3030,5 +3266,153 @@ mod tests {
         let decl = rt.declared_modules();
         assert!(!decl.contains_key("dashboard"), "dashboard not declared");
         assert!(decl.contains_key("surround"), "surround declared");
+    }
+
+    // --- Phase A: New Scheme API tests ---
+
+    #[test]
+    fn string_split_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-split "a,b,c" ",")"#).unwrap();
+        assert!(result.contains("a"));
+        assert!(result.contains("b"));
+        assert!(result.contains("c"));
+    }
+
+    #[test]
+    fn string_join_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-join '("a" "b" "c") ",")"#).unwrap();
+        assert_eq!(result, "a,b,c");
+    }
+
+    #[test]
+    fn string_trim_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-trim "  hello  ")"#).unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn string_contains_works() {
+        let mut rt = new_runtime();
+        assert_eq!(
+            rt.eval(r#"(string-contains? "hello world" "world")"#)
+                .unwrap(),
+            "#t"
+        );
+        assert_eq!(
+            rt.eval(r#"(string-contains? "hello" "xyz")"#).unwrap(),
+            "#f"
+        );
+    }
+
+    #[test]
+    fn string_replace_works() {
+        let mut rt = new_runtime();
+        let result = rt
+            .eval(r#"(string-replace "hello world" "world" "rust")"#)
+            .unwrap();
+        assert_eq!(result, "hello rust");
+    }
+
+    #[test]
+    fn string_upcase_downcase_works() {
+        let mut rt = new_runtime();
+        assert_eq!(rt.eval(r#"(string-upcase "hello")"#).unwrap(), "HELLO");
+        assert_eq!(rt.eval(r#"(string-downcase "HELLO")"#).unwrap(), "hello");
+    }
+
+    #[test]
+    fn shell_command_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(shell-command "echo hello")"#).unwrap();
+        assert_eq!(result.trim(), "hello");
+    }
+
+    #[test]
+    fn create_buffer_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        let initial_count = editor.buffers.len();
+        rt.eval(r#"(create-buffer "test-buf")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.buffers.len(), initial_count + 1);
+        assert_eq!(editor.buffers.last().unwrap().name, "test-buf");
+    }
+
+    #[test]
+    fn kill_buffer_by_name_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        // Create a buffer first
+        let mut buf = mae_core::Buffer::new();
+        buf.name = "kill-me".to_string();
+        editor.buffers.push(buf);
+        assert_eq!(editor.buffers.len(), 2);
+        rt.eval(r#"(kill-buffer-by-name "kill-me")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.buffers.len(), 1);
+    }
+
+    #[test]
+    fn buffer_introspection_functions() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        {
+            let win = editor.window_mgr.focused_window_mut();
+            for ch in "hello\nworld".chars() {
+                editor.buffers[0].insert_char(win, ch);
+            }
+        }
+        rt.inject_editor_state(&editor);
+        assert_eq!(rt.eval("(current-line-number)").unwrap(), "2");
+        // point-min is always 0
+        assert_eq!(rt.eval("(point-min)").unwrap(), "0");
+        // point-max = total chars
+        let pmax = rt.eval("(point-max)").unwrap();
+        assert!(pmax.parse::<i64>().unwrap() > 0);
+        // current-buffer-name
+        let name = rt.eval("(current-buffer-name)").unwrap();
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn region_inactive_in_normal_mode() {
+        let mut rt = new_runtime();
+        let editor = Editor::new();
+        rt.inject_editor_state(&editor);
+        assert_eq!(rt.eval("(region-active?)").unwrap(), "#f");
+    }
+
+    #[test]
+    fn advice_add_and_remove() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        rt.eval(r#"(advice-add! "save" ":before" "my-before-save")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let before = editor
+            .hooks
+            .get_advice("save", mae_core::hooks::AdviceKind::Before);
+        assert_eq!(before, vec!["my-before-save"]);
+
+        rt.eval(r#"(advice-remove! "save" "my-before-save")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let before = editor
+            .hooks
+            .get_advice("save", mae_core::hooks::AdviceKind::Before);
+        assert!(before.is_empty());
+    }
+
+    #[test]
+    fn current_command_variable_exists() {
+        let mut rt = new_runtime();
+        let editor = Editor::new();
+        rt.inject_editor_state(&editor);
+        // Should not error — variable exists
+        let result = rt.eval("*current-command*").unwrap();
+        assert!(result.is_empty());
     }
 }

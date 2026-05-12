@@ -797,7 +797,16 @@ pub fn load_modules(
     let mut registry = ModuleRegistry::new();
     registry.register_resolved(&resolved);
 
+    let current_version = env!("CARGO_PKG_VERSION");
     for module in &resolved {
+        // F2: Enforce version constraints at load time
+        if let Err(e) = module.manifest.check_mae_version(current_version) {
+            registry.mark_failed(&module.name, e.clone());
+            error!(module = %module.name, error = %e, "module version constraint failed");
+            editor.set_status(format!("Module '{}' skipped: {}", module.name, e));
+            continue;
+        }
+
         match load_module_autoloads(module, scheme, editor) {
             Ok(()) => {
                 registry.mark_loaded(&module.name);

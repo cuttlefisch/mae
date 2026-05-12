@@ -12,6 +12,21 @@
 
 use std::collections::HashMap;
 
+/// Advice kind: wrap a command with before/after Scheme functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdviceKind {
+    Before,
+    After,
+}
+
+/// A per-command advice entry.
+#[derive(Debug, Clone)]
+pub struct AdviceEntry {
+    pub command: String,
+    pub kind: AdviceKind,
+    pub fn_name: String,
+}
+
 /// Well-known hook names. These are documented and used by the kernel.
 /// The hook namespace is OPEN — modules can register any hook name.
 /// This list exists for documentation and `mae pkg doctor` validation only.
@@ -40,9 +55,11 @@ pub const WELL_KNOWN_HOOKS: &[&str] = &[
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.
+/// Also manages per-command advice (before/after wrappers).
 #[derive(Debug, Clone)]
 pub struct HookRegistry {
     hooks: HashMap<String, Vec<String>>,
+    advice: Vec<AdviceEntry>,
 }
 
 impl Default for HookRegistry {
@@ -55,6 +72,7 @@ impl HookRegistry {
     pub fn new() -> Self {
         HookRegistry {
             hooks: HashMap::new(),
+            advice: Vec::new(),
         }
     }
 
@@ -124,6 +142,40 @@ impl HookRegistry {
     /// is open so modules can define custom hooks.
     pub fn is_valid(_name: &str) -> bool {
         true
+    }
+
+    // --- Per-command advice (defadvice equivalent) ---
+
+    /// Add advice to a command. Duplicate registrations are silently ignored.
+    pub fn add_advice(&mut self, command: &str, kind: AdviceKind, fn_name: &str) {
+        if !self
+            .advice
+            .iter()
+            .any(|a| a.command == command && a.kind == kind && a.fn_name == fn_name)
+        {
+            self.advice.push(AdviceEntry {
+                command: command.to_string(),
+                kind,
+                fn_name: fn_name.to_string(),
+            });
+        }
+    }
+
+    /// Remove advice from a command by function name (any kind).
+    pub fn remove_advice(&mut self, command: &str, fn_name: &str) -> bool {
+        let before = self.advice.len();
+        self.advice
+            .retain(|a| !(a.command == command && a.fn_name == fn_name));
+        self.advice.len() < before
+    }
+
+    /// Get all advice function names for a command and kind.
+    pub fn get_advice(&self, command: &str, kind: AdviceKind) -> Vec<String> {
+        self.advice
+            .iter()
+            .filter(|a| a.command == command && a.kind == kind)
+            .map(|a| a.fn_name.clone())
+            .collect()
     }
 }
 
@@ -233,6 +285,53 @@ mod tests {
         assert!(HookRegistry::is_valid("nonexistent:rust"));
         // But well_known check still rejects unknown bases.
         assert!(!HookRegistry::is_well_known("nonexistent:rust"));
+    }
+
+    // --- Advice system tests ---
+
+    #[test]
+    fn add_and_get_advice() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "my-before-save");
+        reg.add_advice("save", AdviceKind::After, "my-after-save");
+        assert_eq!(
+            reg.get_advice("save", AdviceKind::Before),
+            vec!["my-before-save"]
+        );
+        assert_eq!(
+            reg.get_advice("save", AdviceKind::After),
+            vec!["my-after-save"]
+        );
+    }
+
+    #[test]
+    fn add_advice_duplicate_idempotent() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        assert_eq!(reg.get_advice("save", AdviceKind::Before).len(), 1);
+    }
+
+    #[test]
+    fn remove_advice_works() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        reg.add_advice("save", AdviceKind::After, "fn-b");
+        assert!(reg.remove_advice("save", "fn-a"));
+        assert!(reg.get_advice("save", AdviceKind::Before).is_empty());
+        assert_eq!(reg.get_advice("save", AdviceKind::After), vec!["fn-b"]);
+    }
+
+    #[test]
+    fn remove_advice_nonexistent_returns_false() {
+        let mut reg = HookRegistry::new();
+        assert!(!reg.remove_advice("save", "nonexistent"));
+    }
+
+    #[test]
+    fn get_advice_empty_for_unknown_command() {
+        let reg = HookRegistry::new();
+        assert!(reg.get_advice("nonexistent", AdviceKind::Before).is_empty());
     }
 
     #[test]

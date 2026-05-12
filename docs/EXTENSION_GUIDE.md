@@ -98,10 +98,35 @@ any module keybinding or option in their config.
 | `(buffer-delete-range start end)` | Delete character range |
 | `(buffer-replace-range start end text)` | Replace range |
 | `(buffer-text-range start end)` | Read range |
+| `(create-buffer name)` | Create a new empty buffer |
+| `(kill-buffer-by-name name)` | Close a buffer by name |
 | `*buffer-name*` | Current buffer name |
 | `*buffer-text*` | Full buffer contents |
 | `*buffer-char-count*` | Character count |
 | `*buffer-list*` | All buffer names |
+
+### Buffer Introspection (callable forms)
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `(current-buffer-name)` | string | Current buffer name |
+| `(current-buffer-file)` | string or `#f` | File path or false if unsaved |
+| `(current-line-number)` | int | 1-indexed line number |
+| `(current-column)` | int | Cursor column |
+| `(point)` | int | Char offset of cursor |
+| `(point-min)` | int | Always 0 |
+| `(point-max)` | int | Total chars in buffer |
+| `(line-beginning-position)` | int | Start of current line |
+| `(line-end-position)` | int | End of current line |
+
+### Selection / Region
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `(region-active?)` | bool | True in visual mode |
+| `(region-beginning)` | int | Start of selection |
+| `(region-end)` | int | End of selection |
+| `(get-selection)` | string | Selected text |
 
 ### Cursor & Navigation
 
@@ -142,13 +167,43 @@ any module keybinding or option in their config.
 | `(undefine-option! name)` | Remove (for unload) |
 | `*option-list*` | All options as tuples |
 
-### Hooks
+### Hooks & Advice
 
 | Function | Description |
 |----------|-------------|
 | `(add-hook! hook fn)` | Subscribe to event |
 | `(remove-hook! hook fn)` | Unsubscribe |
-| `(run-hook! hook)` | Trigger event |
+| `(advice-add! command kind fn)` | Add before/after advice to a command |
+| `(advice-remove! command fn)` | Remove advice from a command |
+| `*current-command*` | Name of command being dispatched |
+
+Hooks `command-pre` and `command-post` fire for every command dispatch.
+Per-command advice wraps specific commands:
+
+```scheme
+(define (my-before-save)
+  (message (string-append "Saving " (current-buffer-name) "...")))
+
+(advice-add! "save" ":before" "my-before-save")
+```
+
+### String Utilities
+
+| Function | Description |
+|----------|-------------|
+| `(string-split str sep)` | Split string into list |
+| `(string-join lst sep)` | Join list with separator |
+| `(string-trim str)` | Trim whitespace |
+| `(string-contains? str sub)` | Substring check |
+| `(string-replace str from to)` | Replace all occurrences |
+| `(string-upcase str)` | Uppercase |
+| `(string-downcase str)` | Lowercase |
+
+### Process Execution
+
+| Function | Description |
+|----------|-------------|
+| `(shell-command cmd)` | Run shell command, return stdout (1MB cap) |
 
 ### Module Queries
 
