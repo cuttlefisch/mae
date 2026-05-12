@@ -427,7 +427,8 @@ impl KnowledgeBase {
         };
         let nodes = parse_org_multi(&content);
         let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
-        for n in nodes {
+        for mut n in nodes {
+            n.source_file = Some(path.as_ref().to_path_buf());
             self.insert(n);
         }
         ids
@@ -507,6 +508,18 @@ a regular [[https://mae.invalid][link]] that we keep.
         assert!(kb.contains("x-1"));
         // The b.org node links to abc-123 → reverse index must reflect it.
         assert_eq!(kb.links_to("abc-123"), vec!["x-1".to_string()]);
+    }
+
+    #[test]
+    fn ingest_org_file_populates_source_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("note.org");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let mut kb = KnowledgeBase::new();
+        let ids = kb.ingest_org_file(&path);
+        assert!(!ids.is_empty());
+        let node = kb.get(&ids[0]).unwrap();
+        assert_eq!(node.source_file.as_deref(), Some(path.as_path()));
     }
 
     #[test]

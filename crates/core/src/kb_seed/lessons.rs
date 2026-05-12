@@ -324,6 +324,7 @@ buffers, shell processes, and AI session info.\n\
   `SPC t D` — toggle debug mode (RSS/CPU/frame-time in status bar)\n\
   `SPC t F` — toggle FPS overlay\n\n\
 **Prev:** [[lesson:debugging|Lesson 11]]  |  \
+**Next:** [[lesson:kb-import-roam|Lesson 13]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n";
 
 pub(super) const CONCEPT_WATCHDOG: &str = "\
@@ -434,3 +435,47 @@ MCP tools — no external profiler needed.\n\n\
 - Set conditional breakpoint: `dap_set_breakpoint(source: \"...\", line: N, condition: \"scale > 1.0\")`\n\
 - Step through the hot path, inspect variables\n\n\
 See also: [[concept:introspect]], [[concept:debugging]], [[concept:event-recording]], [[index]]\n";
+
+pub(super) const LESSON_KB_IMPORT: &str = "\
+## Lesson 13: Importing Your Knowledge Base\n\n\
+If you have an org-roam directory (or any directory of `.org` files with `:ID:` \
+properties), you can register it as a federated KB instance in MAE.\n\n\
+### Prerequisites\n\
+- Your org files need `:PROPERTIES: :ID: <uuid> :END:` drawers.\n\
+- Nested subdirectories are supported (recursive import).\n\
+- Files without `:ID:` are skipped (counted in the report).\n\n\
+### Step 1: Register\n\
+```\n\
+:kb-register MyNotes ~/RoamNotes\n\
+```\n\
+Or ask the AI: \"import my KB at ~/RoamNotes\"\n\n\
+MAE will recursively walk the directory, parse all `.org` files, \
+and report results:\n\
+```\n\
+Registered 'MyNotes': 2,342 nodes, 4,891 links\n\
+  Health: 45 orphans, 12 broken links, 3 duplicate IDs\n\
+```\n\n\
+### Step 2: Verify\n\
+- `:kb-instances` — shows your registered instance with node count.\n\
+- `:kb-health` — detailed health report (orphans, broken links, namespaces).\n\
+- `SPC n f` or `SPC h s` — search should find your notes.\n\n\
+### Step 3: Use\n\
+Your notes are now searchable from `:help`, `SPC h`, and the AI agent. \
+The AI can find and summarize your notes just like built-in help.\n\n\
+### Step 4: Update after edits\n\
+When you edit org files externally, refresh the graph:\n\
+```\n\
+:kb-reimport MyNotes\n\
+```\n\n\
+### Data safety\n\
+- MAE **never writes** to your org directory (except `eor-instance.org` sentinel).\n\
+- Your org files are the source of truth. The index is always re-derivable.\n\
+- Back up your org files with git. The SQLite cache is disposable.\n\n\
+### Unregister\n\
+```\n\
+:kb-unregister MyNotes\n\
+```\n\
+Removes from registry and frees memory. Your org files are untouched.\n\n\
+**Prev:** [[lesson:observability|Lesson 12]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n\n\
+See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:kb-vs-alternatives]]\n";

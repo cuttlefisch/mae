@@ -317,8 +317,35 @@ impl Editor {
         }
     }
 
-    /// List KB instances.
-    pub fn kb_instances(&mut self) {
-        self.set_status("KB federation: built-in KB only (no external instances registered)");
+    /// List KB instances — returns structured info for AI tools.
+    pub fn kb_instances(&mut self) -> String {
+        if self.kb_registry.instances.is_empty() {
+            let msg = "KB federation: built-in KB only (no external instances registered)";
+            self.set_status(msg);
+            return msg.to_string();
+        }
+
+        let mut lines = vec![format!(
+            "KB federation: {} instance(s)",
+            self.kb_registry.instances.len()
+        )];
+        for inst in &self.kb_registry.instances {
+            let count = self
+                .kb_instances
+                .get(&inst.uuid)
+                .map(|kb| kb.len())
+                .unwrap_or(0);
+            lines.push(format!(
+                "  {} [{}]: {} nodes, enabled={}, dir={}",
+                inst.name,
+                &inst.uuid[..8.min(inst.uuid.len())],
+                count,
+                inst.enabled,
+                inst.org_dir.display(),
+            ));
+        }
+        let summary = lines.join("\n");
+        self.set_status(&lines[0]);
+        summary
     }
 }

@@ -358,6 +358,34 @@ fn main() -> io::Result<()> {
         load_history(&mut scheme, &mut editor);
     }
 
+    // Load KB federation registry and import enabled instances.
+    if !clean_mode {
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("mae");
+        let registry = mae_kb::federation::KbRegistry::load(&config_dir);
+        for inst in &registry.instances {
+            if !inst.enabled {
+                continue;
+            }
+            if inst.org_dir.exists() {
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
+                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                info!(
+                    name = %inst.name,
+                    nodes = report.nodes_imported,
+                    skipped = report.nodes_skipped,
+                    errors = report.errors.len(),
+                    "KB instance loaded"
+                );
+                editor.kb_instances.insert(inst.uuid.clone(), kb);
+            } else {
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
+            }
+        }
+        editor.kb_registry = registry;
+    }
+
     // Fire app-start hook after initialization is complete.
     editor.fire_hook("app-start");
 

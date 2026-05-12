@@ -26,6 +26,7 @@ pub mod fuzzy;
 pub mod org;
 pub mod persist;
 pub mod watch;
+pub use federation::{ImportHealth, ImportReport as FederationImportReport};
 pub use org::IngestReport;
 pub use persist::PersistError;
 
@@ -92,6 +93,10 @@ pub struct Node {
     /// Alternative names for discoverability (e.g. "plugins" for concept:modules).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Path to the source `.org` file this node was parsed from (if any).
+    /// Not serialized — ephemeral, populated during ingest.
+    #[serde(skip)]
+    pub source_file: Option<std::path::PathBuf>,
 }
 
 impl Node {
@@ -112,6 +117,7 @@ impl Node {
             source: None,
             source_version: None,
             aliases: Vec::new(),
+            source_file: None,
         }
     }
 
@@ -138,6 +144,11 @@ impl Node {
 
     pub fn with_priority(mut self, priority: char) -> Self {
         self.priority = Some(priority);
+        self
+    }
+
+    pub fn with_source_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.source_file = Some(path.into());
         self
     }
 

@@ -145,6 +145,15 @@ impl Editor {
             "kb-instances" => {
                 self.kb_instances();
             }
+            "kb-register" => {
+                self.set_status("Usage: :kb-register <name> <directory>");
+            }
+            "kb-unregister" => {
+                self.set_status("Usage: :kb-unregister <name>");
+            }
+            "kb-reimport" => {
+                self.set_status("Usage: :kb-reimport <name>");
+            }
             // Display region link navigation
             "text-next-link" => {
                 self.text_next_link();

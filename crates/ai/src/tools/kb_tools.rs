@@ -205,6 +205,198 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "kb_register".into(),
+            description: "Register an org-roam directory as a federated KB instance. Recursively imports all .org files with :ID: properties. Returns import stats and health metrics (orphans, broken links, namespace distribution).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Display name for the KB instance (e.g. 'RoamNotes', 'Work')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Path to the org directory (supports ~ expansion)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["name".into(), "path".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "kb_unregister".into(),
+            description: "Unregister a federated KB instance by name or UUID. Removes it from the registry and frees memory.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name or UUID of the instance to unregister".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["name".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_reimport".into(),
+            description: "Re-import a registered KB instance from its org directory. Use after editing org files to refresh the graph. Returns updated import stats and health metrics.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "name".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Name or UUID of the instance to reimport".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["name".into()],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        // --- KB CRUD tools ---
+        ToolDefinition {
+            name: "kb_create".into(),
+            description: "Create a new node in the local knowledge base. Cannot overwrite seed (built-in help) nodes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Node id (e.g. 'user:my-note', 'concept:my-concept')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "title".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Human-readable title".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "body".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Markdown body (may contain [[link]] markers)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "kind".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Node kind (default: note)".into(),
+                            enum_values: Some(vec!["note".into(), "concept".into(), "command".into(), "key".into(), "project".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["id".into(), "title".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_update".into(),
+            description: "Update fields on an existing KB node. Cannot modify seed (built-in help) nodes. Only provided fields are changed.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Node id to update".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "title".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "New title (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "body".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "New body (optional)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "tags".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "New tags array (optional, replaces existing)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_delete".into(),
+            description: "Delete a node from the local knowledge base. Cannot delete seed (built-in help) nodes.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Node id to delete".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_search_context".into(),
+            description: "RAG-optimized KB search: returns top-K nodes with excerpts for AI reasoning context. Searches local + federated KBs. Use this instead of kb_search + kb_get loops.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Search query (case-insensitive substring, fuzzy fallback)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max results (default 5, max 20)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // --- Org tools ---
         ToolDefinition {
             name: "org_cycle".into(),

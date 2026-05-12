@@ -484,8 +484,7 @@ pub fn execute_org_export(editor: &mut Editor, args: &serde_json::Value) -> Resu
 }
 
 pub fn execute_kb_instances(editor: &mut Editor) -> Result<String, String> {
-    editor.kb_instances();
-    Ok(editor.status_msg.clone())
+    Ok(editor.kb_instances())
 }
 
 pub fn execute_visual_buffer_add_rect(

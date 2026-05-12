@@ -204,23 +204,54 @@ pub struct ImportReport {
     pub nodes_imported: usize,
     pub nodes_skipped: usize,
     pub links_created: usize,
+    pub duplicate_ids: Vec<(String, PathBuf)>,
     pub errors: Vec<(PathBuf, String)>,
+    pub path_to_ids: Vec<(std::path::PathBuf, Vec<String>)>,
 }
 
-/// Import an org-roam directory into a MAE KB instance.
-pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport) {
+/// Health metrics computed after ingestion.
+#[derive(Debug, Clone, Default)]
+pub struct ImportHealth {
+    pub total_nodes: usize,
+    pub total_links: usize,
+    pub orphan_count: usize,
+    pub broken_link_count: usize,
+    pub namespace_counts: HashMap<String, usize>,
+}
+
+impl ImportHealth {
+    /// Compute health metrics from a freshly-imported KB.
+    pub fn from_kb(kb: &KnowledgeBase) -> Self {
+        let report = kb.health_report();
+        Self {
+            total_nodes: report.total_nodes,
+            total_links: report.total_links,
+            orphan_count: report.orphan_ids.len(),
+            broken_link_count: report.broken_links.len(),
+            namespace_counts: report.namespace_counts,
+        }
+    }
+}
+
+/// Import an org-roam directory (recursively) into a MAE KB instance.
+///
+/// Uses `walkdir` to handle nested subdirectories. Skips the sentinel
+/// file (`eor-instance.org`) and files without `:ID:` properties.
+pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHealth) {
     let mut kb = KnowledgeBase::new();
     let mut report = ImportReport::default();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut file_id_map: HashMap<PathBuf, Vec<String>> = HashMap::new();
 
-    let entries = match std::fs::read_dir(org_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            report.errors.push((org_dir.to_path_buf(), e.to_string()));
-            return (kb, report);
+    let walker = walkdir::WalkDir::new(org_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok());
+
+    for entry in walker {
+        if !entry.file_type().is_file() {
+            continue;
         }
-    };
-
-    for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("org") {
             continue;
@@ -230,26 +261,37 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport) {
             continue;
         }
 
-        match std::fs::read_to_string(&path) {
+        match std::fs::read_to_string(path) {
             Ok(content) => {
                 let nodes = crate::org::parse_org_multi(&content);
                 if nodes.is_empty() {
                     report.nodes_skipped += 1;
                 } else {
-                    for node in nodes {
+                    for mut node in nodes {
+                        node.source_file = Some(path.to_path_buf());
                         report.links_created += node.links().len();
-                        kb.insert(node);
-                        report.nodes_imported += 1;
+                        if seen_ids.insert(node.id.clone()) {
+                            let nid = node.id.clone();
+                            kb.insert(node);
+                            report.nodes_imported += 1;
+                            file_id_map.entry(path.to_path_buf()).or_default().push(nid);
+                        } else {
+                            report
+                                .duplicate_ids
+                                .push((node.id.clone(), path.to_path_buf()));
+                        }
                     }
                 }
             }
             Err(e) => {
-                report.errors.push((path, e.to_string()));
+                report.errors.push((path.to_path_buf(), e.to_string()));
             }
         }
     }
 
-    (kb, report)
+    report.path_to_ids = file_id_map.into_iter().collect();
+    let health = ImportHealth::from_kb(&kb);
+    (kb, report, health)
 }
 
 /// Read UUID from sentinel file in org directory.
@@ -451,6 +493,35 @@ mod tests {
         let mut fed = FederatedKb::new(local);
         fed.instances.insert("i1".to_string(), instance);
         assert_eq!(fed.total_nodes(), 3);
+    }
+
+    #[test]
+    fn import_org_dir_populates_source_file() {
+        let tmp = std::env::temp_dir().join("mae-test-source-file");
+        let _ = std::fs::create_dir_all(&tmp);
+        std::fs::write(
+            tmp.join("note.org"),
+            ":PROPERTIES:\n:ID: src-test-1\n:END:\n#+title: Source Test\n\nBody.\n",
+        )
+        .unwrap();
+        let (kb, report, _health) = import_org_dir(&tmp);
+        assert!(kb.get("src-test-1").is_some());
+        let node = kb.get("src-test-1").unwrap();
+        assert!(
+            node.source_file.is_some(),
+            "source_file should be populated"
+        );
+        assert!(node.source_file.as_ref().unwrap().ends_with("note.org"));
+        // path_to_ids populated
+        assert!(!report.path_to_ids.is_empty());
+        let ids_for_note: Vec<_> = report
+            .path_to_ids
+            .iter()
+            .filter(|(p, _)| p.ends_with("note.org"))
+            .collect();
+        assert!(!ids_for_note.is_empty());
+        assert!(ids_for_note[0].1.contains(&"src-test-1".to_string()));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

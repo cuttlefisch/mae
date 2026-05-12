@@ -527,16 +527,51 @@ For full setup guide: :help ai-setup";
 
             // +notes (KB)
             "kb-find" => {
-                let nodes: Vec<(String, String)> = self
+                // Local KB nodes
+                let mut nodes: Vec<(String, String)> = self
                     .kb
                     .list_ids(None)
                     .iter()
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
+                // Federated instance nodes
+                for kb in self.kb_instances.values() {
+                    for id in kb.list_ids(None) {
+                        if let Some(n) = kb.get(&id) {
+                            nodes.push((id, n.title.clone()));
+                        }
+                    }
+                }
                 self.command_palette = Some(
                     crate::command_palette::CommandPalette::for_help_search(&nodes),
                 );
                 self.set_mode(Mode::CommandPalette);
+            }
+            "kb-edit-source" => {
+                self.help_edit_source();
+            }
+            "kb-create" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-create ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-delete" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-delete ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-register" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-register ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-reimport" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-reimport ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-instances" => {
+                self.show_kb_instances();
             }
             "kb-save" => {
                 self.set_status("Usage: :kb-save <path>");

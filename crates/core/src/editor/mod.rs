@@ -13,6 +13,7 @@ mod git_ops;
 mod help_ops;
 mod hook_ops;
 mod jumps;
+pub(crate) mod kb_ops;
 mod keymaps;
 mod lsp_ops;
 mod macros;
@@ -524,6 +525,12 @@ pub struct Editor {
     /// AI-facing `kb_*` tools. Seeded from `CommandRegistry` +
     /// hand-authored concept nodes on startup.
     pub kb: mae_kb::KnowledgeBase,
+    /// KB federation: registry of external KB instances (org-roam dirs etc.).
+    pub kb_registry: mae_kb::federation::KbRegistry,
+    /// KB federation: loaded KB instances keyed by registry UUID.
+    pub kb_instances: HashMap<String, mae_kb::KnowledgeBase>,
+    /// KB federation: live file watchers for registered org directories.
+    pub kb_watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
     /// Babel: prompt before executing blocks (default true).
     pub babel_confirm: bool,
     /// Babel: trusted file patterns that skip confirmation.
@@ -978,6 +985,9 @@ impl Editor {
             last_visual: None,
             pending_scheme_eval: Vec::new(),
             kb,
+            kb_registry: mae_kb::federation::KbRegistry::default(),
+            kb_instances: HashMap::new(),
+            kb_watchers: HashMap::new(),
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
@@ -3921,6 +3931,9 @@ impl Editor {
                 }
             }
         }
+
+        // 3. Drain KB file watchers for federated instances.
+        self.drain_kb_watchers();
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.

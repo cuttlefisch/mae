@@ -177,6 +177,67 @@ impl Editor {
                 }
                 true
             }
+            "kb-create" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-create <id> <title>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-create <id> <title>");
+                        } else {
+                            let id = parts[0];
+                            let title = parts[1].trim();
+                            match self.kb_create_node(id, title, "", mae_kb::NodeKind::Note) {
+                                Ok(()) => {}
+                                Err(e) => self.set_status(e),
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "kb-delete" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-delete <id>"),
+                    Some(id) => match self.kb_delete_node(id) {
+                        Ok(()) => {}
+                        Err(e) => self.set_status(e),
+                    },
+                }
+                true
+            }
+            "kb-register" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-register <name> <directory>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-register <name> <directory>");
+                        } else {
+                            let name = parts[0];
+                            let dir = crate::file_picker::expand_tilde(parts[1].trim());
+                            self.kb_register(name, std::path::Path::new(&dir));
+                        }
+                    }
+                }
+                true
+            }
+            "kb-unregister" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-unregister <name>"),
+                    Some(name) => self.kb_unregister(name),
+                }
+                true
+            }
+            "kb-reimport" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-reimport <name>"),
+                    Some(name) => {
+                        self.kb_reimport(name);
+                    }
+                }
+                true
+            }
             "kb-save" => {
                 self.dispatch_path_op(
                     args,

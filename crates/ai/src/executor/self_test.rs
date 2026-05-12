@@ -460,6 +460,94 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
         }));
     }
 
+    if include("modules") {
+        categories.push(serde_json::json!({
+            "name": "modules",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "list_modules",
+                    "args": {},
+                    "assert": "Returns JSON array with >= 9 modules (dashboard, surround, marks-jumps, search, registers, macros, tables, multicursor, file-tree)"
+                },
+                {
+                    "tool": "execute_command",
+                    "args": {"command": "describe-module"},
+                    "assert": "Succeeds (may show prompt or info for first module)"
+                },
+                {
+                    "tool": "kb_search",
+                    "args": {"query": "module:dashboard"},
+                    "assert": "Returns >= 1 result (module KB nodes exist)"
+                },
+                {
+                    "tool": "kb_get",
+                    "args": {"id": "concept:modules"},
+                    "assert": "Returns node with body containing 'module.toml'"
+                }
+            ]
+        }));
+    }
+
+    if include("federation") {
+        categories.push(serde_json::json!({
+            "name": "federation",
+            "conditional": false,
+            "tests": [
+                {
+                    "tool": "kb_instances",
+                    "args": {},
+                    "assert": "Returns structured response (may be empty list or 'no external instances')"
+                },
+                {
+                    "tool": "kb_health",
+                    "args": {},
+                    "assert": "Returns JSON with local.total_nodes > 100, local.namespace_counts object, instances array"
+                },
+                {
+                    "tool": "kb_search",
+                    "args": {"query": "federation"},
+                    "assert": "Returns at least 1 result including concept:kb-federation"
+                },
+                {
+                    "tool": "kb_get",
+                    "args": {"id": "concept:kb-federation"},
+                    "assert": "Returns node with body containing 'registry'"
+                },
+                {
+                    "tool": "kb_get",
+                    "args": {"id": "concept:kb-workflows"},
+                    "assert": "Returns node with body containing 'backup'"
+                },
+                {
+                    "tool": "kb_get",
+                    "args": {"id": "concept:kb-vs-alternatives"},
+                    "assert": "Returns node with body containing 'Obsidian'"
+                },
+                {
+                    "tool": "kb_create",
+                    "args": {"id": "user:self-test-node", "title": "Self Test Node", "body": "Created by self-test"},
+                    "assert": "Returns JSON with id 'user:self-test-node'"
+                },
+                {
+                    "tool": "kb_update",
+                    "args": {"id": "user:self-test-node", "title": "Updated Self Test"},
+                    "assert": "Returns JSON with title 'Updated Self Test'"
+                },
+                {
+                    "tool": "kb_delete",
+                    "args": {"id": "user:self-test-node"},
+                    "assert": "Returns confirmation 'Deleted node: user:self-test-node'"
+                },
+                {
+                    "tool": "kb_search_context",
+                    "args": {"query": "buffer", "limit": 3},
+                    "assert": "Returns array of objects with id, title, kind, excerpt fields"
+                }
+            ]
+        }));
+    }
+
     if include("guidance") {
         categories.push(serde_json::json!({
             "name": "guidance",

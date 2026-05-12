@@ -307,6 +307,13 @@ fn tutor_nodes() -> Vec<Node> {
             LESSON_OBSERVABILITY,
         )
         .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:kb-import-roam",
+            "Lesson 13: Importing Your Knowledge Base",
+            NodeKind::Concept,
+            LESSON_KB_IMPORT,
+        )
+        .with_tags(["tutorial", "kb", "federation", "org-roam"]),
     ]
 }
 
@@ -527,6 +534,30 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_KB,
         )
         .with_tags(["kb", "architecture"]),
+        Node::new(
+            "concept:kb-federation",
+            "Concept: KB Federation",
+            NodeKind::Concept,
+            CONCEPT_KB_FEDERATION,
+        )
+        .with_tags(["kb", "federation", "org-roam"])
+        .with_aliases(["federation", "kb-register", "org-roam import"]),
+        Node::new(
+            "concept:kb-workflows",
+            "Concept: KB Workflows",
+            NodeKind::Concept,
+            CONCEPT_KB_WORKFLOWS,
+        )
+        .with_tags(["kb", "workflow", "help"])
+        .with_aliases(["kb usage", "help authoring", "backup"]),
+        Node::new(
+            "concept:kb-vs-alternatives",
+            "Concept: KB vs Obsidian / Roam Research",
+            NodeKind::Concept,
+            CONCEPT_KB_ALTERNATIVES,
+        )
+        .with_tags(["kb", "comparison", "obsidian", "roam"])
+        .with_aliases(["obsidian", "roam research", "notion", "logseq"]),
         Node::new(
             "key:normal-mode",
             "Keys: Normal Mode",
@@ -850,7 +881,11 @@ mod tests {
             "concept:modules",
             "concept:flags",
             "concept:design-philosophy",
+            "concept:kb-federation",
+            "concept:kb-workflows",
+            "concept:kb-vs-alternatives",
             "guide:extension-authoring",
+            "lesson:kb-import-roam",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

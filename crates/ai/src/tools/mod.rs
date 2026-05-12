@@ -108,8 +108,8 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 106,
-            "Expected at least 106 AI tools, got {}",
+            tools.len() >= 109,
+            "Expected at least 109 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -207,8 +207,8 @@ mod tests {
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 55,
-            "core tools should be < 55, got {}",
+            core_count < 60,
+            "core tools should be < 60, got {}",
             core_count
         );
         assert!(

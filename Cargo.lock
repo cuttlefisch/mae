@@ -2041,6 +2041,7 @@ dependencies = [
  "mae-core",
  "mae-dap",
  "mae-gui",
+ "mae-kb",
  "mae-lsp",
  "mae-mcp",
  "mae-renderer",

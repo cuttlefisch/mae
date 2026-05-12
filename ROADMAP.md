@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.7.0-dev · **Tests:** 2,629 passing · **Status:** Alpha — all 10 phases complete, polish in progress.
+**Current version:** v0.9.0-dev · **Tests:** 2,748 passing · **Status:** Alpha — all 11 phases complete, KB federation ready for production use.
 
 ---
 
@@ -14,10 +14,11 @@
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | SQLite + FTS5, org parser, 200+ nodes, bidirectional links, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
-| 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
+| 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, noweb, tangle, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
+| 11. Module System | ✅ Complete | 9 modules extracted (Doom model), `module.toml` manifests, `mae pkg` CLI, flags, live reload |
 
 ---
 
@@ -31,7 +32,6 @@
 
 ### Near-term
 - [ ] PDF preview (GUI inline rendering)
-- [ ] Scheme module system (package manager architecture)
 - [ ] Semantic code search (vector embeddings)
 - [ ] Org ↔ Markdown bidirectional conversion
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
@@ -125,6 +125,25 @@
 
 </details>
 
+<details>
+<summary>Phase 11 details — Module System + KB Federation (v0.9.0)</summary>
+
+- 9 modules extracted: dashboard, surround, marks-jumps, search, registers, macros, tables, multicursor, file-tree
+- Doom Emacs-inspired three-file model: `module.toml`, `autoloads.scm`, `init.scm`
+- `mae pkg` CLI: list, doctor, info, create, sync, upgrade
+- Module flags (`+flag` syntax), dependency resolution, live reload
+- `describe-module`, `describe-mode`, `describe-bindings` introspection commands
+- KB federation fully wired: `:kb-register`, `:kb-unregister`, `:kb-reimport`, `:kb-instances`
+- Recursive org-dir import with health metrics (orphans, broken links, namespaces)
+- Federated search across local KB + N external instances
+- AI tools: `kb_register`, `kb_unregister`, `kb_reimport` with structured JSON responses
+- Registry persistence (`~/.config/mae/kb-registry.toml`), startup auto-load
+- KB documentation: `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives`
+- Tutorial: `lesson:kb-import-roam` (Lesson 13)
+- Self-test categories: `modules`, `federation`
+
+</details>
+
 ---
 
 ## Architecture Invariants
@@ -136,16 +155,3 @@ These are non-negotiable constraints derived from Emacs git history analysis:
 3. **AI is a peer, not a plugin** — same `dispatch_builtin()` for human and AI.
 4. **Module boundaries enable distributed ownership** — 11 crates with clear responsibilities.
 5. **Runtime redefinability is sacred** — Scheme `defadvice`, live REPL, hot reload.
-
-## Near-Term Technical Debt (v0.8.0)
-
-### Editor struct extraction
-`editor/mod.rs` is 4,006 lines with 80+ pub fields spanning LSP, DAP, AI, completion, and debug concerns. Extract `LspState`, `DapState`, and `AiState` structs to bring it under 3,500 lines.
-
-### Upgrade path pre-work
-Before introducing a module/package system, these foundations must be in place:
-- **Config versioning** — `config_version` field in config.toml (added in v0.7.0)
-- **KB migration framework** — step-wise schema migrations with `NodeSource` provenance tracking (added in v0.7.0)
-- **Scheme API deprecation mechanism** — `mae-api-version` global + deprecation wrappers
-- **Forward-compatible serialization** — conversation format accepts unknown-higher versions with warning (added in v0.7.0)
-- **Package manifest spec** — `package.scm` format (name, version, dependencies)

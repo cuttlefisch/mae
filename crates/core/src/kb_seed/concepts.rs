@@ -516,25 +516,161 @@ Every tool has a permission tier: ReadOnly, Write, Shell, \
 Privileged. Users control how far the agent can act autonomously.\n\n\
 See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-bootstrap]]\n";
 
-pub(super) const CONCEPT_KB: &str = "MAE's **knowledge base** is a typed graph of nodes with \
-bidirectional link markers. It started as the help system's backing store and is \
-designed to grow into an org-roam-equivalent personal knowledge graph.\n\n\
-## Why one system for both?\n\
-Help pages, keybinding docs, architectural essays, user notes, and AI-authored findings \
-all want the same three properties:\n\
-1. Addressable (stable id).\n\
-2. Linkable (`[[other-node]]`).\n\
-3. Queryable by a peer (the AI gets the same query surface the human does).\n\n\
+pub(super) const CONCEPT_KB: &str = "\
+MAE's **knowledge base** is a typed graph of nodes with bidirectional \
+link markers. It serves as both the built-in help system and a personal \
+knowledge graph (org-roam-equivalent).\n\n\
+## Graph model\n\
+- Typed nodes with bidirectional links (`id|display` syntax).\n\
+- Reverse index: O(1) `links_to()` — who points at this node?\n\
+- Pre-lowercased search cache + FTS5 full-text search (porter stemmer + unicode61).\n\
+- `NodeKind` enum: Index, Command, Concept, Key, Note, Project.\n\
+- `NodeSource` provenance: Seed, UserOrg, Manual, Federation.\n\n\
 ## Node namespaces\n\
 - `index` — the entry page.\n\
 - `cmd:<name>` — one per registered [[concept:command|Command]] (auto-generated).\n\
 - `concept:<slug>` — architectural concepts (hand-authored).\n\
 - `key:<context>` — keybinding summaries.\n\
-- (Future) `note:<slug>` — user notes; `file:<path>` — per-file AI notes.\n\n\
+- `option:<name>` — editor options.\n\
+- `module:<name>` — module documentation.\n\
+- `scheme:<name>` — Scheme API functions.\n\
+- `lesson:<slug>` — interactive tutorials.\n\n\
+## Federation\n\
+The KB supports multiple instances: a local KB (seed + user help) plus N external \
+instances registered from org-roam directories. See [[concept:kb-federation]].\n\n\
 ## AI surface\n\
-The agent reaches the KB via the `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, and \
-`kb_links_to` tools. Same nodes the human reads via `:help`.\n\n\
-See also: [[concept:ai-as-peer]], [[index]]\n";
+The agent reaches the KB via `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, \
+`kb_links_to`, `kb_graph`, and `kb_health`. Same nodes the human reads via `:help`. \
+Federation tools: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.\n\n\
+See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:ai-as-peer]], [[index]]\n";
+
+pub(super) const CONCEPT_KB_FEDERATION: &str = "\
+KB **federation** lets you register external org directories as searchable \
+knowledge base instances alongside MAE's built-in help.\n\n\
+## Architecture\n\
+```\n\
+┌─────────────────────────────────────────┐\n\
+│           MAE Knowledge Base            │\n\
+├─────────────┬───────────────────────────┤\n\
+│  Local KB   │  Federated Instances      │\n\
+│  (seed +    │  ┌─────────┐ ┌─────────┐ │\n\
+│   user help │  │RoamNotes│ │ Work KB │ │\n\
+│   + AI)     │  │ 2,500   │ │ 87      │ │\n\
+│  200+ nodes │  │ nodes   │ │ nodes   │ │\n\
+│             │  └─────────┘ └─────────┘ │\n\
+└─────────────┴───────────────────────────┘\n\
+         ↕ search / get / graph\n\
+    ┌─────────────────────┐\n\
+    │  :help  │  AI tools │\n\
+    │  SPC h  │  kb_*     │\n\
+    └─────────────────────┘\n\
+```\n\n\
+## Design principle\n\
+**The org directory is READ-ONLY for the KB layer. SQLite is derived.**\n\
+Your org files remain the canonical source of truth. MAE reads them, \
+builds an in-memory graph, and never writes to your org directory \
+(except one sentinel file: `eor-instance.org`).\n\n\
+## Registry\n\
+Stored at `~/.config/mae/kb-registry.toml`. Each instance has:\n\
+- UUID (generated or read from sentinel file)\n\
+- Name (user-chosen display label)\n\
+- Org directory path\n\
+- Enabled flag\n\
+- Last import timestamp\n\n\
+## Sentinel file\n\
+When you register a directory, MAE creates `eor-instance.org` with the \
+instance UUID. This file is safe to delete — MAE recreates it on next \
+registration. It marks the directory as a MAE KB instance.\n\n\
+## Link scheme\n\
+- `eor:node-id` — local-first lookup (checks local KB, then instances).\n\
+- `eor:uuid/node-id` — targeted lookup in a specific instance.\n\n\
+## Import pipeline\n\
+1. Recursive `walkdir` over the org directory.\n\
+2. Parse each `.org` file for `:ID:` properties (file-level + heading-level).\n\
+3. Files without `:ID:` are counted but skipped.\n\
+4. File-path links (images, attachments) are NOT treated as KB links.\n\
+5. Duplicate `:ID:` values are detected and reported.\n\
+6. Health metrics (orphans, broken links, namespaces) computed automatically.\n\n\
+## Commands\n\
+- `:kb-register <name> <path>` — register and import.\n\
+- `:kb-unregister <name>` — remove instance.\n\
+- `:kb-reimport <name>` — refresh after editing org files.\n\
+- `:kb-instances` — list registered instances.\n\
+- `:kb-health` — health report (orphans, broken links, namespace counts).\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[lesson:kb-import-roam]]\n";
+
+pub(super) const CONCEPT_KB_WORKFLOWS: &str = "\
+Workflows for exploring, authoring, migrating, and maintaining your knowledge base.\n\n\
+## Exploration\n\
+- `:help <topic>` or `SPC h h` — fuzzy search all KB nodes.\n\
+- `SPC h s` — full-text search.\n\
+- `SPC n f` / `:kb-find` — search with fuzzy matching.\n\
+- Tab/Enter in Help buffer — follow links, navigate graph.\n\
+- `C-o` — jump back in help history.\n\n\
+## Authoring\n\
+- Create `.org` files in `~/.config/mae/help/` with `:ID:` properties.\n\
+- `:help-edit <topic>` — open/create a user help node for editing.\n\
+- User-authored nodes are loaded on startup alongside seed nodes.\n\n\
+## Migration from org-roam\n\
+See [[lesson:kb-import-roam]] for step-by-step instructions.\n\
+Quick version: `:kb-register MyNotes ~/org-roam`\n\n\
+## Backup and restore\n\
+**Your org files ARE the backup.** They're plain text on disk — version \
+them with git, sync them with any tool you like.\n\
+- The SQLite cache is disposable: delete it and reimport, zero data loss.\n\
+- `:kb-save <path>` exports a SQLite snapshot (useful for sharing the index).\n\
+- `:kb-load <path>` imports a snapshot.\n\
+- `:kb-reimport <name>` rebuilds from org source.\n\
+- **There is no new data format to manage.** Your existing org files + \
+git workflow = complete data lifecycle.\n\n\
+## Health monitoring\n\
+- `:kb-health` — orphan nodes, broken links, namespace distribution.\n\
+- Health metrics are also reported automatically after `:kb-register` and `:kb-reimport`.\n\n\
+## AI access\n\
+The AI agent uses the same tools: `kb_search`, `kb_get`, `kb_graph`. \
+It sees everything you see. Ask it: \"find notes about X\" or \
+\"import my KB at ~/RoamNotes\".\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-federation]]\n";
+
+pub(super) const CONCEPT_KB_ALTERNATIVES: &str = "\
+How MAE's knowledge base compares to Obsidian and Roam Research.\n\n\
+## Feature comparison\n\
+| Feature | MAE KB | Obsidian | Roam Research |\n\
+|---------|--------|----------|---------------|\n\
+| Data format | Org-mode (plain text) | Markdown | Proprietary JSON |\n\
+| Storage | Local files + SQLite index | Local vault | Cloud (proprietary) |\n\
+| Link model | Typed graph, reverse index | Wiki-links, backlinks | Block references |\n\
+| Search | FTS5 + fuzzy + substring | Basic full-text | Full-text + filter |\n\
+| AI integration | Peer actor (same API) | Plugin (Copilot) | None native |\n\
+| Federation | Multi-directory, cross-KB | Single vault | Single graph |\n\
+| Open source | GPL-3.0 | Freemium, closed core | Proprietary |\n\
+| Offline | Full offline | Full offline | Requires sync |\n\
+| Extensibility | Scheme + module system | JS plugins | CSS themes only |\n\n\
+## Migration paths\n\n\
+### From Obsidian\n\
+- Obsidian vaults are Markdown files with wiki-style links.\n\
+- Convert to org via pandoc: `pandoc -f markdown -t org input.md -o output.org`\n\
+- Add `:ID:` properties (org-roam's `org-roam-migrate-wizard` helps).\n\
+- Register: `:kb-register MyVault ~/converted-vault`\n\n\
+### From Roam Research\n\
+- Export as Markdown or JSON from Roam settings.\n\
+- Convert to org, assign `:ID:` properties.\n\
+- `((block-ref))` maps lossy to heading-level `:ID:` nodes.\n\
+- Register: `:kb-register RoamExport ~/roam-export`\n\n\
+## Philosophy: why local-first + AI-peer + plain-text-canonical\n\n\
+1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync \
+is a dependency. Org files survive every tool transition.\n\
+2. **AI as peer, not plugin.** MAE's AI calls `kb_search`, `kb_get`, `kb_graph` — \
+the same query surface the human uses. No impedance mismatch.\n\
+3. **Federation > monolithic vault.** Life has multiple knowledge domains. \
+Obsidian forces one vault or vault-switching. MAE federates: each domain \
+is a registered instance, searchable together.\n\
+4. **Ownership means exit.** Your org files are yours. No account, no sync \
+service, no API key required to read your own notes.\n\
+5. **Performance at the editor layer.** In-memory graph with pre-lowercased \
+search cache. FTS5 with porter stemmer. Sub-millisecond search across \
+thousands of nodes. No Electron, no browser runtime.\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-federation]], [[concept:kb-workflows]]\n";
 
 pub(super) const CONCEPT_PROJECT: &str =
     "A **project** in MAE is a directory with optional `.project` TOML configuration.\n\n\
@@ -720,6 +856,8 @@ surface and report what works, what's broken, and what's unavailable.\n\n\
 | **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\
 | **dap** | `dap_start`, `dap_set_breakpoint`, `dap_step` (needs lldb-dap or debugpy) |\n\
 | **git** | `git_status`, `git_diff`, `git_log`, `git_stash_list` (needs git repo) |\n\
+| **modules** | `list_modules`, `describe-module`, module KB nodes |\n\
+| **federation** | `kb_instances`, `kb_health`, `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives` |\n\
 | **performance** | `introspect` timing metrics, lock contention, anomaly detection |\n\n\
 ## State management\n\
 The self-test uses `editor_save_state` before tests and `editor_restore_state` after \

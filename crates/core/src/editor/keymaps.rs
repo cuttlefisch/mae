@@ -328,6 +328,13 @@ impl Editor {
         // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
+        normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
+        normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
+        normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
+        normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
+        normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
+        normal.bind(parse_key_seq_spaced("SPC n i"), "kb-instances");
+        normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)
         normal.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");
         normal.bind(parse_key_seq_spaced("SPC c r"), "lsp-find-references");

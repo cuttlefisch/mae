@@ -1038,6 +1038,19 @@ impl CommandRegistry {
 
         // Notes/KB commands
         reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
+        reg.register_builtin(
+            "kb-edit-source",
+            "Jump to source .org file for current help node (SPC n e)",
+        );
+        reg.register_builtin(
+            "kb-create",
+            "Create a new KB node: kb-create <id> <title> (SPC n c)",
+        );
+        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
+        reg.register_builtin(
+            "kb-instances",
+            "Show all registered KB federation instances (SPC n i)",
+        );
 
         // Help / KB navigation
         reg.register_builtin("help", "Open the *Help* buffer at the knowledge-base index");

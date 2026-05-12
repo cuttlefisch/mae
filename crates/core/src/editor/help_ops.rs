@@ -181,25 +181,41 @@ impl Editor {
     /// Open the *Help* buffer on the given KB node, creating it if it
     /// doesn't exist. Falls back to the `index` node if the requested id
     /// isn't found.
+    /// Check if a node ID exists in the local KB or any federated instance.
+    fn kb_contains_any(&self, id: &str) -> bool {
+        if self.kb.contains(id) {
+            return true;
+        }
+        self.kb_instances.values().any(|kb| kb.contains(id))
+    }
+
+    /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
+    fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
+        if self.kb.contains(id) {
+            return Some(&self.kb);
+        }
+        self.kb_instances.values().find(|kb| kb.contains(id))
+    }
+
     pub fn open_help_at(&mut self, node_id: &str) {
-        let target = if self.kb.contains(node_id) {
+        let target = if self.kb_contains_any(node_id) {
             node_id.to_string()
         } else {
             // Try namespace prefix expansion: "buffer" → "concept:buffer", "save" → "cmd:save"
             let mut found = None;
             for prefix in self.kb.namespace_prefixes() {
                 let expanded = format!("{}{}", prefix, node_id);
-                if self.kb.contains(&expanded) {
+                if self.kb_contains_any(&expanded) {
                     found = Some(expanded);
                     break;
                 }
             }
-            // Fall back to fuzzy search top result.
+            // Fall back to fuzzy search top result (local + federated).
             if found.is_none() {
-                let results = self.kb.search(node_id);
-                if let Some(first) = results.into_iter().next() {
-                    if first != "index" {
-                        found = Some(first);
+                let results = self.kb_federated_search(node_id);
+                if let Some((_, node)) = results.into_iter().next() {
+                    if node.id != "index" {
+                        found = Some(node.id.clone());
                     }
                 }
             }
@@ -301,10 +317,12 @@ impl Editor {
                 );
                 (out, links)
             } else {
-                render_help_node(&self.kb, &node_id)
+                let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
+                render_help_node(kb, &node_id)
             }
         } else {
-            render_help_node(&self.kb, &node_id)
+            let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
+            render_help_node(kb, &node_id)
         };
         // Temporarily allow writing to the read-only buffer.
         self.buffers[buf_idx].read_only = false;
@@ -509,6 +527,36 @@ impl Editor {
                 i if i > help_idx => Some(i - 1),
                 i => Some(i),
             };
+        }
+    }
+
+    /// Jump from the current help buffer node to its source `.org` file.
+    /// Works for federated nodes that have `source_file` stamped during ingest.
+    pub fn help_edit_source(&mut self) {
+        // Get current help node ID
+        let node_id = match self.help_view() {
+            Some(view) => view.current.clone(),
+            None => {
+                self.set_status("Not in a help buffer");
+                return;
+            }
+        };
+
+        // Look up the node (local first, then federated) and get source_file
+        let source_file = self
+            .kb
+            .get(&node_id)
+            .or_else(|| self.kb_instances.values().find_map(|kb| kb.get(&node_id)))
+            .and_then(|n| n.source_file.clone());
+
+        match source_file {
+            Some(path) => {
+                let path_str = path.display().to_string();
+                self.open_file(&path_str);
+            }
+            None => {
+                self.set_status(format!("No source file for '{}'", node_id));
+            }
         }
     }
 
@@ -787,6 +835,40 @@ mod tests {
         let mut e = Editor::new();
         e.help_reopen();
         assert!(e.status_msg.contains("No previous help session"));
+    }
+
+    #[test]
+    fn help_edit_source_no_source_shows_status() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        e.help_edit_source();
+        assert!(e.status_msg.contains("No source file"));
+    }
+
+    #[test]
+    fn help_edit_source_opens_file() {
+        let mut e = Editor::new();
+        // Insert a node with a source file
+        let tmp = std::env::temp_dir().join("mae-test-edit-source.org");
+        std::fs::write(&tmp, "test content").unwrap();
+        let node = mae_kb::Node::new(
+            "user:src-test",
+            "Source Test",
+            mae_kb::NodeKind::Note,
+            "body",
+        )
+        .with_source_file(tmp.clone());
+        e.kb.insert(node);
+        e.open_help_at("user:src-test");
+        e.help_edit_source();
+        // Should have opened the file
+        let opened = e.buffers.iter().any(|b| {
+            b.file_path()
+                .map(|p| p.ends_with("mae-test-edit-source.org"))
+                .unwrap_or(false)
+        });
+        assert!(opened, "should have opened the source file");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

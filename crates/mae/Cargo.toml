@@ -17,6 +17,7 @@ mae-ai = { path = "../ai" }
 mae-lsp = { path = "../lsp" }
 mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
+mae-kb = { path = "../kb" }
 mae-mcp = { path = "../mcp" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
