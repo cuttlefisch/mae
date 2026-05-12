@@ -53,7 +53,7 @@ pub enum OrgElement {
     SrcBlock {
         language: String,
         body: String,
-        exports: crate::babel::ExportsType,
+        exports: mae_babel::ExportsType,
     },
     ResultsBlock(String),
     List {
@@ -181,13 +181,13 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
 
             // Parse exports from header args
             let exports = if header.contains(":exports") {
-                let blocks = crate::babel::parse_src_blocks(&lines[i..].join("\n"));
+                let blocks = mae_babel::parse_src_blocks(&lines[i..].join("\n"));
                 blocks
                     .first()
                     .map(|b| b.header_args.exports.clone())
-                    .unwrap_or(crate::babel::ExportsType::Code)
+                    .unwrap_or(mae_babel::ExportsType::Code)
             } else {
-                crate::babel::ExportsType::Code
+                mae_babel::ExportsType::Code
             };
 
             let mut body_lines = Vec::new();

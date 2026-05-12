@@ -1,0 +1,6 @@
+[package]
+name = "mae-babel"
+description = "Org-babel source block parser, execution, tangle, and safety"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

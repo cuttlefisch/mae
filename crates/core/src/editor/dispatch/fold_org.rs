@@ -131,6 +131,12 @@ impl Editor {
             "babel-kill-sessions" => {
                 self.babel_kill_sessions();
             }
+            "babel-edit-special" => {
+                self.babel_edit_special();
+            }
+            "babel-edit-commit" => {
+                self.babel_edit_commit();
+            }
             // Export commands
             "org-export-html" => {
                 self.org_export_html();

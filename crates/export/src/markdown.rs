@@ -57,7 +57,7 @@ fn render_element(md: &mut String, element: &OrgElement) {
             body,
             exports,
         } => {
-            use crate::babel::ExportsType;
+            use mae_babel::ExportsType;
             match exports {
                 ExportsType::None | ExportsType::Results => {}
                 ExportsType::Code | ExportsType::Both => {
@@ -167,7 +167,7 @@ mod tests {
         let elements = vec![OrgElement::SrcBlock {
             language: "python".to_string(),
             body: "print(1)".to_string(),
-            exports: crate::babel::ExportsType::Code,
+            exports: mae_babel::ExportsType::Code,
         }];
         let exporter = MarkdownExporter;
         let md = exporter.export(&meta, &elements);

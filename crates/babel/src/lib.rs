@@ -3,10 +3,12 @@
 //! Parses `#+begin_src` blocks with full header argument extraction.
 //! Foundation for babel execution (M2), export (M5), and tangle (M4).
 
+pub mod backend;
 pub mod execute;
 pub mod noweb;
 pub mod results;
 pub mod safety;
+pub mod session;
 pub mod tangle;
 pub mod vars;
 

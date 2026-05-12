@@ -2075,12 +2075,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-babel"
+version = "0.8.1"
+
+[[package]]
 name = "mae-core"
 version = "0.8.1"
 dependencies = [
  "imagesize",
  "kamadak-exif",
  "libc",
+ "mae-babel",
+ "mae-export",
  "mae-kb",
  "regex",
  "ropey",
@@ -2116,6 +2122,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mae-export"
+version = "0.8.1"
+dependencies = [
+ "mae-babel",
 ]
 
 [[package]]

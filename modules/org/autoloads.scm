@@ -50,6 +50,7 @@
 (define-key "org" "SPC m x" "babel-execute")
 (define-key "org" "SPC m X" "babel-execute-all")
 (define-key "org" "SPC m T" "babel-tangle")
+(define-key "org" "SPC m '" "babel-edit-special")
 (define-key "org" "C-c C-c" "babel-execute")
 
 ;; Export commands (gated by +export flag)

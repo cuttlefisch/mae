@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/babel",
+    "crates/export",
     "crates/core",
     "crates/renderer",
     "crates/gui",

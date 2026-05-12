@@ -219,6 +219,25 @@ pub struct Buffer {
     /// Invalidated automatically by generation/display_regions_gen changes
     /// and explicitly when wrap-affecting options change.
     pub visual_rows_cache: Option<VisualRowsCache>,
+    /// When set, this buffer is an edit-special buffer for a babel src block.
+    /// `SPC m '` (or `C-c '`) commits changes back to the source buffer.
+    pub babel_edit_source: Option<BabelEditContext>,
+}
+
+/// Context for a babel edit-special buffer (Emacs `C-c '` / `org-edit-special`).
+/// Tracks the source buffer and block location so changes can be written back.
+#[derive(Debug, Clone)]
+pub struct BabelEditContext {
+    /// Buffer index of the source org file.
+    pub source_buffer: usize,
+    /// Line range of the src block in the source buffer (begin_src..end_src, inclusive).
+    pub block_line_range: (usize, usize),
+    /// Byte range of the body within the source buffer.
+    pub body_byte_range: (usize, usize),
+    /// Block name (for status display).
+    pub block_name: Option<String>,
+    /// Language (for restoring context).
+    pub language: String,
 }
 
 /// Cached visual-row counts for a contiguous range of buffer lines.
@@ -275,6 +294,7 @@ impl Buffer {
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
             visual_rows_cache: None,
+            babel_edit_source: None,
         }
     }
 

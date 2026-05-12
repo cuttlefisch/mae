@@ -565,6 +565,8 @@ pub struct Editor {
     pub babel_trust_paths: Vec<String>,
     /// Babel: execution timeout in seconds (default 30).
     pub babel_timeout: u64,
+    /// Babel: persistent REPL session manager.
+    pub babel_sessions: crate::babel::session::SessionManager,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_help_state: Option<crate::help_view::HelpView>,
@@ -1031,6 +1033,7 @@ impl Editor {
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
+            babel_sessions: crate::babel::session::SessionManager::new(),
             ai_session_cost_usd: 0.0,
             ai_session_tokens_in: 0,
             ai_session_tokens_out: 0,

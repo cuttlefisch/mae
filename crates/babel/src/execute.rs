@@ -1,11 +1,11 @@
 //! Babel execution engine — runs source blocks and captures output.
 
-use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use super::session::SessionManager;
 use super::{expand_tilde, EvalPolicy, HeaderArgs, SrcBlock};
 
 /// Result of executing a source block.
@@ -15,23 +15,21 @@ pub enum ExecResult {
     Value(String),
     File(PathBuf),
     Error(String),
+    /// Scheme blocks need evaluation through the editor runtime.
+    PendingSchemeEval(String),
 }
 
 /// Babel execution engine with session management.
 pub struct BabelExecutor {
-    sessions: HashMap<(String, String), SessionHandle>,
+    pub sessions: SessionManager,
     pub timeout_secs: u64,
     pub max_output_bytes: usize,
-}
-
-struct SessionHandle {
-    _placeholder: (), // Will hold PTY handle in session implementation
 }
 
 impl Default for BabelExecutor {
     fn default() -> Self {
         BabelExecutor {
-            sessions: HashMap::new(),
+            sessions: SessionManager::new(),
             timeout_secs: 30,
             max_output_bytes: 100 * 1024, // 100KB
         }
@@ -64,11 +62,27 @@ impl BabelExecutor {
         let body = self.prepare_body(block, resolved_vars);
 
         match block.language.as_str() {
-            "scheme" | "elisp" => {
-                // Scheme execution handled by editor (has access to runtime)
-                ExecResult::Error("Scheme blocks must be executed through the editor".to_string())
+            "scheme" | "elisp" => ExecResult::PendingSchemeEval(body),
+            lang => {
+                // Route through session if `:session` header arg is set
+                if let Some(session_name) = &block.header_args.session {
+                    match self
+                        .sessions
+                        .get_or_create(lang, session_name, &working_dir)
+                    {
+                        Ok(session) => {
+                            let timeout = Duration::from_secs(self.timeout_secs);
+                            match session.execute(&body, timeout) {
+                                Ok(output) => ExecResult::Output(output),
+                                Err(e) => ExecResult::Error(e),
+                            }
+                        }
+                        Err(e) => ExecResult::Error(e),
+                    }
+                } else {
+                    self.execute_shell(lang, &body, &working_dir, &block.header_args)
+                }
             }
-            lang => self.execute_shell(lang, &body, &working_dir, &block.header_args),
         }
     }
 
@@ -161,7 +175,7 @@ impl BabelExecutor {
 
     /// Kill all active sessions.
     pub fn kill_sessions(&mut self) {
-        self.sessions.clear();
+        self.sessions.kill_all();
     }
 }
 

@@ -1,6 +1,7 @@
 //! Variable resolution for babel source blocks.
 
-use super::{SrcBlock, VarSource};
+use super::results::read_results_content;
+use super::{find_results_block, SrcBlock, VarSource};
 
 /// Resolve all `:var` bindings for a block.
 /// Returns `(name, resolved_value)` pairs ready for injection.
@@ -14,7 +15,7 @@ pub fn resolve_vars(
     for (name, source) in &block.header_args.var {
         let value = match source {
             VarSource::Literal(v) => v.clone(),
-            VarSource::BlockRef(ref_name) => resolve_block_ref(ref_name, all_blocks),
+            VarSource::BlockRef(ref_name) => resolve_block_ref(ref_name, all_blocks, buf_text),
             VarSource::TableRef(ref_name) => resolve_table_ref(ref_name, buf_text),
         };
         resolved.push((name.clone(), value));
@@ -23,14 +24,24 @@ pub fn resolve_vars(
     resolved
 }
 
-/// Resolve a block reference by finding the named block's last results.
-fn resolve_block_ref(name: &str, all_blocks: &[SrcBlock]) -> String {
-    // Look for the named block — in a real implementation we'd execute it
-    // or read its cached #+RESULTS:. For now, return a placeholder.
-    if let Some(_block) = all_blocks.iter().find(|b| b.name.as_deref() == Some(name)) {
-        format!("<block-ref:{}>", name)
-    } else {
-        format!("<unresolved:{}>", name)
+/// Resolve a block reference by reading its cached `#+RESULTS:` block.
+fn resolve_block_ref(name: &str, all_blocks: &[SrcBlock], source: &str) -> String {
+    match all_blocks.iter().find(|b| b.name.as_deref() == Some(name)) {
+        Some(block) => {
+            // Look for cached #+RESULTS: after the block
+            match find_results_block(source, block.line_range.1 + 1) {
+                Some((start, end)) => {
+                    let content = read_results_content(source, start, end);
+                    if content.is_empty() {
+                        format!("<no-results:{}>", name)
+                    } else {
+                        content
+                    }
+                }
+                None => format!("<no-results:{}>", name),
+            }
+        }
+        None => format!("<unresolved:{}>", name),
     }
 }
 
@@ -69,7 +80,7 @@ fn resolve_table_ref(name: &str, buf_text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::babel::HeaderArgs;
+    use crate::HeaderArgs;
 
     #[test]
     fn resolve_literal_vars() {
@@ -120,5 +131,35 @@ mod tests {
     fn resolve_missing_table() {
         let result = resolve_table_ref("nonexistent", "no tables here");
         assert!(result.contains("table-not-found"));
+    }
+
+    #[test]
+    fn resolve_block_ref_with_cached_results() {
+        let src = "#+name: compute\n#+begin_src python\nprint(42)\n#+end_src\n\n#+RESULTS: compute\n: 42\n";
+        let blocks = crate::parse_src_blocks(src);
+        let result = resolve_block_ref("compute", &blocks, src);
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn resolve_block_ref_drawer_results() {
+        let src = "#+name: data\n#+begin_src python\nprint('hello')\n#+end_src\n\n#+RESULTS: data\n:RESULTS:\nhello\n:END:\n";
+        let blocks = crate::parse_src_blocks(src);
+        let result = resolve_block_ref("data", &blocks, src);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn resolve_block_ref_no_results() {
+        let src = "#+name: norun\n#+begin_src python\nprint(1)\n#+end_src\n";
+        let blocks = crate::parse_src_blocks(src);
+        let result = resolve_block_ref("norun", &blocks, src);
+        assert!(result.contains("no-results"));
+    }
+
+    #[test]
+    fn resolve_block_ref_unresolved() {
+        let result = resolve_block_ref("nonexistent", &[], "");
+        assert!(result.contains("unresolved"));
     }
 }

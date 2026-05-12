@@ -1,0 +1,9 @@
+[package]
+name = "mae-export"
+description = "Org export infrastructure — parse org documents and export to HTML/Markdown"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mae-babel = { path = "../babel" }

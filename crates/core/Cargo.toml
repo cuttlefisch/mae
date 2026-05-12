@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+mae-babel = { path = "../babel" }
+mae-export = { path = "../export" }
 mae-kb = { path = "../kb" }
 ropey = "1"
 unicode-width = "0.2"

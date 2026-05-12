@@ -1,5 +1,5 @@
 pub mod agenda_view;
-pub mod babel;
+pub use mae_babel as babel;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -16,7 +16,7 @@ pub mod display_policy;
 pub mod display_region;
 pub mod editor;
 pub mod event_record;
-pub mod export;
+pub use mae_export as export;
 pub mod file_browser;
 pub mod file_picker;
 pub mod file_tree;
@@ -47,7 +47,7 @@ pub mod window;
 pub mod word;
 pub mod wrap;
 
-pub use buffer::{Buffer, BufferKind, BufferLocalOptions};
+pub use buffer::{BabelEditContext, Buffer, BufferKind, BufferLocalOptions};
 pub use buffer_mode::BufferMode;
 pub use buffer_view::BufferView;
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};

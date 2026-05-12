@@ -57,16 +57,25 @@ impl Editor {
             .and_then(|p| p.parent())
             .unwrap_or_else(|| std::path::Path::new("."));
 
-        let mut executor = BabelExecutor::new();
-        executor.timeout_secs = self.babel_timeout;
+        let mut executor = BabelExecutor {
+            sessions: std::mem::take(&mut self.babel_sessions),
+            timeout_secs: self.babel_timeout,
+            ..BabelExecutor::default()
+        };
 
         let result = executor.execute_block(&block, buf_dir, &resolved_vars);
+        self.babel_sessions = executor.sessions;
 
         // Format results
         let output_text = match &result {
             babel::execute::ExecResult::Output(s) => s.clone(),
             babel::execute::ExecResult::Value(s) => s.clone(),
             babel::execute::ExecResult::File(p) => format!("[[file:{}]]", p.display()),
+            babel::execute::ExecResult::PendingSchemeEval(code) => {
+                self.pending_scheme_eval.push(code.clone());
+                self.set_status("Scheme block queued for evaluation");
+                return;
+            }
             babel::execute::ExecResult::Error(e) => {
                 self.set_status(format!("Babel error: {}", e));
                 return;
@@ -129,15 +138,20 @@ impl Editor {
                 .unwrap_or_else(|| std::path::Path::new("."));
 
             let resolved_vars = babel::vars::resolve_vars(block, &current_blocks, &current_source);
-            let mut executor = BabelExecutor::new();
-            executor.timeout_secs = self.babel_timeout;
+            let mut executor = BabelExecutor {
+                sessions: std::mem::take(&mut self.babel_sessions),
+                timeout_secs: self.babel_timeout,
+                ..BabelExecutor::default()
+            };
 
             let result = executor.execute_block(block, buf_dir, &resolved_vars);
+            self.babel_sessions = executor.sessions;
             let output_text = match &result {
                 babel::execute::ExecResult::Output(s) => s.clone(),
                 babel::execute::ExecResult::Value(s) => s.clone(),
                 babel::execute::ExecResult::File(p) => format!("[[file:{}]]", p.display()),
-                babel::execute::ExecResult::Error(_) => continue,
+                babel::execute::ExecResult::PendingSchemeEval(_)
+                | babel::execute::ExecResult::Error(_) => continue,
             };
 
             let formatted = results::format_results(&output_text, &block.header_args.results);
@@ -209,8 +223,124 @@ impl Editor {
 
     /// Kill all babel session processes.
     pub fn babel_kill_sessions(&mut self) {
-        // Sessions not yet persisted on editor — this is a placeholder
-        self.set_status("No active babel sessions");
+        let count = self.babel_sessions.len();
+        self.babel_sessions.kill_all();
+        if count > 0 {
+            self.set_status(format!("Killed {} babel session(s)", count));
+        } else {
+            self.set_status("No active babel sessions");
+        }
+    }
+
+    /// Open a source block in a dedicated edit buffer with proper language mode.
+    /// Emacs equivalent: `C-c '` / `org-edit-special`. MAE uses `SPC m '`.
+    pub fn babel_edit_special(&mut self) {
+        let buf_idx = self.ai_active_buffer_idx();
+        let source = self.buffers[buf_idx].rope().to_string();
+        let cursor_line = self.ai_cursor_row();
+
+        let blocks = babel::parse_src_blocks(&source);
+        let block = match babel::find_block_at_line(&blocks, cursor_line) {
+            Some(b) => b.clone(),
+            None => {
+                self.set_status("No source block at cursor");
+                return;
+            }
+        };
+
+        let buf_name = format!(
+            "*babel-edit: {} [{}]*",
+            block.name.as_deref().unwrap_or("src"),
+            block.language
+        );
+
+        // Check if edit buffer already exists
+        if self.buffers.iter().any(|b| b.name == buf_name) {
+            self.set_status("Edit buffer already open for this block");
+            return;
+        }
+
+        let ctx = crate::buffer::BabelEditContext {
+            source_buffer: buf_idx,
+            block_line_range: block.line_range,
+            body_byte_range: block.body_byte_range,
+            block_name: block.name.clone(),
+            language: block.language.clone(),
+        };
+
+        let mut edit_buf = crate::Buffer::new();
+        edit_buf.name = buf_name.clone();
+        edit_buf.insert_text_at(0, &block.body);
+        edit_buf.modified = false;
+        edit_buf.babel_edit_source = Some(ctx);
+
+        self.buffers.push(edit_buf);
+        let new_idx = self.buffers.len() - 1;
+
+        // Switch to new buffer in the focused window
+        let win = self.window_mgr.focused_window_mut();
+        win.buffer_idx = new_idx;
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+        win.scroll_offset = 0;
+
+        self.mark_full_redraw();
+        self.set_status(format!(
+            "Editing {} block — SPC m ' to commit",
+            block.language
+        ));
+    }
+
+    /// Commit changes from an edit-special buffer back to the source buffer.
+    /// Emacs equivalent: `C-c '` in the edit buffer. MAE uses `SPC m '`.
+    pub fn babel_edit_commit(&mut self) {
+        let buf_idx = self.ai_active_buffer_idx();
+
+        let ctx = match self.buffers[buf_idx].babel_edit_source.take() {
+            Some(ctx) => ctx,
+            None => {
+                self.set_status("Not in a babel edit buffer");
+                return;
+            }
+        };
+
+        // Read the edited content
+        let new_body = self.buffers[buf_idx].rope().to_string();
+
+        // Validate source buffer still exists
+        if ctx.source_buffer >= self.buffers.len() {
+            self.set_status("Source buffer no longer exists");
+            return;
+        }
+
+        // Replace body in source buffer
+        let src_buf = &mut self.buffers[ctx.source_buffer];
+        src_buf.begin_undo_group();
+        if ctx.body_byte_range.0 < ctx.body_byte_range.1 {
+            src_buf.delete_range(ctx.body_byte_range.0, ctx.body_byte_range.1);
+        }
+        src_buf.insert_text_at(ctx.body_byte_range.0, &new_body);
+        src_buf.end_undo_group();
+
+        // Kill edit buffer and switch back to source
+        let source_idx = ctx.source_buffer;
+        self.kill_buffer_at(buf_idx);
+
+        // Adjust source_idx if needed (kill might shift indices)
+        let target_idx = if buf_idx < source_idx {
+            source_idx - 1
+        } else {
+            source_idx
+        };
+
+        let win = self.window_mgr.focused_window_mut();
+        if target_idx < self.buffers.len() {
+            win.buffer_idx = target_idx;
+        }
+
+        self.clamp_all_cursors();
+        self.mark_full_redraw();
+        self.set_status("Committed edit back to source buffer");
     }
 
     /// Export current org buffer to HTML.

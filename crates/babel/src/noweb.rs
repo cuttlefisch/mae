@@ -102,7 +102,7 @@ fn expand_noweb_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::babel::HeaderArgs;
+    use crate::HeaderArgs;
 
     fn make_block(name: &str, body: &str) -> SrcBlock {
         SrcBlock {

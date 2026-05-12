@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.9.0-dev · **Tests:** 2,748 passing · **Status:** Alpha — all 11 phases complete, KB federation ready for production use.
+**Current version:** v0.9.0-dev · **Tests:** 2,833 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
 
 ---
 
@@ -30,11 +30,54 @@
 
 ## In Progress / Planned
 
+### Phase G: Feature Crate Extraction + Babel Gaps (v0.9.0) — COMPLETE
+
+- [x] `mae-babel` crate extracted from `mae-core` (7 files, zero import changes downstream)
+- [x] `mae-export` crate extracted from `mae-core` (3 files, depends on `mae-babel`)
+- [x] Block ref resolution: `resolve_block_ref()` reads cached `#+RESULTS:` (was stub)
+- [x] Persistent REPL sessions: `SessionManager` with sentinel-based output capture
+- [x] Per-language backends: `LanguageBackend` trait + 4 implementations (shell, script, compiled, internal)
+- [x] Compiled backend: hash-based binary caching in `~/.cache/mae/babel/`
+- [x] `PendingSchemeEval` variant: scheme blocks routed to editor runtime
+- [x] Babel edit-special: `SPC m '` opens src block in dedicated buffer with language mode
+- [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
+
 ### Near-term
 - [ ] PDF preview (GUI inline rendering)
 - [ ] Semantic code search (vector embeddings)
 - [ ] Org ↔ Markdown bidirectional conversion
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
+
+### Doom Parity Roadmap: Future Feature Crates
+
+**Tier 1: High-value, self-contained (next 2-3 releases)**
+
+| Crate | Doom Equivalent | Description |
+|-------|----------------|-------------|
+| `mae-snippets` | `:editor/snippets` | YASnippet-style templates with tab-stops, mirrors, transforms |
+| `mae-spell` | `:checkers/spell` | Spellcheck via hunspell/aspell, inline markers, `z=` suggest |
+| `mae-format` | `:editor/format` | Formatter bridge (prettier, black, rustfmt) — complements LSP format |
+| `mae-lookup` | `:tools/lookup` | Unified lookup: LSP def + docs URL + man + Dash/Devdocs |
+| `mae-make` | `:tools/make` | Build runner: detect Makefile/Cargo.toml/package.json, `SPC c b` |
+
+**Tier 2: Language IDE modules (Scheme, not Rust crates)**
+
+| Module | Doom Equivalent | What it configures |
+|--------|----------------|-------------------|
+| `lang-python` | `:lang/python` | pyright/pylsp, debugpy, virtualenv, REPL |
+| `lang-rust` | `:lang/rust` | rust-analyzer, lldb-dap, cargo, test runner |
+| `lang-go` | `:lang/go` | gopls, dlv, go commands |
+| `lang-javascript` | `:lang/javascript` | ts-ls, chrome-debugger, npm |
+| `lang-cc` | `:lang/cc` | clangd, lldb-dap, cmake |
+
+**Tier 3: Editor enhancement crates (future releases)**
+
+| Crate | Doom Equivalent | Description |
+|-------|----------------|-------------|
+| `mae-dired` | `:emacs/dired` | Buffer-based file manager |
+| `mae-undo-tree` | `:emacs/undo` | Undo tree visualization |
+| `mae-workspace` | `:ui/workspaces` | Named workspace sessions, per-project layouts |
+| `mae-zen` | `:ui/zen` | Distraction-free writing mode |
 
 ### AI
 - [ ] Memory synthesis (sub-agent reads persistent memory into context)

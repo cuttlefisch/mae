@@ -157,6 +157,26 @@ pub fn compute_results_edit(
     }
 }
 
+/// Read the content of a `#+RESULTS:` block (excluding the header line).
+/// Strips fixed-width prefixes (`: `) and drawer markers (`:RESULTS:` / `:END:`).
+pub fn read_results_content(source: &str, results_start: usize, results_end: usize) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut content = Vec::new();
+    // Skip the #+RESULTS: header line, read content lines
+    for line in &lines[results_start + 1..=results_end.min(lines.len().saturating_sub(1))] {
+        let trimmed = line.trim();
+        if trimmed == ":RESULTS:" || trimmed == ":END:" {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(": ") {
+            content.push(rest.to_string());
+        } else {
+            content.push(trimmed.to_string());
+        }
+    }
+    content.join("\n")
+}
+
 fn line_byte_offset_of(source: &str, line: usize) -> usize {
     let mut offset = 0;
     for (i, l) in source.lines().enumerate() {
@@ -171,7 +191,7 @@ fn line_byte_offset_of(source: &str, line: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::babel::ResultsType;
+    use crate::ResultsType;
 
     #[test]
     fn format_scalar_single_line() {
@@ -240,5 +260,26 @@ mod tests {
         let r = format_results("a\tb\n1\t2\n", &ResultsType::Output(ResultsFormat::Table));
         assert!(r.contains("| a"));
         assert!(r.contains("| 1"));
+    }
+
+    #[test]
+    fn read_results_content_fixed_width() {
+        let src = "#+RESULTS:\n: 42\n: hello\n";
+        let content = read_results_content(src, 0, 2);
+        assert_eq!(content, "42\nhello");
+    }
+
+    #[test]
+    fn read_results_content_drawer() {
+        let src = "#+RESULTS:\n:RESULTS:\nsome output\n:END:\n";
+        let content = read_results_content(src, 0, 3);
+        assert_eq!(content, "some output");
+    }
+
+    #[test]
+    fn read_results_content_single_line() {
+        let src = "#+RESULTS:\n: 1\n";
+        let content = read_results_content(src, 0, 1);
+        assert_eq!(content, "1");
     }
 }
