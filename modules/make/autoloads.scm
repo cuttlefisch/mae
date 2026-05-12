@@ -1,4 +1,9 @@
-;; make module autoloads — build system keybindings
+;;; make/autoloads.scm — build system keybindings
+
+;;; @module: make
+;;; @version: 0.1.0
+;;; @stability: experimental
+;;; @provides: make-autoloads
 
 (define-key "normal" "SPC c b" "run-build")
 (define-key "normal" "SPC c t" "run-test")

@@ -1,5 +1,8 @@
 //! mae-snippets: Snippet expansion engine with tab-stops, mirrors, and field navigation.
 //!
+//! @stability: experimental
+//! @since: 0.9.0
+//!
 //! Parses VSCode/LSP-compatible snippet syntax and provides a session-based
 //! expansion model where the user navigates between fields with Tab/S-Tab.
 

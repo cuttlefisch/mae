@@ -1,5 +1,8 @@
 //! mae-format: Code formatter bridge — external commands and format-on-save.
 //!
+//! @stability: experimental
+//! @since: 0.9.0
+//!
 //! Complements LSP formatting with external formatter support (prettier, black,
 //! rustfmt, gofmt, etc.). Formatters are configured per-language and can run
 //! via stdin piping or filename argument.

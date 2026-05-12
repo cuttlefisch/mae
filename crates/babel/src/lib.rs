@@ -1,5 +1,8 @@
 //! Org-babel source block parser and data model.
 //!
+//! @stability: stable
+//! @since: 0.9.0
+//!
 //! Parses `#+begin_src` blocks with full header argument extraction.
 //! Foundation for babel execution (M2), export (M5), and tangle (M4).
 

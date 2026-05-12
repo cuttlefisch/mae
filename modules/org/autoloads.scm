@@ -4,6 +4,11 @@
 ;;; in the kernel (Rust dispatch/fold_org.rs). This module makes the
 ;;; keybindings disableable by omitting the module from init.scm.
 
+;;; @module: org
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: org-autoloads
+
 ;; Create org keymap inheriting from normal
 (define-keymap "org" "normal")
 

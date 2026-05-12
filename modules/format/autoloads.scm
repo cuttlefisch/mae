@@ -1,4 +1,9 @@
-;; format module autoloads — formatter keybindings and on-save hook
+;;; format/autoloads.scm — formatter keybindings and on-save hook
+
+;;; @module: format
+;;; @version: 0.1.0
+;;; @stability: experimental
+;;; @provides: format-autoloads
 
 (define-key "normal" "SPC c f" "format-buffer")
 

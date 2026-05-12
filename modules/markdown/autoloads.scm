@@ -3,6 +3,11 @@
 ;;; Registers markdown-mode keybindings. The markdown dispatch logic is
 ;;; implemented in the kernel. This module makes the keybindings disableable.
 
+;;; @module: markdown
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: markdown-autoloads
+
 ;; Create markdown keymap inheriting from normal
 (define-keymap "markdown" "normal")
 

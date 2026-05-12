@@ -3,6 +3,11 @@
 ;;; Registers the git-status keymap and SPC g leader bindings.
 ;;; The git dispatch logic is implemented in the kernel.
 
+;;; @module: git-status
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: git-status-autoloads
+
 ;; Create git-status keymap inheriting from normal
 (define-keymap "git-status" "normal")
 

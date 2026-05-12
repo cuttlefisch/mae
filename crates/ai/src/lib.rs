@@ -1,3 +1,8 @@
+//! mae-ai: AI agent integration — tool-calling transport, provider adapters, session management.
+//!
+//! @stability: stable
+//! @since: 0.3.0
+
 pub mod claude;
 pub mod context_limits;
 pub mod executor;
@@ -12,7 +17,7 @@ pub mod tools;
 pub mod types;
 
 pub use claude::ClaudeProvider;
-pub use context_limits::lookup as lookup_context_limit;
+pub use context_limits::{lookup as lookup_context_limit, ModelVerification};
 pub use executor::{execute_tool, DeferredKind, ExecuteResult};
 pub use gemini::GeminiProvider;
 pub use openai::OpenAiProvider;

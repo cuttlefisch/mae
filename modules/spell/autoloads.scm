@@ -1,4 +1,9 @@
-;; spell module autoloads — spell check keybindings
+;;; spell/autoloads.scm — spell check keybindings
+
+;;; @module: spell
+;;; @version: 0.1.0
+;;; @stability: experimental
+;;; @provides: spell-autoloads
 
 (define-key "normal" "z=" "spell-suggest")
 (define-key "normal" "]s" "spell-next")

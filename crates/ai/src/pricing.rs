@@ -362,3 +362,10 @@ mod tests {
         assert_eq!(p.cost_usd(&usage), 0.0);
     }
 }
+
+// Note: Qwen, Llama, Mistral, Phi, and Command-R are intentionally absent
+// from the pricing table. These models are typically self-hosted via Ollama
+// or similar local inference servers (free/unmetered). When accessed through
+// paid inference platforms (Together, Fireworks, Groq), pricing varies by
+// platform — there is no single canonical rate to encode here. The session
+// budget tracker treats `lookup() → None` as free and skips enforcement.

@@ -4,6 +4,11 @@
 ;;; implemented in the kernel (Rust dispatch/nav.rs). This module makes
 ;;; the keybindings disableable.
 
+;;; @module: marks-jumps
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: marks-jumps-autoloads
+
 ;; Normal mode — marks
 (define-key "normal" "m" "set-mark-await")
 (define-key "normal" "'" "jump-mark-await")

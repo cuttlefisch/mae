@@ -376,6 +376,19 @@ pub fn setup_ai(
         let budget = config.budget.clone();
         let config_ai = &file_config.ai;
         info!(provider = %provider_name, model = %model, "initializing AI provider");
+
+        // Warn about untested models so users know tool calling may be unreliable
+        let limits = mae_ai::context_limits::lookup(&model);
+        match limits.verification {
+            mae_ai::ModelVerification::Untested => {
+                tracing::warn!(model = %model, "model has not been tested with MAE — tool calling may be unreliable");
+            }
+            mae_ai::ModelVerification::Testing => {
+                info!(model = %model, "model is in testing — report issues at github.com/cuttlefisch/mae");
+            }
+            mae_ai::ModelVerification::Verified => {}
+        }
+
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
             "gemini" => Box::new(GeminiProvider::new(config)),
@@ -502,7 +515,8 @@ pub fn build_system_prompt_with_modules(
             ("explorer", true) => include_str!("prompts/explorer-compact.xml").to_string(),
             ("reviewer", true) => include_str!("prompts/reviewer-compact.xml").to_string(),
             ("explorer", false) => include_str!("prompts/explorer.xml").to_string(),
-            ("planner", _) => include_str!("prompts/planner.xml").to_string(),
+            ("planner", true) => include_str!("prompts/planner-compact.xml").to_string(),
+            ("planner", false) => include_str!("prompts/planner.xml").to_string(),
             ("reviewer", false) => include_str!("prompts/reviewer.xml").to_string(),
             _ => include_str!("prompts/pair-programmer.xml").to_string(),
         }

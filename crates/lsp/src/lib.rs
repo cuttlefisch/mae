@@ -1,3 +1,8 @@
+//! mae-lsp: LSP client — types, references, diagnostics exposed to Scheme and AI.
+//!
+//! @stability: stable
+//! @since: 0.4.0
+
 pub mod client;
 pub mod manager;
 pub mod protocol;

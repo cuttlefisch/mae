@@ -1,5 +1,8 @@
 //! GUI rendering backend for MAE.
 //!
+//! @stability: experimental
+//! @since: 0.7.0
+//!
 //! Uses winit for window management + OS-level input, and skia-safe for
 //! GPU-accelerated 2D rendering. This gives MAE direct key access (no host
 //! terminal intercepting keybindings) and rich rendering capabilities:

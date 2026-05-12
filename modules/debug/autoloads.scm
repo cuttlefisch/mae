@@ -3,6 +3,11 @@
 ;;; Registers the debug panel keymap and SPC d leader bindings.
 ;;; The DAP dispatch logic is implemented in the kernel.
 
+;;; @module: debug
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: debug-autoloads
+
 ;; Create debug keymap inheriting from normal
 (define-keymap "debug" "normal")
 

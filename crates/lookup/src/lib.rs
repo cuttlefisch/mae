@@ -1,5 +1,8 @@
 //! mae-lookup: Definition lookup fallbacks and documentation URL builders.
 //!
+//! @stability: experimental
+//! @since: 0.9.0
+//!
 //! Provides grep-based "dumb jump" for definition finding when no LSP is
 //! available, plus URL builders for online documentation (docs.rs, MDN,
 //! devdocs.io, cppreference).

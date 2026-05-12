@@ -3,6 +3,11 @@
 ;;; Registers the agenda keymap and SPC o a launcher.
 ;;; Depends on the org module.
 
+;;; @module: agenda
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: agenda-autoloads
+
 ;; Create agenda keymap inheriting from normal
 (define-keymap "agenda" "normal")
 

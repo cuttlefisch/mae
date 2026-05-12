@@ -1,5 +1,10 @@
-;; search/autoloads.scm — search keybindings
-;; Commands remain kernel builtins; this module owns the keybindings.
+;;; search/autoloads.scm — search keybindings
+;;; Commands remain kernel builtins; this module owns the keybindings.
+
+;;; @module: search
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: search-autoloads
 
 ;; Normal mode: core search
 (define-key "normal" "/" "search-forward-start")

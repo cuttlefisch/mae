@@ -1,5 +1,8 @@
 //! mae-make: Build system detection and compiler error parsing.
 //!
+//! @stability: experimental
+//! @since: 0.9.0
+//!
 //! Detects build systems by walking up from a file path, provides default
 //! build/test/run commands per system, and parses compiler output into
 //! structured error diagnostics.

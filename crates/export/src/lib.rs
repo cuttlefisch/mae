@@ -1,4 +1,7 @@
 //! Org export infrastructure — parse org documents and export to various formats.
+//!
+//! @stability: experimental
+//! @since: 0.9.0
 
 pub mod html;
 pub mod markdown;

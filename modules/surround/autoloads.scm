@@ -4,6 +4,11 @@
 ;;; implemented in the kernel (Rust dispatch/edit.rs). This module makes
 ;;; the keybindings disableable by omitting the module from init.scm.
 
+;;; @module: surround
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: surround-autoloads
+
 ;; Normal mode
 (define-key "normal" "d s" "delete-surround-await")
 (define-key "normal" "c s" "change-surround-await")

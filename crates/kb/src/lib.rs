@@ -1,5 +1,8 @@
 //! mae-kb — in-memory knowledge base (graph store).
 //!
+//! @stability: stable
+//! @since: 0.5.0
+//!
 //! The knowledge base is the shared data model for:
 //!
 //! 1. The built-in help system (command, concept, and keybinding docs).

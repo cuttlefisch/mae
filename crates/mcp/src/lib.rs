@@ -1,5 +1,8 @@
 //! MCP (Model Context Protocol) bridge for MAE.
 //!
+//! @stability: stable
+//! @since: 0.6.0
+//!
 //! Exposes the editor's tools via JSON-RPC over a Unix domain socket.
 //! Claude Code (or any MCP client) connects via the mae-mcp-shim binary
 //! which bridges stdio <-> the socket.

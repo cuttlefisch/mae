@@ -1,3 +1,8 @@
+//! mae-core: Buffer management, editor state, event dispatch.
+//!
+//! @stability: stable
+//! @since: 0.1.0
+
 pub mod agenda_view;
 pub use mae_babel as babel;
 pub mod buffer;

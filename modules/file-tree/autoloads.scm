@@ -1,5 +1,10 @@
-;; file-tree/autoloads.scm — NERDTree-style file browser keybindings
-;; Commands remain kernel builtins; this module owns the keymap + bindings.
+;;; file-tree/autoloads.scm — NERDTree-style file browser keybindings
+;;; Commands remain kernel builtins; this module owns the keymap + bindings.
+
+;;; @module: file-tree
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: file-tree-autoloads
 
 ;; Create the file-tree keymap with normal as parent (for fallback)
 (define-keymap "file-tree" "normal")

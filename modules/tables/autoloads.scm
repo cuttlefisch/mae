@@ -1,5 +1,10 @@
-;; tables/autoloads.scm — table editing keybindings for org + markdown
-;; Commands remain kernel builtins; this module owns the keybindings.
+;;; tables/autoloads.scm — table editing keybindings for org + markdown
+;;; Commands remain kernel builtins; this module owns the keybindings.
+
+;;; @module: tables
+;;; @version: 0.1.0
+;;; @stability: stable
+;;; @provides: tables-autoloads
 
 ;; Org-mode table bindings (SPC m b group)
 (define-key "org" "SPC m b a" "table-align")
