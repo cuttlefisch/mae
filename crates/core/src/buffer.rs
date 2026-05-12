@@ -1,6 +1,7 @@
 use ropey::Rope;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -450,7 +451,10 @@ impl Buffer {
             // (disk full, crash, etc.). rename(2) is atomic on POSIX.
             let parent = path.parent().unwrap_or(Path::new("."));
             let tmp_path = parent.join(format!(".mae-save-{}.tmp", std::process::id()));
-            fs::write(&tmp_path, self.rope.to_string())?;
+            let file = fs::File::create(&tmp_path)?;
+            let mut writer = std::io::BufWriter::new(file);
+            self.rope.write_to(&mut writer)?;
+            writer.flush()?;
             if let Err(e) = fs::rename(&tmp_path, path) {
                 // Clean up temp file on rename failure.
                 let _ = fs::remove_file(&tmp_path);
@@ -2163,5 +2167,21 @@ mod tests {
         buf.recompute_display_regions(true);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(!has_image, "no image regions when inline_images disabled");
+    }
+
+    #[test]
+    fn save_streaming_preserves_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stream_test.txt");
+        // Build a multi-chunk rope (ropey uses ~1KB chunks internally).
+        let chunk = "abcdefghij\n".repeat(200); // ~2.2KB per repeat
+        let content = chunk.repeat(5); // ~11KB total, multiple rope chunks
+        let mut buf = Buffer::new();
+        buf.rope = ropey::Rope::from_str(&content);
+        buf.set_file_path(path.clone());
+        buf.save().unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, content);
+        assert!(!buf.modified);
     }
 }

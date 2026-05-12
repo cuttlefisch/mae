@@ -105,11 +105,10 @@ pub(crate) async fn run_terminal_loop(
                 deferred_ai_reply.is_some(),
                 last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
             );
+            // Autosave + swap writes (same 30s cadence as GUI HealthTick).
+            editor.try_autosave();
             last_health_check = tokio::time::Instant::now();
         }
-
-        // Autosave check (runs on every loop iteration, try_autosave gates on interval).
-        editor.try_autosave();
 
         editor.clamp_all_cursors();
 

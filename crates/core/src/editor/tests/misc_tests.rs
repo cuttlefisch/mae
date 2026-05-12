@@ -1927,5 +1927,67 @@ fn execute_command_respects_ai_target() {
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
 }
 
+// --- Async git diff tests ---
+
+#[test]
+fn git_diff_async_does_not_block_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test_save.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let mut editor = Editor::new();
+    editor.buffers[0] = crate::buffer::Buffer::from_file(&path).unwrap();
+    editor.buffers[0].insert_char(&mut editor.window_mgr.focused_window_mut().clone(), 'x');
+    assert!(editor.buffers[0].modified);
+    // save_current_buffer calls request_git_diff (async, non-blocking)
+    editor.save_current_buffer();
+    // modified must be false immediately after save — before any poll
+    assert!(
+        !editor.buffers[0].modified,
+        "modified should be false immediately after save"
+    );
+}
+
+#[test]
+fn git_diff_stale_buffer_ignored() {
+    let mut editor = Editor::new();
+    // Create a fake pending git diff with a disconnected channel
+    let (_tx, rx) = std::sync::mpsc::channel();
+    drop(_tx); // disconnect
+    editor.pending_git_diff = Some(crate::editor::PendingGitDiff {
+        file_path: std::path::PathBuf::from("/nonexistent/file.rs"),
+        receiver: rx,
+    });
+    // poll should not panic — just drop the stale result
+    editor.poll_pending_git_diff();
+    assert!(editor.pending_git_diff.is_none());
+}
+
+#[test]
+fn poll_pending_git_diff_applies_result() {
+    let mut editor = Editor::new();
+    let path = std::path::PathBuf::from("/test/apply.rs");
+    editor.buffers[0].set_file_path(path.clone());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    editor.pending_git_diff = Some(crate::editor::PendingGitDiff {
+        file_path: path,
+        receiver: rx,
+    });
+
+    // Send a mock result
+    let mut mock_diff = std::collections::HashMap::new();
+    mock_diff.insert(0, crate::render_common::gutter::GitLineStatus::Added);
+    mock_diff.insert(5, crate::render_common::gutter::GitLineStatus::Modified);
+    tx.send(mock_diff).unwrap();
+
+    editor.poll_pending_git_diff();
+    assert!(editor.pending_git_diff.is_none());
+    assert_eq!(editor.buffers[0].git_diff_lines.len(), 2);
+    assert_eq!(
+        editor.buffers[0].git_diff_lines[&0],
+        crate::render_common::gutter::GitLineStatus::Added
+    );
+}
+
 // Shell-insert keymap tests (Part 1: Lisp machine fix)
 // ---------------------------------------------------------------------------

@@ -293,6 +293,14 @@ pub enum InputLock {
 
 /// Snapshot of editor state for save/restore (push/pop state stack).
 /// Captures the buffer list, window layout, focus, and mode so tools
+/// Pending async git diff: spawned on a background thread, polled on idle ticks.
+pub struct PendingGitDiff {
+    pub file_path: std::path::PathBuf,
+    pub receiver: std::sync::mpsc::Receiver<
+        std::collections::HashMap<usize, crate::render_common::gutter::GitLineStatus>,
+    >,
+}
+
 /// can restore the editor to a known state after temporary operations.
 #[derive(Clone)]
 pub struct EditorStateSnapshot {
@@ -925,6 +933,9 @@ pub struct Editor {
     /// Pending module reload requests. Drained by the binary which owns
     /// the SchemeRuntime and ModuleRegistry.
     pub pending_module_reloads: Vec<String>,
+    /// Pending async git diff result. `request_git_diff()` spawns a background
+    /// thread; `poll_pending_git_diff()` drains the result on idle ticks.
+    pub pending_git_diff: Option<PendingGitDiff>,
     /// Pending package management commands (sync, upgrade, doctor).
     /// Drained by the binary crate in the event loop.
     pub pending_pkg_commands: Vec<String>,
@@ -1198,6 +1209,7 @@ impl Editor {
             active_modules: Vec::new(),
             pending_module_reloads: Vec::new(),
             pending_pkg_commands: Vec::new(),
+            pending_git_diff: None,
         }
     }
 

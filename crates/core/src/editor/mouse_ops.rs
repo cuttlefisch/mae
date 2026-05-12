@@ -405,7 +405,10 @@ impl super::Editor {
             }
         }
 
-        // 3. Drain KB file watchers for federated instances.
+        // 3. Poll pending async git diff results.
+        self.poll_pending_git_diff();
+
+        // 4. Drain KB file watchers for federated instances.
         self.drain_kb_watchers();
     }
 

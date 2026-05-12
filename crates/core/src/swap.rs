@@ -14,7 +14,7 @@
 
 use ropey::Rope;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -76,11 +76,11 @@ pub fn write_swap(file_path: &Path, rope: &Rope, custom_dir: Option<&Path>) -> i
         file_path.display(),
     );
 
-    let mut content = header;
-    for chunk in rope.chunks() {
-        content.push_str(chunk);
-    }
-    fs::write(&tmp, &content)?;
+    let file = fs::File::create(&tmp)?;
+    let mut writer = io::BufWriter::new(file);
+    writer.write_all(header.as_bytes())?;
+    rope.write_to(&mut writer)?;
+    writer.flush()?;
 
     // Atomic rename (Emacs lesson #5).
     if let Err(e) = fs::rename(&tmp, &swap) {
@@ -515,6 +515,23 @@ mod tests {
         let content = fs::read_to_string(&index_path).unwrap();
         assert!(content.contains("/test/indexed.txt"));
         assert!(content.contains("/swap/indexed.swp"));
+    }
+
+    #[test]
+    fn swap_streaming_roundtrip() {
+        let dir = test_dir();
+        let file_path = Path::new("/home/user/stream_test.rs");
+        // Multi-chunk rope: ropey splits at ~1KB boundaries.
+        let chunk = "fn foo() { println!(\"test\"); }\n".repeat(200);
+        let content = chunk.repeat(3); // ~18KB, multiple rope chunks
+        let rope = Rope::from_str(&content);
+
+        let swap = write_swap(file_path, &rope, Some(dir.path())).unwrap();
+        assert!(swap.exists());
+
+        let (header, recovered) = read_swap(&swap).unwrap();
+        assert_eq!(header.original_path, file_path);
+        assert_eq!(recovered.to_string(), content);
     }
 
     #[test]

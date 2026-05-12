@@ -174,7 +174,7 @@ impl Editor {
                 }
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
-                self.refresh_git_diff(idx);
+                self.request_git_diff(idx);
                 self.fire_hook("after-save");
             }
             Err(e) => {
@@ -1181,7 +1181,7 @@ impl Editor {
                 }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
-                self.refresh_git_diff(new_idx);
+                self.request_git_diff(new_idx);
                 self.fire_hook("buffer-open");
                 if let Some(lang) = detected_lang {
                     self.fire_hook(&format!("buffer-open:{}", lang.id()));
