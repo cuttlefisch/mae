@@ -323,17 +323,34 @@ fn scan_heading_id(lines: &[&str]) -> Option<String> {
 /// internal link scanner (which uses `[[…]]`). If a `[[` has no matching
 /// `]]` before a nested `[[`, it's treated as literal text.
 pub fn rewrite_links(body: &str) -> String {
+    let code_ranges = crate::compute_code_block_ranges(body);
+    let in_code_block =
+        |pos: usize| -> bool { code_ranges.iter().any(|&(s, e)| pos >= s && pos < e) };
+
     let mut out = String::with_capacity(body.len());
     let bytes = body.as_bytes();
     let mut i = 0;
     while i < body.len() {
         // `[[` is pure ASCII so byte-indexed lookahead is UTF-8-safe.
-        if i + 1 < bytes.len() && bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            if let Some(rel_end) = body[i + 2..].find("]]") {
-                let inner = &body[i + 2..i + 2 + rel_end];
-                // Reject candidates with a nested `[[` — the outer
-                // open is almost certainly a stray `[[` in prose.
-                if !inner.contains("[[") {
+        if i + 1 < bytes.len() && bytes[i] == b'[' && bytes[i + 1] == b'[' && !in_code_block(i) {
+            // Triple-bracket `[[[id:...]]` — skip the stray leading `[`
+            // so the inner `[[id:...]]` is parsed as a normal link.
+            let link_start = if i + 2 < bytes.len() && bytes[i + 2] == b'[' {
+                i + 1
+            } else {
+                i
+            };
+            if let Some(rel_end) = body[link_start + 2..].find("]]") {
+                let inner = &body[link_start + 2..link_start + 2 + rel_end];
+                // If `inner` contains a nested `[[`, the outer brackets
+                // are stray. Skip just ONE `[` so the inner link can be
+                // parsed on the next iteration.
+                if inner.contains("[[") {
+                    out.push('[');
+                    i += 1;
+                    continue;
+                }
+                {
                     let (target_raw, display) = match inner.find("][") {
                         Some(sep) => (&inner[..sep], Some(&inner[sep + 2..])),
                         None => (inner, None),
@@ -360,10 +377,9 @@ pub fn rewrite_links(body: &str) -> String {
                         out.push_str(target_raw);
                         out.push(')');
                     }
-                    i += 2 + rel_end + 2;
+                    i = link_start + 2 + rel_end + 2;
                     continue;
                 }
-                // fallthrough: treat outer `[` as literal.
             }
         }
         // Emit one full UTF-8 char. This keeps multibyte bodies
@@ -646,5 +662,67 @@ Just a heading without a drawer.
         assert!(out.contains("café"));
         // External-style brackets become "display (target)".
         assert!(out.contains("émoji 🎉 link (id:xyz)") || out.contains("[[xyz|émoji 🎉 link]]"));
+    }
+
+    #[test]
+    fn rewrite_links_triple_bracket() {
+        // org-roam sometimes produces `[[[id:UUID][display]]` (extra leading bracket).
+        // Should be parsed as a normal id: link.
+        let body = "see [[[id:abc-def-123][my note]]].";
+        let out = rewrite_links(body);
+        assert!(
+            out.contains("[[abc-def-123|my note]]"),
+            "triple bracket should parse as link, got: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn rewrite_links_triple_bracket_bare() {
+        let body = "link: [[[id:xyz-123]]] end";
+        let out = rewrite_links(body);
+        assert!(
+            out.contains("[[xyz-123]]"),
+            "bare triple bracket should parse, got: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn rewrite_links_skips_code_blocks() {
+        let body = "\
+Text with [[id:abc][real link]].
+#+begin_src elisp
+(format \"[[id:%s][%s]]\" prev-id prev-title)
+#+end_src
+After code [[id:def][another link]].";
+        let out = rewrite_links(body);
+        // Real links outside code blocks should be rewritten.
+        assert!(
+            out.contains("[[abc|real link]]"),
+            "real link missing: {out}"
+        );
+        assert!(
+            out.contains("[[def|another link]]"),
+            "post-code link missing: {out}"
+        );
+        // The code block content should be preserved verbatim.
+        assert!(
+            out.contains("[[id:%s][%s]]"),
+            "code block link should NOT be rewritten: {out}"
+        );
+    }
+
+    #[test]
+    fn rewrite_links_code_block_case_insensitive() {
+        let body = "\
+#+BEGIN_SRC python
+x = \"[[id:fake][link]]\"
+#+END_SRC";
+        let out = rewrite_links(body);
+        assert!(
+            out.contains("[[id:fake][link]]"),
+            "case-insensitive code block not detected: {out}"
+        );
     }
 }

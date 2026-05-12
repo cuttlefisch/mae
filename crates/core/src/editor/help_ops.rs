@@ -16,7 +16,11 @@ fn node_kind_label(kind: mae_kb::NodeKind) -> &'static str {
 
 /// Render a KB node into plain text and extract link byte ranges.
 /// Returns `(rendered_text, link_spans)`.
-fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<HelpLinkSpan>) {
+fn render_help_node(
+    kb: &mae_kb::KnowledgeBase,
+    node_id: &str,
+    resolve_title: impl Fn(&str) -> Option<String>,
+) -> (String, Vec<HelpLinkSpan>) {
     let mut out = String::new();
     let mut links: Vec<HelpLinkSpan> = Vec::new();
 
@@ -25,8 +29,8 @@ fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<H
         return (out, links);
     };
 
-    // Header
-    out.push_str(&node.title);
+    // Header — # prefix gives h1 scale in GUI heading renderer
+    out.push_str(&format!("# {}", node.title));
     out.push('\n');
     out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
     if !node.tags.is_empty() {
@@ -34,8 +38,26 @@ fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<H
     }
     out.push('\n');
 
-    // Body — parse [[target|display]] link markers
+    // Body — parse [[target|display]] link markers, strip property drawers
+    let mut in_drawer = false;
+    let header_lines = out.lines().count();
     for body_line in node.body.lines() {
+        let trimmed = body_line.trim();
+        if trimmed.eq_ignore_ascii_case(":PROPERTIES:") || trimmed.eq_ignore_ascii_case(":LOGBOOK:")
+        {
+            in_drawer = true;
+            continue;
+        }
+        if in_drawer {
+            if trimmed.eq_ignore_ascii_case(":END:") {
+                in_drawer = false;
+            }
+            continue;
+        }
+        // Strip #+keyword lines near top (already in header metadata)
+        if trimmed.starts_with("#+") && out.lines().count() < header_lines + 4 {
+            continue;
+        }
         render_body_line(body_line, &mut out, &mut links);
         out.push('\n');
     }
@@ -46,15 +68,12 @@ fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<H
 
     if !outgoing.is_empty() || !incoming.is_empty() {
         out.push('\n');
-        out.push_str("── Neighborhood ──\n");
+        out.push_str("## Neighborhood\n");
     }
     if !outgoing.is_empty() {
         out.push_str("Outgoing:\n");
         for target in &outgoing {
-            let (title_text, _missing) = match kb.get(target) {
-                Some(n) => (n.title.clone(), false),
-                None => ("(missing)".to_string(), true),
-            };
+            let title_text = resolve_title(target).unwrap_or_else(|| "(missing)".to_string());
             out.push_str("  → ");
             let link_start = out.len();
             out.push_str(target);
@@ -70,10 +89,7 @@ fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<H
     if !incoming.is_empty() {
         out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
         for src in &incoming {
-            let (title_text, _missing) = match kb.get(src) {
-                Some(n) => (n.title.clone(), false),
-                None => ("(missing)".to_string(), true),
-            };
+            let title_text = resolve_title(src).unwrap_or_else(|| "(missing)".to_string());
             out.push_str("  ← ");
             let link_start = out.len();
             out.push_str(src);
@@ -88,7 +104,9 @@ fn render_help_node(kb: &mae_kb::KnowledgeBase, node_id: &str) -> (String, Vec<H
     }
 
     out.push('\n');
-    out.push_str("Tab/S-Tab: focus link · Enter: follow · C-o/C-i: back/forward · q: close\n");
+    out.push_str(
+        "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
+    );
 
     (out, links)
 }
@@ -189,6 +207,19 @@ impl Editor {
         self.kb_instances.values().any(|kb| kb.contains(id))
     }
 
+    /// Resolve a node title across local + federated KBs.
+    fn kb_resolve_title(&self, id: &str) -> Option<String> {
+        if let Some(n) = self.kb.get(id) {
+            return Some(n.title.clone());
+        }
+        for kb in self.kb_instances.values() {
+            if let Some(n) = kb.get(id) {
+                return Some(n.title.clone());
+            }
+        }
+        None
+    }
+
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
     fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
         if self.kb.contains(id) {
@@ -251,7 +282,7 @@ impl Editor {
                 let mut links = Vec::new();
                 // Add header info from KB node if it exists
                 if let Some(node) = self.kb.get(&node_id) {
-                    out.push_str(&node.title);
+                    out.push_str(&format!("# {}", node.title));
                     out.push('\n');
                     out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
                     if !node.tags.is_empty() {
@@ -264,20 +295,18 @@ impl Editor {
                     render_body_line(body_line, &mut out, &mut links);
                     out.push('\n');
                 }
-                // Add neighborhood from KB
+                // Add neighborhood from KB (federation-aware)
                 let outgoing = self.kb.links_from(&node_id);
                 let incoming = self.kb.links_to(&node_id);
                 if !outgoing.is_empty() || !incoming.is_empty() {
                     out.push('\n');
-                    out.push_str("── Neighborhood ──\n");
+                    out.push_str("## Neighborhood\n");
                 }
                 if !outgoing.is_empty() {
                     out.push_str("Outgoing:\n");
                     for target in &outgoing {
                         let title_text = self
-                            .kb
-                            .get(target)
-                            .map(|n| n.title.clone())
+                            .kb_resolve_title(target)
                             .unwrap_or_else(|| "(missing)".to_string());
                         out.push_str("  → ");
                         let link_start = out.len();
@@ -295,9 +324,7 @@ impl Editor {
                     out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
                     for src in &incoming {
                         let title_text = self
-                            .kb
-                            .get(src)
-                            .map(|n| n.title.clone())
+                            .kb_resolve_title(src)
                             .unwrap_or_else(|| "(missing)".to_string());
                         out.push_str("  ← ");
                         let link_start = out.len();
@@ -313,23 +340,47 @@ impl Editor {
                 }
                 out.push('\n');
                 out.push_str(
-                    "Tab/S-Tab: focus link · Enter: follow · C-o/C-i: back/forward · q: close\n",
+                    "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
                 );
                 (out, links)
             } else {
                 let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
-                render_help_node(kb, &node_id)
+                let local = &self.kb;
+                let federated = &self.kb_instances;
+                render_help_node(kb, &node_id, |id| {
+                    local.get(id).map(|n| n.title.clone()).or_else(|| {
+                        federated
+                            .values()
+                            .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
+                    })
+                })
             }
         } else {
             let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb);
-            render_help_node(kb, &node_id)
+            let local = &self.kb;
+            let federated = &self.kb_instances;
+            render_help_node(kb, &node_id, |id| {
+                local.get(id).map(|n| n.title.clone()).or_else(|| {
+                    federated
+                        .values()
+                        .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
+                })
+            })
         };
         // Temporarily allow writing to the read-only buffer.
         self.buffers[buf_idx].read_only = false;
         self.buffers[buf_idx].replace_contents(&text);
         self.buffers[buf_idx].read_only = true;
+        // Detect broken links for visual feedback (before borrowing buffers mutably).
+        let mut broken = std::collections::HashSet::new();
+        for (i, link) in link_spans.iter().enumerate() {
+            if !self.kb_contains_any(&link.target) {
+                broken.insert(i);
+            }
+        }
         if let Some(view) = self.buffers[buf_idx].help_view_mut() {
             view.rendered_links = link_spans;
+            view.broken_links = broken;
         }
     }
 
@@ -376,10 +427,21 @@ impl Editor {
             let Some(link) = view.rendered_links.get(idx) else {
                 return;
             };
-            let target = link.target.clone();
-            if !self.kb.contains(&target) {
-                self.set_status(format!("Link target '{}' not found", target));
-                return;
+            let mut target = link.target.clone();
+            if !self.kb_contains_any(&target) {
+                // Attempt fuzzy resolution via federated search
+                let results = self.kb_federated_search(&target);
+                if results.len() == 1 {
+                    let resolved_id = results[0].1.id.clone();
+                    self.set_status(format!("Resolved: {} → {}", target, resolved_id));
+                    target = resolved_id;
+                } else {
+                    self.set_status(format!(
+                        "Link not found: '{}' — try :help {}",
+                        target, target
+                    ));
+                    return;
+                }
             }
             let Some(buf_idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) else {
                 return;
@@ -558,6 +620,133 @@ impl Editor {
                 self.set_status(format!("No source file for '{}'", node_id));
             }
         }
+    }
+
+    /// Return to the rendered KB view from source editing.
+    /// If a help buffer exists, switch to it. Otherwise, reopen the last one.
+    pub fn help_return_to_view(&mut self) {
+        if let Some(idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            self.display_buffer(idx);
+        } else if self.last_help_state.is_some() {
+            self.help_reopen();
+        } else {
+            self.set_status("No KB view to return to");
+        }
+    }
+
+    // --- Help buffer heading folding (Fix 4) ---
+
+    /// Heading level for a help buffer line (language-agnostic: both `*` and `#`).
+    fn help_heading_level_at(&self, buf_idx: usize, row: usize) -> u8 {
+        let rope = self.buffers[buf_idx].rope();
+        if row >= rope.len_lines() {
+            return 0;
+        }
+        let line = rope.line(row);
+        let chars: Vec<char> = line.chars().take(10).collect();
+        crate::heading::heading_level_from_chars(&chars)
+    }
+
+    /// Find the end of a heading's subtree (next heading at same-or-shallower level).
+    fn help_subtree_end(&self, buf_idx: usize, row: usize, level: u8) -> usize {
+        let total = self.buffers[buf_idx].line_count();
+        let mut end = row + 1;
+        while end < total {
+            let l = self.help_heading_level_at(buf_idx, end);
+            if l > 0 && l <= level {
+                break;
+            }
+            end += 1;
+        }
+        end
+    }
+
+    /// Tab on a heading → fold/unfold subtree. Not on heading → next link.
+    pub fn help_heading_cycle(&mut self) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            Some(i) => i,
+            None => return,
+        };
+        let row = self.window_mgr.focused_window().cursor_row;
+        let level = self.help_heading_level_at(buf_idx, row);
+        if level == 0 {
+            // Not on a heading — fall through to next link
+            self.help_next_link();
+            return;
+        }
+        let end = self.help_subtree_end(buf_idx, row, level);
+        if row >= end.saturating_sub(1) {
+            return; // single-line heading
+        }
+        let fold_ranges = vec![(row, end)];
+        self.buffers[buf_idx].toggle_fold_at(row, &fold_ranges);
+    }
+
+    /// Global visibility cycle: OVERVIEW → CONTENTS → SHOW ALL.
+    pub fn help_heading_global_cycle(&mut self) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            Some(i) => i,
+            None => return,
+        };
+        let total = self.buffers[buf_idx].line_count();
+        // Collect all headings
+        let mut headings: Vec<(usize, u8)> = Vec::new();
+        for row in 0..total {
+            let level = self.help_heading_level_at(buf_idx, row);
+            if level > 0 {
+                headings.push((row, level));
+            }
+        }
+        if headings.is_empty() {
+            return;
+        }
+        let has_folds = !self.buffers[buf_idx].folded_ranges.is_empty();
+        if !has_folds {
+            // SHOW ALL → OVERVIEW: fold all headings
+            self.buffers[buf_idx].read_only = false;
+            for &(row, level) in &headings {
+                let end = self.help_subtree_end(buf_idx, row, level);
+                if end > row + 1 {
+                    self.buffers[buf_idx].folded_ranges.push((row, end));
+                }
+            }
+            self.buffers[buf_idx].read_only = true;
+            self.set_status("Overview");
+        } else {
+            // Has folds → SHOW ALL: clear all
+            self.buffers[buf_idx].folded_ranges.clear();
+            self.set_status("Show All");
+        }
+    }
+
+    /// Close all folds in help buffer (zM).
+    pub fn help_close_all_folds(&mut self) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            Some(i) => i,
+            None => return,
+        };
+        let total = self.buffers[buf_idx].line_count();
+        self.buffers[buf_idx].folded_ranges.clear();
+        for row in 0..total {
+            let level = self.help_heading_level_at(buf_idx, row);
+            if level > 0 {
+                let end = self.help_subtree_end(buf_idx, row, level);
+                if end > row + 1 {
+                    self.buffers[buf_idx].folded_ranges.push((row, end));
+                }
+            }
+        }
+        self.set_status("All folds closed");
+    }
+
+    /// Open all folds in help buffer (zR).
+    pub fn help_open_all_folds(&mut self) {
+        let buf_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            Some(i) => i,
+            None => return,
+        };
+        self.buffers[buf_idx].folded_ranges.clear();
+        self.set_status("All folds opened");
     }
 
     /// Reopen the last-closed help buffer at exactly the node and
@@ -880,5 +1069,262 @@ mod tests {
         assert!(text.contains("movement"), "should include category");
         // The default keymaps bind h to move-left
         assert!(text.contains("normal"), "should include normal mode");
+    }
+
+    // --- KB UX: title heading scale (Fix 1) ---
+
+    #[test]
+    fn help_title_has_heading_prefix() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
+        assert!(
+            text.starts_with("# "),
+            "title should have # prefix for heading scale, got: {}",
+            &text[..text.len().min(40)]
+        );
+    }
+
+    #[test]
+    fn help_neighborhood_has_h2_heading() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
+        assert!(
+            text.contains("## Neighborhood"),
+            "neighborhood should use ## heading"
+        );
+    }
+
+    // --- KB UX: drawer stripping (Fix 2) ---
+
+    #[test]
+    fn help_strips_properties_drawer() {
+        let mut e = Editor::new();
+        let node = mae_kb::Node::new(
+            "user:drawer-test",
+            "Drawer Test",
+            mae_kb::NodeKind::Note,
+            ":PROPERTIES:\n:ID: drawer-test\n:END:\nVisible body.\n",
+        );
+        e.kb.insert(node);
+        e.open_help_at("user:drawer-test");
+        let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
+        assert!(
+            !text.contains(":PROPERTIES:"),
+            "properties drawer should be stripped"
+        );
+        assert!(text.contains("Visible body"), "body content should remain");
+    }
+
+    // --- KB UX: kb-view command (Fix 3) ---
+
+    #[test]
+    fn kb_view_returns_to_help_buffer() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        // Switch away from help
+        e.display_buffer(0);
+        assert_ne!(e.active_buffer().kind, BufferKind::Help);
+        // kb-view should return
+        e.help_return_to_view();
+        assert_eq!(e.active_buffer().kind, BufferKind::Help);
+    }
+
+    #[test]
+    fn kb_view_reopens_closed_help() {
+        let mut e = Editor::new();
+        e.open_help_at("concept:buffer");
+        e.help_close();
+        assert!(e.buffers.iter().all(|b| b.kind != BufferKind::Help));
+        e.help_return_to_view();
+        assert_eq!(e.active_buffer().kind, BufferKind::Help);
+        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+    }
+
+    #[test]
+    fn kb_view_no_help_shows_status() {
+        let mut e = Editor::new();
+        e.help_return_to_view();
+        assert!(e.status_msg.contains("No KB view"));
+    }
+
+    // --- KB UX: help heading folding (Fix 4) ---
+
+    #[test]
+    fn help_heading_cycle_folds_heading() {
+        let mut e = Editor::new();
+        // Insert a node with headings
+        let node = mae_kb::Node::new(
+            "user:fold-test",
+            "Fold Test",
+            mae_kb::NodeKind::Note,
+            "## Section 1\nBody 1\nBody 2\n## Section 2\nBody 3\n",
+        );
+        e.kb.insert(node);
+        e.open_help_at("user:fold-test");
+        let buf_idx = e.active_buffer_idx();
+        // Find the ## Section 1 line (should be after title + metadata)
+        let text: String = e.buffers[buf_idx].rope().chars().collect();
+        let section_row = text
+            .lines()
+            .position(|l| l.starts_with("## Section 1"))
+            .unwrap();
+        e.window_mgr.focused_window_mut().cursor_row = section_row;
+        e.help_heading_cycle();
+        assert!(
+            !e.buffers[buf_idx].folded_ranges.is_empty(),
+            "heading should be folded"
+        );
+        // Toggle again to unfold
+        e.help_heading_cycle();
+        assert!(
+            e.buffers[buf_idx].folded_ranges.is_empty(),
+            "heading should be unfolded"
+        );
+    }
+
+    #[test]
+    fn help_close_all_folds_works() {
+        let mut e = Editor::new();
+        let node = mae_kb::Node::new(
+            "user:fold-all-test",
+            "Fold All",
+            mae_kb::NodeKind::Note,
+            "## A\nBody A\n## B\nBody B\n",
+        );
+        e.kb.insert(node);
+        e.open_help_at("user:fold-all-test");
+        let buf_idx = e.active_buffer_idx();
+        e.help_close_all_folds();
+        assert!(
+            !e.buffers[buf_idx].folded_ranges.is_empty(),
+            "should have folds"
+        );
+        e.help_open_all_folds();
+        assert!(
+            e.buffers[buf_idx].folded_ranges.is_empty(),
+            "should have no folds"
+        );
+    }
+
+    // --- KB UX: broken link detection (Fix 5) ---
+
+    #[test]
+    fn help_broken_links_detected() {
+        let mut e = Editor::new();
+        let node = mae_kb::Node::new(
+            "user:broken-link-test",
+            "Broken Links",
+            mae_kb::NodeKind::Note,
+            "See [[nonexistent:target]] for info.\n",
+        );
+        e.kb.insert(node);
+        e.open_help_at("user:broken-link-test");
+        let view = e.help_view().unwrap();
+        assert!(
+            !view.broken_links.is_empty(),
+            "should detect broken link to nonexistent:target"
+        );
+    }
+
+    #[test]
+    fn help_valid_links_not_broken() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        let view = e.help_view().unwrap();
+        // The index node links to real nodes — none should be broken
+        let valid_count = view
+            .rendered_links
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !view.broken_links.contains(i))
+            .count();
+        assert!(valid_count > 0, "index should have valid links");
+    }
+
+    #[test]
+    fn help_follow_broken_link_fuzzy_resolves() {
+        let mut e = Editor::new();
+        // Create a node with a link that partially matches an existing node
+        let node = mae_kb::Node::new(
+            "user:fuzzy-test",
+            "Fuzzy Test",
+            mae_kb::NodeKind::Note,
+            "See [[concept:buffer]] for info.\n",
+        );
+        e.kb.insert(node);
+        e.open_help_at("user:fuzzy-test");
+        // Focus the link and follow it — should work since concept:buffer exists
+        e.help_next_link();
+        e.help_follow_link();
+        assert_eq!(e.help_view().unwrap().current, "concept:buffer");
+    }
+
+    // --- KB UX: hint footer (Fix 6) ---
+
+    #[test]
+    fn help_footer_shows_new_keybindings() {
+        let mut e = Editor::new();
+        e.open_help_at("index");
+        let text: String = e.buffers[e.active_buffer_idx()].rope().chars().collect();
+        assert!(text.contains("Tab: fold"), "footer should mention Tab fold");
+        assert!(
+            text.contains("n/p: links"),
+            "footer should mention n/p links"
+        );
+        assert!(text.contains("e: edit"), "footer should mention edit");
+    }
+
+    // --- Bug A: close-window on sole conversation group ---
+
+    #[test]
+    fn close_window_on_sole_conversation_group_resets() {
+        use crate::editor::ConversationPair;
+
+        let mut e = Editor::new();
+        // Simulate creating a conversation pair with a group layout
+        let out_buf = crate::buffer::Buffer::new_conversation("*AI*");
+        e.buffers.push(out_buf);
+        let output_idx = e.buffers.len() - 1;
+        let mut input_buf = crate::buffer::Buffer::new();
+        input_buf.name = "*ai-input*".to_string();
+        e.buffers.push(input_buf);
+        let input_idx = e.buffers.len() - 1;
+        // Create a split layout with two windows
+        let area = e.default_area();
+        let out_win_id = e.window_mgr.focused_id();
+        e.window_mgr.focused_window_mut().buffer_idx = output_idx;
+        let input_win_id = e
+            .window_mgr
+            .split(crate::window::SplitDirection::Horizontal, input_idx, area)
+            .unwrap();
+        e.window_mgr.set_focused(input_win_id);
+        // Group them as a conversation pair
+        e.window_mgr
+            .wrap_subtree_as_group(&[out_win_id, input_win_id], "ai-chat".to_string());
+        e.conversation_pair = Some(ConversationPair {
+            output_buffer_idx: output_idx,
+            input_buffer_idx: input_idx,
+            output_window_id: out_win_id,
+            input_window_id: input_win_id,
+        });
+        assert!(
+            e.window_mgr.is_in_group(input_win_id),
+            "input window should be in group"
+        );
+        // Now close-window should tear down the conversation
+        e.dispatch_builtin("close-window");
+        assert!(
+            e.conversation_pair.is_none(),
+            "conversation pair should be cleared"
+        );
+        assert_eq!(e.mode, crate::Mode::Normal, "should return to Normal mode");
+        assert!(
+            e.buffers
+                .iter()
+                .all(|b| b.kind != crate::BufferKind::Conversation),
+            "conversation buffers should be removed"
+        );
     }
 }

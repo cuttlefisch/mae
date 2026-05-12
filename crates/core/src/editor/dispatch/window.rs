@@ -36,7 +36,53 @@ impl Editor {
                     // Group-aware close: close all members of the group
                     let buf_indices = self.window_mgr.close_group(focused);
                     if buf_indices.is_empty() {
-                        self.set_status("Cannot close last window");
+                        // close_group refused (would leave 0 windows).
+                        // If this is a conversation group, tear it down and
+                        // restore the single-window layout with the previous buffer.
+                        if self.conversation_pair.is_some() {
+                            let pair = self.conversation_pair.take().unwrap();
+                            // Collect conversation buffer indices to remove (in reverse order).
+                            let mut to_remove = vec![pair.output_buffer_idx, pair.input_buffer_idx];
+                            to_remove.sort_unstable();
+                            to_remove.dedup();
+                            // Find a destination buffer (alternate or first non-conversation).
+                            let dest = self
+                                .alternate_buffer_idx
+                                .filter(|&i| i < self.buffers.len() && !to_remove.contains(&i))
+                                .or_else(|| {
+                                    self.buffers
+                                        .iter()
+                                        .enumerate()
+                                        .position(|(i, _)| !to_remove.contains(&i))
+                                })
+                                .unwrap_or(0);
+                            // Reset window manager to single window showing dest.
+                            self.window_mgr.reset_to_single(dest);
+                            // Remove conversation buffers (highest index first).
+                            for &idx in to_remove.iter().rev() {
+                                if idx < self.buffers.len() {
+                                    self.buffers.remove(idx);
+                                    self.syntax.shift_after_remove(idx);
+                                    self.adjust_ai_target_after_remove(idx);
+                                    // Fix window buffer indices after removal.
+                                    for win in self.window_mgr.iter_windows_mut() {
+                                        if win.buffer_idx > idx {
+                                            win.buffer_idx -= 1;
+                                        }
+                                    }
+                                    if let Some(ref mut alt) = self.alternate_buffer_idx {
+                                        if *alt == idx {
+                                            self.alternate_buffer_idx = None;
+                                        } else if *alt > idx {
+                                            *alt -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                            self.set_mode(crate::Mode::Normal);
+                        } else {
+                            self.set_status("Cannot close last window");
+                        }
                     }
                     // Clear conversation pair if we closed its windows
                     if let Some(ref pair) = self.conversation_pair {

@@ -6,7 +6,7 @@ mod git;
 mod help;
 mod image;
 mod introspect;
-mod kb;
+pub(crate) mod kb;
 pub(crate) mod lsp;
 mod project;
 mod shell;

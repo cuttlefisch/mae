@@ -169,11 +169,19 @@ impl Node {
 /// A parsed link from a body: `(target_id, display_text)`.
 /// Display text defaults to the target id if no `|display` override exists.
 pub fn parse_links(body: &str) -> Vec<(String, String)> {
+    // Pre-compute code block ranges to skip (same logic as rewrite_links).
+    let code_ranges = compute_code_block_ranges(body);
+
     let mut out = Vec::new();
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
         if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            // Skip links inside #+begin_src … #+end_src.
+            if code_ranges.iter().any(|&(s, e)| i >= s && i < e) {
+                i += 1;
+                continue;
+            }
             if let Some(end_rel) = body[i + 2..].find("]]") {
                 let inner = &body[i + 2..i + 2 + end_rel];
                 // Split on '|' for display-text override.
@@ -194,13 +202,83 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Compute byte ranges of `#+begin_src` … `#+end_src` blocks (case-insensitive).
+fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let lower = body.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(start) = lower[search_from..].find("#+begin_src") {
+        let abs_start = search_from + start;
+        if let Some(end) = lower[abs_start..].find("#+end_src") {
+            let abs_end = abs_start + end + "#+end_src".len();
+            let abs_end = body[abs_end..]
+                .find('\n')
+                .map_or(body.len(), |nl| abs_end + nl + 1);
+            ranges.push((abs_start, abs_end));
+            search_from = abs_end;
+        } else {
+            ranges.push((abs_start, body.len()));
+            break;
+        }
+    }
+    ranges
+}
+
+/// Classification of a broken link — why it's broken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrokenLinkKind {
+    /// Target UUID is well-formed but no node with that ID exists (deleted file).
+    DeletedNode,
+    /// Target is not a valid UUID (elisp code, prose, malformed markup).
+    MalformedId,
+    /// Target is a template placeholder like `%s` or `UUID`.
+    TemplatePlaceholder,
+}
+
+/// A broken link with classification and display context.
+#[derive(Debug, Clone)]
+pub struct BrokenLink {
+    pub source: String,
+    pub target: String,
+    pub display: String,
+    pub kind: BrokenLinkKind,
+}
+
+impl BrokenLink {
+    /// Classify a broken link target.
+    fn classify(target: &str) -> BrokenLinkKind {
+        let t = target.trim();
+        if t == "%s" || t.eq_ignore_ascii_case("uuid") || t == "..." {
+            BrokenLinkKind::TemplatePlaceholder
+        } else if is_uuid_like(t) {
+            BrokenLinkKind::DeletedNode
+        } else {
+            BrokenLinkKind::MalformedId
+        }
+    }
+}
+
+/// Check if a string looks like a UUID (8-4-4-4-12 hex pattern).
+fn is_uuid_like(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts[0].len() == 8
+        && parts[1].len() == 4
+        && parts[2].len() == 4
+        && parts[3].len() == 4
+        && parts[4].len() == 12
+        && parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 /// Health report for the knowledge base — orphans, broken links, namespace stats.
 #[derive(Debug, Clone)]
 pub struct KbHealthReport {
     pub total_nodes: usize,
     pub total_links: usize,
     pub orphan_ids: Vec<String>,
-    pub broken_links: Vec<(String, String)>,
+    pub broken_links: Vec<BrokenLink>,
     pub namespace_counts: HashMap<String, usize>,
 }
 
@@ -547,56 +625,74 @@ impl KnowledgeBase {
 
     /// Compute a health report: orphan nodes, broken links, namespace counts.
     pub fn health_report(&self) -> KbHealthReport {
+        self.health_report_with(|_| false)
+    }
+
+    /// Health report with an external resolver for cross-KB link checking.
+    /// `external_contains` returns true if a target exists in another KB.
+    pub fn health_report_with(&self, external_contains: impl Fn(&str) -> bool) -> KbHealthReport {
         let all_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
-        let total_nodes = all_ids.len();
 
-        // Count links and find broken ones.
-        let mut total_links = 0usize;
-        let mut broken_links = Vec::new();
-        for node in self.nodes.values() {
-            let targets = node.links();
-            total_links += targets.len();
-            for target in &targets {
-                if !all_ids.contains(target.as_str()) {
-                    broken_links.push((node.id.clone(), target.clone()));
+        // Single fold over all nodes: accumulate link count, broken links,
+        // orphan IDs, and namespace counts in one pass.
+        struct Acc {
+            total_links: usize,
+            broken_links: Vec<BrokenLink>,
+            orphan_ids: Vec<String>,
+            namespace_counts: HashMap<String, usize>,
+        }
+
+        let result = self.nodes.iter().fold(
+            Acc {
+                total_links: 0,
+                broken_links: Vec::new(),
+                orphan_ids: Vec::new(),
+                namespace_counts: HashMap::new(),
+            },
+            |mut acc, (id, node)| {
+                // Links: count + broken detection with classification.
+                let link_pairs = parse_links(&node.body);
+                acc.total_links += link_pairs.len();
+                for (target, display) in &link_pairs {
+                    if !all_ids.contains(target.as_str()) && !external_contains(target) {
+                        acc.broken_links.push(BrokenLink {
+                            source: node.id.clone(),
+                            target: target.clone(),
+                            display: display.clone(),
+                            kind: BrokenLink::classify(target),
+                        });
+                    }
                 }
-            }
-        }
 
-        // Orphan nodes: no incoming AND no outgoing links.
-        // Exclude index nodes — they're entry points by design.
-        let mut orphan_ids = Vec::new();
-        for (id, node) in &self.nodes {
-            if node.kind == NodeKind::Index {
-                continue;
-            }
-            let has_outgoing = !node.links().is_empty();
-            let has_incoming = self
-                .links_in
-                .get(id.as_str())
-                .is_some_and(|v| !v.is_empty());
-            if !has_outgoing && !has_incoming {
-                orphan_ids.push(id.clone());
-            }
-        }
+                // Orphans: no links in or out, not an index node.
+                if node.kind != NodeKind::Index {
+                    let has_outgoing = !link_pairs.is_empty();
+                    let has_incoming = self
+                        .links_in
+                        .get(id.as_str())
+                        .is_some_and(|v| !v.is_empty());
+                    if !has_outgoing && !has_incoming {
+                        acc.orphan_ids.push(id.clone());
+                    }
+                }
+
+                // Namespace.
+                let ns = id.find(':').map_or("(none)", |pos| &id[..pos]);
+                *acc.namespace_counts.entry(ns.to_string()).or_default() += 1;
+
+                acc
+            },
+        );
+
+        let mut orphan_ids = result.orphan_ids;
         orphan_ids.sort();
 
-        // Namespace counts.
-        let mut namespace_counts: HashMap<String, usize> = HashMap::new();
-        for id in self.nodes.keys() {
-            let ns = match id.find(':') {
-                Some(pos) => &id[..pos],
-                None => "(none)",
-            };
-            *namespace_counts.entry(ns.to_string()).or_default() += 1;
-        }
-
         KbHealthReport {
-            total_nodes,
-            total_links,
+            total_nodes: self.nodes.len(),
+            total_links: result.total_links,
             orphan_ids,
-            broken_links,
-            namespace_counts,
+            broken_links: result.broken_links,
+            namespace_counts: result.namespace_counts,
         }
     }
 
@@ -676,6 +772,19 @@ mod tests {
     #[test]
     fn parse_links_unclosed_bracket() {
         assert!(parse_links("[[foo").is_empty());
+    }
+
+    #[test]
+    fn parse_links_skips_code_blocks() {
+        let body = "[[real]] text\n#+begin_src elisp\n[[fake]]\n#+end_src\n[[also-real]]";
+        let links = parse_links(body);
+        let targets: Vec<&str> = links.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(targets.contains(&"real"));
+        assert!(targets.contains(&"also-real"));
+        assert!(
+            !targets.contains(&"fake"),
+            "code block link should be skipped"
+        );
     }
 
     #[test]
@@ -946,10 +1055,36 @@ mod tests {
         let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "[[nonexistent]]")]);
         let report = kb.health_report();
         assert_eq!(report.broken_links.len(), 1);
-        assert_eq!(
-            report.broken_links[0],
-            ("a".to_string(), "nonexistent".to_string())
-        );
+        assert_eq!(report.broken_links[0].source, "a");
+        assert_eq!(report.broken_links[0].target, "nonexistent");
+        assert_eq!(report.broken_links[0].kind, BrokenLinkKind::MalformedId);
+    }
+
+    #[test]
+    fn health_report_classifies_broken_links() {
+        let kb = kb_with(vec![Node::new(
+            "a",
+            "A",
+            NodeKind::Note,
+            "[[%s]] [[UUID]] [[deadbeef-dead-beef-dead-beefdeadbeef]] [[not a uuid]]",
+        )]);
+        let report = kb.health_report();
+        let kinds: Vec<_> = report.broken_links.iter().map(|b| &b.kind).collect();
+        assert!(kinds.contains(&&BrokenLinkKind::TemplatePlaceholder)); // %s
+        assert!(kinds.contains(&&BrokenLinkKind::TemplatePlaceholder)); // UUID
+        assert!(kinds.contains(&&BrokenLinkKind::DeletedNode)); // valid UUID format
+        assert!(kinds.contains(&&BrokenLinkKind::MalformedId)); // not a uuid
+    }
+
+    #[test]
+    fn health_report_with_external_resolver() {
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "[[ext-node]]")]);
+        // Without resolver: broken.
+        let report = kb.health_report();
+        assert_eq!(report.broken_links.len(), 1);
+        // With resolver that knows about ext-node: not broken.
+        let report = kb.health_report_with(|id| id == "ext-node");
+        assert_eq!(report.broken_links.len(), 0);
     }
 
     #[test]

@@ -1038,9 +1038,15 @@ pub fn setup_lsp(
     let mut server_info: HashMap<String, mae_core::LspServerInfo> = HashMap::new();
 
     // Phase 1: Populate from defaults, overridden by config.toml, overridden by env vars.
+    // Only include servers whose binary is actually on PATH — avoids spawning
+    // unnecessary processes for languages not used in the current project.
     for &(lang, env_var, default_cmd, default_args) in defaults {
         let (command, args) = resolve_lsp_config(lang, env_var, default_cmd, default_args, config);
         let binary_found = find_binary(&command);
+        if !binary_found {
+            info!(lang, command, "LSP server binary not found, skipping");
+            continue;
+        }
         server_info.insert(
             lang.to_string(),
             mae_core::LspServerInfo {
@@ -1074,6 +1080,10 @@ pub fn setup_lsp(
             config,
         );
         let binary_found = find_binary(&command);
+        if !binary_found {
+            info!(lang, command, "LSP server binary not found, skipping");
+            continue;
+        }
         server_info.insert(
             lang.to_string(),
             mae_core::LspServerInfo {

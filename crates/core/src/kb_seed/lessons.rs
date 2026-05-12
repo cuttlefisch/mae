@@ -226,10 +226,15 @@ the AI queries via `kb_*` tools.\n\n\
   `SPC h o` — describe option\n\
   `:help <topic>` — open help for a topic\n\n\
 ### Navigation\n\
-- **Tab** — next link    **Shift-Tab** — previous link\n\
+- **Tab** — fold/unfold heading (or next link if not on heading)\n\
+- **S-Tab** — global visibility cycle (Overview → Show All)\n\
+- **n** / **p** — next/previous link\n\
 - **Enter** — follow link\n\
+- **e** — edit source file (Obsidian-style toggle)\n\
 - **C-o** — go back    **C-i** — go forward\n\
-- **q** — close help\n\n\
+- **za** — fold toggle    **zM** — fold all    **zR** — unfold all\n\
+- **q** — close help\n\
+- `SPC n v` — return to rendered KB view from source editing\n\n\
 **Prev:** [[lesson:terminal|Lesson 8]]  |  \
 **Next:** [[lesson:leader|Lesson 10: Leader Keys]]  |  \
 **Index:** [[tutor:index|Tutorial]]\n";

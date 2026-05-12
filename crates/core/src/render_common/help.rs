@@ -9,6 +9,7 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let mut spans: Vec<HighlightSpan> = Vec::new();
 
     // Heading spans from leading `*` or `#` chars in rope lines.
+    // Also detect metadata lines (kind · id, tags:) for dimmed rendering.
     let rope = buf.rope();
     for line_idx in 0..buf.line_count() {
         let line = rope.line(line_idx);
@@ -22,14 +23,14 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
         } else {
             (0, false)
         };
+        let line_start = rope.line_to_char(line_idx);
+        let line_len = line.len_chars();
+        let text_len = if line_idx + 1 < buf.line_count() {
+            line_len.saturating_sub(1)
+        } else {
+            line_len
+        };
         if is_heading && prefix_count > 0 {
-            let line_start = rope.line_to_char(line_idx);
-            let line_len = line.len_chars();
-            let text_len = if line_idx + 1 < buf.line_count() {
-                line_len.saturating_sub(1)
-            } else {
-                line_len
-            };
             let byte_start = rope.char_to_byte(line_start);
             let byte_end = rope.char_to_byte(line_start + text_len);
             spans.push(HighlightSpan {
@@ -37,6 +38,18 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
                 byte_end,
                 theme_key: "markup.heading",
             });
+        } else if line_idx > 0 && line_idx <= 3 && text_len > 0 {
+            // Dim metadata lines (line 2: kind · id, line 3: tags:)
+            let line_str: String = line.chars().take(40).collect();
+            if line_str.contains(" · ") || line_str.starts_with("tags:") {
+                let byte_start = rope.char_to_byte(line_start);
+                let byte_end = rope.char_to_byte(line_start + text_len);
+                spans.push(HighlightSpan {
+                    byte_start,
+                    byte_end,
+                    theme_key: "comment",
+                });
+            }
         }
     }
 
@@ -56,11 +69,14 @@ pub fn compute_help_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     if let Some(view) = buf.help_view() {
         for (i, link) in view.rendered_links.iter().enumerate() {
             let is_focused_link = view.focused_link == Some(i);
+            let is_broken = view.broken_links.contains(&i);
             spans.push(HighlightSpan {
                 byte_start: link.byte_start,
                 byte_end: link.byte_end,
                 theme_key: if is_focused_link {
                     "ui.selection"
+                } else if is_broken {
+                    "diagnostic.warning"
                 } else {
                     "markup.link"
                 },

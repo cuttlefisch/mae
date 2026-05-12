@@ -839,6 +839,17 @@ impl WindowManager {
         }
     }
 
+    /// Reset to a single window showing `buffer_idx`, discarding all other windows.
+    pub fn reset_to_single(&mut self, buffer_idx: usize) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let window = Window::new(id, buffer_idx);
+        self.windows.clear();
+        self.windows.insert(id, window);
+        self.layout = LayoutNode::Leaf(id);
+        self.focused = id;
+    }
+
     /// Get the focused window.
     pub fn focused_window(&self) -> &Window {
         self.windows

@@ -36,6 +36,7 @@ pub const WELL_KNOWN_HOOKS: &[&str] = &[
     "after-load",
     "module-loaded",
     "module-unloaded",
+    "after-kb-change",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.

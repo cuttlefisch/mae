@@ -902,7 +902,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "perf_benchmark".into(),
-            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source), 'scroll_stress' (scroll N times in current buffer, returns min/max/p50/p95/mean frame times).".into(),
+            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source), 'scroll_stress' (scroll N times, returns latency stats), 'kb_search_stress' (search N-node KB, returns p50/p95), 'kb_graph_stress' (BFS depth-2 on N-node graph, returns latency stats).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([

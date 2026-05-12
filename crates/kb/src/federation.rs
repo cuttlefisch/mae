@@ -30,9 +30,9 @@ pub struct KbRegistry {
 }
 
 impl KbRegistry {
-    /// Load registry from `~/.config/mae/kb-registry.toml`.
-    pub fn load(config_dir: &Path) -> Self {
-        let path = config_dir.join("kb-registry.toml");
+    /// Load registry from `~/.local/share/mae/kb-registry.toml`.
+    pub fn load(data_dir: &Path) -> Self {
+        let path = data_dir.join("kb-registry.toml");
         if !path.exists() {
             return Self::default();
         }
@@ -42,9 +42,9 @@ impl KbRegistry {
         }
     }
 
-    /// Save registry to `~/.config/mae/kb-registry.toml`.
-    pub fn save(&self, config_dir: &Path) -> io::Result<()> {
-        let path = config_dir.join("kb-registry.toml");
+    /// Save registry to `~/.local/share/mae/kb-registry.toml`.
+    pub fn save(&self, data_dir: &Path) -> io::Result<()> {
+        let path = data_dir.join("kb-registry.toml");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -216,6 +216,8 @@ pub struct ImportHealth {
     pub total_links: usize,
     pub orphan_count: usize,
     pub broken_link_count: usize,
+    pub broken_link_deleted: usize,
+    pub broken_link_malformed: usize,
     pub namespace_counts: HashMap<String, usize>,
 }
 
@@ -228,6 +230,16 @@ impl ImportHealth {
             total_links: report.total_links,
             orphan_count: report.orphan_ids.len(),
             broken_link_count: report.broken_links.len(),
+            broken_link_deleted: report
+                .broken_links
+                .iter()
+                .filter(|b| b.kind == crate::BrokenLinkKind::DeletedNode)
+                .count(),
+            broken_link_malformed: report
+                .broken_links
+                .iter()
+                .filter(|b| b.kind == crate::BrokenLinkKind::MalformedId)
+                .count(),
             namespace_counts: report.namespace_counts,
         }
     }

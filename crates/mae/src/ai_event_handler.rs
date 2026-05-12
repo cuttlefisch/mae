@@ -240,6 +240,9 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             }
             editor.sync_conversation_buffer_rope();
+            // Explicit scroll-to-bottom on session complete — the common epilogue
+            // also scrolls, but this ensures it happens before state restore.
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
 

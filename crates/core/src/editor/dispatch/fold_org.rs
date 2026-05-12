@@ -154,6 +154,19 @@ impl Editor {
             "kb-reimport" => {
                 self.set_status("Usage: :kb-reimport <name>");
             }
+            // Help buffer heading folding
+            "help-cycle" => {
+                self.help_heading_cycle();
+            }
+            "help-global-cycle" => {
+                self.help_heading_global_cycle();
+            }
+            "help-close-all-folds" => {
+                self.help_close_all_folds();
+            }
+            "help-open-all-folds" => {
+                self.help_open_all_folds();
+            }
             // Display region link navigation
             "text-next-link" => {
                 self.text_next_link();

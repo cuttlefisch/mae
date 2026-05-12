@@ -61,6 +61,13 @@ pub struct PerfStats {
     pub markup_cache_misses: u64,
     pub visual_rows_cache_hits: u64,
     pub visual_rows_cache_misses: u64,
+    // --- KB performance ---
+    /// Last KB search latency in microseconds.
+    pub kb_search_latency_us: u64,
+    /// Last KB watcher drain duration in microseconds.
+    pub kb_watcher_drain_us: u64,
+    /// Cumulative KB watcher events processed.
+    pub kb_watcher_events: u64,
     /// Ring buffer of recent anomalies, capped at 100 entries.
     pub anomaly_log: VecDeque<PerfAnomaly>,
     /// Ring buffer of recent frame times.
@@ -100,6 +107,9 @@ impl Default for PerfStats {
             markup_cache_misses: 0,
             visual_rows_cache_hits: 0,
             visual_rows_cache_misses: 0,
+            kb_search_latency_us: 0,
+            kb_watcher_drain_us: 0,
+            kb_watcher_events: 0,
             anomaly_log: VecDeque::new(),
             frame_times: vec![0u64; 60],
             frame_idx: 0,

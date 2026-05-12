@@ -212,17 +212,31 @@ impl LspClient {
             },
             "documentHighlight": { "dynamicRegistration": false }
         });
-        let params = serde_json::json!({
+        // Build workspaceFolders from rootUri so rust-analyzer can locate
+        // Cargo.toml and index the workspace properly.
+        let workspace_folders = config.root_uri.as_ref().map(|uri| {
+            serde_json::json!([{
+                "uri": uri,
+                "name": uri.rsplit('/').next().unwrap_or("workspace")
+            }])
+        });
+        let mut params = serde_json::json!({
             "processId": std::process::id() as i64,
             "rootUri": config.root_uri,
             "capabilities": {
-                "textDocument": text_document_caps
+                "textDocument": text_document_caps,
+                "workspace": {
+                    "workspaceFolders": true
+                }
             },
             "clientInfo": {
                 "name": "MAE",
                 "version": env!("CARGO_PKG_VERSION")
             }
         });
+        if let Some(folders) = workspace_folders {
+            params["workspaceFolders"] = folders;
+        }
 
         let response = self
             .request(

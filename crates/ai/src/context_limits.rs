@@ -116,6 +116,8 @@ impl ProviderHint {
                 "- Use explicit JSON examples when calling tools with complex args.\n",
                 "- tool_choice is set to 'auto' — you can call multiple tools per turn.\n",
                 "- Prefer longer, more descriptive tool call arguments.\n",
+                "- RAG: call kb_search_context like: {\"query\": \"buffer management\", \"limit\": 5}\n",
+                "  Response is an array of {id, title, kind, excerpt, score}.\n",
                 "</provider-hints>\n",
             )),
             Self::DeepSeek => Some(concat!(
@@ -124,9 +126,15 @@ impl ProviderHint {
                 "- Follow numbered step sequences strictly.\n",
                 "- If you find yourself repeating the same tool call, STOP and try a different approach.\n",
                 "- State your plan before each tool call.\n",
+                "- RAG workflow: 1. kb_search_context(query) 2. Read top excerpt 3. If insufficient, kb_get(id) 4. Synthesize answer.\n",
                 "</provider-hints>\n",
             )),
-            Self::OpenAi => None, // Works well with current prompts
+            Self::OpenAi => Some(concat!(
+                "\n<provider-hints>\n",
+                "## OpenAI-Specific\n",
+                "- Use kb_search_context for architecture questions — do not skip available tools.\n",
+                "</provider-hints>\n",
+            )),
             Self::Claude => None, // Primary target
             Self::Unknown => None,
         }
@@ -250,7 +258,7 @@ mod tests {
     #[test]
     fn provider_hints_only_for_non_claude() {
         assert!(ProviderHint::Claude.prompt_hints().is_none());
-        assert!(ProviderHint::OpenAi.prompt_hints().is_none());
+        assert!(ProviderHint::OpenAi.prompt_hints().is_some());
         assert!(ProviderHint::Gemini.prompt_hints().is_some());
         assert!(ProviderHint::DeepSeek.prompt_hints().is_some());
         assert!(ProviderHint::Unknown.prompt_hints().is_none());

@@ -51,6 +51,11 @@ If you have called the same tools 3+ times without progress, STOP immediately.
 3. If that also fails, explain to the user what you tried and ask for guidance.
 4. NEVER use delay() hoping the system recovers. NEVER poll in loops.
 
+## RAG: Knowledge Base Search
+- Use `kb_search_context(query)` for architecture/concept questions — returns ranked excerpts.
+- Use `kb_graph(id, depth=2)` for neighborhood exploration. Do NOT manually loop kb_get → kb_links_from → kb_get.
+- Do NOT use kb_search_context for simple edits or commands you already know.
+
 ## Documentation &amp; Help
 When the user asks "how do I...", "what is...", or "explain..." about MAE itself:
 1. Call request_tools("knowledge") to get KB tools.

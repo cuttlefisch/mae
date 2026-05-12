@@ -542,7 +542,22 @@ pub(crate) fn build_self_test_plan(filter: &str) -> String {
                 {
                     "tool": "kb_search_context",
                     "args": {"query": "buffer", "limit": 3},
-                    "assert": "Returns array of objects with id, title, kind, excerpt fields"
+                    "assert": "Returns array of objects with id, title, kind, score fields"
+                },
+                {
+                    "tool": "introspect",
+                    "args": {"section": "kb"},
+                    "assert": "Returns JSON with local_nodes > 100, watcher_count >= 0"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "kb_search_stress", "size": 500},
+                    "assert": "p95_us < 10000 (search < 10ms at 500 nodes)"
+                },
+                {
+                    "tool": "perf_benchmark",
+                    "args": {"benchmark": "kb_graph_stress", "size": 200},
+                    "assert": "p95_us < 50000 (BFS depth-2 < 50ms at 200 nodes)"
                 }
             ]
         }));

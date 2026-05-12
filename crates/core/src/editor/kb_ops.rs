@@ -6,6 +6,23 @@ use mae_kb::federation::{ImportHealth, ImportReport};
 
 use super::Editor;
 
+/// Cumulative statistics for KB watcher drain operations.
+#[derive(Debug, Default)]
+pub struct KbWatcherStats {
+    /// Total nodes upserted via watcher drain.
+    pub events_upserted: u64,
+    /// Total nodes removed via watcher drain.
+    pub events_removed: u64,
+    /// Events skipped due to debounce or drain cap.
+    pub events_skipped: u64,
+    /// Watcher errors encountered.
+    pub errors: u64,
+    /// Duration of the last drain operation in microseconds.
+    pub last_drain_us: u64,
+    /// Number of events processed in the last drain.
+    pub last_drain_event_count: usize,
+}
+
 /// Result of a KB registration or reimport operation.
 #[derive(Debug, Clone)]
 pub struct KbImportResult {
@@ -90,7 +107,12 @@ impl KbImportResult {
 
 impl Editor {
     /// Resolve the MAE config directory (~/.config/mae).
-    fn mae_config_dir() -> Option<PathBuf> {
+    /// Checks `config_dir_override` first (for test isolation).
+    #[allow(dead_code)]
+    fn mae_config_dir(&self) -> Option<PathBuf> {
+        if let Some(ref dir) = self.config_dir_override {
+            return Some(dir.clone());
+        }
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             Some(PathBuf::from(xdg).join("mae"))
         } else if let Ok(home) = std::env::var("HOME") {
@@ -101,7 +123,11 @@ impl Editor {
     }
 
     /// Resolve the MAE data directory (~/.local/share/mae).
-    fn mae_data_dir() -> Option<PathBuf> {
+    /// Checks `data_dir_override` first (for test isolation).
+    fn mae_data_dir(&self) -> Option<PathBuf> {
+        if let Some(ref dir) = self.data_dir_override {
+            return Some(dir.clone());
+        }
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             Some(PathBuf::from(xdg).join("mae"))
         } else if let Ok(home) = std::env::var("HOME") {
@@ -131,11 +157,7 @@ impl Editor {
             return None;
         }
 
-        let Some(config_dir) = Self::mae_config_dir() else {
-            self.set_status("KB register error: cannot determine config directory");
-            return None;
-        };
-        let Some(data_dir) = Self::mae_data_dir() else {
+        let Some(data_dir) = self.mae_data_dir() else {
             self.set_status("KB register error: cannot determine data directory");
             return None;
         };
@@ -151,15 +173,30 @@ impl Editor {
         // Store the instance
         self.kb_instances.insert(uuid.clone(), kb);
 
-        // Start file watcher for live updates
-        if let Ok(watcher) = mae_kb::watch::OrgDirWatcher::new(org_dir) {
-            watcher.seed(
-                report
-                    .path_to_ids
-                    .iter()
-                    .map(|(p, ids)| (p.clone(), ids.clone())),
-            );
-            self.kb_watchers.insert(uuid.clone(), watcher);
+        // Start file watcher for live updates (if enabled)
+        if self.kb_watcher_enabled {
+            match mae_kb::watch::OrgDirWatcher::new(org_dir) {
+                Ok(watcher) => {
+                    watcher.seed(
+                        report
+                            .path_to_ids
+                            .iter()
+                            .map(|(p, ids)| (p.clone(), ids.clone())),
+                    );
+                    self.kb_watchers.insert(uuid.clone(), watcher);
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("inotify") || msg.contains("No space left") {
+                        self.set_status(
+                            "KB watcher failed: inotify limit reached. \
+                             Run `sysctl fs.inotify.max_user_watches=65536` \
+                             or set `kb_watcher_enabled=false`.",
+                        );
+                    }
+                    // Watcher is optional — registration still succeeds
+                }
+            }
         }
 
         // Update last_import timestamp
@@ -173,7 +210,7 @@ impl Editor {
         }
 
         // Persist registry
-        let _ = self.kb_registry.save(&config_dir);
+        let _ = self.kb_registry.save(&data_dir);
 
         let result = KbImportResult {
             name: name.to_string(),
@@ -194,8 +231,8 @@ impl Editor {
                 self.kb_instances.remove(&uuid);
                 self.kb_watchers.remove(&uuid);
                 self.kb_registry.unregister(name_or_uuid);
-                if let Some(config_dir) = Self::mae_config_dir() {
-                    let _ = self.kb_registry.save(&config_dir);
+                if let Some(data_dir) = self.mae_data_dir() {
+                    let _ = self.kb_registry.save(&data_dir);
                 }
                 self.set_status(format!("KB instance '{}' unregistered", name_or_uuid));
             }
@@ -225,8 +262,8 @@ impl Editor {
                 {
                     reg_inst.last_import = Some(chrono_now());
                 }
-                if let Some(config_dir) = Self::mae_config_dir() {
-                    let _ = self.kb_registry.save(&config_dir);
+                if let Some(data_dir) = self.mae_data_dir() {
+                    let _ = self.kb_registry.save(&data_dir);
                 }
 
                 let result = KbImportResult {
@@ -372,23 +409,29 @@ impl Editor {
     }
 
     /// Search across local KB and all federated instances.
-    /// Returns (instance_name_or_none, node) pairs.
+    /// Returns (instance_name_or_none, node) pairs, deduplicated by node ID.
+    /// Local results take priority over federated.
     pub fn kb_federated_search(&self, query: &str) -> Vec<(Option<String>, &mae_kb::Node)> {
         let mut results: Vec<(Option<String>, &mae_kb::Node)> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
-        // Local KB first
+        // Local KB first (always wins on duplicates)
         for id in self.kb.search(query) {
             if let Some(node) = self.kb.get(&id) {
-                results.push((None, node));
+                if seen_ids.insert(&node.id) {
+                    results.push((None, node));
+                }
             }
         }
 
-        // Then each federated instance
+        // Then each federated instance (skip if already seen)
         for (uuid, kb) in &self.kb_instances {
             let inst_name = self.kb_registry.find_by_uuid(uuid).map(|i| i.name.clone());
             for id in kb.search(query) {
                 if let Some(node) = kb.get(&id) {
-                    results.push((inst_name.clone(), node));
+                    if seen_ids.insert(&node.id) {
+                        results.push((inst_name.clone(), node));
+                    }
                 }
             }
         }
@@ -412,18 +455,63 @@ impl Editor {
 
     /// Drain KB file watchers — apply changes from filesystem events.
     /// Called from `idle_work()` to pick up org file edits without `:kb-reimport`.
+    ///
+    /// Hardened with: debounce (skip if too recent), drain cap (max N events),
+    /// time-boxing (50ms deadline), error tracking, and enable/disable toggle.
     pub fn drain_kb_watchers(&mut self) {
+        // Early return if watchers disabled
+        if !self.kb_watcher_enabled {
+            return;
+        }
+
+        let drain_start = std::time::Instant::now();
+        let debounce_dur = std::time::Duration::from_millis(self.kb_watcher_debounce_ms);
+        let max_events = self.kb_max_drain_events;
+        let deadline = drain_start + std::time::Duration::from_millis(50);
+
         let uuids: Vec<String> = self.kb_watchers.keys().cloned().collect();
         let mut changed = false;
+        let mut total_processed: usize = 0;
+
         for uuid in uuids {
+            // Debounce: skip if last drain was too recent
+            if let Some(last) = self.kb_last_drain.get(&uuid) {
+                if last.elapsed() < debounce_dur {
+                    continue;
+                }
+            }
+
             let changes = match self.kb_watchers.get(&uuid) {
-                Some(w) => w.drain(),
+                Some(w) => {
+                    // Track watcher errors
+                    let errs = w.error_count();
+                    if errs > self.kb_watcher_stats.errors {
+                        self.kb_watcher_stats.errors = errs;
+                    }
+                    w.drain()
+                }
                 None => continue,
             };
             if changes.is_empty() {
                 continue;
             }
-            for change in changes {
+
+            // Update last drain timestamp
+            self.kb_last_drain
+                .insert(uuid.clone(), std::time::Instant::now());
+
+            let skipped = changes.len().saturating_sub(max_events);
+            if skipped > 0 {
+                self.kb_watcher_stats.events_skipped += skipped as u64;
+            }
+
+            for change in changes.into_iter().take(max_events) {
+                // Time-boxing: break if we've exceeded the 50ms budget
+                if std::time::Instant::now() > deadline {
+                    self.kb_watcher_stats.events_skipped += 1;
+                    break;
+                }
+
                 match change {
                     mae_kb::watch::OrgChange::Upserted(path) => {
                         if let Some(kb) = self.kb_instances.get_mut(&uuid) {
@@ -431,7 +519,9 @@ impl Editor {
                             if let Some(w) = self.kb_watchers.get(&uuid) {
                                 w.record_ids(path, ids);
                             }
+                            self.kb_watcher_stats.events_upserted += 1;
                             changed = true;
+                            total_processed += 1;
                         }
                     }
                     mae_kb::watch::OrgChange::Removed(ids) => {
@@ -439,12 +529,22 @@ impl Editor {
                             for id in ids {
                                 kb.remove(&id);
                             }
+                            self.kb_watcher_stats.events_removed += 1;
                             changed = true;
+                            total_processed += 1;
                         }
                     }
                 }
             }
         }
+
+        // Record timing in both watcher stats and perf stats
+        let elapsed_us = drain_start.elapsed().as_micros() as u64;
+        self.kb_watcher_stats.last_drain_us = elapsed_us;
+        self.kb_watcher_stats.last_drain_event_count = total_processed;
+        self.perf_stats.kb_watcher_drain_us = elapsed_us;
+        self.perf_stats.kb_watcher_events += total_processed as u64;
+
         if changed {
             self.fire_hook("after-kb-change");
         }
@@ -497,10 +597,20 @@ mod tests {
         dir
     }
 
+    /// Set config/data dir overrides to a tempdir so tests never touch
+    /// real user directories (~/.config/mae, ~/.local/share/mae).
+    fn with_test_dirs(editor: &mut Editor) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        editor.config_dir_override = Some(tmp.path().join("config"));
+        editor.data_dir_override = Some(tmp.path().join("data"));
+        tmp
+    }
+
     #[test]
     fn kb_register_creates_instance() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path());
         assert!(result.is_some());
         let result = result.unwrap();
@@ -517,6 +627,7 @@ mod tests {
     fn kb_register_handles_subdirs() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         // note2.org is in subdir/ — must be found
         assert_eq!(result.report.nodes_imported, 2);
@@ -528,6 +639,7 @@ mod tests {
     fn kb_unregister_removes_instance() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
         assert!(editor.kb_instances.contains_key(&uuid));
@@ -541,6 +653,7 @@ mod tests {
     fn kb_reimport_refreshes_nodes() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
 
@@ -560,6 +673,7 @@ mod tests {
     fn kb_federated_search_finds_across_instances() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         editor.kb_register("TestNotes", dir.path());
 
         // Search should find nodes from federated instance
@@ -572,6 +686,7 @@ mod tests {
     fn kb_federated_get_local_first() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         editor.kb_register("TestNotes", dir.path());
 
         // Get from federated instance
@@ -585,6 +700,7 @@ mod tests {
     #[test]
     fn kb_register_nonexistent_path() {
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("Bad", Path::new("/nonexistent/path"));
         assert!(result.is_none());
         assert!(editor.status_msg.contains("does not exist"));
@@ -594,6 +710,7 @@ mod tests {
     fn kb_import_result_json() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let json = result.to_json();
         assert!(json.contains("\"name\": \"TestNotes\""));
@@ -675,6 +792,7 @@ mod tests {
     fn watcher_starts_on_register() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         assert!(
             editor.kb_watchers.contains_key(&result.uuid),
@@ -686,6 +804,7 @@ mod tests {
     fn watcher_removed_on_unregister() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
         assert!(editor.kb_watchers.contains_key(&uuid));
@@ -697,6 +816,7 @@ mod tests {
     fn watcher_drains_new_file() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
         let result = editor.kb_register("TestNotes", dir.path()).unwrap();
         let uuid = result.uuid.clone();
 
@@ -719,6 +839,228 @@ mod tests {
         assert!(
             editor.kb_instances[&uuid].get("watch-test-new").is_some(),
             "new org file should be auto-ingested by watcher"
+        );
+    }
+
+    // --- W1: KB options tests ---
+
+    #[test]
+    fn kb_options_registered() {
+        let editor = Editor::new();
+        for name in &[
+            "kb_watcher_enabled",
+            "kb_watcher_debounce_ms",
+            "kb_max_drain_events",
+            "kb_search_excerpt_length",
+            "kb_search_max_results",
+            "kb_auto_register",
+        ] {
+            assert!(
+                editor.option_registry.find(name).is_some(),
+                "option '{}' not found in registry",
+                name
+            );
+        }
+        // Also check aliases
+        assert!(editor.option_registry.find("kb-watcher-enabled").is_some());
+        assert!(editor.option_registry.find("kb-max-drain-events").is_some());
+    }
+
+    #[test]
+    fn kb_options_get_set_roundtrip() {
+        let mut editor = Editor::new();
+        // Bool roundtrip
+        assert_eq!(editor.get_option("kb_watcher_enabled").unwrap().0, "true");
+        editor.set_option("kb_watcher_enabled", "false").unwrap();
+        assert_eq!(editor.get_option("kb_watcher_enabled").unwrap().0, "false");
+        // Int roundtrip
+        editor.set_option("kb_watcher_debounce_ms", "1000").unwrap();
+        assert_eq!(
+            editor.get_option("kb_watcher_debounce_ms").unwrap().0,
+            "1000"
+        );
+        editor.set_option("kb_max_drain_events", "50").unwrap();
+        assert_eq!(editor.get_option("kb_max_drain_events").unwrap().0, "50");
+        editor
+            .set_option("kb_search_excerpt_length", "300")
+            .unwrap();
+        assert_eq!(
+            editor.get_option("kb_search_excerpt_length").unwrap().0,
+            "300"
+        );
+        editor.set_option("kb_search_max_results", "10").unwrap();
+        assert_eq!(editor.get_option("kb_search_max_results").unwrap().0, "10");
+        // Bool roundtrip
+        editor.set_option("kb_auto_register", "true").unwrap();
+        assert_eq!(editor.get_option("kb_auto_register").unwrap().0, "true");
+    }
+
+    // --- W4: Watcher hardening tests ---
+
+    #[test]
+    fn drain_debounce_skips_recent() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_register("TestNotes", dir.path()).unwrap();
+        let uuid = result.uuid.clone();
+
+        // Write a file and wait for watcher to see it
+        std::fs::write(
+            dir.path().join("debounce-first.org"),
+            ":PROPERTIES:\n:ID: debounce-first\n:END:\n#+title: First\n\ntest\n",
+        )
+        .unwrap();
+        // Drain until first file is picked up (establishes timestamp)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            editor.drain_kb_watchers();
+            if editor.kb_last_drain.contains_key(&uuid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(editor.kb_last_drain.contains_key(&uuid));
+
+        // Now set a very long debounce
+        editor.kb_watcher_debounce_ms = 60_000;
+
+        // Write another file
+        std::fs::write(
+            dir.path().join("debounce-second.org"),
+            ":PROPERTIES:\n:ID: debounce-second\n:END:\n#+title: Second\n\ntest\n",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // This drain should be debounced — second node should NOT appear
+        editor.drain_kb_watchers();
+        assert!(
+            editor.kb_instances[&uuid].get("debounce-second").is_none(),
+            "debounce should have skipped the drain"
+        );
+    }
+
+    #[test]
+    fn watcher_disabled_skips_drain() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_watcher_enabled = false;
+        // Register should skip watcher creation
+        let result = editor.kb_register("TestNotes", dir.path()).unwrap();
+        assert!(
+            !editor.kb_watchers.contains_key(&result.uuid),
+            "watcher should not be created when disabled"
+        );
+        // drain should be a no-op
+        editor.drain_kb_watchers();
+    }
+
+    #[test]
+    fn watcher_error_count_exposed() {
+        let dir = create_test_org_dir();
+        let watcher = mae_kb::watch::OrgDirWatcher::new(dir.path()).unwrap();
+        // Initial error count should be 0
+        assert_eq!(watcher.error_count(), 0);
+    }
+
+    #[test]
+    fn kb_federated_search_deduplicates() {
+        let mut editor = Editor::new();
+        // Insert a node locally
+        editor
+            .kb_create_node("dedup-test", "Dedup", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        // Insert same node in a federated instance
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "dedup-test",
+            "Dedup",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.kb_instances.insert("inst-1".to_string(), inst);
+
+        let results = editor.kb_federated_search("Dedup");
+        let dedup_count = results.iter().filter(|(_, n)| n.id == "dedup-test").count();
+        assert_eq!(dedup_count, 1, "same node ID should appear only once");
+        // Local result should win (instance_name is None)
+        let (inst_name, _) = results.iter().find(|(_, n)| n.id == "dedup-test").unwrap();
+        assert!(
+            inst_name.is_none(),
+            "local result should win over federated"
+        );
+    }
+
+    // --- W5: Observability tests ---
+
+    #[test]
+    fn kb_watcher_stats_update_on_drain() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_register("TestNotes", dir.path()).unwrap();
+        let uuid = result.uuid.clone();
+
+        // Write a new file and wait for watcher
+        std::fs::write(
+            dir.path().join("stats-test.org"),
+            ":PROPERTIES:\n:ID: stats-test\n:END:\n#+title: Stats\n\ntest\n",
+        )
+        .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            editor.drain_kb_watchers();
+            if editor.kb_instances[&uuid].get("stats-test").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert!(
+            editor.kb_watcher_stats.events_upserted > 0,
+            "events_upserted should be positive after drain"
+        );
+    }
+
+    #[test]
+    fn perf_stats_kb_fields_default_zero() {
+        let editor = Editor::new();
+        assert_eq!(editor.perf_stats.kb_search_latency_us, 0);
+        assert_eq!(editor.perf_stats.kb_watcher_drain_us, 0);
+        assert_eq!(editor.perf_stats.kb_watcher_events, 0);
+    }
+
+    #[test]
+    fn kb_register_does_not_clobber_user_dirs() {
+        // Resolve real user dirs the same way the production code does.
+        let home = std::env::var("HOME").unwrap();
+        let real_config = PathBuf::from(&home).join(".config/mae/kb-registry.toml");
+        let real_data = PathBuf::from(&home).join(".local/share/mae/kb-registry.toml");
+
+        // Record mtimes before
+        let config_mtime = real_config.metadata().ok().and_then(|m| m.modified().ok());
+        let data_mtime = real_data.metadata().ok().and_then(|m| m.modified().ok());
+
+        // Run a register + unregister cycle with test dirs
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_register("IsolationTest", dir.path()).unwrap();
+        editor.kb_unregister(&result.uuid);
+
+        // Verify mtimes unchanged
+        let config_mtime_after = real_config.metadata().ok().and_then(|m| m.modified().ok());
+        let data_mtime_after = real_data.metadata().ok().and_then(|m| m.modified().ok());
+        assert_eq!(
+            config_mtime, config_mtime_after,
+            "config dir kb-registry.toml was modified by test"
+        );
+        assert_eq!(
+            data_mtime, data_mtime_after,
+            "data dir kb-registry.toml was modified by test"
         );
     }
 }

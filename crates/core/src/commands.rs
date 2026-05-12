@@ -1072,6 +1072,26 @@ impl CommandRegistry {
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
         reg.register_builtin(
+            "kb-view",
+            "Return to rendered KB view from source editing (SPC n v)",
+        );
+        reg.register_builtin(
+            "help-cycle",
+            "Fold/unfold heading at cursor, or next link if not on heading (Tab)",
+        );
+        reg.register_builtin(
+            "help-global-cycle",
+            "Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab)",
+        );
+        reg.register_builtin(
+            "help-close-all-folds",
+            "Fold all headings in help buffer (zM)",
+        );
+        reg.register_builtin(
+            "help-open-all-folds",
+            "Unfold all headings in help buffer (zR)",
+        );
+        reg.register_builtin(
             "help-edit",
             "Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>)",
         );

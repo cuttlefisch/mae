@@ -33,6 +33,7 @@ mod visual;
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
+pub use kb_ops::KbWatcherStats;
 pub use lsp_ops::{DocumentHighlightRange, HighlightKind, LspLocation, LspRange};
 pub use marks::Mark;
 
@@ -531,6 +532,31 @@ pub struct Editor {
     pub kb_instances: HashMap<String, mae_kb::KnowledgeBase>,
     /// KB federation: live file watchers for registered org directories.
     pub kb_watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
+    /// KB watcher: last drain timestamp per instance UUID (for debounce).
+    pub kb_last_drain: HashMap<String, std::time::Instant>,
+    /// KB watcher: cumulative statistics.
+    pub kb_watcher_stats: KbWatcherStats,
+    /// KB option: enable/disable file watchers.
+    pub kb_watcher_enabled: bool,
+    /// KB option: debounce interval in ms between watcher drains.
+    pub kb_watcher_debounce_ms: u64,
+    /// KB option: max events processed per idle tick.
+    pub kb_max_drain_events: usize,
+    /// KB option: max bytes for RAG excerpt truncation.
+    pub kb_search_excerpt_length: usize,
+    /// KB option: hard cap for kb_search_context results.
+    pub kb_search_max_results: usize,
+    /// KB option: auto-register org directories in project root.
+    pub kb_auto_register: bool,
+    /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
+    /// Append guidance on revisit to steer away from manual graph traversal loops.
+    /// Cleared when a new AI conversation starts.
+    pub kb_ai_visited_ids: std::collections::HashSet<String>,
+
+    /// Override for config dir (test isolation — prevents clobbering ~/.config/mae).
+    pub config_dir_override: Option<std::path::PathBuf>,
+    /// Override for data dir (test isolation — prevents clobbering ~/.local/share/mae).
+    pub data_dir_override: Option<std::path::PathBuf>,
     /// Babel: prompt before executing blocks (default true).
     pub babel_confirm: bool,
     /// Babel: trusted file patterns that skip confirmation.
@@ -988,6 +1014,17 @@ impl Editor {
             kb_registry: mae_kb::federation::KbRegistry::default(),
             kb_instances: HashMap::new(),
             kb_watchers: HashMap::new(),
+            kb_last_drain: HashMap::new(),
+            kb_watcher_stats: KbWatcherStats::default(),
+            kb_watcher_enabled: true,
+            kb_watcher_debounce_ms: 500,
+            kb_max_drain_events: 100,
+            kb_search_excerpt_length: 500,
+            kb_search_max_results: 20,
+            kb_auto_register: false,
+            kb_ai_visited_ids: std::collections::HashSet::new(),
+            config_dir_override: None,
+            data_dir_override: None,
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
@@ -1570,6 +1607,12 @@ impl Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "org_agenda_files" => self.org_agenda_files.join(", "),
+            "kb_watcher_enabled" => self.kb_watcher_enabled.to_string(),
+            "kb_watcher_debounce_ms" => self.kb_watcher_debounce_ms.to_string(),
+            "kb_max_drain_events" => self.kb_max_drain_events.to_string(),
+            "kb_search_excerpt_length" => self.kb_search_excerpt_length.to_string(),
+            "kb_search_max_results" => self.kb_search_max_results.to_string(),
+            "kb_auto_register" => self.kb_auto_register.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1884,6 +1927,36 @@ impl Editor {
             "org_agenda_files" => {
                 return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
             }
+            "kb_watcher_enabled" => {
+                self.kb_watcher_enabled = parse_option_bool(value)?;
+            }
+            "kb_watcher_debounce_ms" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_watcher_debounce_ms = v.clamp(0, 60_000);
+            }
+            "kb_max_drain_events" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_max_drain_events = v.clamp(1, 10_000);
+            }
+            "kb_search_excerpt_length" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_search_excerpt_length = v.clamp(50, 10_000);
+            }
+            "kb_search_max_results" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_search_max_results = v.clamp(1, 100);
+            }
+            "kb_auto_register" => {
+                self.kb_auto_register = parse_option_bool(value)?;
+            }
             _ => return Err(format!("Unknown option: {}", name)),
         }
         let (current, _) = self
@@ -2103,14 +2176,58 @@ impl Editor {
         }
         lines.push(String::new());
 
-        // Broken links.
+        // Broken links — grouped by classification.
         lines.push(format!("Broken Links ({})", report.broken_links.len()));
         lines.push("------------".to_string());
         if report.broken_links.is_empty() {
             lines.push("  (none)".to_string());
         } else {
-            for (src, target) in &report.broken_links {
-                lines.push(format!("  {} → {}", src, target));
+            use mae_kb::BrokenLinkKind;
+            let mut deleted: Vec<_> = report
+                .broken_links
+                .iter()
+                .filter(|b| b.kind == BrokenLinkKind::DeletedNode)
+                .collect();
+            let mut malformed: Vec<_> = report
+                .broken_links
+                .iter()
+                .filter(|b| b.kind == BrokenLinkKind::MalformedId)
+                .collect();
+            let mut placeholder: Vec<_> = report
+                .broken_links
+                .iter()
+                .filter(|b| b.kind == BrokenLinkKind::TemplatePlaceholder)
+                .collect();
+            deleted.sort_by_key(|b| &b.target);
+            malformed.sort_by_key(|b| &b.target);
+            placeholder.sort_by_key(|b| &b.target);
+            if !deleted.is_empty() {
+                lines.push(format!("  Deleted nodes ({}):", deleted.len()));
+                for b in &deleted {
+                    let label = if b.display.is_empty() {
+                        &b.target
+                    } else {
+                        &b.display
+                    };
+                    lines.push(format!(
+                        "    {} → {} ({})",
+                        b.source,
+                        label,
+                        &b.target[..8.min(b.target.len())]
+                    ));
+                }
+            }
+            if !malformed.is_empty() {
+                lines.push(format!("  Malformed IDs ({}):", malformed.len()));
+                for b in &malformed {
+                    lines.push(format!("    {} → {:?}", b.source, b.target));
+                }
+            }
+            if !placeholder.is_empty() {
+                lines.push(format!("  Template placeholders ({}):", placeholder.len()));
+                for b in &placeholder {
+                    lines.push(format!("    {} → {:?}", b.source, b.target));
+                }
             }
         }
 

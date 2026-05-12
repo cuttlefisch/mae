@@ -32,6 +32,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "ai" {
         result.insert("ai".into(), build_ai_section(editor));
     }
+    if section == "all" || section == "kb" {
+        result.insert("kb".into(), build_kb_section(editor));
+    }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
     }
@@ -197,6 +200,61 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
             "us": ps.last_command_us,
         },
         "visible_buffers": visible_buffers,
+    })
+}
+
+fn build_kb_section(editor: &Editor) -> serde_json::Value {
+    let local_nodes = editor.kb.len();
+    let federated_instances = editor.kb_instances.len();
+    let total_federated_nodes: usize = editor.kb_instances.values().map(|kb| kb.len()).sum();
+    let watcher_count = editor.kb_watchers.len();
+    let ws = &editor.kb_watcher_stats;
+
+    // Check for non-default KB options
+    let mut option_overrides = serde_json::Map::new();
+    if !editor.kb_watcher_enabled {
+        option_overrides.insert("kb_watcher_enabled".into(), json!(false));
+    }
+    if editor.kb_watcher_debounce_ms != 500 {
+        option_overrides.insert(
+            "kb_watcher_debounce_ms".into(),
+            json!(editor.kb_watcher_debounce_ms),
+        );
+    }
+    if editor.kb_max_drain_events != 100 {
+        option_overrides.insert(
+            "kb_max_drain_events".into(),
+            json!(editor.kb_max_drain_events),
+        );
+    }
+    if editor.kb_search_excerpt_length != 500 {
+        option_overrides.insert(
+            "kb_search_excerpt_length".into(),
+            json!(editor.kb_search_excerpt_length),
+        );
+    }
+    if editor.kb_search_max_results != 20 {
+        option_overrides.insert(
+            "kb_search_max_results".into(),
+            json!(editor.kb_search_max_results),
+        );
+    }
+
+    json!({
+        "local_nodes": local_nodes,
+        "federated_instances": federated_instances,
+        "total_federated_nodes": total_federated_nodes,
+        "watcher_count": watcher_count,
+        "watcher_stats": {
+            "events_upserted": ws.events_upserted,
+            "events_removed": ws.events_removed,
+            "events_skipped": ws.events_skipped,
+            "errors": ws.errors,
+            "last_drain_us": ws.last_drain_us,
+            "last_drain_event_count": ws.last_drain_event_count,
+        },
+        "search_latency_us": editor.perf_stats.kb_search_latency_us,
+        "option_overrides": option_overrides,
     })
 }
 

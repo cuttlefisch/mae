@@ -328,6 +328,7 @@ impl Editor {
         // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
+        normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
         normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
         normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
         normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
@@ -756,14 +757,24 @@ impl Editor {
 
         // File tree keymap + bindings — moved to modules/file-tree/autoloads.scm
 
-        // Help buffer keymap
+        // Help buffer keymap — org-mode Tab conventions:
+        // Tab = fold heading (or next link if not on heading)
+        // S-Tab = global visibility cycle
+        // n/p = link navigation (moved from Tab/S-Tab)
+        // e = edit source (Obsidian-style toggle)
         let mut help = Keymap::with_parent("help", "normal");
         help.bind(vec![KeyPress::special(Key::Enter)], "help-follow-link");
-        help.bind(vec![KeyPress::special(Key::Tab)], "help-next-link");
-        help.bind(vec![KeyPress::special(Key::BackTab)], "help-prev-link");
+        help.bind(vec![KeyPress::special(Key::Tab)], "help-cycle");
+        help.bind(vec![KeyPress::special(Key::BackTab)], "help-global-cycle");
+        help.bind(parse_key_seq("n"), "help-next-link");
+        help.bind(parse_key_seq("p"), "help-prev-link");
+        help.bind(parse_key_seq("e"), "kb-edit-source");
         help.bind(parse_key_seq("q"), "help-close");
         help.bind(parse_key_seq("C-o"), "help-back");
         help.bind(parse_key_seq("C-i"), "help-forward");
+        help.bind(parse_key_seq("za"), "help-cycle");
+        help.bind(parse_key_seq("zM"), "help-close-all-folds");
+        help.bind(parse_key_seq("zR"), "help-open-all-folds");
         help.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("help".to_string(), help);
 

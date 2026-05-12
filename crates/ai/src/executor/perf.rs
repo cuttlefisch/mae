@@ -137,6 +137,92 @@ pub(crate) fn execute_perf_benchmark(
             });
             return Ok(serde_json::to_string_pretty(&result).unwrap());
         }
+        "kb_search_stress" => {
+            // Populate a KB with N synthetic nodes, then benchmark searches.
+            let mut kb = mae_core::KnowledgeBase::new();
+            for i in 0..size {
+                kb.insert(mae_core::KbNode::new(
+                    format!("bench:node-{}", i),
+                    format!("Benchmark Node {} about {}", i, ["buffer", "render", "command", "hook", "scheme", "module"][i % 6]),
+                    mae_core::KbNodeKind::Concept,
+                    format!("This node covers topic {} in the benchmark suite. It discusses {} management and integration.", i, ["buffer", "render", "command", "hook", "scheme", "module"][i % 6]),
+                ));
+            }
+
+            let queries = ["buffer", "render", "command", "hook", "scheme", "module"];
+            let mut times = Vec::with_capacity(queries.len());
+            for q in &queries {
+                let start = std::time::Instant::now();
+                let _results = kb.search(q);
+                times.push(start.elapsed().as_micros() as u64);
+            }
+            times.sort();
+            let total: u64 = times.iter().sum();
+            let count = times.len();
+            let result = serde_json::json!({
+                "benchmark": "kb_search_stress",
+                "nodes": size,
+                "queries": count,
+                "min_us": times.first().copied().unwrap_or(0),
+                "max_us": times.last().copied().unwrap_or(0),
+                "p50_us": times.get(count / 2).copied().unwrap_or(0),
+                "p95_us": times.get(count * 95 / 100).copied().unwrap_or(0),
+                "mean_us": total / count.max(1) as u64,
+            });
+            return Ok(serde_json::to_string_pretty(&result).unwrap());
+        }
+        "kb_graph_stress" => {
+            // Build a KB with N nodes (~3 links each), BFS at depth 2.
+            let mut kb = mae_core::KnowledgeBase::new();
+            for i in 0..size {
+                let links: Vec<String> = (1..=3)
+                    .map(|j| format!("[[bench:node-{}]]", (i + j) % size))
+                    .collect();
+                kb.insert(mae_core::KbNode::new(
+                    format!("bench:node-{}", i),
+                    format!("Graph Node {}", i),
+                    mae_core::KbNodeKind::Concept,
+                    links.join(" "),
+                ));
+            }
+
+            let mut times = Vec::with_capacity(size.min(20));
+            let seeds: Vec<usize> = (0..size.min(20)).collect();
+            for &seed in &seeds {
+                let start = std::time::Instant::now();
+                // BFS depth 2
+                let mut visited = std::collections::HashSet::new();
+                let mut queue = std::collections::VecDeque::new();
+                let seed_id = format!("bench:node-{}", seed);
+                visited.insert(seed_id.clone());
+                queue.push_back((seed_id, 0usize));
+                while let Some((cur, hop)) = queue.pop_front() {
+                    if hop >= 2 {
+                        continue;
+                    }
+                    for n in kb.neighbors(&cur) {
+                        if visited.insert(n.clone()) {
+                            queue.push_back((n, hop + 1));
+                        }
+                    }
+                }
+                times.push(start.elapsed().as_micros() as u64);
+            }
+            times.sort();
+            let total: u64 = times.iter().sum();
+            let count = times.len();
+            let result = serde_json::json!({
+                "benchmark": "kb_graph_stress",
+                "nodes": size,
+                "traversals": count,
+                "min_us": times.first().copied().unwrap_or(0),
+                "max_us": times.last().copied().unwrap_or(0),
+                "p50_us": times.get(count / 2).copied().unwrap_or(0),
+                "p95_us": times.get(count * 95 / 100).copied().unwrap_or(0),
+                "mean_us": total / count.max(1) as u64,
+            });
+            return Ok(serde_json::to_string_pretty(&result).unwrap());
+        }
         _ => return Err(format!("Unknown benchmark type: {}", benchmark)),
     };
 
@@ -267,6 +353,20 @@ pub(crate) fn execute_perf_profile(
                 ));
             }
 
+            // KB performance diagnosis
+            if editor.perf_stats.kb_watcher_drain_us > 5000 {
+                diagnosis.push(format!(
+                    "KB watcher drain took {}μs — consider increasing kb_watcher_debounce_ms",
+                    editor.perf_stats.kb_watcher_drain_us
+                ));
+            }
+            if editor.perf_stats.kb_search_latency_us > 10_000 {
+                diagnosis.push(format!(
+                    "KB search took {}μs — check federated instance count",
+                    editor.perf_stats.kb_search_latency_us
+                ));
+            }
+
             let result = serde_json::json!({
                 "duration_ms": duration_ms,
                 "total_frames": total_frames,
@@ -291,5 +391,38 @@ pub(crate) fn execute_perf_profile(
             "Unknown perf_profile action: '{}'. Use 'start', 'stop', or 'report'.",
             action
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kb_search_benchmark_returns_stats() {
+        let mut editor = Editor::new();
+        let result = execute_perf_benchmark(
+            &mut editor,
+            &serde_json::json!({"benchmark": "kb_search_stress", "size": 100}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["benchmark"], "kb_search_stress");
+        assert!(v["p50_us"].is_number());
+        assert!(v["p95_us"].is_number());
+    }
+
+    #[test]
+    fn kb_graph_benchmark_returns_stats() {
+        let mut editor = Editor::new();
+        let result = execute_perf_benchmark(
+            &mut editor,
+            &serde_json::json!({"benchmark": "kb_graph_stress", "size": 50}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["benchmark"], "kb_graph_stress");
+        assert!(v["p50_us"].is_number());
+        assert!(v["p95_us"].is_number());
     }
 }

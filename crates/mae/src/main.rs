@@ -360,10 +360,22 @@ fn main() -> io::Result<()> {
 
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
+            .join("mae");
+        // Migrate kb-registry.toml from config → data (v0.9.0)
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
             .join("mae");
-        let registry = mae_kb::federation::KbRegistry::load(&config_dir);
+        let old_registry = config_dir.join("kb-registry.toml");
+        let new_registry = data_dir.join("kb-registry.toml");
+        if old_registry.exists() && !new_registry.exists() {
+            let _ = std::fs::create_dir_all(&data_dir);
+            if std::fs::rename(&old_registry, &new_registry).is_ok() {
+                info!("migrated kb-registry.toml from config to data directory");
+            }
+        }
+        let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         for inst in &registry.instances {
             if !inst.enabled {
                 continue;

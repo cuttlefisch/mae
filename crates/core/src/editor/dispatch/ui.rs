@@ -180,6 +180,9 @@ impl Editor {
             "help-reopen" => {
                 self.help_reopen();
             }
+            "kb-view" => {
+                self.help_return_to_view();
+            }
             "tutor" => {
                 self.open_help_at("tutorial:getting-started");
             }
