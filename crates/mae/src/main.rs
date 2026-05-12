@@ -476,6 +476,7 @@ fn main() -> io::Result<()> {
         let all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
+            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);

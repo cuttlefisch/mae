@@ -32,7 +32,8 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
         .list_commands()
         .iter()
         .map(|cmd| {
-            let tool_name = format!("command_{}", cmd.name.replace('-', "_"));
+            let sanitized = cmd.name.replace('-', "_").replace('!', "");
+            let tool_name = format!("command_{}", sanitized);
             ToolDefinition {
                 name: tool_name,
                 description: cmd.doc.clone(),
@@ -42,6 +43,45 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
                     required: vec![],
                 },
                 permission: Some(classify_command_permission(&cmd.name)),
+            }
+        })
+        .collect()
+}
+
+/// Convert Scheme-registered AI tools to ToolDefinitions for the provider.
+pub fn scheme_tools_to_definitions(
+    scheme_tools: &[mae_core::SchemeToolDef],
+) -> Vec<ToolDefinition> {
+    scheme_tools
+        .iter()
+        .map(|st| {
+            let mut properties = HashMap::new();
+            for (name, ty, desc) in &st.params {
+                properties.insert(
+                    name.clone(),
+                    ToolProperty {
+                        prop_type: ty.clone(),
+                        description: desc.clone(),
+                        enum_values: None,
+                    },
+                );
+            }
+            let permission = match st.permission.as_str() {
+                "read" | "readonly" => PermissionTier::ReadOnly,
+                "write" => PermissionTier::Write,
+                "shell" => PermissionTier::Shell,
+                "privileged" => PermissionTier::Privileged,
+                _ => PermissionTier::Write,
+            };
+            ToolDefinition {
+                name: st.name.clone(),
+                description: st.description.clone(),
+                parameters: ToolParameters {
+                    schema_type: "object".into(),
+                    properties,
+                    required: st.required.clone(),
+                },
+                permission: Some(permission),
             }
         })
         .collect()
@@ -396,6 +436,41 @@ mod tests {
             classify_tool_category("shell_list"),
             Some(ToolCategory::ShellMgmt)
         );
+    }
+
+    #[test]
+    fn scheme_tool_def_to_definition() {
+        let st = mae_core::SchemeToolDef {
+            name: "my_tool".into(),
+            description: "Does stuff".into(),
+            params: vec![
+                ("name".into(), "string".into(), "The name".into()),
+                ("count".into(), "integer".into(), "How many".into()),
+            ],
+            required: vec!["name".into()],
+            handler_fn: "my-handler".into(),
+            permission: "write".into(),
+        };
+        let defs = scheme_tools_to_definitions(&[st]);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "my_tool");
+        assert_eq!(defs[0].parameters.properties.len(), 2);
+        assert_eq!(defs[0].parameters.required, vec!["name"]);
+        assert_eq!(defs[0].permission, Some(PermissionTier::Write));
+    }
+
+    #[test]
+    fn scheme_tool_unknown_permission_defaults_write() {
+        let st = mae_core::SchemeToolDef {
+            name: "t".into(),
+            description: String::new(),
+            params: vec![],
+            required: vec![],
+            handler_fn: "h".into(),
+            permission: "bogus".into(),
+        };
+        let defs = scheme_tools_to_definitions(&[st]);
+        assert_eq!(defs[0].permission, Some(PermissionTier::Write));
     }
 
     #[test]

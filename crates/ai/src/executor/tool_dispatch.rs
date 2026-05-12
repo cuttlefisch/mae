@@ -30,6 +30,18 @@ pub fn execute_tool(
         .and_then(|t| t.permission)
         .unwrap_or(PermissionTier::Write);
 
+    // 1b. Validate arguments against schema
+    if let Some(def) = tool_def {
+        if let Err(e) = validate_tool_args(def, &call.arguments) {
+            return ExecuteResult::Immediate(ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: e,
+            });
+        }
+    }
+
     // 2. Check permission
     if !policy.is_allowed(permission) {
         return ExecuteResult::Immediate(ToolResult {
@@ -194,6 +206,16 @@ fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String>
         return execute_registry_command(editor, cmd_name);
     }
 
+    // Scheme-registered AI tools
+    if let Some(st) = editor.scheme_ai_tools.iter().find(|t| t.name == call.name) {
+        let handler = st.handler_fn.clone();
+        let args_json = serde_json::to_string(&call.arguments).unwrap_or_default();
+        let escaped = args_json.replace('\\', "\\\\").replace('"', "\\\"");
+        let code = format!("({} \"{}\")", handler, escaped);
+        editor.pending_scheme_eval.push(code);
+        return Ok(format!("Scheme tool '{}' queued for evaluation", call.name));
+    }
+
     Err(format!("Unknown tool: {}", call.name))
 }
 
@@ -203,5 +225,209 @@ fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<St
         Ok(format!("Executed: {}", cmd_name))
     } else {
         Err(format!("Unknown command: {}", cmd_name))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Argument validation
+// ---------------------------------------------------------------------------
+
+/// Validate tool arguments against the schema defined in `ToolDefinition`.
+/// Catches type mismatches and missing required params before dispatch.
+fn validate_tool_args(tool_def: &ToolDefinition, args: &serde_json::Value) -> Result<(), String> {
+    let obj = args.as_object();
+
+    // Check required params are present and non-null
+    for req in &tool_def.parameters.required {
+        let present = obj
+            .and_then(|o| o.get(req.as_str()))
+            .map(|v| !v.is_null())
+            .unwrap_or(false);
+        if !present {
+            return Err(format!(
+                "Missing required parameter '{}' for tool '{}'",
+                req, tool_def.name
+            ));
+        }
+    }
+
+    // Type-check provided params
+    if let Some(obj) = obj {
+        for (key, value) in obj {
+            if value.is_null() {
+                continue;
+            }
+            if let Some(prop) = tool_def.parameters.properties.get(key.as_str()) {
+                validate_json_type(&tool_def.name, key, value, prop)?;
+            }
+            // Unknown params are silently ignored (forward-compatible)
+        }
+    }
+    Ok(())
+}
+
+fn validate_json_type(
+    tool_name: &str,
+    param_name: &str,
+    value: &serde_json::Value,
+    prop: &ToolProperty,
+) -> Result<(), String> {
+    let ok = match prop.prop_type.as_str() {
+        "string" => value.is_string(),
+        "integer" | "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        _ => true, // unknown type → skip validation
+    };
+    if !ok {
+        return Err(format!(
+            "Parameter '{}' for tool '{}' expected {}, got {}",
+            param_name,
+            tool_name,
+            prop.prop_type,
+            json_type_name(value)
+        ));
+    }
+    // Check enum constraint
+    if let Some(ref allowed) = prop.enum_values {
+        if let Some(s) = value.as_str() {
+            if !allowed.iter().any(|a| a == s) {
+                return Err(format!(
+                    "Parameter '{}' for tool '{}': value '{}' not in {:?}",
+                    param_name, tool_name, s, allowed
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::Null => "null",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn make_tool(name: &str, props: Vec<(&str, &str)>, required: Vec<&str>) -> ToolDefinition {
+        let mut properties = HashMap::new();
+        for (pname, ptype) in props {
+            properties.insert(
+                pname.to_string(),
+                ToolProperty {
+                    prop_type: ptype.to_string(),
+                    description: String::new(),
+                    enum_values: None,
+                },
+            );
+        }
+        ToolDefinition {
+            name: name.to_string(),
+            description: String::new(),
+            parameters: ToolParameters {
+                schema_type: "object".to_string(),
+                properties,
+                required: required.into_iter().map(|s| s.to_string()).collect(),
+            },
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_string_for_integer() {
+        let tool = make_tool("buffer_read", vec![("start_line", "integer")], vec![]);
+        let args = serde_json::json!({"start_line": "abc"});
+        let err = validate_tool_args(&tool, &args).unwrap_err();
+        assert!(err.contains("expected integer"));
+        assert!(err.contains("got string"));
+    }
+
+    #[test]
+    fn validate_rejects_missing_required() {
+        let tool = make_tool("buffer_write", vec![("content", "string")], vec!["content"]);
+        let args = serde_json::json!({});
+        let err = validate_tool_args(&tool, &args).unwrap_err();
+        assert!(err.contains("Missing required parameter 'content'"));
+    }
+
+    #[test]
+    fn validate_accepts_correct_types() {
+        let tool = make_tool(
+            "buffer_read",
+            vec![("start_line", "integer"), ("buffer_name", "string")],
+            vec![],
+        );
+        let args = serde_json::json!({"start_line": 10, "buffer_name": "main.rs"});
+        assert!(validate_tool_args(&tool, &args).is_ok());
+    }
+
+    #[test]
+    fn validate_allows_missing_optional() {
+        let tool = make_tool(
+            "buffer_read",
+            vec![("start_line", "integer"), ("end_line", "integer")],
+            vec![],
+        );
+        let args = serde_json::json!({"start_line": 1});
+        assert!(validate_tool_args(&tool, &args).is_ok());
+    }
+
+    #[test]
+    fn validate_enum_rejects_invalid() {
+        let mut tool = make_tool("set_option", vec![("scope", "string")], vec!["scope"]);
+        tool.parameters
+            .properties
+            .get_mut("scope")
+            .unwrap()
+            .enum_values = Some(vec!["buffer".into(), "global".into()]);
+        let args = serde_json::json!({"scope": "invalid"});
+        let err = validate_tool_args(&tool, &args).unwrap_err();
+        assert!(err.contains("not in"));
+    }
+
+    #[test]
+    fn validate_ignores_unknown_params() {
+        let tool = make_tool("buffer_read", vec![("start_line", "integer")], vec![]);
+        let args = serde_json::json!({"start_line": 1, "extra_param": "whatever"});
+        assert!(validate_tool_args(&tool, &args).is_ok());
+    }
+
+    #[test]
+    fn scheme_tool_dispatch_queues_eval() {
+        let mut editor = mae_core::Editor::new();
+        editor.scheme_ai_tools.push(mae_core::SchemeToolDef {
+            name: "my_tool".into(),
+            description: "test".into(),
+            params: vec![],
+            required: vec![],
+            handler_fn: "my-handler".into(),
+            permission: "write".into(),
+        });
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "my_tool".into(),
+            arguments: serde_json::json!({"key": "val"}),
+        };
+        let result = dispatch_tool(&mut editor, &call);
+        assert!(result.is_ok());
+        assert_eq!(editor.pending_scheme_eval.len(), 1);
+        assert!(editor.pending_scheme_eval[0].contains("my-handler"));
+    }
+
+    #[test]
+    fn validate_null_values_skipped() {
+        let tool = make_tool("buffer_read", vec![("start_line", "integer")], vec![]);
+        let args = serde_json::json!({"start_line": null});
+        assert!(validate_tool_args(&tool, &args).is_ok());
     }
 }

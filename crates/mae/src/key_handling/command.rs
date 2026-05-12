@@ -193,6 +193,20 @@ pub fn handle_command_mode(
                 return;
             }
 
+            // :ai-status! — detailed AI diagnostics buffer
+            if cmd == "ai-status!" {
+                let content = build_ai_status_report(editor, ai_tx);
+                let mut buf = mae_core::buffer::Buffer::new();
+                buf.name = "*AI Status*".to_string();
+                buf.replace_contents(&content);
+                buf.modified = false;
+                buf.read_only = true;
+                let buf_idx = editor.buffers.len();
+                editor.buffers.push(buf);
+                editor.display_buffer(buf_idx);
+                return;
+            }
+
             // :ai <prompt> — send to AI agent
             if let Some(prompt) = cmd.strip_prefix("ai ") {
                 let prompt = prompt.trim();
@@ -400,6 +414,148 @@ pub fn build_self_test_prompt(categories: &str) -> String {
     }
 }
 
+fn build_ai_status_report(
+    editor: &Editor,
+    ai_tx: &Option<tokio::sync::mpsc::Sender<AiCommand>>,
+) -> String {
+    let config = load_ai_config(editor);
+    let mut lines = vec![
+        "MAE AI Status Report".to_string(),
+        "====================".to_string(),
+        String::new(),
+        // Provider
+        "Provider".to_string(),
+        "--------".to_string(),
+    ];
+    if let Some(ref cfg) = config {
+        lines.push(format!("  Type:       {}", cfg.provider_type));
+        lines.push(format!("  Model:      {}", cfg.model));
+        let key_set = cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
+        lines.push(format!(
+            "  API Key:    {}",
+            if key_set { "*** (set)" } else { "not set" }
+        ));
+        if let Some(ref url) = cfg.base_url {
+            lines.push(format!("  Base URL:   {}", url));
+        }
+        lines.push(format!("  Timeout:    {}s", cfg.timeout_secs));
+        lines.push(format!("  Max Tokens: {}", cfg.max_tokens));
+        lines.push(format!("  Connected:  {}", ai_tx.is_some()));
+    } else {
+        lines.push("  Not configured — :help ai-setup for setup guide".to_string());
+    }
+    lines.push(String::new());
+
+    // Permission
+    lines.push("Permission".to_string());
+    lines.push("----------".to_string());
+    lines.push(format!("  Tier:       {}", editor.ai_permission_tier));
+    lines.push(format!("  Mode:       {}", editor.ai_mode));
+    lines.push(format!("  Profile:    {}", editor.ai_profile));
+    lines.push(String::new());
+
+    // Session
+    lines.push("Session".to_string());
+    lines.push("-------".to_string());
+    lines.push(format!(
+        "  Cost:           ${:.4}",
+        editor.ai_session_cost_usd
+    ));
+    lines.push(format!("  Tokens In:      {}", editor.ai_session_tokens_in));
+    lines.push(format!(
+        "  Tokens Out:     {}",
+        editor.ai_session_tokens_out
+    ));
+    if editor.ai_context_window > 0 {
+        let pct = (editor.ai_context_used_tokens as f64 / editor.ai_context_window as f64) * 100.0;
+        lines.push(format!(
+            "  Context:        {}/{} ({:.1}%)",
+            editor.ai_context_used_tokens, editor.ai_context_window, pct
+        ));
+    }
+    if editor.ai_cache_read_tokens > 0 || editor.ai_cache_creation_tokens > 0 {
+        let total = editor.ai_cache_read_tokens + editor.ai_cache_creation_tokens;
+        let hit = if total > 0 {
+            (editor.ai_cache_read_tokens as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        lines.push(format!(
+            "  Cache Read:     {} ({:.1}% hit rate)",
+            editor.ai_cache_read_tokens, hit
+        ));
+        lines.push(format!(
+            "  Cache Created:  {}",
+            editor.ai_cache_creation_tokens
+        ));
+    }
+    if let Some(ref cfg) = config {
+        let warn = cfg.budget.session_warn_usd.unwrap_or(0.0);
+        let cap = cfg.budget.session_hard_cap_usd.unwrap_or(0.0);
+        if warn > 0.0 || cap > 0.0 {
+            lines.push(format!(
+                "  Budget:         warn=${:.2}, cap=${:.2}",
+                warn, cap
+            ));
+        }
+    }
+    lines.push(String::new());
+
+    // Scheme Tools
+    lines.push("Scheme Tools".to_string());
+    lines.push("------------".to_string());
+    if editor.scheme_ai_tools.is_empty() {
+        lines.push("  (none registered)".to_string());
+    } else {
+        for st in &editor.scheme_ai_tools {
+            lines.push(format!(
+                "  {} — {} [{}]",
+                st.name, st.description, st.permission
+            ));
+        }
+    }
+    lines.push(String::new());
+
+    // Configuration
+    lines.push("Configuration".to_string());
+    lines.push("-------------".to_string());
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+                .unwrap_or_default()
+        })
+        .join("mae");
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+                .unwrap_or_default()
+        })
+        .join("mae");
+    lines.push(format!(
+        "  Config:     {}",
+        config_dir.join("config.toml").display()
+    ));
+    lines.push(format!(
+        "  Init:       {}",
+        config_dir.join("init.scm").display()
+    ));
+    lines.push(format!("  Data:       {}", data_dir.display()));
+    lines.push(format!(
+        "  Transcripts: {}",
+        data_dir.join("transcripts").display()
+    ));
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +579,15 @@ mod tests {
     fn build_self_test_prompt_multi_category() {
         let prompt = build_self_test_prompt("editing,help");
         assert!(prompt.contains("Execute ONLY these categories: editing,help"));
+    }
+
+    #[test]
+    fn ai_status_report_has_sections() {
+        let editor = mae_core::Editor::new();
+        let report = build_ai_status_report(&editor, &None);
+        assert!(report.contains("Provider"));
+        assert!(report.contains("Permission"));
+        assert!(report.contains("Session"));
+        assert!(report.contains("Configuration"));
     }
 }

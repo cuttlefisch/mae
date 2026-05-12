@@ -1184,6 +1184,10 @@ impl CommandRegistry {
             "ai-load",
             "Load AI conversation from JSON file (:ai-load <path>)",
         );
+        reg.register_builtin(
+            "ai-status!",
+            "Open detailed AI diagnostics buffer (provider, session, config)",
+        );
 
         // Agent bootstrap
         reg.register_builtin(

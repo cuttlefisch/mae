@@ -114,6 +114,12 @@ struct SharedState {
     deprecated_functions: HashMap<String, (String, String)>,
     /// Already-warned deprecated function names (to warn only once).
     deprecated_warned: HashSet<String>,
+    /// Pending AI tool registrations from Scheme.
+    pending_ai_tools: Vec<mae_core::SchemeToolDef>,
+    /// Param accumulator for `ai-tool-param!` calls (tool_name → params).
+    pending_ai_tool_params: HashMap<String, Vec<(String, String, String)>>,
+    /// Required param accumulator for `ai-tool-require!` calls.
+    pending_ai_tool_required: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -875,6 +881,57 @@ impl SchemeRuntime {
                 SteelVal::Void
             },
         );
+
+        // (register-ai-tool! NAME DESCRIPTION HANDLER-FN PERMISSION)
+        let s = shared.clone();
+        engine.register_fn(
+            "register-ai-tool!",
+            move |name: String, desc: String, handler: String, perm: String| {
+                let mut st = s.lock().unwrap();
+                // Collect any pre-registered params/required for this tool
+                let params = st.pending_ai_tool_params.remove(&name).unwrap_or_default();
+                let required = st
+                    .pending_ai_tool_required
+                    .remove(&name)
+                    .unwrap_or_default();
+                st.pending_ai_tools.push(mae_core::SchemeToolDef {
+                    name,
+                    description: desc,
+                    params,
+                    required,
+                    handler_fn: handler,
+                    permission: perm,
+                });
+                SteelVal::Void
+            },
+        );
+
+        // (ai-tool-param! TOOL-NAME PARAM-NAME PARAM-TYPE DESCRIPTION)
+        let s = shared.clone();
+        engine.register_fn(
+            "ai-tool-param!",
+            move |tool: String, pname: String, ptype: String, pdesc: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_ai_tool_params
+                    .entry(tool)
+                    .or_default()
+                    .push((pname, ptype, pdesc));
+                SteelVal::Void
+            },
+        );
+
+        // (ai-tool-require! TOOL-NAME PARAM-NAME)
+        let s = shared.clone();
+        engine.register_fn("ai-tool-require!", move |tool: String, pname: String| {
+            s.lock()
+                .unwrap()
+                .pending_ai_tool_required
+                .entry(tool)
+                .or_default()
+                .push(pname);
+            SteelVal::Void
+        });
 
         // --- A5: String utilities (no editor state needed) ---
 
@@ -1903,6 +1960,31 @@ impl SchemeRuntime {
                     warn!(key = key.as_str(), "set-local-option! error: {}", e);
                     editor.set_status(e);
                 }
+            }
+        }
+
+        // Scheme-registered AI tools
+        let mut ai_tools: Vec<mae_core::SchemeToolDef> = state.pending_ai_tools.drain(..).collect();
+        for tool in &mut ai_tools {
+            // Merge any late-registered params (ai-tool-param! called after register-ai-tool!)
+            if let Some(extra) = state.pending_ai_tool_params.remove(&tool.name) {
+                tool.params.extend(extra);
+            }
+            if let Some(extra) = state.pending_ai_tool_required.remove(&tool.name) {
+                tool.required.extend(extra);
+            }
+        }
+        for tool in ai_tools {
+            debug!(name = %tool.name, handler = %tool.handler_fn, "registering Scheme AI tool");
+            // Upsert: replace if already registered by name
+            if let Some(existing) = editor
+                .scheme_ai_tools
+                .iter_mut()
+                .find(|t| t.name == tool.name)
+            {
+                *existing = tool;
+            } else {
+                editor.scheme_ai_tools.push(tool);
             }
         }
 

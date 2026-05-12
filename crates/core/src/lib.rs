@@ -48,6 +48,20 @@ pub mod word;
 pub mod wrap;
 
 pub use buffer::{BabelEditContext, Buffer, BufferKind, BufferLocalOptions};
+
+/// A Scheme-defined AI tool registered via `register-ai-tool!`.
+#[derive(Debug, Clone)]
+pub struct SchemeToolDef {
+    pub name: String,
+    pub description: String,
+    /// (param_name, param_type, param_description)
+    pub params: Vec<(String, String, String)>,
+    pub required: Vec<String>,
+    /// Scheme function name to call with JSON args
+    pub handler_fn: String,
+    /// Permission tier: "read", "write", "shell", "privileged"
+    pub permission: String,
+}
 pub use buffer_mode::BufferMode;
 pub use buffer_view::BufferView;
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};

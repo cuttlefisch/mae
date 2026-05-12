@@ -922,7 +922,12 @@ mod tests {
             &PermissionPolicy::default(),
         ));
         assert!(!result.success);
-        assert!(result.output.contains("Unknown step"));
+        // Validation catches the bad enum value before the DAP executor
+        assert!(
+            result.output.contains("not in") || result.output.contains("Unknown step"),
+            "expected validation or DAP error, got: {}",
+            result.output
+        );
     }
 
     #[test]

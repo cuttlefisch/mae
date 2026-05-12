@@ -739,6 +739,8 @@ pub struct Editor {
     pub ai_provider: String,
     /// AI model identifier. Empty = use provider default.
     pub ai_model: String,
+    /// Scheme-registered AI tools (via `register-ai-tool!`).
+    pub scheme_ai_tools: Vec<crate::SchemeToolDef>,
     /// Shell command whose stdout is the API key (e.g. "pass show deepseek/api-key").
     pub ai_api_key_command: String,
     /// Base URL override for the AI API.
@@ -1107,6 +1109,7 @@ impl Editor {
             ai_editor: "claude".to_string(),
             ai_provider: String::new(),
             ai_model: String::new(),
+            scheme_ai_tools: Vec::new(),
             ai_api_key_command: String::new(),
             ai_base_url: String::new(),
             option_registry: OptionRegistry::new(),
