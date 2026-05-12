@@ -1,0 +1,9 @@
+[package]
+name = "mae-make"
+description = "Build system detection and compiler error parsing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+regex = "1"

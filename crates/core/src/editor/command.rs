@@ -952,6 +952,47 @@ impl Editor {
                 );
                 true
             }
+            // H1-H5 Doom parity commands
+            "format-buffer" | "format" => {
+                self.dispatch_builtin("format-buffer");
+                true
+            }
+            "spell-check" | "spell-toggle" => {
+                self.dispatch_builtin("spell-check-buffer");
+                true
+            }
+            "spell-next" => {
+                self.dispatch_builtin("spell-next");
+                true
+            }
+            "spell-prev" => {
+                self.dispatch_builtin("spell-prev");
+                true
+            }
+            "spell-suggest" => {
+                self.dispatch_builtin("spell-suggest");
+                true
+            }
+            "run-build" | "make" => {
+                self.dispatch_builtin("run-build");
+                true
+            }
+            "run-test" => {
+                self.dispatch_builtin("run-test");
+                true
+            }
+            "next-error" => {
+                self.dispatch_builtin("next-error");
+                true
+            }
+            "prev-error" => {
+                self.dispatch_builtin("prev-error");
+                true
+            }
+            "lookup-online" => {
+                self.dispatch_builtin("lookup-online");
+                true
+            }
             _ => {
                 // Shell escape: :!cmd
                 if let Some(shell_cmd) = cmd.strip_prefix('!') {

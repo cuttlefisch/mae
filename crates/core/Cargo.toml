@@ -8,7 +8,12 @@ license.workspace = true
 [dependencies]
 mae-babel = { path = "../babel" }
 mae-export = { path = "../export" }
+mae-format = { path = "../format" }
 mae-kb = { path = "../kb" }
+mae-lookup = { path = "../lookup" }
+mae-make = { path = "../make" }
+mae-snippets = { path = "../snippets" }
+mae-spell = { path = "../spell" }
 ropey = "1"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

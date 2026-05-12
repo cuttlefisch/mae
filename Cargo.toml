@@ -13,6 +13,11 @@ members = [
     "crates/mae",
     "crates/shell",
     "crates/mcp",
+    "crates/snippets",
+    "crates/format",
+    "crates/make",
+    "crates/lookup",
+    "crates/spell",
     "test_fixtures",
 ]
 exclude = ["tools/code-map"]

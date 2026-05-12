@@ -1,0 +1,9 @@
+[module]
+name = "lookup"
+version = "0.1.0"
+description = "Definition lookup — dumb-jump fallback, online docs, man pages"
+mae_version = ">=0.9.0"
+category = "tools"
+
+[entry]
+autoloads = "autoloads.scm"

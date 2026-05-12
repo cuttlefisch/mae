@@ -1,0 +1,6 @@
+[package]
+name = "mae-format"
+description = "Code formatter bridge — external commands and format-on-save"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

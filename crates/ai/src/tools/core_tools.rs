@@ -1241,5 +1241,66 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Format/Build/Spell/Lookup tools ---
+        ToolDefinition {
+            name: "format_buffer".into(),
+            description: "Format the current buffer using the configured external formatter or LSP.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "run_build".into(),
+            description: "Detect the project build system (Cargo, Make, npm, etc.) and run the build command. Parse compiler errors for navigation.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "run_test".into(),
+            description: "Detect the project build system and run the test command.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "spell_check".into(),
+            description: "Run spell check on the current buffer using aspell or hunspell.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lookup_online".into(),
+            description: "Look up documentation URL for the word at cursor (docs.rs, MDN, devdocs.io).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "next_error".into(),
+            description: "Navigate to the next build error after running a build command.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }

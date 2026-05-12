@@ -85,7 +85,13 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "switch_project"
         | "toggle_file_tree"
         | "audit_configuration"
-        | "list_modules" => ToolTier::Core,
+        | "list_modules"
+        | "format_buffer"
+        | "run_build"
+        | "run_test"
+        | "spell_check"
+        | "lookup_online"
+        | "next_error" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }

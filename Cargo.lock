@@ -2087,7 +2087,12 @@ dependencies = [
  "libc",
  "mae-babel",
  "mae-export",
+ "mae-format",
  "mae-kb",
+ "mae-lookup",
+ "mae-make",
+ "mae-snippets",
+ "mae-spell",
  "regex",
  "ropey",
  "serde",
@@ -2132,6 +2137,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-format"
+version = "0.8.1"
+
+[[package]]
 name = "mae-gui"
 version = "0.8.1"
 dependencies = [
@@ -2159,6 +2168,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-lookup"
+version = "0.8.1"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "mae-lsp"
 version = "0.8.1"
 dependencies = [
@@ -2166,6 +2182,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mae-make"
+version = "0.8.1"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
@@ -2207,6 +2230,14 @@ dependencies = [
  "portable-pty",
  "tracing",
 ]
+
+[[package]]
+name = "mae-snippets"
+version = "0.8.1"
+
+[[package]]
+name = "mae-spell"
+version = "0.8.1"
 
 [[package]]
 name = "mae-test-fixtures"

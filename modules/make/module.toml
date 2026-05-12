@@ -1,0 +1,9 @@
+[module]
+name = "make"
+version = "0.1.0"
+description = "Build system runner — auto-detect, compile, jump to errors"
+mae_version = ">=0.9.0"
+category = "tools"
+
+[entry]
+autoloads = "autoloads.scm"

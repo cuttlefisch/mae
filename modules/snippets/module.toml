@@ -1,0 +1,9 @@
+[module]
+name = "snippets"
+version = "0.1.0"
+description = "Snippet expansion engine — tab-stops, mirrors, field navigation"
+mae_version = ">=0.9.0"
+category = "editor"
+
+[entry]
+autoloads = "autoloads.scm"

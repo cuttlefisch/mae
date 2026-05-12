@@ -1,0 +1,6 @@
+[package]
+name = "mae-spell"
+description = "Spell checking via aspell/hunspell subprocess pipe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

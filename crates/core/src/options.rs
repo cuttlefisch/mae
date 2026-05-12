@@ -313,6 +313,12 @@ impl OptionRegistry {
                 opt!("kb_auto_register", &["kb-auto-register"],
                     "Auto-register org directories found in project root",
                     OptionKind::Bool, "false", Some("kb.auto_register"), &[]),
+                opt!("format_on_save", &["format-on-save"],
+                    "Run formatter before saving buffers",
+                    OptionKind::Bool, "false", Some("format.on_save"), &[]),
+                opt!("spell_enabled", &["spell-enabled"],
+                    "Enable spell checking",
+                    OptionKind::Bool, "false", Some("spell.enabled"), &[]),
             ],
         }
     }

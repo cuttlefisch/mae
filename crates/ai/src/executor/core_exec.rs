@@ -45,6 +45,20 @@ fn execute_command_dispatch(
     }
 }
 
+/// Dispatch a builtin command by name (no arguments).
+fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, String> {
+    if editor.dispatch_builtin_in_target(cmd) {
+        let status = editor.status_msg.clone();
+        if status.is_empty() {
+            Ok(format!("Executed: {}", cmd))
+        } else {
+            Ok(status)
+        }
+    } else {
+        Err(format!("Unknown command: {}", cmd))
+    }
+}
+
 /// Set the AI's target buffer/window for subsequent tool calls.
 fn execute_set_ai_target(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     // Clear targeting if requested.
@@ -131,6 +145,12 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "set_ai_target" => execute_set_ai_target(editor, &call.arguments),
         "list_modules" => execute_list_modules(editor),
         "pkg_sync" | "pkg_upgrade" | "pkg_doctor" => execute_pkg_command(editor, &call.name),
+        "format_buffer" => execute_dispatch_command(editor, "format-buffer"),
+        "run_build" => execute_dispatch_command(editor, "run-build"),
+        "run_test" => execute_dispatch_command(editor, "run-test"),
+        "spell_check" => execute_dispatch_command(editor, "spell-check-buffer"),
+        "lookup_online" => execute_dispatch_command(editor, "lookup-online"),
+        "next_error" => execute_dispatch_command(editor, "next-error"),
         _ => return None,
     };
     Some(result)

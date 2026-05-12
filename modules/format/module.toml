@@ -1,0 +1,12 @@
+[module]
+name = "format"
+version = "0.1.0"
+description = "Code formatting — external formatters and format-on-save"
+mae_version = ">=0.9.0"
+category = "editor"
+
+[flags]
+onsave = { doc = "Format buffer on save via before-save hook" }
+
+[entry]
+autoloads = "autoloads.scm"
