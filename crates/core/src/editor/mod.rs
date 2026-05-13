@@ -10,17 +10,23 @@ mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
+mod heading_ops;
 mod help_ops;
 mod hook_ops;
 mod jumps;
 pub(crate) mod kb_ops;
 mod keymaps;
+mod lsp_actions;
+mod lsp_completion;
 mod lsp_ops;
+mod lsp_symbols;
 mod macros;
+mod markdown_ops;
 mod marks;
 mod mouse_ops;
 mod multicursor;
 mod option_ops;
+mod org_ops;
 pub mod perf;
 mod project_ops;
 mod register_ops;
@@ -75,6 +81,10 @@ pub struct ModuleInfo {
     pub options: Vec<String>,
     pub flags: Vec<(String, String)>,
     pub path: String,
+    /// Dependencies declared in module.toml `[dependencies]`.
+    pub depends: Vec<String>,
+    /// Flags enabled by the user via `(use-modules! '((mod +flag)))`.
+    pub enabled_flags: Vec<String>,
 }
 
 /// Links the output `*AI*` buffer and input `*ai-input*` buffer in a
@@ -930,6 +940,10 @@ pub struct Editor {
     /// Active modules. Populated by the module loader in bootstrap.rs.
     /// Used by `:describe-module`, `list_modules` MCP tool, and `audit_configuration`.
     pub active_modules: Vec<ModuleInfo>,
+    /// Keybinding conflict warnings from module loading.
+    /// Populated by bootstrap when a module's autoloads.scm overrides an
+    /// existing binding.
+    pub module_binding_warnings: Vec<String>,
     /// Pending module reload requests. Drained by the binary which owns
     /// the SchemeRuntime and ModuleRegistry.
     pub pending_module_reloads: Vec<String>,
@@ -1207,6 +1221,7 @@ impl Editor {
             org_agenda_files: Vec::new(),
             ai_configured: false,
             active_modules: Vec::new(),
+            module_binding_warnings: Vec::new(),
             pending_module_reloads: Vec::new(),
             pending_pkg_commands: Vec::new(),
             pending_git_diff: None,

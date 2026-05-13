@@ -1,0 +1,603 @@
+//! Org-mode specific operations: cycle, TODO, priority, tags, links, export.
+
+use super::Editor;
+use tracing::info;
+
+impl Editor {
+    /// Three-state org heading cycle (TAB).
+    ///
+    /// Cycle: SUBTREE (all visible) → FOLDED (heading only) → CHILDREN
+    /// (body + child headings visible, child bodies folded) → SUBTREE.
+    /// Leaf headings (no children) cycle: SUBTREE ↔ FOLDED.
+    pub fn org_cycle(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        let lang = self.syntax.language_of(buf_idx);
+        if lang != Some(crate::syntax::Language::Org) {
+            return;
+        }
+        // Tab on a table line → cell navigation instead of heading fold.
+        let row = self.window_mgr.focused_window().cursor_row;
+        if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
+            self.table_next_cell();
+            return;
+        }
+        self.heading_cycle(crate::syntax::Language::Org);
+    }
+
+    /// Cycle TODO state for org/markdown headings: none→TODO→DONE→TODO.
+    pub fn org_todo_cycle(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+
+        info!(buf_idx, "org todo cycle");
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line = self.buffers[buf_idx].rope().line(row);
+        let line_str: String = line.chars().collect();
+
+        let (new_line, status) = if line_str.contains("TODO ") {
+            (line_str.replacen("TODO ", "DONE ", 1), "DONE")
+        } else if line_str.contains("DONE ") {
+            (line_str.replacen("DONE ", "TODO ", 1), "TODO")
+        } else {
+            // Find the start of the heading text (after stars or hashes)
+            let mut prefix_end = 0;
+            let mut found = false;
+            for (i, ch) in line_str.chars().enumerate() {
+                if ch == '*' || ch == '#' {
+                    found = true;
+                } else if found && ch == ' ' {
+                    prefix_end = i + 1;
+                    break;
+                } else {
+                    break;
+                }
+            }
+
+            if found && prefix_end > 0 {
+                let mut next = line_str.clone();
+                next.insert_str(prefix_end, "TODO ");
+                (next, "TODO")
+            } else {
+                (line_str.clone(), "Not a heading")
+            }
+        };
+
+        if new_line != line_str {
+            let start = self.buffers[buf_idx].rope().line_to_char(row);
+            let end = start + line.len_chars();
+            self.buffers[buf_idx].begin_undo_group();
+            self.buffers[buf_idx].delete_range(start, end);
+            self.buffers[buf_idx].insert_text_at(start, &new_line);
+            self.buffers[buf_idx].end_undo_group();
+            self.set_status(status);
+            // Update parent heading's statistics cookies ([/] or [%])
+            self.update_statistics_cookies(row);
+        }
+    }
+
+    /// Promote Org heading (thin wrapper).
+    pub fn org_promote(&mut self) {
+        self.heading_promote(crate::syntax::Language::Org);
+    }
+
+    /// Demote Org heading (thin wrapper).
+    pub fn org_demote(&mut self) {
+        self.heading_demote(crate::syntax::Language::Org);
+    }
+
+    /// Cycle org heading priority up: none → [#A] → [#B] → [#C] → none.
+    pub fn org_priority_up(&mut self) {
+        self.org_priority_cycle(true);
+    }
+
+    /// Cycle org heading priority down: none → [#C] → [#B] → [#A] → none.
+    pub fn org_priority_down(&mut self) {
+        self.org_priority_cycle(false);
+    }
+
+    fn org_priority_cycle(&mut self, up: bool) {
+        use regex::Regex;
+        use std::sync::OnceLock;
+
+        static HEADING_PRI: OnceLock<Regex> = OnceLock::new();
+        let re = HEADING_PRI.get_or_init(|| {
+            Regex::new(
+                r"^(\*+ )(?:(TODO|DONE|NEXT|WAIT|CANCELLED|DEFERRED) )?(?:\[#([A-C])\] )?(.*)",
+            )
+            .unwrap()
+        });
+
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+        let Some(cap) = re.captures(&line) else {
+            self.set_status("Not a heading");
+            return;
+        };
+
+        let stars = cap.get(1).unwrap().as_str();
+        let keyword = cap.get(2).map(|m| m.as_str());
+        let current_pri = cap.get(3).map(|m| m.as_str());
+        let rest = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+
+        let new_pri = if up {
+            match current_pri {
+                None => Some("A"),
+                Some("A") => Some("B"),
+                Some("B") => Some("C"),
+                _ => None,
+            }
+        } else {
+            match current_pri {
+                None => Some("C"),
+                Some("C") => Some("B"),
+                Some("B") => Some("A"),
+                _ => None,
+            }
+        };
+
+        let mut new_line = String::from(stars);
+        if let Some(kw) = keyword {
+            new_line.push_str(kw);
+            new_line.push(' ');
+        }
+        if let Some(pri) = new_pri {
+            new_line.push_str(&format!("[#{}] ", pri));
+        }
+        new_line.push_str(rest);
+        // Preserve trailing newline
+        if line.ends_with('\n') && !new_line.ends_with('\n') {
+            new_line.push('\n');
+        }
+
+        let start = self.buffers[buf_idx].rope().line_to_char(row);
+        let end = start + self.buffers[buf_idx].rope().line(row).len_chars();
+        self.buffers[buf_idx].begin_undo_group();
+        self.buffers[buf_idx].delete_range(start, end);
+        self.buffers[buf_idx].insert_text_at(start, &new_line);
+        self.buffers[buf_idx].end_undo_group();
+        let label = new_pri
+            .map(|p| format!("[#{}]", p))
+            .unwrap_or_else(|| "none".into());
+        self.set_status(format!("Priority: {}", label));
+    }
+
+    /// Open a MiniDialog to set tags on the current org heading.
+    pub fn org_set_tags(&mut self) {
+        use crate::command_palette::{MiniDialogContext, MiniDialogState};
+
+        let buf_idx = self.active_buffer_idx();
+        let row = self.window_mgr.focused_window().cursor_row;
+        let line: String = self.buffers[buf_idx].rope().line(row).chars().collect();
+
+        if !line.trim_start().starts_with('*') {
+            self.set_status("Not a heading");
+            return;
+        }
+
+        // Extract current tags from trailing :tag1:tag2: pattern.
+        let trimmed = line.trim_end_matches('\n').trim_end();
+        let current_tags = if let Some(last_space) = trimmed.rfind(char::is_whitespace) {
+            let tail = &trimmed[last_space + 1..];
+            if tail.starts_with(':') && tail.ends_with(':') && tail.len() >= 3 {
+                tail[1..tail.len() - 1].to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        self.mini_dialog = Some(MiniDialogState::single_input(
+            "Tags (colon-separated)",
+            &current_tags,
+            "tag1:tag2",
+            MiniDialogContext::OrgSetTags { heading_line: row },
+        ));
+        self.set_mode(crate::Mode::CommandPalette);
+    }
+
+    /// Calculate the range of lines covered by the subtree rooted at the
+    /// heading on `row`. Returns `(start_row, end_row_exclusive)` where
+    /// `start_row` is the heading itself and `end_row_exclusive` is the
+    /// first line of the next sibling (same or higher level) or EOF.
+    pub fn org_subtree_range(&self, row: usize) -> Option<(usize, usize)> {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return None;
+        }
+        self.heading_subtree_range(row, crate::syntax::Language::Org)
+    }
+
+    /// Move org subtree down (thin wrapper).
+    pub fn org_move_subtree_down(&mut self) {
+        self.heading_move_subtree_down(crate::syntax::Language::Org);
+    }
+
+    /// Move org subtree up (thin wrapper).
+    pub fn org_move_subtree_up(&mut self) {
+        self.heading_move_subtree_up(crate::syntax::Language::Org);
+    }
+
+    /// Open the Org link at the cursor.
+    pub fn org_open_link(&mut self) {
+        let buf_idx = self.active_buffer_idx();
+        if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
+            return;
+        }
+
+        info!(buf_idx, "org open link at cursor");
+
+        let win = self.window_mgr.focused_window();
+        let cursor_char = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);
+        let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
+
+        let source: String = self.buffers[buf_idx].rope().chars().collect();
+        let Some(tree) = self.syntax.tree_for(buf_idx, &source) else {
+            return;
+        };
+
+        let mut node = tree
+            .root_node()
+            .descendant_for_byte_range(cursor_byte, cursor_byte);
+
+        // Org links often have nested nodes, walk up to find the link node.
+        while let Some(n) = node {
+            if n.kind() == "link" {
+                break;
+            }
+            node = n.parent();
+        }
+
+        let Some(link) = node else {
+            return;
+        };
+
+        // Extract target from [[target][label]] or [[target]]
+        let link_text = &source[link.start_byte()..link.end_byte()];
+        if let Some(target) = link_text
+            .strip_prefix("[[")
+            .and_then(|s| s.split(']').next())
+        {
+            let target = target.split('|').next().unwrap_or(target).trim();
+            if target.starts_with("http") {
+                // Open external link
+                let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+                self.set_status(format!("Opening {}", target));
+            } else {
+                // Jump to internal heading — search buffer for matching heading
+                let buf = self.active_buffer();
+                let target_lower = target.to_lowercase();
+                let mut found = false;
+                for line_idx in 0..buf.line_count() {
+                    let line = buf.line_text(line_idx);
+                    let trimmed = line.trim_start_matches('*').trim_start();
+                    if trimmed.to_lowercase().starts_with(&target_lower) {
+                        let win = self.window_mgr.focused_window_mut();
+                        win.cursor_row = line_idx;
+                        win.cursor_col = 0;
+                        self.set_status(format!("Jumped to: {}", target));
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    self.set_status(format!("Heading not found: {}", target));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::Language;
+
+    fn org_editor(text: &str) -> Editor {
+        let mut ed = Editor::new();
+        ed.buffers[0].insert_text_at(0, text);
+        ed.syntax.set_language(0, Language::Org);
+        ed
+    }
+
+    #[test]
+    fn org_demote_adds_star() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_demote();
+        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
+        assert!(ed.status_msg.contains("level 2"));
+    }
+
+    #[test]
+    fn org_promote_removes_star() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_promote();
+        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
+        assert!(ed.status_msg.contains("level 1"));
+    }
+
+    #[test]
+    fn org_promote_single_star_noop() {
+        let mut ed = org_editor("* Heading\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_promote();
+        assert_eq!(ed.buffers[0].text(), "* Heading\n");
+    }
+
+    #[test]
+    fn dedent_line_dispatches_org_promote() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.dispatch_builtin("dedent-line");
+        assert_eq!(ed.buffers[0].text(), "* Heading\nBody\n");
+    }
+
+    #[test]
+    fn indent_line_dispatches_org_demote() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.dispatch_builtin("indent-line");
+        assert_eq!(ed.buffers[0].text(), "** Heading\nBody\n");
+    }
+
+    #[test]
+    fn org_demote_non_heading_noop() {
+        let mut ed = org_editor("Just text\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_demote();
+        assert_eq!(ed.buffers[0].text(), "Just text\n");
+    }
+
+    #[test]
+    fn org_subtree_range_single() {
+        let ed = org_editor("* H1\nBody\n* H2\n");
+        let range = ed.org_subtree_range(0);
+        assert_eq!(range, Some((0, 2)));
+    }
+
+    #[test]
+    fn org_subtree_range_nested() {
+        let ed = org_editor("* H1\n** Sub\nBody\n* H2\n");
+        let range = ed.org_subtree_range(0);
+        assert_eq!(range, Some((0, 3)));
+        let range = ed.org_subtree_range(1);
+        assert_eq!(range, Some((1, 3)));
+    }
+
+    #[test]
+    fn org_move_subtree_down() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_move_subtree_down();
+        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(ed.window_mgr.focused_window().cursor_row, 2);
+    }
+
+    #[test]
+    fn org_move_subtree_up() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 2;
+        ed.org_move_subtree_up();
+        assert_eq!(ed.buffers[0].text(), "* H2\nBody2\n* H1\nBody1\n");
+        assert_eq!(ed.window_mgr.focused_window().cursor_row, 0);
+    }
+
+    #[test]
+    fn org_move_at_boundary_noop() {
+        let mut ed = org_editor("* H1\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_move_subtree_down();
+        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+        ed.org_move_subtree_up();
+        assert_eq!(ed.buffers[0].text(), "* H1\nBody\n");
+    }
+
+    // --- Three-state org heading cycle tests ---
+
+    #[test]
+    fn org_cycle_subtree_to_folded() {
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle();
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            "Expected fold at row 0"
+        );
+        assert!(ed.status_msg.contains("Folded"));
+    }
+
+    #[test]
+    fn org_cycle_folded_to_children() {
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        // First TAB: SUBTREE → FOLDED
+        ed.org_cycle();
+        assert!(ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0));
+        // Second TAB: FOLDED → CHILDREN
+        ed.org_cycle();
+        assert!(
+            !ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 0),
+            "Heading 0 should not be folded in CHILDREN state"
+        );
+        // Child heading at row 2 should be folded
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 2),
+            "Child heading at row 2 should be folded"
+        );
+        assert!(ed.status_msg.contains("Children"));
+    }
+
+    #[test]
+    fn org_cycle_children_to_subtree() {
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // SUBTREE → FOLDED
+        ed.org_cycle(); // FOLDED → CHILDREN
+        ed.org_cycle(); // CHILDREN → SUBTREE
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "All folds should be cleared in SUBTREE state"
+        );
+        assert!(ed.status_msg.contains("Subtree"));
+    }
+
+    #[test]
+    fn org_cycle_full_round_trip() {
+        let mut ed = org_editor("* H1\nBody\n** Sub\nSub body\n* H2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+        ed.org_cycle(); // → FOLDED
+        ed.org_cycle(); // → CHILDREN
+        ed.org_cycle(); // → SUBTREE
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_cycle_leaf_heading_two_state() {
+        let mut ed = org_editor("* H1\nBody line 1\nBody line 2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // → FOLDED
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+        ed.org_cycle(); // → UNFOLDED
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_cycle_nested_children() {
+        let mut ed = org_editor("* H1\n** Sub1\n*** Deep\nDeep body\n** Sub2\nSub2 body\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_cycle(); // → FOLDED
+        ed.org_cycle(); // → CHILDREN
+                        // ** Sub1 (row 1) should be folded (has content below)
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 1),
+            "Sub1 should be folded in CHILDREN state"
+        );
+        // ** Sub2 (row 4) should be folded
+        assert!(
+            ed.buffers[0].folded_ranges.iter().any(|(s, _)| *s == 4),
+            "Sub2 should be folded in CHILDREN state"
+        );
+    }
+
+    // --- Fold-aware structural editing tests ---
+
+    #[test]
+    fn org_move_subtree_down_clears_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_move_subtree_down();
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "Folds should be cleared after move: {:?}",
+            ed.buffers[0].folded_ranges
+        );
+    }
+
+    #[test]
+    fn org_move_subtree_up_clears_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 2;
+        ed.buffers[0].folded_ranges.push((2, 4));
+        ed.org_move_subtree_up();
+        assert!(
+            ed.buffers[0].folded_ranges.is_empty(),
+            "Folds should be cleared after move up"
+        );
+    }
+
+    #[test]
+    fn org_promote_preserves_folds() {
+        let mut ed = org_editor("** Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_promote();
+        assert_eq!(
+            ed.buffers[0].folded_ranges.len(),
+            1,
+            "Promote should preserve folds"
+        );
+    }
+
+    #[test]
+    fn org_demote_preserves_folds() {
+        let mut ed = org_editor("* Heading\nBody\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.buffers[0].folded_ranges.push((0, 2));
+        ed.org_demote();
+        assert_eq!(
+            ed.buffers[0].folded_ranges.len(),
+            1,
+            "Demote should preserve folds"
+        );
+    }
+
+    // --- heading_level helper tests ---
+
+    #[test]
+    fn heading_level_org() {
+        assert_eq!(Editor::heading_level("* H1", Language::Org), 1);
+        assert_eq!(Editor::heading_level("** H2", Language::Org), 2);
+        assert_eq!(Editor::heading_level("*** H3", Language::Org), 3);
+        assert_eq!(Editor::heading_level("Not a heading", Language::Org), 0);
+        assert_eq!(Editor::heading_level("**nospace", Language::Org), 0);
+    }
+
+    #[test]
+    fn heading_scale_option_toggle() {
+        let mut ed = Editor::new();
+        assert!(ed.heading_scale); // default on
+        assert!(ed.set_option("heading_scale", "false").is_ok());
+        assert!(!ed.heading_scale);
+        assert!(ed.set_option("heading-scale", "true").is_ok());
+        assert!(ed.heading_scale);
+    }
+
+    // --- zM/zR for org headings ---
+
+    #[test]
+    fn org_close_all_folds() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.close_all_folds();
+        assert!(!ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    #[test]
+    fn org_open_all_folds_clears() {
+        let mut ed = org_editor("* H1\nBody1\n* H2\nBody2\n");
+        ed.close_all_folds();
+        ed.open_all_folds();
+        assert!(ed.buffers[0].folded_ranges.is_empty());
+    }
+
+    // --- TODO cycle tests ---
+
+    #[test]
+    fn todo_cycle_adds_todo() {
+        let mut ed = org_editor("* Heading\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_todo_cycle();
+        assert!(ed.buffers[0].text().contains("TODO"));
+    }
+
+    #[test]
+    fn todo_cycle_todo_to_done() {
+        let mut ed = org_editor("* TODO Heading\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_todo_cycle();
+        assert!(ed.buffers[0].text().contains("DONE"));
+        assert!(!ed.buffers[0].text().contains("TODO"));
+    }
+
+    #[test]
+    fn todo_cycle_done_to_todo() {
+        let mut ed = org_editor("* DONE Heading\n");
+        ed.window_mgr.focused_window_mut().cursor_row = 0;
+        ed.org_todo_cycle();
+        assert!(ed.buffers[0].text().contains("TODO"));
+        assert!(!ed.buffers[0].text().contains("DONE"));
+    }
+}

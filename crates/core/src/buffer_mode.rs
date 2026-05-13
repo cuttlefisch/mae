@@ -73,6 +73,7 @@ impl BufferMode for BufferKind {
             Self::Agenda => "Agenda",
             Self::Demo => "Demo",
             Self::ShellSelect => "Shell Select",
+            Self::Modules => "Modules",
         }
     }
 
@@ -85,6 +86,7 @@ impl BufferMode for BufferKind {
             Self::Agenda => Some("agenda"),
             Self::Shell => Some("shell-normal"),
             Self::ShellSelect => Some("shell-select"),
+            Self::Modules => Some("modules"),
             _ => None,
         }
     }
@@ -141,6 +143,7 @@ impl BufferMode for BufferKind {
                 | Self::ShellSelect
                 | Self::Diff
                 | Self::Agenda
+                | Self::Modules
         )
     }
 

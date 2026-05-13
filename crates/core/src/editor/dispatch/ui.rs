@@ -411,7 +411,36 @@ For full setup guide: :help ai-setup";
                 self.show_bindings_report();
             }
             "describe-module" => {
-                self.show_module_report();
+                let arg = self.command_line.trim().to_string();
+                let module_name = if arg.is_empty() { None } else { Some(arg) };
+                self.show_module_report(module_name.as_deref());
+            }
+            "describe-module-at-cursor" => {
+                // Extract module name from current line (first whitespace-delimited word).
+                let line_text = {
+                    let idx = self.active_buffer_idx();
+                    let buf = &self.buffers[idx];
+                    let row = self.window_mgr.focused_window().cursor_row;
+                    if row < buf.line_count() {
+                        buf.line_text(row)
+                    } else {
+                        String::new()
+                    }
+                };
+                let name = line_text
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty()
+                    && !name.starts_with('-')
+                    && !name.starts_with('=')
+                    && name != "Module"
+                    && name != "Total:"
+                    && name != "Press"
+                {
+                    self.show_module_report(Some(&name));
+                }
             }
             "describe-mode" => {
                 self.show_mode_report();

@@ -949,7 +949,14 @@ impl CommandRegistry {
             "describe-bindings",
             "Show all keybindings for the current mode",
         );
-        reg.register_builtin("describe-module", "Show active modules and their status");
+        reg.register_builtin(
+            "describe-module",
+            "Show module summary or detail (:describe-module [name])",
+        );
+        reg.register_builtin(
+            "describe-module-at-cursor",
+            "Open detail view for module name under cursor",
+        );
         reg.register_builtin(
             "describe-mode",
             "Show current buffer's mode, keymap, and active options",

@@ -1,4 +1,7 @@
 ;;; spell/autoloads.scm — spell check keybindings
+;;;
+;;; Spell checking commands — suggest corrections, navigate misspellings,
+;;; and toggle spell checking per buffer.
 
 ;;; @module: spell
 ;;; @version: 0.1.0

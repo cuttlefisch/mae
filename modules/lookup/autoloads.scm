@@ -1,4 +1,7 @@
 ;;; lookup/autoloads.scm — documentation lookup keybindings
+;;;
+;;; Online documentation and man-page lookup commands. Binds SPC s o
+;;; for web search and SPC s m for local man-page display.
 
 ;;; @module: lookup
 ;;; @version: 0.1.0

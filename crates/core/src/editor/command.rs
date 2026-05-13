@@ -150,6 +150,11 @@ impl Editor {
                 }
                 true
             }
+            "describe-module" => {
+                let module_name = args.map(str::trim).filter(|s| !s.is_empty());
+                self.show_module_report(module_name);
+                true
+            }
             "diagnostics" | "diag" => {
                 self.dispatch_builtin("lsp-show-diagnostics");
                 true

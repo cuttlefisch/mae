@@ -822,10 +822,35 @@ pub fn load_modules(
             continue;
         }
 
+        // A5: Snapshot keymaps before module eval for conflict detection
+        let pre_snapshot = mae_core::keymap::snapshot_all_keymaps(&editor.keymaps);
+
         match load_module_autoloads(module, scheme, editor) {
             Ok(()) => {
                 registry.mark_loaded(&module.name);
                 info!(module = %module.name, "module loaded");
+
+                // Detect keybinding conflicts introduced by this module
+                let post_snapshot = mae_core::keymap::snapshot_all_keymaps(&editor.keymaps);
+                for ((km_name, seq), new_cmd) in &post_snapshot {
+                    if let Some(old_cmd) = pre_snapshot.get(&(km_name.clone(), seq.clone())) {
+                        if old_cmd != new_cmd {
+                            let key_str = mae_core::keymap::format_key_seq(seq);
+                            let warning = format!(
+                                "[module: {}] overrides '{}' in keymap '{}' (was: {}, now: {})",
+                                module.name, key_str, km_name, old_cmd, new_cmd
+                            );
+                            info!("{}", warning);
+                            editor.message_log.push(
+                                mae_core::messages::MessageLevel::Warn,
+                                "modules",
+                                &warning,
+                            );
+                            editor.module_binding_warnings.push(warning);
+                        }
+                    }
+                }
+
                 // Fire module-loaded hook
                 editor.fire_hook(&format!("module-loaded:{}", module.name));
             }
@@ -864,6 +889,8 @@ pub fn load_modules(
                     .map(|(k, v)| (k.clone(), v.doc.clone()))
                     .collect(),
                 path: m.path.display().to_string(),
+                depends: m.manifest.dependencies.keys().cloned().collect(),
+                enabled_flags: m.enabled_flags.clone(),
             }
         })
         .collect();

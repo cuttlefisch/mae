@@ -51,6 +51,9 @@ pub enum BufferKind {
     /// Shell select buffer — read-only snapshot of shell scrollback for
     /// vim-style selection and yanking.
     ShellSelect,
+    /// Module list/detail buffer — `:describe-module` output.
+    /// Read-only, Enter navigates to module detail.
+    Modules,
 }
 
 /// A single edit operation, stored for undo/redo.

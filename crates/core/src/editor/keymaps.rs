@@ -490,6 +490,15 @@ impl Editor {
         shell_select.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("shell-select".to_string(), shell_select);
 
+        // Module list keymap — Enter to expand, q to close
+        let mut modules_km = Keymap::with_parent("modules", "normal");
+        modules_km.bind(
+            vec![KeyPress::special(Key::Enter)],
+            "describe-module-at-cursor",
+        );
+        modules_km.bind(parse_key_seq("q"), "kill-buffer");
+        maps.insert("modules".to_string(), modules_km);
+
         // Git-status, org, markdown keymaps — moved to modules/
 
         // File tree keymap + bindings — moved to modules/file-tree/autoloads.scm

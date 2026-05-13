@@ -41,7 +41,7 @@ modules/my-module/
 | `version` | Yes | Semver (e.g. `0.1.0`) |
 | `description` | Yes | One-line summary |
 | `mae_version` | Yes | Minimum MAE version (e.g. `>=0.9.0`) |
-| `category` | Yes | `editor`, `lang`, `tools`, `ui`, or `completion` |
+| `category` | Yes | `editor`, `lang`, `tools`, `ui`, `completion`, `app`, `checkers`, or `os` |
 | `author` | No | Author name |
 | `license` | No | SPDX identifier (default: GPL-3.0-or-later) |
 | `homepage` | No | URL for docs/repo |

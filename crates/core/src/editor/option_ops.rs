@@ -613,8 +613,19 @@ impl super::Editor {
         self.display_buffer(buf_idx);
     }
 
-    /// Show all active modules in a read-only buffer.
-    pub fn show_module_report(&mut self) {
+    /// Show active modules in a read-only buffer.
+    ///
+    /// - No argument: summary table with description column + totals.
+    /// - With argument (`:describe-module org`): full detail for one module.
+    pub fn show_module_report(&mut self, module_name: Option<&str>) {
+        if let Some(name) = module_name {
+            self.show_module_detail(name);
+        } else {
+            self.show_module_summary();
+        }
+    }
+
+    fn show_module_summary(&mut self) {
         let mut lines = Vec::new();
         lines.push("Active Modules".to_string());
         lines.push("==============".to_string());
@@ -624,26 +635,134 @@ impl super::Editor {
             lines.push("No modules loaded.".to_string());
         } else {
             lines.push(format!(
-                "{:<25} {:<12} {:<10} {}",
-                "Module", "Version", "Status", "Category"
+                "{:<20} {:<10} {:<10} {:<12} {}",
+                "Module", "Version", "Status", "Category", "Description"
             ));
             lines.push(format!(
-                "{:<25} {:<12} {:<10} {}",
-                "------", "-------", "------", "--------"
+                "{:<20} {:<10} {:<10} {:<12} {}",
+                "------", "-------", "------", "--------", "-----------"
             ));
+            let mut loaded = 0usize;
+            let mut failed = 0usize;
             for m in &self.active_modules {
                 lines.push(format!(
-                    "{:<25} {:<12} {:<10} {}",
-                    m.name, m.version, m.status, m.category
+                    "{:<20} {:<10} {:<10} {:<12} {}",
+                    m.name, m.version, m.status, m.category, m.description
                 ));
+                if m.status == "loaded" {
+                    loaded += 1;
+                } else if m.status.starts_with("failed") {
+                    failed += 1;
+                }
             }
             lines.push(String::new());
-            lines.push(format!("Total: {} modules", self.active_modules.len()));
+            lines.push(format!(
+                "Total: {} modules ({} loaded, {} failed)",
+                self.active_modules.len(),
+                loaded,
+                failed
+            ));
+            lines.push(String::new());
+            lines.push("Press Enter on a module name to see details.".to_string());
         }
 
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();
         buf.name = "*Modules*".to_string();
+        buf.replace_contents(&content);
+        buf.modified = false;
+        buf.read_only = true;
+        buf.kind = crate::buffer::BufferKind::Modules;
+
+        let buf_idx = self.buffers.len();
+        self.buffers.push(buf);
+        self.display_buffer(buf_idx);
+    }
+
+    fn show_module_detail(&mut self, name: &str) {
+        let m = match self.active_modules.iter().find(|m| m.name == name) {
+            Some(m) => m.clone(),
+            None => {
+                self.set_status(format!("Module '{}' not found", name));
+                return;
+            }
+        };
+
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Module: {}  v{}  [{}]",
+            m.name, m.version, m.status
+        ));
+        lines.push("================================".to_string());
+        lines.push(m.description.clone());
+        lines.push(String::new());
+
+        lines.push(format!("{:<16}{}", "Category:", m.category));
+        lines.push(format!("{:<16}{}", "Path:", m.path));
+        if m.depends.is_empty() {
+            lines.push(format!("{:<16}(none)", "Dependencies:"));
+        } else {
+            lines.push(format!("{:<16}{}", "Dependencies:", m.depends.join(", ")));
+        }
+        lines.push(String::new());
+
+        // Flags section
+        if !m.flags.is_empty() {
+            lines.push("Flags:".to_string());
+            for (flag, doc) in &m.flags {
+                let enabled = m.enabled_flags.contains(&format!("+{}", flag));
+                let tag = if enabled { "[enabled]" } else { "[disabled]" };
+                lines.push(format!("  +{:<14} {:<40} {}", flag, doc, tag));
+            }
+            lines.push(String::new());
+        }
+
+        // Commands section
+        lines.push(format!("Commands ({}):", m.commands.len()));
+        if m.commands.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            // Show in rows of 4
+            for chunk in m.commands.chunks(4) {
+                lines.push(format!("  {}", chunk.join(", ")));
+            }
+        }
+        lines.push(String::new());
+
+        // Options section
+        lines.push(format!("Options ({}):", m.options.len()));
+        if m.options.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for opt in &m.options {
+                lines.push(format!("  {}", opt));
+            }
+        }
+        lines.push(String::new());
+
+        // Keybindings section — look up keymap with same name as module
+        if let Some(km) = self.keymaps.get(&m.name) {
+            let bindings: Vec<_> = km.bindings().collect();
+            lines.push(format!(
+                "Keybindings ({} keymap, {} bindings):",
+                m.name,
+                bindings.len()
+            ));
+            let mut sorted: Vec<_> = bindings
+                .iter()
+                .map(|(seq, cmd)| (crate::keymap::format_key_seq(seq), (*cmd).clone()))
+                .collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            for (key, cmd) in &sorted {
+                lines.push(format!("  {:<20} {}", key, cmd));
+            }
+        } else {
+            lines.push("Keybindings: (no dedicated keymap)".to_string());
+        }
+
+        let content = lines.join("\n");
+        let mut buf = crate::buffer::Buffer::new();
+        buf.name = format!("*Module: {}*", m.name);
         buf.replace_contents(&content);
         buf.modified = false;
         buf.read_only = true;
