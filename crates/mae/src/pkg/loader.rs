@@ -178,6 +178,9 @@ pub fn load_module_autoloads(
         }
     }
 
+    // Set module dir for relative path resolution in register-splash-art-image! etc.
+    scheme.set_module_dir(Some(&module.path));
+
     // Load the autoloads file
     scheme.inject_editor_state(editor);
     if let Err(e) = scheme.load_file(&autoloads_path) {
@@ -196,6 +199,9 @@ pub fn load_module_autoloads(
 
     // Apply accumulated state to editor
     scheme.apply_to_editor(editor);
+
+    // Clear module dir after loading
+    scheme.set_module_dir(None);
 
     Ok(())
 }

@@ -122,6 +122,9 @@ struct SharedState {
     pending_ai_tool_required: HashMap<String, Vec<String>>,
     /// Pending custom splash art registrations: (name, art, image_path).
     pending_splash_arts: Vec<(String, String, Option<PathBuf>)>,
+    /// Current module directory (set before loading each module's autoloads).
+    /// Used by `register-splash-art-image!` to resolve relative paths.
+    current_module_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -946,15 +949,26 @@ impl SchemeRuntime {
         });
 
         // (register-splash-art-image! NAME IMAGE-PATH)
+        // Resolves relative paths against current_module_dir if set.
         let s = shared.clone();
         engine.register_fn(
             "register-splash-art-image!",
             move |name: String, path: String| {
-                s.lock().unwrap().pending_splash_arts.push((
-                    name,
-                    String::new(),
-                    Some(PathBuf::from(path)),
-                ));
+                let mut st = s.lock().unwrap();
+                let resolved = {
+                    let p = PathBuf::from(&path);
+                    if p.is_relative() {
+                        if let Some(ref dir) = st.current_module_dir {
+                            dir.join(&p)
+                        } else {
+                            p
+                        }
+                    } else {
+                        p
+                    }
+                };
+                st.pending_splash_arts
+                    .push((name, String::new(), Some(resolved)));
                 SteelVal::Void
             },
         );
@@ -1125,6 +1139,12 @@ impl SchemeRuntime {
     /// Return declared packages from `(package! ...)`.
     pub fn declared_packages(&self) -> Vec<DeclaredPackage> {
         self.shared.lock().unwrap().declared_packages.clone()
+    }
+
+    /// Set the current module directory for relative path resolution.
+    /// Called by the module loader before evaluating each module's autoloads.
+    pub fn set_module_dir(&mut self, dir: Option<&Path>) {
+        self.shared.lock().unwrap().current_module_dir = dir.map(|d| d.to_path_buf());
     }
 
     /// Drain pending KB nodes registered via `(define-kb-node! ...)`.
