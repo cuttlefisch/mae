@@ -5,6 +5,15 @@
 //! round/token budgets, and a verdict (Pass/Marginal/Fail).
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+/// Resolve XDG data directory (same pattern as session/mod.rs).
+fn xdg_data_dir() -> Option<PathBuf> {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .ok()
+}
 
 /// Verdict from a model validation exam.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +318,105 @@ pub fn aggregate_grades(model: &str, grades: &[TestGrade]) -> ExamResult {
     }
 }
 
+/// A complete exam run with metadata for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExamRun {
+    /// ISO-8601 timestamp.
+    pub timestamp: String,
+    /// Runner identifier: "mae-builtin", "claude-code", "gemini-cli", etc.
+    pub runner: String,
+    /// MAE version string.
+    pub mae_version: String,
+    /// Aggregated exam result.
+    pub result: ExamResult,
+    /// Per-test grades.
+    pub grades: Vec<TestGrade>,
+}
+
+/// Save an exam run to `~/.local/share/mae/exam-results/{model}_{timestamp}.json`.
+/// Creates the directory if needed. Returns the path on success.
+pub fn save_exam_run(run: &ExamRun) -> Result<PathBuf, String> {
+    let data_dir = xdg_data_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("mae")
+        .join("exam-results");
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create dir: {e}"))?;
+
+    // Sanitize model name for filename
+    let safe_model = run.result.model.replace(['/', ':', ' '], "_");
+    let safe_ts = run.timestamp.replace(':', "-");
+    let filename = format!("{safe_model}_{safe_ts}.json");
+    let path = data_dir.join(&filename);
+
+    let json = serde_json::to_string_pretty(run).map_err(|e| format!("Serialize error: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("Write error: {e}"))?;
+    Ok(path)
+}
+
+/// Load all exam runs from `~/.local/share/mae/exam-results/`.
+#[allow(dead_code)]
+pub fn load_exam_runs() -> Vec<ExamRun> {
+    let data_dir = xdg_data_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("mae")
+        .join("exam-results");
+    let Ok(entries) = std::fs::read_dir(&data_dir) else {
+        return Vec::new();
+    };
+    let mut runs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(run) = serde_json::from_str::<ExamRun>(&content) {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+    runs.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    runs
+}
+
+/// Render a markdown compatibility table from exam runs.
+/// Groups by model, shows the most recent run for each.
+#[allow(dead_code)]
+pub fn format_exam_report(runs: &[ExamRun]) -> String {
+    if runs.is_empty() {
+        return "No exam results found.".to_string();
+    }
+
+    // Deduplicate: keep most recent run per model
+    let mut latest: std::collections::HashMap<&str, &ExamRun> = std::collections::HashMap::new();
+    for run in runs {
+        let entry = latest.entry(run.result.model.as_str()).or_insert(run);
+        if run.timestamp > entry.timestamp {
+            *entry = run;
+        }
+    }
+
+    let mut models: Vec<&&ExamRun> = latest.values().collect();
+    models.sort_by_key(|r| &r.result.model);
+
+    let mut out = String::from("| Model | Provider | Verdict | Pass Rate | Date | Notes |\n");
+    out.push_str("|-------|----------|---------|-----------|------|-------|\n");
+
+    for run in models {
+        let provider = crate::context_limits::ProviderHint::from_model(&run.result.model);
+        out.push_str(&format!(
+            "| {} | {:?} | {} | {:.0}% | {} | {}/{} tests |\n",
+            run.result.model,
+            provider,
+            run.result.verdict,
+            run.result.pass_rate * 100.0,
+            &run.timestamp[..10.min(run.timestamp.len())],
+            run.result.passed,
+            run.result.total,
+        ));
+    }
+    out
+}
+
 fn exam_tests() -> Vec<ExamTest> {
     vec![
         // Category: tool_selection
@@ -581,5 +689,71 @@ mod tests {
         assert_eq!(result.wrong_tool, 1);
         assert_eq!(result.pass_rate, 0.5);
         assert_eq!(result.verdict, ExamVerdict::Fail);
+    }
+
+    #[test]
+    fn save_and_load_exam_run() {
+        let grades = vec![TestGrade {
+            test_id: 1,
+            passed: true,
+            reason: "ok".into(),
+            hallucination: false,
+            wrong_tool: false,
+            wrong_params: false,
+        }];
+        let result = aggregate_grades("test-model", &grades);
+        let run = ExamRun {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            runner: "test".into(),
+            mae_version: "0.9.0".into(),
+            result,
+            grades,
+        };
+
+        // Save to a temp dir
+        let tmp = std::env::temp_dir().join("mae-exam-test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("test-model_2025-01-01T00-00-00Z.json");
+        let json = serde_json::to_string_pretty(&run).unwrap();
+        std::fs::write(&path, &json).unwrap();
+
+        // Verify round-trip
+        let loaded: ExamRun = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.result.model, "test-model");
+        assert_eq!(loaded.result.passed, 1);
+        assert_eq!(loaded.grades.len(), 1);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn format_exam_report_basic() {
+        let grades = vec![TestGrade {
+            test_id: 1,
+            passed: true,
+            reason: "ok".into(),
+            hallucination: false,
+            wrong_tool: false,
+            wrong_params: false,
+        }];
+        let result = aggregate_grades("claude-sonnet-4", &grades);
+        let runs = vec![ExamRun {
+            timestamp: "2025-01-01T00:00:00Z".into(),
+            runner: "test".into(),
+            mae_version: "0.9.0".into(),
+            result,
+            grades,
+        }];
+        let report = format_exam_report(&runs);
+        assert!(report.contains("claude-sonnet-4"));
+        assert!(report.contains("PASS"));
+        assert!(report.contains("100%"));
+    }
+
+    #[test]
+    fn format_exam_report_empty() {
+        let report = format_exam_report(&[]);
+        assert_eq!(report, "No exam results found.");
     }
 }

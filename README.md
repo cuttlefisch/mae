@@ -8,7 +8,7 @@
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling
 the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime. 2,629 tests.
+runtime. 3,039 tests.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
@@ -86,7 +86,7 @@ user's keybinding and the AI's tool palette.
 
 ```
 mae (binary)
- ├── mae-core       Buffer (rope), editor state, commands, keymap, syntax, babel, export
+ ├── mae-core        Buffer (rope), editor state, commands, keymap, syntax
  ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
  ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
  ├── mae-scheme      Steel Scheme runtime, init.scm loading, hook dispatch
@@ -95,7 +95,14 @@ mae (binary)
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
  ├── mae-kb          Knowledge base — graph store, org-mode parser, FTS5 search, federation
- └── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
+ ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
+ ├── mae-babel       Org-babel executor — 12 languages, persistent sessions, language backends
+ ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
+ ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
+ ├── mae-format      Formatter bridge — prettier, black, rustfmt (complements LSP format)
+ ├── mae-make        Build runner — Makefile/Cargo.toml/package.json detection
+ ├── mae-lookup      Unified lookup — LSP def + docs URL + man pages
+ └── mae-spell       Spellcheck — hunspell/aspell integration, inline markers
 ```
 
 ## Getting Started
@@ -174,7 +181,7 @@ examples; DeepSeek gets anti-looping guardrails).
 
 ### First Steps
 
-1. `:tutor` — interactive tutorial (12 lessons: vim, beginner, AI tracks)
+1. `:tutor` — interactive tutorial (13 lessons: vim, beginner, AI tracks)
 2. `SPC SPC` — command palette (fuzzy search all commands)
 3. `SPC f f` — find file in project
 4. `SPC h h` — help index (knowledge base)
@@ -208,6 +215,32 @@ Useful commands:
 - `:edit-config` — edit `init.scm` from inside the editor
 - `:edit-settings` — edit `config.toml` from inside the editor
 - `:describe-configuration` — health report (AI, LSP, DAP status)
+
+## Module System
+
+MAE uses a Doom Emacs-inspired module system. Each module is a directory with
+`module.toml` (metadata), `autoloads.scm` (keybindings), and optionally `init.scm`
+(user config). Modules are loaded at startup and can be live-reloaded.
+
+```sh
+mae pkg list            # list installed modules with status
+mae pkg info surround   # show module details and dependencies
+mae pkg doctor          # health check all modules
+mae pkg sync            # synchronize module state
+mae pkg create mymod    # scaffold a new module from template
+```
+
+**19 built-in modules** by category:
+
+| Category | Modules |
+|----------|---------|
+| UI | `dashboard`, `file-tree` |
+| Editor | `surround`, `marks-jumps`, `search`, `registers`, `macros`, `multicursor`, `tables` |
+| Tools | `snippets`, `format`, `make`, `lookup`, `spell` |
+| Lang | `lang-python`, `lang-rust`, `lang-go`, `lang-javascript`, `lang-cc` |
+
+Enable modules with `+flag` syntax in `init.scm`. See [Extension Guide](docs/EXTENSION_GUIDE.md)
+for authoring custom modules.
 
 ## Vim-Level Editing
 
@@ -306,11 +339,12 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | SQLite graph, org parser, FTS5, help system, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
-| 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config` |
+| 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia, inline images, variable-height, inertial scroll |
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
-| **Next** | 🔧 In progress | PDF preview, module system, semantic code search |
+| 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
+| **Next** | 🔧 In progress | PDF preview, semantic code search. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) |
 
 ## Design Lineage
 
@@ -325,12 +359,19 @@ decisions that led to its current maintenance burden:
 - **Fix ratio doubled** — from 15% to 32% over 35 years. Rust's type system
   structurally prevents this.
 - **Bus factor of ~4** — top 5 contributors = 50.8% of commits. MAE enforces
-  module boundaries across 11 crates.
+  module boundaries across 18 crates.
 
 ## Self-Hosting
 
 MAE is used to develop itself. The AI agent runs in an embedded shell, calling
 the same tools the human uses. The GUI is the primary development target.
+
+## Model Compatibility
+
+MAE supports 33+ model prefixes across 8 providers. Run `:model-exam` to
+validate any model's tool-calling capabilities with a deterministic 10-test
+exam. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) for the full compatibility
+matrix and exam instructions.
 
 ## Data Directories
 
@@ -339,7 +380,7 @@ MAE follows the [XDG Base Directory Specification](https://specifications.freede
 | Path | Contents |
 |------|----------|
 | `~/.config/mae/` | `config.toml`, `init.scm`, `help/*.org` |
-| `~/.local/share/mae/` | `swap/`, `transcripts/` |
+| `~/.local/share/mae/` | `swap/`, `transcripts/`, `exam-results/` |
 | `~/.local/state/mae/` | `logs/`, `history.scm` |
 | `.mae/` (per-project) | `session.json`, `conversation.json`, `kb.sqlite3`, `memory/`, `plans/` |
 

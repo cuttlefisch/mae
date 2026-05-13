@@ -32,6 +32,10 @@
           "kind": "mod"
         },
         {
+          "name": "connectivity",
+          "kind": "mod"
+        },
+        {
           "name": "context_limits",
           "kind": "mod"
         },
@@ -433,6 +437,14 @@
           "kind": "mod"
         },
         {
+          "name": "markdown_parser",
+          "kind": "mod"
+        },
+        {
+          "name": "org_writer",
+          "kind": "mod"
+        },
+        {
           "name": "OrgMeta",
           "kind": "struct"
         },
@@ -642,6 +654,14 @@
       "path": "crates/mcp/src/lib.rs",
       "dependencies": [],
       "public_items": [
+        {
+          "name": "client",
+          "kind": "mod"
+        },
+        {
+          "name": "client_mgr",
+          "kind": "mod"
+        },
         {
           "name": "protocol",
           "kind": "mod"
@@ -1753,6 +1773,14 @@
       "doc": "Reject proposed AI changes"
     },
     {
+      "name": "ai-ping",
+      "doc": "Test AI API connectivity (SPC a n)"
+    },
+    {
+      "name": "verify",
+      "doc": "Spawn verifier sub-agent to run tests (SPC a v)"
+    },
+    {
       "name": "ai-set-mode",
       "doc": "Switch the AI operating mode (standard, plan, auto-accept)"
     },
@@ -2355,6 +2383,14 @@
     {
       "name": "org-export-subtree",
       "doc": "Export subtree at cursor (SPC m e s)"
+    },
+    {
+      "name": "markdown-to-org",
+      "doc": "Convert current Markdown buffer to Org format"
+    },
+    {
+      "name": "org-to-markdown",
+      "doc": "Convert current Org buffer to Markdown (in-buffer)"
     },
     {
       "name": "kb-register",

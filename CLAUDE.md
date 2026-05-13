@@ -281,9 +281,17 @@ Node ID namespaces: `cmd:*` (commands), `concept:*` (architecture), `lesson:*` (
 | `audit_configuration` | Structured config health report |
 | `introspect` | Diagnostic snapshot of editor state |
 
+### Model Exam
+
+| Tool | Purpose |
+|------|---------|
+| `model_exam` | Run deterministic tool-calling exam (`action=plan` / `action=grade`) |
+
 ### Validation
 
 `self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
+
+`model_exam` provides a 10-test deterministic exam for validating model tool-calling capabilities. Results auto-save to `~/.local/share/mae/exam-results/`. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md).
 
 ### When to Use
 

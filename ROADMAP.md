@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.9.0-dev · **Tests:** 2,833 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
+**Current version:** v0.9.0-dev · **Tests:** 3,039 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
 
 ---
 
@@ -45,7 +45,7 @@
 ### Near-term
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
-- [ ] Org ↔ Markdown bidirectional conversion
+- [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
 
 ### Doom Parity Roadmap: Future Feature Crates
@@ -83,10 +83,10 @@
 - [x] Semantic tool search (`search_tools` — fuzzy match over 146+ tool names/descriptions)
 - [x] Dynamic MCP tool discovery (external MCP server connections, `mcp_{server}_{tool}` namespacing)
 - [x] `request_tools` accepts specific tool names (completes search→request workflow)
-- [ ] Memory synthesis (sub-agent reads persistent memory into context)
-- [ ] Verification specialist (isolated test execution sub-agent)
+- [x] Memory synthesis (`synthesize_memory()` in bootstrap.rs — categorizes/deduplicates/budgets memory per model)
+- [x] Verification specialist (verifier profile, `AiCommand::Delegate`, scoped tools)
 - [ ] AI session playback & undo (step-through replay of code changes)
-- [ ] Network status command (`:ai-status` with connectivity diagnostics)
+- [x] Network status command (`:ai-ping`, `connectivity_check()` — HTTP HEAD, no LLM round-trip)
 - [ ] `:mcp-status` / `:mcp-reconnect` commands (MCP server management UI)
 
 ### Org-mode

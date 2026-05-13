@@ -206,7 +206,31 @@ pub fn execute_tool(
                             }
                         }
                         let result = super::model_exam::aggregate_grades(model, &grades);
-                        serde_json::to_string_pretty(&result).unwrap_or_default()
+                        let mut output = serde_json::to_string_pretty(&result).unwrap_or_default();
+
+                        // Auto-save exam run
+                        let run = super::model_exam::ExamRun {
+                            timestamp: chrono::Utc::now()
+                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                            runner: "mae-builtin".to_string(),
+                            mae_version: env!("CARGO_PKG_VERSION").to_string(),
+                            result: result.clone(),
+                            grades: grades.clone(),
+                        };
+                        match super::model_exam::save_exam_run(&run) {
+                            Ok(path) => {
+                                output.push_str(&format!(
+                                    "\n\nExam results saved to: {}",
+                                    path.display()
+                                ));
+                            }
+                            Err(e) => {
+                                output.push_str(&format!(
+                                    "\n\nWarning: failed to save exam results: {e}"
+                                ));
+                            }
+                        }
+                        output
                     }
                     None => "Missing 'results' array for grade action".to_string(),
                 }

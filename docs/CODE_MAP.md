@@ -60,6 +60,7 @@ Source: `crates/ai/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `claude` | mod |
+| `connectivity` | mod |
 | `context_limits` | mod |
 | `executor` | mod |
 | `gemini` | mod |
@@ -179,6 +180,8 @@ Source: `crates/export/src/lib.rs`
 |------|------|
 | `html` | mod |
 | `markdown` | mod |
+| `markdown_parser` | mod |
+| `org_writer` | mod |
 | `OrgMeta` | struct |
 | `ExportOptions` | struct |
 | `OrgElement` | enum |
@@ -269,6 +272,8 @@ Source: `crates/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `client` | mod |
+| `client_mgr` | mod |
 | `protocol` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
@@ -421,7 +426,7 @@ Source: `crates/spell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (473 built-in)
+## Commands (477 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -583,6 +588,8 @@ Source: `crates/spell/src/lib.rs`
 | `ai-cancel` | Cancel current AI operation |
 | `ai-accept` | Accept proposed AI changes |
 | `ai-reject` | Reject proposed AI changes |
+| `ai-ping` | Test AI API connectivity (SPC a n) |
+| `verify` | Spawn verifier sub-agent to run tests (SPC a v) |
 | `ai-set-mode` | Switch the AI operating mode (standard, plan, auto-accept) |
 | `ai-set-profile` | Switch the active AI prompt profile (pair-programmer, explorer, planner, reviewer) |
 | `describe-key` | Show what a key does |
@@ -734,6 +741,8 @@ Source: `crates/spell/src/lib.rs`
 | `org-export-html` | Export org buffer to HTML (SPC m e h) |
 | `org-export-markdown` | Export org buffer to Markdown (SPC m e m) |
 | `org-export-subtree` | Export subtree at cursor (SPC m e s) |
+| `markdown-to-org` | Convert current Markdown buffer to Org format |
+| `org-to-markdown` | Convert current Org buffer to Markdown (in-buffer) |
 | `kb-register` | Register org-roam directory as KB instance |
 | `kb-unregister` | Remove a registered KB instance |
 | `kb-reimport` | Re-import KB instance from org files |

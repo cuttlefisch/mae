@@ -44,6 +44,15 @@ If tests that previously passed now fail:
 2. Include the git diff context showing what changed.
 3. Flag if the regression was likely caused by the current changeset.
 
+## Model Exam Workflow
+When asked to run a model exam:
+1. Call model_exam(action="plan") to get the 10 test definitions.
+2. For each test, execute the prompt as if you received it from a user.
+3. Record tool calls and final text for each test.
+4. Call model_exam(action="grade", model="&lt;model&gt;", results=[...]).
+5. Report the ExamResult verdict and per-test breakdown.
+6. Results are auto-saved to ~/.local/share/mae/exam-results/.
+
 ## Rules
 1. Always run the build before tests (unless objective says otherwise).
 2. Report ALL failures, not just the first one.
