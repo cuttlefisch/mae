@@ -64,6 +64,8 @@ impl super::Editor {
             "icon_font_family" => self.gui_icon_font_family.clone(),
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
+            "splash_image_width" => self.splash_image_width.to_string(),
+            "splash_show_logo" => self.splash_show_logo.to_string(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
             "ai_tier" => self.ai_permission_tier.clone(),
@@ -186,6 +188,15 @@ impl super::Editor {
             }
             "splash_art" => {
                 self.splash_art = Some(value.to_string());
+            }
+            "splash_image_width" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.splash_image_width = v.clamp(10, 80);
+            }
+            "splash_show_logo" => {
+                self.splash_show_logo = parse_option_bool(value)?;
             }
             "debug_mode" => {
                 self.debug_mode = parse_option_bool(value)?;
