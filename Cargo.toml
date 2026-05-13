@@ -27,7 +27,7 @@ resolver = "2"
 version = "0.8.1"
 edition = "2021"
 license = "GPL-3.0-or-later"
-rust-version = "1.93"
+rust-version = "1.95"
 
 [workspace.dependencies]
 tracing = "0.1"
