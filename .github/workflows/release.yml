@@ -37,7 +37,7 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/mae dist/mae-linux-x86_64
           chmod +x dist/mae-linux-x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64
           path: dist/mae-linux-x86_64
@@ -64,7 +64,7 @@ jobs:
           cp target/release/mae dist/mae-linux-x86_64-gui
           chmod +x dist/mae-linux-x86_64-gui
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64-gui
           path: dist/mae-linux-x86_64-gui
@@ -88,7 +88,7 @@ jobs:
           cp target/release/mae dist/mae-macos-aarch64
           chmod +x dist/mae-macos-aarch64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mae-macos-aarch64
           path: dist/mae-macos-aarch64
@@ -105,7 +105,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
