@@ -3,7 +3,7 @@
 //! Shells out to `git(1)` for clone, fetch, and checkout operations.
 //! Uses `--depth 1` shallow clones (Doom's full clones are its biggest perf pain point).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Parsed package source.
@@ -13,6 +13,8 @@ pub enum PackageSource {
     GitHub { user: String, repo: String },
     /// Full git URL.
     GitUrl(String),
+    /// `path:./relative` or `path:/absolute` — local module for development.
+    Local(PathBuf),
 }
 
 impl PackageSource {
@@ -21,6 +23,7 @@ impl PackageSource {
     /// Accepted formats:
     /// - `github:user/repo`
     /// - `https://...` or `git@...` (any git URL)
+    /// - `path:./relative` or `path:/absolute` (local module)
     pub fn parse(spec: &str) -> Result<Self, String> {
         if let Some(rest) = spec.strip_prefix("github:") {
             let parts: Vec<&str> = rest.splitn(2, '/').collect();
@@ -34,6 +37,11 @@ impl PackageSource {
                 user: parts[0].to_string(),
                 repo: parts[1].to_string(),
             })
+        } else if let Some(rest) = spec.strip_prefix("path:") {
+            if rest.is_empty() {
+                return Err("Empty path in path: source".to_string());
+            }
+            Ok(PackageSource::Local(PathBuf::from(rest)))
         } else if spec.starts_with("https://")
             || spec.starts_with("git@")
             || spec.starts_with("ssh://")
@@ -41,19 +49,20 @@ impl PackageSource {
             Ok(PackageSource::GitUrl(spec.to_string()))
         } else {
             Err(format!(
-                "Unknown source format: '{}' (expected github:user/repo or git URL)",
+                "Unknown source format: '{}' (expected github:user/repo, path:..., or git URL)",
                 spec
             ))
         }
     }
 
-    /// Return the git clone URL.
+    /// Return the git clone URL.  For `Local` sources, returns the path string.
     pub fn clone_url(&self) -> String {
         match self {
             PackageSource::GitHub { user, repo } => {
                 format!("https://github.com/{}/{}.git", user, repo)
             }
             PackageSource::GitUrl(url) => url.clone(),
+            PackageSource::Local(path) => path.display().to_string(),
         }
     }
 
@@ -68,7 +77,19 @@ impl PackageSource {
                 let name = name.strip_suffix(".git").unwrap_or(name);
                 name.strip_prefix("mae-").unwrap_or(name).to_string()
             }
+            PackageSource::Local(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                name.strip_prefix("mae-").unwrap_or(name).to_string()
+            }
         }
+    }
+
+    /// Returns true if this is a local path source.
+    pub fn is_local(&self) -> bool {
+        matches!(self, PackageSource::Local(_))
     }
 }
 
@@ -163,11 +184,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_local_source() {
+        let src = PackageSource::parse("path:./my-module").unwrap();
+        assert_eq!(src, PackageSource::Local(PathBuf::from("./my-module")));
+        assert!(src.is_local());
+        assert_eq!(src.inferred_name(), "my-module");
+    }
+
+    #[test]
+    fn parse_local_absolute() {
+        let src = PackageSource::parse("path:/home/user/mae-fancy").unwrap();
+        assert_eq!(
+            src,
+            PackageSource::Local(PathBuf::from("/home/user/mae-fancy"))
+        );
+        assert_eq!(src.inferred_name(), "fancy");
+    }
+
+    #[test]
     fn parse_invalid_source() {
         assert!(PackageSource::parse("foobar").is_err());
         assert!(PackageSource::parse("github:").is_err());
         assert!(PackageSource::parse("github:user").is_err());
         assert!(PackageSource::parse("github:/repo").is_err());
+        assert!(PackageSource::parse("path:").is_err());
     }
 
     #[test]

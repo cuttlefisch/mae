@@ -544,8 +544,8 @@ For full setup guide: :help ai-setup";
                 self.cycle_theme();
             }
             "set-splash-art" => {
-                self.command_palette =
-                    Some(crate::command_palette::CommandPalette::for_splash_art());
+                let palette = CommandPalette::for_splash_art(self);
+                self.command_palette = Some(palette);
                 self.set_mode(Mode::CommandPalette);
             }
 

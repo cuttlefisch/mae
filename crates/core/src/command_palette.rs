@@ -273,13 +273,13 @@ impl CommandPalette {
         Self::with_name_list(branches, PalettePurpose::GitBranch)
     }
 
-    /// Splash art picker palette. More art variants will be added in a
-    /// follow-up PR — the infrastructure supports any number of entries.
-    pub fn for_splash_art() -> Self {
-        let entries = vec![PaletteEntry {
-            name: "bat".to_string(),
-            doc: "Bat with spread wings".to_string(),
-        }];
+    /// Splash art picker palette. Lists built-in + custom registered arts.
+    pub fn for_splash_art(editor: &crate::Editor) -> Self {
+        let names = crate::render_common::splash::available_splash_names(editor);
+        let entries: Vec<PaletteEntry> = names
+            .into_iter()
+            .map(|(name, kind)| PaletteEntry { name, doc: kind })
+            .collect();
         let filtered: Vec<usize> = (0..entries.len()).collect();
         CommandPalette {
             query: String::new(),

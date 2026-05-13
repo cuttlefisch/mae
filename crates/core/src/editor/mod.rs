@@ -613,6 +613,8 @@ pub struct Editor {
     pub last_help_state: Option<crate::help_view::HelpView>,
     /// Which ASCII art to show on the splash screen. Default is "bat".
     pub splash_art: Option<String>,
+    /// Custom splash arts registered via `(register-splash-art! ...)`.
+    pub custom_splash_arts: Vec<crate::render_common::splash::CustomSplashArt>,
     /// Pending operator for operator-pending mode (`d`, `c`, `y`).
     /// When set, the next motion completes the operator.
     pub pending_operator: Option<String>,
@@ -1057,6 +1059,7 @@ impl Editor {
             macro_replay_depth: 0,
             last_help_state: None,
             splash_art: Some("bat".to_string()),
+            custom_splash_arts: Vec::new(),
             pending_operator: None,
             operator_start: None,
             operator_count: None,
@@ -1245,6 +1248,7 @@ impl Editor {
         Editor {
             buffers: vec![buf],
             splash_art: None,
+            custom_splash_arts: Vec::new(),
             syntax,
             ..Self::new()
         }

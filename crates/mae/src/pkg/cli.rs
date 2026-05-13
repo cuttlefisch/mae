@@ -124,7 +124,47 @@ fn cmd_sync() -> i32 {
 
         let target = pkg_dir.join(&pkg.name);
 
-        if !target.exists() {
+        if source.is_local() {
+            // Local source — create symlink instead of cloning.
+            let local_path = match &source {
+                PackageSource::Local(p) => p.clone(),
+                _ => unreachable!(),
+            };
+            if !target.exists() {
+                print!("  Linking {}...", pkg.name);
+                if let Err(e) = std::fs::create_dir_all(&pkg_dir) {
+                    eprintln!(" failed to create packages dir: {}", e);
+                    errors += 1;
+                    continue;
+                }
+                let abs_path = if local_path.is_relative() {
+                    std::env::current_dir()
+                        .unwrap_or_default()
+                        .join(&local_path)
+                } else {
+                    local_path.clone()
+                };
+                #[cfg(unix)]
+                {
+                    match std::os::unix::fs::symlink(&abs_path, &target) {
+                        Ok(()) => println!(" done (→ {})", abs_path.display()),
+                        Err(e) => {
+                            eprintln!(" symlink failed: {}", e);
+                            errors += 1;
+                            continue;
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    eprintln!(" path: sources require Unix (symlink support)");
+                    errors += 1;
+                    continue;
+                }
+            }
+            lockfile.pin(&pkg.name, source_spec, "local", "");
+            synced += 1;
+        } else if !target.exists() {
             // Clone
             print!("  Cloning {}...", pkg.name);
             if let Err(e) = std::fs::create_dir_all(&pkg_dir) {
@@ -140,6 +180,25 @@ fn cmd_sync() -> i32 {
                     continue;
                 }
             }
+
+            // Get current SHA and update lockfile
+            match super::git::head_sha(&target) {
+                Ok(sha) => {
+                    let manifest_path = target.join("module.toml");
+                    let integrity = if manifest_path.exists() {
+                        std::fs::read(manifest_path)
+                            .map(|data| sha256_hex(&data))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
+                    synced += 1;
+                }
+                Err(e) => {
+                    eprintln!("  {} — failed to read SHA: {}", pkg.name, e);
+                }
+            }
         } else if let Some(ref pin) = pkg.pin {
             // Pinned — checkout specific SHA
             print!("  Pinning {} to {}...", pkg.name, &pin[..pin.len().min(8)]);
@@ -151,24 +210,24 @@ fn cmd_sync() -> i32 {
                     continue;
                 }
             }
-        }
 
-        // Get current SHA and update lockfile
-        match super::git::head_sha(&target) {
-            Ok(sha) => {
-                let manifest_path = target.join("module.toml");
-                let integrity = if manifest_path.exists() {
-                    std::fs::read(manifest_path)
-                        .map(|data| sha256_hex(&data))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
-                synced += 1;
-            }
-            Err(e) => {
-                eprintln!("  {} — failed to read SHA: {}", pkg.name, e);
+            // Update lockfile
+            match super::git::head_sha(&target) {
+                Ok(sha) => {
+                    let manifest_path = target.join("module.toml");
+                    let integrity = if manifest_path.exists() {
+                        std::fs::read(manifest_path)
+                            .map(|data| sha256_hex(&data))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
+                    synced += 1;
+                }
+                Err(e) => {
+                    eprintln!("  {} — failed to read SHA: {}", pkg.name, e);
+                }
             }
         }
     }
@@ -488,6 +547,15 @@ fn cmd_info(name: Option<&str>) -> i32 {
     }
     if !manifest.module.license.is_empty() {
         println!("License: {}", manifest.module.license);
+    }
+    if !manifest.module.homepage.is_empty() {
+        println!("Homepage: {}", manifest.module.homepage);
+    }
+    if !manifest.module.repository.is_empty() {
+        println!("Repository: {}", manifest.module.repository);
+    }
+    if !manifest.module.keywords.is_empty() {
+        println!("Keywords: {}", manifest.module.keywords.join(", "));
     }
     println!("Path: {}", path.display());
     println!(

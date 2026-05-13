@@ -24,10 +24,21 @@ pub(crate) fn render_splash_if_needed(frame: &mut Frame, area: Rect, editor: &Ed
 
 fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
-    let splash = ALL_ARTS
+
+    // Look up art: custom first, then built-in.
+    let custom = editor
+        .custom_splash_arts
         .iter()
-        .find(|a| a.name == selected)
-        .unwrap_or(&ALL_ARTS[0]);
+        .find(|a| a.name == selected);
+    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
+        (c.art.as_str(), &c.accent_lines)
+    } else {
+        let splash = ALL_ARTS
+            .iter()
+            .find(|a| a.name == selected)
+            .unwrap_or(&ALL_ARTS[0]);
+        (splash.art, splash.accent_lines)
+    };
 
     let art_primary = ts(editor, "keyword");
     let art_accent = ts(editor, "string");
@@ -38,11 +49,11 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Art lines with two-tone coloring.
-    let art_lines: Vec<&str> = splash.art.lines().collect();
+    // Art lines with two-tone coloring (TUI always uses ASCII, no images).
+    let art_lines: Vec<&str> = art_str.lines().collect();
     let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     for (i, line) in art_lines.iter().enumerate() {
-        let style = if splash.accent_lines.contains(&i) {
+        let style = if accent_lines.contains(&i) {
             art_accent
         } else {
             art_primary

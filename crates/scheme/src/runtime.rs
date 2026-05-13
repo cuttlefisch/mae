@@ -120,6 +120,8 @@ struct SharedState {
     pending_ai_tool_params: HashMap<String, Vec<(String, String, String)>>,
     /// Required param accumulator for `ai-tool-require!` calls.
     pending_ai_tool_required: HashMap<String, Vec<String>>,
+    /// Pending custom splash art registrations: (name, art, image_path).
+    pending_splash_arts: Vec<(String, String, Option<PathBuf>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -932,6 +934,30 @@ impl SchemeRuntime {
                 .push(pname);
             SteelVal::Void
         });
+
+        // (register-splash-art! NAME ART-STRING)
+        let s = shared.clone();
+        engine.register_fn("register-splash-art!", move |name: String, art: String| {
+            s.lock()
+                .unwrap()
+                .pending_splash_arts
+                .push((name, art, None));
+            SteelVal::Void
+        });
+
+        // (register-splash-art-image! NAME IMAGE-PATH)
+        let s = shared.clone();
+        engine.register_fn(
+            "register-splash-art-image!",
+            move |name: String, path: String| {
+                s.lock().unwrap().pending_splash_arts.push((
+                    name,
+                    String::new(),
+                    Some(PathBuf::from(path)),
+                ));
+                SteelVal::Void
+            },
+        );
 
         // --- A5: String utilities (no editor state needed) ---
 
@@ -1985,6 +2011,27 @@ impl SchemeRuntime {
                 *existing = tool;
             } else {
                 editor.scheme_ai_tools.push(tool);
+            }
+        }
+
+        // Custom splash arts
+        for (name, art, image_path) in state.pending_splash_arts.drain(..) {
+            use mae_core::render_common::splash::CustomSplashArt;
+            let entry = CustomSplashArt {
+                name: name.clone(),
+                art,
+                accent_lines: Vec::new(),
+                image_path,
+            };
+            // Upsert by name
+            if let Some(existing) = editor
+                .custom_splash_arts
+                .iter_mut()
+                .find(|a| a.name == name)
+            {
+                *existing = entry;
+            } else {
+                editor.custom_splash_arts.push(entry);
             }
         }
 

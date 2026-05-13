@@ -38,6 +38,15 @@ pub struct ModuleIdentity {
     pub mae_version: String,
     #[serde(default)]
     pub category: String,
+    /// URL for docs or project homepage.
+    #[serde(default)]
+    pub homepage: String,
+    /// Git URL for the source repository.
+    #[serde(default)]
+    pub repository: String,
+    /// Searchable tags for package discovery.
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 fn default_version() -> String {
@@ -211,5 +220,41 @@ name = "test"
     fn invalid_toml_gives_error() {
         let result = ModuleManifest::from_str("not valid toml {{{", Path::new("bad"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_manifest_with_metadata() {
+        let toml = r#"
+[module]
+name = "splash-themes"
+version = "0.1.0"
+description = "Community splash screen art"
+homepage = "https://github.com/cuttlefisch/mae-splash-themes"
+repository = "https://github.com/cuttlefisch/mae-splash-themes.git"
+keywords = ["splash", "themes", "art"]
+category = "ui"
+"#;
+        let m = ModuleManifest::from_str(toml, Path::new("test")).unwrap();
+        assert_eq!(
+            m.module.homepage,
+            "https://github.com/cuttlefisch/mae-splash-themes"
+        );
+        assert_eq!(
+            m.module.repository,
+            "https://github.com/cuttlefisch/mae-splash-themes.git"
+        );
+        assert_eq!(m.module.keywords, vec!["splash", "themes", "art"]);
+    }
+
+    #[test]
+    fn metadata_fields_default_empty() {
+        let toml = r#"
+[module]
+name = "minimal"
+"#;
+        let m = ModuleManifest::from_str(toml, Path::new("test")).unwrap();
+        assert!(m.module.homepage.is_empty());
+        assert!(m.module.repository.is_empty());
+        assert!(m.module.keywords.is_empty());
     }
 }

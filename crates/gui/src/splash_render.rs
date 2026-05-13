@@ -22,10 +22,24 @@ pub fn render_splash(
     area_height: usize,
 ) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
-    let splash = ALL_ARTS
+
+    // Check for custom art with image path (GUI-only feature).
+    let custom = editor
+        .custom_splash_arts
         .iter()
-        .find(|a| a.name == selected)
-        .unwrap_or(&ALL_ARTS[0]);
+        .find(|a| a.name == selected);
+    let image_path = custom.and_then(|c| c.image_path.as_ref());
+
+    // Resolve art text: custom or built-in.
+    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
+        (c.art.as_str(), &c.accent_lines)
+    } else {
+        let splash = ALL_ARTS
+            .iter()
+            .find(|a| a.name == selected)
+            .unwrap_or(&ALL_ARTS[0]);
+        (splash.art, splash.accent_lines)
+    };
 
     let art_fg = theme::ts_fg(editor, "keyword");
     let art_accent = theme::ts_fg(editor, "string");
@@ -34,19 +48,39 @@ pub fn render_splash(
     let _desc_fg = theme::ts_fg(editor, "ui.text");
     let subtitle_fg = theme::ts_fg(editor, "comment");
 
+    // If this custom art has an image, try to render it centered.
+    // We track how many "virtual lines" it occupies so the rest of the
+    // splash layout stays consistent. Image rendering happens at the end
+    // once we know centering offsets.
+    let mut image_lines = 0usize;
+    let (cell_w, cell_h) = canvas.cell_size();
+    if image_path.is_some() {
+        // Reserve vertical space — scale to ~35% of area height.
+        let max_img_h = (area_height as f32 * cell_h) * 0.35;
+        image_lines = (max_img_h / cell_h).ceil() as usize;
+        let _ = cell_w; // used below during image draw
+    }
+
     // Collect all lines: (text, fg_color, is_selected).
     let mut lines: Vec<(String, skia_safe::Color4f, bool)> = Vec::new();
 
-    // Art.
-    let art_lines: Vec<&str> = splash.art.lines().collect();
-    let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
-    for (i, line) in art_lines.iter().enumerate() {
-        let fg = if splash.accent_lines.contains(&i) {
-            art_accent
-        } else {
-            art_fg
-        };
-        lines.push((line.to_string(), fg, false));
+    // Reserve blank lines for image space.
+    for _ in 0..image_lines {
+        lines.push((String::new(), art_fg, false));
+    }
+
+    // Art (ASCII fallback — skip if we have an image).
+    let art_lines_vec: Vec<&str> = art_str.lines().collect();
+    let art_width = art_lines_vec.iter().map(|l| l.len()).max().unwrap_or(0);
+    if image_path.is_none() {
+        for (i, line) in art_lines_vec.iter().enumerate() {
+            let fg = if accent_lines.contains(&i) {
+                art_accent
+            } else {
+                art_fg
+            };
+            lines.push((line.to_string(), fg, false));
+        }
     }
 
     // Logo.
@@ -143,6 +177,16 @@ pub fn render_splash(
         } else {
             canvas.draw_text_at(row, left_pad, text, *fg);
         }
+    }
+
+    // Draw image splash if available (over the reserved blank lines).
+    if let Some(img) = image_path {
+        let max_img_w = area_width as f32 * cell_w * 0.4;
+        let max_img_h = image_lines as f32 * cell_h;
+        // Center horizontally, place at the reserved top region.
+        let img_x = (area_width as f32 * cell_w - max_img_w) / 2.0;
+        let img_y = (area_row + top_pad) as f32 * cell_h;
+        canvas.draw_image_from_cache(img, img_x, img_y, max_img_w, max_img_h);
     }
 }
 

@@ -3,6 +3,8 @@
 //! Backends call [`should_show_splash`] and [`build_splash_lines`] to get
 //! pre-laid-out lines, then just draw them with their native draw calls.
 
+use std::path::PathBuf;
+
 use crate::{BufferKind, Editor};
 
 pub const ART_BAT: &str = r#"
@@ -31,6 +33,34 @@ pub const ALL_ARTS: &[SplashArt] = &[SplashArt {
     art: ART_BAT,
     accent_lines: &[],
 }];
+
+/// A custom splash art registered at runtime via `(register-splash-art! ...)`.
+#[derive(Debug, Clone)]
+pub struct CustomSplashArt {
+    pub name: String,
+    pub art: String,
+    pub accent_lines: Vec<usize>,
+    /// Optional image path for GUI rendering (PNG/JPG/SVG).
+    /// TUI backends fall back to the ASCII `art` field.
+    pub image_path: Option<PathBuf>,
+}
+
+/// Return all available splash art names (built-in + custom).
+pub fn available_splash_names(editor: &Editor) -> Vec<(String, String)> {
+    let mut names: Vec<(String, String)> = ALL_ARTS
+        .iter()
+        .map(|a| (a.name.to_string(), "built-in".to_string()))
+        .collect();
+    for art in &editor.custom_splash_arts {
+        let kind = if art.image_path.is_some() {
+            "image"
+        } else {
+            "custom"
+        };
+        names.push((art.name.clone(), kind.to_string()));
+    }
+    names
+}
 
 pub const MAE_LOGO: &str = r#"
      __  __    _     _____
@@ -81,18 +111,29 @@ pub struct SplashLine {
 /// Returns `(lines, art_width)` — backends use art_width to compute left padding.
 pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
-    let splash = ALL_ARTS
+
+    // Look up art: first check custom, then built-in.
+    let custom = editor
+        .custom_splash_arts
         .iter()
-        .find(|a| a.name == selected)
-        .unwrap_or(&ALL_ARTS[0]);
+        .find(|a| a.name == selected);
+    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
+        (c.art.as_str(), &c.accent_lines)
+    } else {
+        let splash = ALL_ARTS
+            .iter()
+            .find(|a| a.name == selected)
+            .unwrap_or(&ALL_ARTS[0]);
+        (splash.art, splash.accent_lines)
+    };
 
     let mut lines: Vec<SplashLine> = Vec::new();
 
     // Art.
-    let art_lines: Vec<&str> = splash.art.lines().collect();
+    let art_lines: Vec<&str> = art_str.lines().collect();
     let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     for (i, line) in art_lines.iter().enumerate() {
-        let key = if splash.accent_lines.contains(&i) {
+        let key = if accent_lines.contains(&i) {
             "string"
         } else {
             "keyword"
@@ -253,5 +294,43 @@ mod tests {
     #[test]
     fn splash_action_count_matches() {
         assert_eq!(splash_action_count(), QUICK_ACTIONS.len());
+    }
+
+    #[test]
+    fn custom_splash_art_used() {
+        let mut editor = Editor::default();
+        editor.custom_splash_arts.push(CustomSplashArt {
+            name: "test-art".to_string(),
+            art: "HELLO\nWORLD".to_string(),
+            accent_lines: vec![],
+            image_path: None,
+        });
+        editor.splash_art = Some("test-art".to_string());
+        editor.install_dashboard();
+        let (lines, _width) = build_splash_lines(&editor);
+        // First lines should be from our custom art
+        assert!(lines.iter().any(|l| l.text.contains("HELLO")));
+        assert!(lines.iter().any(|l| l.text.contains("WORLD")));
+    }
+
+    #[test]
+    fn available_names_includes_custom() {
+        let mut editor = Editor::default();
+        editor.custom_splash_arts.push(CustomSplashArt {
+            name: "my-art".to_string(),
+            art: String::new(),
+            accent_lines: vec![],
+            image_path: None,
+        });
+        editor.custom_splash_arts.push(CustomSplashArt {
+            name: "img-art".to_string(),
+            art: String::new(),
+            accent_lines: vec![],
+            image_path: Some(PathBuf::from("logo.svg")),
+        });
+        let names = available_splash_names(&editor);
+        assert!(names.iter().any(|(n, k)| n == "bat" && k == "built-in"));
+        assert!(names.iter().any(|(n, k)| n == "my-art" && k == "custom"));
+        assert!(names.iter().any(|(n, k)| n == "img-art" && k == "image"));
     }
 }
