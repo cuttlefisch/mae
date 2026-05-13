@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### CI
 
+- *(deps)* Bump the ci-dependencies group with 2 updates ([418ac68](https://github.com/cuttlefisch/mae/commit/418ac6846112f52afa0bc7775c74cb69687e8b6c))
+
+## [0.8.1] - 2026-05-11
+
+### CI
+
 - Drop macOS x86_64 from release matrix, add version bump guidance ([ca17004](https://github.com/cuttlefisch/mae/commit/ca170041098fb602d578043924efdc3dc7c4a799))
+
+### Miscellaneous
+
+- Bump version to 0.8.1 ([2a41bd5](https://github.com/cuttlefisch/mae/commit/2a41bd5a187e8fca15214001f51890d95b00c8c4))
 
 ## [0.8.0] - 2026-05-11
 
