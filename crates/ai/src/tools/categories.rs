@@ -24,6 +24,7 @@ pub enum ToolCategory {
     Ai,
     Visual,
     Debug,
+    Mcp,
 }
 
 /// Classify a tool into Core or Extended tier.
@@ -91,7 +92,8 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "run_test"
         | "spell_check"
         | "lookup_online"
-        | "next_error" => ToolTier::Core,
+        | "next_error"
+        | "search_tools" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -99,6 +101,9 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
 
 /// Classify a tool into its category for request_tools.
 pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
+    if name.starts_with("mcp_") {
+        return Some(ToolCategory::Mcp);
+    }
     if name.starts_with("lsp_") || name == "syntax_tree" {
         Some(ToolCategory::Lsp)
     } else if name.starts_with("dap_") || name == "debug_state" {
@@ -159,6 +164,7 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
             "ai" | "agent" => Some(ToolCategory::Ai),
             "visual" | "canvas" => Some(ToolCategory::Visual),
             "debug" | "profiling" => Some(ToolCategory::Debug),
+            "mcp" | "external" => Some(ToolCategory::Mcp),
             _ => None,
         })
         .collect()
@@ -168,17 +174,27 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
 pub fn request_tools_definition() -> ToolDefinition {
     ToolDefinition {
         name: "request_tools".into(),
-        description: "Request additional tool categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug. Returns tool names added.".into(),
+        description: "Request additional tools by category or specific name. Use search_tools first to discover tool names, then request them here. Categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp.".into(),
         parameters: ToolParameters {
             schema_type: "object".into(),
-            properties: HashMap::from([(
-                "categories".into(),
-                ToolProperty {
-                    prop_type: "string".into(),
-                    description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug".into(),
-                    enum_values: None,
-                },
-            )]),
+            properties: HashMap::from([
+                (
+                    "categories".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp".into(),
+                        enum_values: None,
+                    },
+                ),
+                (
+                    "tools".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Comma-separated tool names to add (e.g. from search_tools results)".into(),
+                        enum_values: None,
+                    },
+                ),
+            ]),
             required: vec!["categories".into()],
         },
         permission: Some(PermissionTier::ReadOnly),

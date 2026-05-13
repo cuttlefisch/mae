@@ -4,6 +4,7 @@
 //! @since: 0.3.0
 
 pub mod claude;
+pub mod connectivity;
 pub mod context_limits;
 pub mod executor;
 pub mod gemini;
@@ -17,6 +18,7 @@ pub mod tools;
 pub mod types;
 
 pub use claude::ClaudeProvider;
+pub use connectivity::ConnectivityResult;
 pub use context_limits::{lookup as lookup_context_limit, ModelVerification};
 pub use executor::{execute_tool, DeferredKind, ExecuteResult};
 pub use gemini::GeminiProvider;

@@ -380,3 +380,131 @@ fn shell_buffer_normal_mode_uses_shell_normal_keymap() {
 // ---------------------------------------------------------------------------
 // Mouse handling (Phase 8 — Step 8)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// rekey_after_remove + notify_buffer_removed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rekey_after_remove() {
+    use crate::editor::rekey_after_remove;
+    let mut map = std::collections::HashMap::new();
+    map.insert(1, "a");
+    map.insert(3, "b");
+    map.insert(5, "c");
+    rekey_after_remove(&mut map, 3);
+    // key 3 removed, key 5 shifted to 4, key 1 unchanged
+    assert_eq!(map.get(&1), Some(&"a"));
+    assert!(!map.contains_key(&3));
+    assert_eq!(map.get(&4), Some(&"c"));
+    assert!(!map.contains_key(&5));
+    assert_eq!(map.len(), 2);
+}
+
+#[test]
+fn test_rekey_at_zero() {
+    use crate::editor::rekey_after_remove;
+    let mut map = std::collections::HashMap::new();
+    map.insert(0, "x");
+    map.insert(1, "y");
+    map.insert(2, "z");
+    rekey_after_remove(&mut map, 0);
+    // key 0 ("x") removed, key 1 ("y") shifted to 0, key 2 ("z") shifted to 1
+    assert_eq!(map.get(&0), Some(&"y"));
+    assert_eq!(map.get(&1), Some(&"z"));
+    assert!(!map.contains_key(&2));
+    assert_eq!(map.len(), 2);
+}
+
+#[test]
+fn test_notify_buffer_removed_viewports() {
+    let mut editor = Editor::new();
+    // Set up 3 buffers
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    editor.shell_viewports.insert(0, vec!["a".into()]);
+    editor.shell_viewports.insert(2, vec!["c".into()]);
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // Key 0 unchanged, key 2 shifted to 1
+    assert!(editor.shell_viewports.contains_key(&0));
+    assert_eq!(
+        editor.shell_viewports.get(&1).unwrap(),
+        &vec!["c".to_string()]
+    );
+    assert!(!editor.shell_viewports.contains_key(&2));
+}
+
+#[test]
+fn test_notify_buffer_removed_alternate() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    // alternate points to buffer 2
+    editor.alternate_buffer_idx = Some(2);
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // alternate should shift from 2 to 1
+    assert_eq!(editor.alternate_buffer_idx, Some(1));
+
+    // Now test clearing when alternate matches removed
+    editor.alternate_buffer_idx = Some(1);
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    assert_eq!(editor.alternate_buffer_idx, None);
+}
+
+#[test]
+fn test_notify_buffer_removed_saved_view_states() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    // Populate saved_view_states on the focused window
+    let win = editor.window_mgr.focused_window_mut();
+    win.saved_view_states.insert(
+        0,
+        crate::window::BufferViewState {
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_offset: 0,
+            col_offset: 0,
+        },
+    );
+    win.saved_view_states.insert(
+        2,
+        crate::window::BufferViewState {
+            cursor_row: 10,
+            cursor_col: 5,
+            scroll_offset: 3,
+            col_offset: 0,
+        },
+    );
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    let win = editor.window_mgr.focused_window();
+    assert!(win.saved_view_states.contains_key(&0));
+    assert!(win.saved_view_states.contains_key(&1)); // was key 2, shifted
+    assert!(!win.saved_view_states.contains_key(&2));
+    assert_eq!(win.saved_view_states.get(&1).unwrap().cursor_row, 10);
+}
+
+#[test]
+fn test_notify_buffer_removed_pending_queues() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    editor.pending_shell_spawns = vec![0, 1, 2];
+    editor.pending_shell_resets = vec![2];
+    editor.pending_agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // idx 1 dropped, idx 2 shifted to 1
+    assert_eq!(editor.pending_shell_spawns, vec![0, 1]);
+    assert_eq!(editor.pending_shell_resets, vec![1]);
+    assert_eq!(editor.pending_agent_spawns, vec![(1, "cmd2".into())]);
+    // pending_buffer_removals should have an entry
+    assert_eq!(editor.pending_buffer_removals, vec![1]);
+}

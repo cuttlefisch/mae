@@ -1320,5 +1320,69 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
+        // --- Tool Discovery ---
+        ToolDefinition {
+            name: "search_tools".into(),
+            description: "Fuzzy search over all available tools by name or description. Use this to discover tools when you don't know the exact name. Example: search for 'breakpoint' to find dap_set_breakpoint.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Natural language search query (e.g. 'set breakpoint', 'find references')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max results to return (default: 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Model Validation ---
+        ToolDefinition {
+            name: "model_exam".into(),
+            description: "Model validation exam \u{2014} deterministic known-answer tests that grade tool selection, parameter accuracy, output interpretation, and safety pushback. Actions: 'plan' returns the exam JSON, 'grade' accepts results and returns ExamResult with verdict.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Action: 'plan' to get exam tests, 'grade' to grade results".into(),
+                            enum_values: Some(vec!["plan".into(), "grade".into()]),
+                        },
+                    ),
+                    (
+                        "results".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "Array of {test_id, tool_calls: [{name, arguments}], final_text} for grading".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "model".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Model name for the grade report".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["action".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
     ]
 }

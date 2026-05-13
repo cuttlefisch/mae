@@ -19,16 +19,10 @@ impl Editor {
                             && self.buffers[idx].kind == BufferKind::FileTree
                         {
                             self.buffers.remove(idx);
-                            self.syntax.shift_after_remove(idx);
-                            self.adjust_ai_target_after_remove(idx);
+                            self.notify_buffer_removed(idx);
                             for win in self.window_mgr.iter_windows_mut() {
                                 if win.buffer_idx > idx {
                                     win.buffer_idx -= 1;
-                                }
-                            }
-                            if let Some(ref mut alt) = self.alternate_buffer_idx {
-                                if *alt > idx {
-                                    *alt -= 1;
                                 }
                             }
                         }

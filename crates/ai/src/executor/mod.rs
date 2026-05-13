@@ -3,6 +3,7 @@ mod core_exec;
 mod dap_exec;
 mod kb_exec;
 mod lsp_exec;
+pub(crate) mod model_exam;
 mod perf;
 mod permission;
 pub(crate) mod self_test;

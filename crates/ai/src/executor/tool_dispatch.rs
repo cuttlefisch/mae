@@ -160,6 +160,99 @@ pub fn execute_tool(
         });
     }
 
+    // 4d. Handle model_exam (exam plan + grading).
+    if call.name == "model_exam" {
+        let action = call
+            .arguments
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let output = match action {
+            "plan" => super::model_exam::build_exam_plan(),
+            "grade" => {
+                let model = call
+                    .arguments
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let results = call.arguments.get("results").and_then(|v| v.as_array());
+                match results {
+                    Some(arr) => {
+                        let tests: Vec<super::model_exam::ExamTest> =
+                            serde_json::from_value(serde_json::Value::Array(
+                                // Re-read the canonical tests
+                                serde_json::from_str(&super::model_exam::build_exam_plan())
+                                    .unwrap_or_default(),
+                            ))
+                            .unwrap_or_default();
+                        let mut grades = Vec::new();
+                        for entry in arr {
+                            let test_id =
+                                entry.get("test_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                            let tool_calls: Vec<ToolCall> = entry
+                                .get("tool_calls")
+                                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                .unwrap_or_default();
+                            let final_text = entry
+                                .get("final_text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if let Some(test) = tests.iter().find(|t| t.id == test_id) {
+                                grades.push(super::model_exam::grade_exam_response(
+                                    test,
+                                    &tool_calls,
+                                    final_text,
+                                ));
+                            }
+                        }
+                        let result = super::model_exam::aggregate_grades(model, &grades);
+                        serde_json::to_string_pretty(&result).unwrap_or_default()
+                    }
+                    None => "Missing 'results' array for grade action".to_string(),
+                }
+            }
+            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+        };
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: true,
+            output,
+        });
+    }
+
+    // 4e. Handle search_tools (needs access to all_tools).
+    if call.name == "search_tools" {
+        let query = call
+            .arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let limit = call
+            .arguments
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10) as usize;
+        let results = crate::tools::tool_search::search_tools(all_tools, query, limit);
+        let json_results: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.name,
+                    "description": r.description,
+                    "score": r.score,
+                })
+            })
+            .collect();
+        let output = serde_json::to_string_pretty(&json_results).unwrap_or_default();
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: true,
+            output,
+        });
+    }
+
     // 5. Dispatch synchronous tools via submodules
     let result = dispatch_tool(editor, call);
 

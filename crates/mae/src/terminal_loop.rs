@@ -38,6 +38,7 @@ pub(crate) async fn run_terminal_loop(
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
     app_config: &config::Config,
+    mcp_client_mgr: &ai_event_handler::McpClientMgrRef,
 ) -> io::Result<()> {
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
@@ -105,6 +106,12 @@ pub(crate) async fn run_terminal_loop(
                 deferred_ai_reply.is_some(),
                 last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
             );
+            // Rekey after health_check zombie cleanup.
+            for removed_idx in std::mem::take(&mut editor.pending_buffer_removals) {
+                mae_core::editor::rekey_after_remove(&mut shell_terminals, removed_idx);
+                mae_core::editor::rekey_after_remove(&mut shell_last_dims, removed_idx);
+                mae_core::editor::rekey_after_remove(&mut shell_generations, removed_idx);
+            }
             // Autosave + swap writes (same 30s cadence as GUI HealthTick).
             editor.try_autosave();
             last_health_check = tokio::time::Instant::now();
@@ -328,6 +335,13 @@ pub(crate) async fn run_terminal_loop(
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
 
+        // Rekey binary-owned shell maps after any buffer removals this tick.
+        for removed_idx in std::mem::take(&mut editor.pending_buffer_removals) {
+            mae_core::editor::rekey_after_remove(&mut shell_terminals, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut shell_last_dims, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut shell_generations, removed_idx);
+        }
+
         // Process module reload requests.
         let reloads = std::mem::take(&mut editor.pending_module_reloads);
         for module_name in reloads {
@@ -528,6 +542,7 @@ pub(crate) async fn run_terminal_loop(
                     ai_event_tx,
                     ai_command_tx,
                     scheme,
+                    mcp_client_mgr,
                 };
                 ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }

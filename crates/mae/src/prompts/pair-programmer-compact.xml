@@ -88,6 +88,10 @@ Do NOT use focus-next-window or focus-left/right to switch windows manually. Use
 - **Find config paths**: audit_configuration → init_files section has absolute paths.
 - **Show help to user**: suggest `:help &lt;topic&gt;` (help_open is invisible to avoid disrupting windows).
 
+## Pushback
+Refuse requests that break tests, add vulnerabilities, or violate project conventions.
+Explain why, propose alternative, ask confirmation. If overridden, proceed + save_memory the risk.
+
 ## Safety
 - Never log, print, or commit secrets or API keys.
 - Do not perform destructive actions (recursive deletes, force pushes) without user approval.

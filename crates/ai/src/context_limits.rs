@@ -57,6 +57,18 @@ pub struct ModelLimits {
     pub verification: ModelVerification,
 }
 
+impl ModelLimits {
+    /// Memory budget: 2% of context_window, clamped [256, 4096] tokens.
+    pub fn memory_budget_tokens(&self) -> u64 {
+        (self.context_window / 50).clamp(256, 4096)
+    }
+
+    /// Approximate character budget (tokens × 4).
+    pub fn memory_budget_chars(&self) -> usize {
+        (self.memory_budget_tokens() * 4) as usize
+    }
+}
+
 impl Default for ModelLimits {
     fn default() -> Self {
         ModelLimits {
@@ -151,6 +163,19 @@ impl ProviderHint {
             Self::Local
         } else {
             Self::Unknown
+        }
+    }
+
+    /// Default API endpoint URL for this provider (for connectivity checks).
+    pub fn default_endpoint(&self) -> Option<&'static str> {
+        match self {
+            Self::Claude => Some("https://api.anthropic.com"),
+            Self::OpenAi => Some("https://api.openai.com"),
+            Self::Gemini => Some("https://generativelanguage.googleapis.com"),
+            Self::DeepSeek => Some("https://api.deepseek.com"),
+            Self::Qwen => Some("https://dashscope.aliyuncs.com"),
+            Self::Mistral => Some("https://api.mistral.ai"),
+            Self::Local | Self::Unknown => None,
         }
     }
 
@@ -423,6 +448,64 @@ mod tests {
         assert_eq!(ModelTier::parse_tier("bogus"), ModelTier::Compact);
         assert_eq!(ModelTier::Full.as_str(), "full");
         assert_eq!(ModelTier::Compact.as_str(), "compact");
+    }
+
+    // --- Memory budget tests ---
+
+    #[test]
+    fn memory_budget_min_clamp() {
+        let l = lookup("llama3-8b"); // 8K context
+        assert_eq!(l.memory_budget_tokens(), 256); // 8192/50 = 163 → clamped to 256
+    }
+
+    #[test]
+    fn memory_budget_max_clamp() {
+        let l = lookup("gemini-2.5-pro"); // 1M context
+        assert_eq!(l.memory_budget_tokens(), 4096); // 1_000_000/50 = 20_000 → clamped to 4096
+    }
+
+    #[test]
+    fn memory_budget_normal() {
+        let l = lookup("claude-sonnet-4-5"); // 200K context
+        assert_eq!(l.memory_budget_tokens(), 4000); // 200_000/50 = 4000
+    }
+
+    #[test]
+    fn memory_budget_chars() {
+        let l = lookup("claude-sonnet-4-5");
+        assert_eq!(l.memory_budget_chars(), 16000); // 4000 * 4
+    }
+
+    // --- Provider endpoint tests ---
+
+    #[test]
+    fn provider_default_endpoints() {
+        assert_eq!(
+            ProviderHint::Claude.default_endpoint(),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            ProviderHint::OpenAi.default_endpoint(),
+            Some("https://api.openai.com")
+        );
+        assert_eq!(
+            ProviderHint::Gemini.default_endpoint(),
+            Some("https://generativelanguage.googleapis.com")
+        );
+        assert_eq!(
+            ProviderHint::DeepSeek.default_endpoint(),
+            Some("https://api.deepseek.com")
+        );
+        assert_eq!(
+            ProviderHint::Qwen.default_endpoint(),
+            Some("https://dashscope.aliyuncs.com")
+        );
+        assert_eq!(
+            ProviderHint::Mistral.default_endpoint(),
+            Some("https://api.mistral.ai")
+        );
+        assert!(ProviderHint::Local.default_endpoint().is_none());
+        assert!(ProviderHint::Unknown.default_endpoint().is_none());
     }
 
     // --- New model prefix tests ---

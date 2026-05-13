@@ -1817,7 +1817,7 @@ impl SchemeRuntime {
             if let Some(idx) = editor.buffers.iter().position(|b| b.name == name) {
                 if editor.buffers.len() > 1 {
                     editor.buffers.remove(idx);
-                    // Adjust window buffer indices
+                    editor.notify_buffer_removed(idx);
                     for w in editor.window_mgr.iter_windows_mut() {
                         if w.buffer_idx == idx {
                             w.buffer_idx = 0;

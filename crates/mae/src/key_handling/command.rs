@@ -207,16 +207,15 @@ pub fn handle_command_mode(
                 return;
             }
 
-            // :ai-ping — test AI API connectivity
+            // :ai-ping — network connectivity check (no LLM round-trip)
             if cmd == "ai-ping" {
                 if let Some(tx) = ai_tx {
-                    if tx
-                        .try_send(AiCommand::Prompt("Reply with exactly: pong".to_string()))
-                        .is_err()
-                    {
-                        editor.set_status("[AI] Ping failed — channel closed");
+                    let config = load_ai_config(editor);
+                    let base_url = config.as_ref().and_then(|c| c.base_url.clone());
+                    if tx.try_send(AiCommand::PingNetwork { base_url }).is_err() {
+                        editor.set_status("[AI] Ping failed \u{2014} channel closed");
                     } else {
-                        editor.set_status("[AI] Ping sent...");
+                        editor.set_status("[AI] Pinging...");
                     }
                 } else {
                     editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
@@ -224,7 +223,7 @@ pub fn handle_command_mode(
                 return;
             }
 
-            // :verify [objective] — spawn verifier sub-agent
+            // :verify [objective] — spawn verifier sub-agent (direct delegate, no LLM round-trip)
             if cmd == "verify" || cmd.starts_with("verify ") {
                 let objective = cmd.strip_prefix("verify").unwrap_or("").trim();
                 let objective = if objective.is_empty() {
@@ -233,9 +232,14 @@ pub fn handle_command_mode(
                     objective
                 };
                 if let Some(tx) = ai_tx {
-                    let prompt = format!("[delegate:verifier] {}", objective);
-                    if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
-                        editor.set_status("[AI] Verify failed — channel closed");
+                    if tx
+                        .try_send(AiCommand::Delegate {
+                            profile: "verifier".to_string(),
+                            objective: objective.to_string(),
+                        })
+                        .is_err()
+                    {
+                        editor.set_status("[AI] Verify failed \u{2014} channel closed");
                     } else {
                         editor.set_status("[AI] Verifier spawned...");
                     }
@@ -291,6 +295,26 @@ pub fn handle_command_mode(
                         }
                     );
                     editor.set_status("[AI BUSY — Esc to cancel] Running self-test...");
+                } else {
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
+                }
+                return;
+            }
+
+            // :model-exam — run model validation exam via verifier sub-agent
+            if cmd == "model-exam" {
+                if let Some(tx) = ai_tx {
+                    if tx
+                        .try_send(AiCommand::Delegate {
+                            profile: "verifier".to_string(),
+                            objective: "Run the model validation exam: call model_exam with action='plan' to get the test plan, execute each test by sending the prompt and recording which tools are called, then call model_exam with action='grade' and provide the results array. Report the final ExamResult with verdict.".to_string(),
+                        })
+                        .is_err()
+                    {
+                        editor.set_status("[AI] Model exam failed \u{2014} channel closed");
+                    } else {
+                        editor.set_status("[AI] Model exam started...");
+                    }
                 } else {
                     editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
                 }
@@ -563,6 +587,23 @@ fn build_ai_status_report(
     if let Some(ref err) = editor.ai_last_api_error {
         lines.push(format!("  Last Error: {}", err));
     }
+    if let Some(ref check) = editor.ai_last_network_check {
+        lines.push(String::new());
+        lines.push("Connectivity".to_string());
+        lines.push("------------".to_string());
+        lines.push(format!("  Endpoint:   {}", check.endpoint));
+        lines.push(format!(
+            "  Reachable:  {}",
+            if check.reachable { "OK" } else { "FAIL" }
+        ));
+        if let Some(status) = check.http_status {
+            lines.push(format!("  HTTP:       {}", status));
+        }
+        lines.push(format!("  Latency:    {}ms", check.latency_ms));
+        if let Some(ref err) = check.error {
+            lines.push(format!("  Error:      {}", err));
+        }
+    }
     lines.push(String::new());
 
     // Scheme Tools
@@ -654,6 +695,24 @@ mod tests {
         assert!(report.contains("Session"));
         assert!(report.contains("Network"));
         assert!(report.contains("Configuration"));
+    }
+
+    #[test]
+    fn ai_status_report_with_network_check() {
+        let mut editor = mae_core::Editor::new();
+        editor.ai_last_network_check = Some(mae_core::editor::AiNetworkCheck {
+            endpoint: "https://api.anthropic.com".into(),
+            reachable: true,
+            http_status: Some(200),
+            latency_ms: 42,
+            error: None,
+        });
+        let report = build_ai_status_report(&editor, &None);
+        assert!(report.contains("Connectivity"));
+        assert!(report.contains("https://api.anthropic.com"));
+        assert!(report.contains("Reachable:  OK"));
+        assert!(report.contains("HTTP:       200"));
+        assert!(report.contains("Latency:    42ms"));
     }
 
     #[test]

@@ -51,6 +51,26 @@ mod tests;
 use std::collections::HashMap;
 
 use crate::buffer::Buffer;
+
+/// Rekey a `HashMap<usize, V>` after a buffer at `removed_idx` was removed.
+/// Drops the entry for `removed_idx` and decrements every key above it.
+pub fn rekey_after_remove<V>(map: &mut HashMap<usize, V>, removed_idx: usize) {
+    // Collect affected entries, then rebuild. Sorting ensures no key collisions
+    // when re-inserting (e.g. removing key 0 with keys 0,1,2 present).
+    let mut affected: Vec<(usize, V)> = Vec::new();
+    let stale: Vec<usize> = map.keys().filter(|&&k| k >= removed_idx).copied().collect();
+    for k in stale {
+        if let Some(v) = map.remove(&k) {
+            affected.push((k, v));
+        }
+    }
+    for (k, v) in affected {
+        if k > removed_idx {
+            map.insert(k - 1, v);
+        }
+        // k == removed_idx: dropped
+    }
+}
 use crate::command_palette::CommandPalette;
 use crate::commands::CommandRegistry;
 use crate::dap_intent::DapIntent;
@@ -329,6 +349,16 @@ pub struct EditorStateSnapshot {
     pub conversation_pair: Option<ConversationPair>,
 }
 
+/// Network connectivity check result (lightweight copy for display/reporting).
+#[derive(Debug, Clone)]
+pub struct AiNetworkCheck {
+    pub endpoint: String,
+    pub reachable: bool,
+    pub http_status: Option<u16>,
+    pub latency_ms: u64,
+    pub error: Option<String>,
+}
+
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -495,6 +525,9 @@ pub struct Editor {
     /// Pending shell mouse release position: (row, col). Set on button release
     /// in shell buffers, drained by the binary to finalize selection.
     pub pending_shell_release: Option<(usize, usize)>,
+    /// Buffer indices removed this tick, for the binary to rekey its own
+    /// shell-related HashMaps (shell_terminals, shell_last_dims, etc.).
+    pub pending_buffer_removals: Vec<usize>,
     /// Cached viewport snapshots for shell terminals, updated by the binary
     /// each render tick. Keyed by buffer index. Used by AI tools to read
     /// terminal output without direct access to `ShellTerminal`.
@@ -667,6 +700,9 @@ pub struct Editor {
     pub ai_last_api_latency_ms: Option<u64>,
     /// Total number of AI API calls this session.
     pub ai_api_call_count: u64,
+    /// Last network connectivity check result (from :ai-ping).
+    /// Fields: (endpoint, reachable, http_status, latency_ms, error).
+    pub ai_last_network_check: Option<AiNetworkCheck>,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -1053,6 +1089,7 @@ impl Editor {
             pending_shell_click: None,
             pending_shell_drag: None,
             pending_shell_release: None,
+            pending_buffer_removals: Vec::new(),
             shell_viewports: HashMap::new(),
             shell_cwds: HashMap::new(),
             hooks,
@@ -1123,6 +1160,7 @@ impl Editor {
             ai_last_api_error: None,
             ai_last_api_latency_ms: None,
             ai_api_call_count: 0,
+            ai_last_network_check: None,
             bell_until: None,
             project: None,
             git_branch: None,
@@ -1749,6 +1787,7 @@ impl Editor {
             if !snapshot.buffer_names.contains(&self.buffers[i].name) {
                 closed.push(self.buffers[i].name.clone());
                 self.buffers.remove(i);
+                self.notify_buffer_removed(i);
             }
         }
 
@@ -1992,6 +2031,91 @@ impl Editor {
                 *target -= 1;
             }
         }
+    }
+
+    /// Central bookkeeping after `buffers.remove(removed_idx)`.
+    ///
+    /// Rekeys all Editor-owned HashMaps keyed by buffer index, adjusts
+    /// pending queues, alternate_buffer_idx, AI target, syntax map, and
+    /// per-window saved_view_states. Also pushes `removed_idx` to
+    /// `pending_buffer_removals` so the binary can rekey its own maps
+    /// (shell_terminals, shell_last_dims, shell_generations).
+    ///
+    /// Callers are still responsible for adjusting `window.buffer_idx`
+    /// (different sites have different retarget logic).
+    pub fn notify_buffer_removed(&mut self, removed_idx: usize) {
+        // 1. Syntax + AI target
+        self.syntax.shift_after_remove(removed_idx);
+        self.adjust_ai_target_after_remove(removed_idx);
+
+        // 2. Editor-owned shell maps
+        rekey_after_remove(&mut self.shell_viewports, removed_idx);
+        rekey_after_remove(&mut self.shell_cwds, removed_idx);
+        rekey_after_remove(&mut self.pending_shell_cwds, removed_idx);
+
+        // 3. Pending shell queues (Vec<usize> and Vec<(usize, _)>)
+        self.pending_shell_spawns.retain_mut(|idx| {
+            if *idx == removed_idx {
+                return false;
+            }
+            if *idx > removed_idx {
+                *idx -= 1;
+            }
+            true
+        });
+        self.pending_agent_spawns.retain_mut(|(idx, _)| {
+            if *idx == removed_idx {
+                return false;
+            }
+            if *idx > removed_idx {
+                *idx -= 1;
+            }
+            true
+        });
+        self.pending_shell_resets.retain_mut(|idx| {
+            if *idx == removed_idx {
+                return false;
+            }
+            if *idx > removed_idx {
+                *idx -= 1;
+            }
+            true
+        });
+        self.pending_shell_closes.retain_mut(|idx| {
+            if *idx == removed_idx {
+                return false;
+            }
+            if *idx > removed_idx {
+                *idx -= 1;
+            }
+            true
+        });
+        self.pending_shell_inputs.retain_mut(|(idx, _)| {
+            if *idx == removed_idx {
+                return false;
+            }
+            if *idx > removed_idx {
+                *idx -= 1;
+            }
+            true
+        });
+
+        // 4. Alternate buffer index
+        if let Some(ref mut alt) = self.alternate_buffer_idx {
+            if *alt == removed_idx {
+                self.alternate_buffer_idx = None;
+            } else if *alt > removed_idx {
+                *alt -= 1;
+            }
+        }
+
+        // 5. Per-window saved_view_states
+        for win in self.window_mgr.iter_windows_mut() {
+            rekey_after_remove(&mut win.saved_view_states, removed_idx);
+        }
+
+        // 6. Signal the binary to rekey its own maps
+        self.pending_buffer_removals.push(removed_idx);
     }
 
     /// visible during AI tool calls that open/switch files.

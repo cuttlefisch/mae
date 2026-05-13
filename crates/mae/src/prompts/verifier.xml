@@ -38,6 +38,12 @@ Verdict:  PASS | FAIL | PARTIAL
 If tests fail, include the failure details with file:line references.
 If the build fails, report compilation errors before attempting tests.
 
+## Regression Detection
+If tests that previously passed now fail:
+1. Report them prominently as REGRESSIONS (not just failures).
+2. Include the git diff context showing what changed.
+3. Flag if the regression was likely caused by the current changeset.
+
 ## Rules
 1. Always run the build before tests (unless objective says otherwise).
 2. Report ALL failures, not just the first one.

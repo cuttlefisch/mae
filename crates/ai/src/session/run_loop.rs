@@ -305,6 +305,49 @@ impl AgentSession {
                     info!(prompt_len = prompt.len(), "received AI prompt");
                     self.handle_prompt(prompt).await;
                 }
+                Some(AiCommand::Delegate { profile, objective }) => {
+                    // Direct delegate: emit as a Delegate event for the main
+                    // thread to spawn a sub-agent. No LLM round-trip needed.
+                    info!(%profile, "direct delegate command");
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    let _ = self
+                        .event_tx
+                        .send(AiEvent::Delegate {
+                            profile,
+                            objective,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    match reply_rx.await {
+                        Ok(result) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::SessionComplete {
+                                    text: result.output,
+                                    target_buffer: self.target_buffer.clone(),
+                                    transcript_path: self.transcript_path_str.clone(),
+                                })
+                                .await;
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .event_tx
+                                .send(AiEvent::Error(
+                                    "Delegate sub-agent failed".into(),
+                                    self.transcript_path_str.clone(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                Some(AiCommand::PingNetwork { base_url }) => {
+                    let provider =
+                        crate::context_limits::ProviderHint::from_model(&self.model_name);
+                    let result =
+                        crate::connectivity::connectivity_check(base_url.as_deref(), provider)
+                            .await;
+                    let _ = self.event_tx.send(AiEvent::NetworkDiagnostic(result)).await;
+                }
                 Some(AiCommand::Cancel) => {
                     info!("AI cancel received");
                     continue;

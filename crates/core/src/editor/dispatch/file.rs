@@ -175,7 +175,7 @@ impl Editor {
                 let killed = to_remove.len();
                 for &i in to_remove.iter().rev() {
                     self.buffers.remove(i);
-                    self.adjust_ai_target_after_remove(i);
+                    self.notify_buffer_removed(i);
                 }
                 let buf_count = self.buffers.len();
                 for win in self.window_mgr.iter_windows_mut() {

@@ -78,6 +78,10 @@ pub enum PendingInteractiveEvent {
     ProposeChanges(tokio::sync::oneshot::Sender<bool>),
 }
 
+/// Shared reference to the MCP client manager for external tool dispatch.
+pub type McpClientMgrRef =
+    std::sync::Arc<tokio::sync::Mutex<mae_mcp::client_mgr::McpClientManager>>;
+
 /// Context required for AI event dispatching.
 pub struct AiEventContext<'a> {
     pub all_tools: &'a [mae_ai::ToolDefinition],
@@ -91,6 +95,7 @@ pub struct AiEventContext<'a> {
     #[allow(dead_code)]
     pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pub scheme: &'a mut mae_scheme::SchemeRuntime,
+    pub mcp_client_mgr: &'a McpClientMgrRef,
 }
 
 /// Handle a single AI event. Shared between terminal and GUI loops.
@@ -107,6 +112,40 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     mae_core::conversation::ToolCallState::Running,
                 );
             }
+            // Intercept mcp_* external tool calls — dispatch async via client manager
+            if let Some(rest) = call.name.strip_prefix("mcp_") {
+                if let Some((server, tool)) = rest.split_once('_') {
+                    let mgr = ctx.mcp_client_mgr.clone();
+                    let server_name = server.to_string();
+                    let tool_name = tool.to_string();
+                    let call_id = call.id.clone();
+                    let call_name = call.name.clone();
+                    let arguments = call.arguments.clone();
+                    tokio::spawn(async move {
+                        let result = {
+                            let mgr = mgr.lock().await;
+                            mgr.call_tool(&server_name, &tool_name, arguments).await
+                        };
+                        let tool_result = match result {
+                            Ok(output) => mae_ai::ToolResult {
+                                tool_call_id: call_id,
+                                tool_name: call_name,
+                                success: true,
+                                output,
+                            },
+                            Err(e) => mae_ai::ToolResult {
+                                tool_call_id: call_id,
+                                tool_name: call_name,
+                                success: false,
+                                output: e,
+                            },
+                        };
+                        let _ = reply.send(tool_result);
+                    });
+                    return;
+                }
+            }
+
             let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
@@ -401,6 +440,27 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
         }
+        AiEvent::NetworkDiagnostic(result) => {
+            let status = if result.reachable {
+                format!(
+                    "[AI] Network OK \u{2014} {}ms to {}",
+                    result.latency_ms, result.endpoint
+                )
+            } else {
+                format!(
+                    "[AI] Network FAIL \u{2014} {}",
+                    result.error.as_deref().unwrap_or("unknown")
+                )
+            };
+            editor.set_status(&status);
+            editor.ai_last_network_check = Some(mae_core::editor::AiNetworkCheck {
+                endpoint: result.endpoint,
+                reachable: result.reachable,
+                http_status: result.http_status,
+                latency_ms: result.latency_ms,
+                error: result.error,
+            });
+        }
         AiEvent::Delegate {
             profile,
             objective,
@@ -445,10 +505,42 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 _ => Box::new(mae_ai::ClaudeProvider::new(config.clone())),
             };
 
-            let tools = {
+            // Scope verifier tools: read-only + shell, no write/create/modify.
+            let all_tools = {
                 let mut t = mae_ai::tools_from_registry(&editor.commands);
                 t.extend(mae_ai::ai_specific_tools(&editor.option_registry));
                 t
+            };
+            let tools = if profile == "verifier" {
+                all_tools
+                    .into_iter()
+                    .filter(|t| {
+                        matches!(
+                            t.name.as_str(),
+                            "buffer_read"
+                                | "project_search"
+                                | "project_files"
+                                | "project_info"
+                                | "run_test"
+                                | "run_build"
+                                | "shell_exec"
+                                | "cursor_info"
+                                | "editor_state"
+                                | "list_buffers"
+                                | "kb_search"
+                                | "kb_get"
+                                | "introspect"
+                                | "lsp_diagnostics"
+                                | "open_file"
+                                | "file_read"
+                                | "read_messages"
+                                | "model_exam"
+                                | "self_test_suite"
+                        ) || t.name.starts_with("command_")
+                    })
+                    .collect()
+            } else {
+                all_tools
             };
 
             let effective_tier = {

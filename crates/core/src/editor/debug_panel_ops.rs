@@ -48,7 +48,7 @@ impl Editor {
 
         // Remove the debug buffer.
         self.buffers.remove(debug_idx);
-        self.adjust_ai_target_after_remove(debug_idx);
+        self.notify_buffer_removed(debug_idx);
 
         // Fix up all window buffer_idx references.
         for win in self.window_mgr.iter_windows_mut() {
@@ -56,14 +56,6 @@ impl Editor {
                 win.buffer_idx = target.min(self.buffers.len().saturating_sub(1));
             } else if win.buffer_idx > debug_idx {
                 win.buffer_idx -= 1;
-            }
-        }
-        // Fix up alternate.
-        if let Some(ref mut alt_idx) = self.alternate_buffer_idx {
-            if *alt_idx == debug_idx {
-                *alt_idx = 0;
-            } else if *alt_idx > debug_idx {
-                *alt_idx -= 1;
             }
         }
     }

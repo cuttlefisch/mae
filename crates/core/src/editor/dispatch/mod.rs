@@ -454,8 +454,7 @@ impl Editor {
         } else {
             self.lsp_notify_did_close_for_buffer(idx);
             self.buffers.remove(idx);
-            self.syntax.shift_after_remove(idx);
-            self.adjust_ai_target_after_remove(idx);
+            self.notify_buffer_removed(idx);
             for win in self.window_mgr.iter_windows_mut() {
                 if win.buffer_idx == idx {
                     win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
@@ -479,8 +478,7 @@ impl Editor {
         }
         self.lsp_notify_did_close_for_buffer(idx);
         self.buffers.remove(idx);
-        self.syntax.shift_after_remove(idx);
-        self.adjust_ai_target_after_remove(idx);
+        self.notify_buffer_removed(idx);
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx == idx {
                 win.buffer_idx = idx

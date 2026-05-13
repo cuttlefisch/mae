@@ -441,6 +441,7 @@ fn main() -> io::Result<()> {
         mcp_socket_path,
         all_tools,
         permission_policy,
+        mcp_client_mgr,
     ) = rt.block_on(async {
         let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
@@ -473,13 +474,49 @@ fn main() -> io::Result<()> {
         let (dap_event_rx, dap_command_tx) = setup_dap();
         info!("DAP task spawned");
 
-        let all_tools = {
+        let mut all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);
+
+        // MCP client: connect to external MCP servers configured in config.toml
+        let mcp_client_configs = {
+            let raw_toml: toml::Value = std::fs::read_to_string(config::config_path())
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(toml::Value::Table(Default::default()));
+            mae_mcp::client_mgr::McpClientManager::parse_configs(&raw_toml)
+        };
+        let mcp_client_mgr = {
+            let mut mgr = mae_mcp::client_mgr::McpClientManager::new(mcp_client_configs);
+            mgr.start_all().await;
+            // Convert external tools to ToolDefinitions for the AI agent
+            for ext in mgr.external_tools() {
+                let prefixed_name = format!("mcp_{}_{}", ext.server_name, ext.name);
+                all_tools.push(mae_ai::ToolDefinition {
+                    name: prefixed_name,
+                    description: format!("[{}] {}", ext.server_name, ext.description),
+                    parameters: mae_ai::ToolParameters {
+                        schema_type: "object".into(),
+                        properties: std::collections::HashMap::new(), // external schema not mapped
+                        required: vec![],
+                    },
+                    permission: Some(mae_ai::PermissionTier::Privileged),
+                });
+            }
+            if mgr.has_servers() {
+                let status = mgr.status();
+                info!(
+                    server_count = status.len(),
+                    total_tools = mgr.external_tools().len(),
+                    "MCP external servers initialized"
+                );
+            }
+            std::sync::Arc::new(tokio::sync::Mutex::new(mgr))
+        };
 
         // MCP bridge: Unix socket for external agents (Claude Code, etc.)
         cleanup_stale_mcp_sockets();
@@ -511,6 +548,7 @@ fn main() -> io::Result<()> {
             mcp_socket_path,
             all_tools,
             permission_policy,
+            mcp_client_mgr,
         )
     });
 
@@ -569,6 +607,7 @@ fn main() -> io::Result<()> {
                 all_tools,
                 permission_policy,
                 app_config,
+                mcp_client_mgr,
             );
         }
     }
@@ -589,6 +628,7 @@ fn main() -> io::Result<()> {
         &all_tools,
         &permission_policy,
         &app_config,
+        &mcp_client_mgr,
     ))?;
 
     let _ = std::fs::remove_file(&mcp_socket_path);
@@ -625,6 +665,7 @@ fn run_gui(
     all_tools: Vec<mae_ai::ToolDefinition>,
     permission_policy: mae_ai::PermissionPolicy,
     app_config: config::Config,
+    mcp_client_mgr: ai_event_handler::McpClientMgrRef,
 ) -> io::Result<()> {
     use gui_event::MaeEvent;
     use std::sync::atomic::AtomicBool;
@@ -700,6 +741,7 @@ fn run_gui(
         dap_command_tx,
         mcp_socket_path,
         app_config,
+        mcp_client_mgr,
         ctrl_held: false,
         alt_held: false,
         shift_held: false,
@@ -837,6 +879,7 @@ struct GuiApp {
     // Config
     mcp_socket_path: String,
     app_config: config::Config,
+    mcp_client_mgr: ai_event_handler::McpClientMgrRef,
 
     // Input state
     ctrl_held: bool,
@@ -897,6 +940,13 @@ impl GuiApp {
             &mut self.shell_last_dims,
         );
         shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
+
+        // Rekey binary-owned shell maps after any buffer removals this tick.
+        for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+            mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+        }
 
         // Detect theme changes and update shell terminal colors.
         if self.editor.theme.name != self.last_theme_name {
@@ -993,6 +1043,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
                     scheme: &mut self.scheme,
+                    mcp_client_mgr: &self.mcp_client_mgr,
                 };
                 ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
@@ -1079,6 +1130,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.deferred_ai_reply.is_some(),
                     self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
                 );
+                // Rekey after health_check zombie cleanup.
+                for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+                    mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+                }
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
             }

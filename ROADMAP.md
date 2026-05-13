@@ -43,7 +43,7 @@
 - [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
 
 ### Near-term
-- [ ] PDF preview (GUI inline rendering)
+- [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [ ] Org ↔ Markdown bidirectional conversion
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
@@ -80,11 +80,14 @@
 | `mae-zen` | `:ui/zen` | Distraction-free writing mode |
 
 ### AI
+- [x] Semantic tool search (`search_tools` — fuzzy match over 146+ tool names/descriptions)
+- [x] Dynamic MCP tool discovery (external MCP server connections, `mcp_{server}_{tool}` namespacing)
+- [x] `request_tools` accepts specific tool names (completes search→request workflow)
 - [ ] Memory synthesis (sub-agent reads persistent memory into context)
-- [ ] Dynamic MCP tool discovery (fuzzy search across servers)
 - [ ] Verification specialist (isolated test execution sub-agent)
 - [ ] AI session playback & undo (step-through replay of code changes)
 - [ ] Network status command (`:ai-status` with connectivity diagnostics)
+- [ ] `:mcp-status` / `:mcp-reconnect` commands (MCP server management UI)
 
 ### Org-mode
 - [ ] Table formulas (`#+TBLFM:` with Calc-like syntax)

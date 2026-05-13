@@ -147,6 +147,8 @@ pub enum AiEvent {
         session_id: String,
         agent_name: String,
     },
+    /// Result of network connectivity check.
+    NetworkDiagnostic(crate::connectivity::ConnectivityResult),
     /// An error occurred in the AI transport.
     Error(String, Option<String>),
     /// Incremental cost tally after a successful provider round. The
@@ -201,6 +203,11 @@ pub enum AiEvent {
 pub enum AiCommand {
     /// Start a new conversation turn.
     Prompt(String),
+    /// Direct delegate to sub-agent (bypasses LLM round-trip).
+    /// Used by `:verify` and similar commands.
+    Delegate { profile: String, objective: String },
+    /// Network connectivity check — HTTP HEAD, no LLM call.
+    PingNetwork { base_url: Option<String> },
     /// Cancel the current operation.
     Cancel,
     /// Shut down the AI task.

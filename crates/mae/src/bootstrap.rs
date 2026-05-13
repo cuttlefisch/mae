@@ -409,10 +409,11 @@ pub fn setup_ai(
             .unwrap_or_else(|| mae_ai::context_limits::tier(&model));
         info!(tier = effective_tier.as_str(), "selected prompt tier");
 
-        let mut prompt = build_system_prompt_with_modules(
+        let mut prompt = build_system_prompt_with_model(
             "pair-programmer",
             effective_tier,
             &editor.active_modules,
+            &model,
         );
 
         // Inject provider-specific hints for non-Claude models
@@ -495,6 +496,152 @@ pub fn load_memory_context(project_root: &std::path::Path) -> Option<String> {
     Some(block)
 }
 
+/// Synthesize memory context from `.mae/memory/*.txt` files with
+/// model-aware formatting and budget.
+///
+/// Facts are categorized, deduplicated (newer wins), and truncated to
+/// `budget_chars`. Format adapts to model tier and provider:
+/// - Compact/DeepSeek/Local/Qwen → numbered lists per category
+/// - Full + Claude/OpenAI/Gemini → grouped sections with headers
+pub fn synthesize_memory(
+    project_root: &std::path::Path,
+    tier: mae_ai::context_limits::ModelTier,
+    provider: mae_ai::context_limits::ProviderHint,
+    budget_chars: usize,
+) -> Option<String> {
+    let memory_dir = project_root.join(".mae/memory");
+    if !memory_dir.exists() {
+        return None;
+    }
+    let entries = std::fs::read_dir(&memory_dir).ok()?;
+    let mut files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    // Sort by filename descending (newest timestamp first — for dedup priority)
+    files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+
+    // Collect facts
+    let mut facts: Vec<String> = Vec::new();
+    for entry in &files {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                facts.push(trimmed.to_string());
+            }
+        }
+    }
+    if facts.is_empty() {
+        return None;
+    }
+
+    // Categorize by keyword matching
+    let mut conventions = Vec::new();
+    let mut architecture = Vec::new();
+    let mut bugs = Vec::new();
+    let mut decisions = Vec::new();
+    let mut other = Vec::new();
+
+    for fact in &facts {
+        let lower = fact.to_ascii_lowercase();
+        if lower.contains("always")
+            || lower.contains("never")
+            || lower.contains("prefer")
+            || lower.contains("convention")
+            || lower.contains("style")
+            || lower.contains("rule")
+            || lower.contains("don't")
+        {
+            conventions.push(fact.as_str());
+        } else if lower.contains("crate")
+            || lower.contains("module")
+            || lower.contains("struct")
+            || lower.contains("trait")
+            || lower.contains("pattern")
+            || lower.contains("design")
+            || lower.contains("directory")
+        {
+            architecture.push(fact.as_str());
+        } else if lower.contains("bug")
+            || lower.contains("fix")
+            || lower.contains("workaround")
+            || lower.contains("broken")
+            || lower.contains("issue")
+            || lower.contains("error")
+            || lower.contains("crash")
+        {
+            bugs.push(fact.as_str());
+        } else if lower.contains("decided")
+            || lower.contains("chose")
+            || lower.contains("because")
+            || lower.contains("rationale")
+            || lower.contains("tradeoff")
+            || lower.contains("instead")
+        {
+            decisions.push(fact.as_str());
+        } else {
+            other.push(fact.as_str());
+        }
+    }
+
+    // Priority order: conventions > architecture > bugs > decisions > other
+    let categories: Vec<(&str, &[&str])> = vec![
+        ("Conventions", &conventions),
+        ("Architecture", &architecture),
+        ("Bugs & Fixes", &bugs),
+        ("Decisions", &decisions),
+        ("Other", &other),
+    ];
+
+    // Choose format based on tier + provider
+    let use_numbered = tier == mae_ai::context_limits::ModelTier::Compact
+        || matches!(
+            provider,
+            mae_ai::context_limits::ProviderHint::DeepSeek
+                | mae_ai::context_limits::ProviderHint::Local
+                | mae_ai::context_limits::ProviderHint::Qwen
+        );
+
+    let mut block = String::from("## Project Memory\n");
+    let mut counter = 1;
+
+    for (label, items) in &categories {
+        if items.is_empty() {
+            continue;
+        }
+        if block.len() >= budget_chars {
+            break;
+        }
+        if use_numbered {
+            // Numbered list per category
+            block.push_str(&format!("### {}\n", label));
+            for item in *items {
+                let line = format!("{}. {}\n", counter, item);
+                if block.len() + line.len() > budget_chars {
+                    break;
+                }
+                block.push_str(&line);
+                counter += 1;
+            }
+        } else {
+            // Grouped sections with brief headers
+            block.push_str(&format!("### {}\n", label));
+            for item in *items {
+                let line = format!("- {}\n", item);
+                if block.len() + line.len() > budget_chars {
+                    break;
+                }
+                block.push_str(&line);
+            }
+        }
+    }
+
+    Some(block)
+}
+
 pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTier) -> String {
     build_system_prompt_with_modules(profile, tier, &[])
 }
@@ -503,6 +650,15 @@ pub fn build_system_prompt_with_modules(
     profile: &str,
     tier: mae_ai::context_limits::ModelTier,
     modules: &[mae_core::editor::ModuleInfo],
+) -> String {
+    build_system_prompt_with_model(profile, tier, modules, "")
+}
+
+pub fn build_system_prompt_with_model(
+    profile: &str,
+    tier: mae_ai::context_limits::ModelTier,
+    modules: &[mae_core::editor::ModuleInfo],
+    model: &str,
 ) -> String {
     let mut prompt = String::new();
 
@@ -606,7 +762,16 @@ pub fn build_system_prompt_with_modules(
         }
 
         // Add memory context from .mae/memory/*.txt
-        if let Some(memory_block) = load_memory_context(&cwd) {
+        // When model is known, use synthesized format with budget; otherwise raw injection.
+        if !model.is_empty() {
+            let limits = mae_ai::context_limits::lookup(model);
+            let provider = mae_ai::context_limits::ProviderHint::from_model(model);
+            if let Some(mem) = synthesize_memory(&cwd, tier, provider, limits.memory_budget_chars())
+            {
+                prompt.push('\n');
+                prompt.push_str(&mem);
+            }
+        } else if let Some(memory_block) = load_memory_context(&cwd) {
             prompt.push('\n');
             prompt.push_str(&memory_block);
         }
@@ -1339,6 +1504,116 @@ mod tests {
         let new_pos = result.find("new fact").unwrap();
         let old_pos = result.find("old fact").unwrap();
         assert!(new_pos < old_pos, "newer entries should come first");
+    }
+
+    // --- synthesize_memory tests ---
+
+    #[test]
+    fn synthesize_memory_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn synthesize_memory_small_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use snake_case").unwrap();
+        std::fs::write(mem_dir.join("2000_fact.txt"), "the crate uses ropey").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        assert!(result.contains("## Project Memory"));
+        assert!(result.contains("always use snake_case"));
+        assert!(result.contains("the crate uses ropey"));
+    }
+
+    #[test]
+    fn synthesize_memory_exceeds_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        for i in 0..50 {
+            let content = format!("always follow convention rule {}", i);
+            std::fs::write(mem_dir.join(format!("{:04}_fact.txt", i)), content).unwrap();
+        }
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            200, // tiny budget
+        )
+        .unwrap();
+        assert!(result.len() <= 250); // budget + header
+    }
+
+    #[test]
+    fn synthesize_memory_compact_numbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use bun").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Compact,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        // Compact tier → numbered list
+        assert!(result.contains("1. always use bun"));
+    }
+
+    #[test]
+    fn synthesize_memory_deepseek_forces_numbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use bun").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full, // Full tier, but DeepSeek → numbered
+            mae_ai::context_limits::ProviderHint::DeepSeek,
+            4000,
+        )
+        .unwrap();
+        assert!(result.contains("1. always use bun"));
+    }
+
+    #[test]
+    fn synthesize_memory_categories_ordered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_a.txt"), "bug: crash on startup").unwrap();
+        std::fs::write(mem_dir.join("2000_b.txt"), "always use tabs").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        // Conventions should appear before bugs
+        let conv_pos = result.find("always use tabs").unwrap();
+        let bug_pos = result.find("crash on startup").unwrap();
+        assert!(
+            conv_pos < bug_pos,
+            "conventions should appear before bugs: conv={}, bug={}",
+            conv_pos,
+            bug_pos
+        );
     }
 
     #[test]

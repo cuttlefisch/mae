@@ -211,7 +211,9 @@ pub fn manage_shell_lifecycle(
         }
     }
 
-    // Handle exited shells.
+    // Handle exited shells — process highest index first so removals
+    // don't invalidate subsequent indices.
+    exited_shells.sort_unstable_by(|a, b| b.cmp(a));
     for buf_idx in &exited_shells {
         debug!(buf_idx, "shell exited — cleaning up buffer");
     }
@@ -240,17 +242,10 @@ pub fn manage_shell_lifecycle(
                 editor.window_mgr.focused_window_mut().buffer_idx = target;
             }
             editor.buffers.remove(buf_idx);
-            // Fix up buffer indices in all windows after removal
+            editor.notify_buffer_removed(buf_idx);
             for win in editor.window_mgr.iter_windows_mut() {
                 if win.buffer_idx > buf_idx {
                     win.buffer_idx -= 1;
-                }
-            }
-            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
-                if *alt > buf_idx {
-                    *alt -= 1;
-                } else if *alt == buf_idx {
-                    *alt = 0;
                 }
             }
             editor.set_status(label);
@@ -358,11 +353,13 @@ pub fn health_check(
     mcp_activity_active: bool,
 ) {
     // Scan for shells with exited children that weren't cleaned up.
-    let zombies: Vec<usize> = shell_terminals
+    let mut zombies: Vec<usize> = shell_terminals
         .iter()
         .filter(|(_, shell)| shell.has_exited())
         .map(|(idx, _)| *idx)
         .collect();
+    // Process highest index first so removals don't invalidate subsequent indices.
+    zombies.sort_unstable_by(|a, b| b.cmp(a));
 
     for buf_idx in zombies {
         warn!(buf_idx, "health check: found zombie shell — cleaning up");
@@ -384,16 +381,10 @@ pub fn health_check(
                 editor.window_mgr.focused_window_mut().buffer_idx = target;
             }
             editor.buffers.remove(buf_idx);
+            editor.notify_buffer_removed(buf_idx);
             for win in editor.window_mgr.iter_windows_mut() {
                 if win.buffer_idx > buf_idx {
                     win.buffer_idx -= 1;
-                }
-            }
-            if let Some(alt) = editor.alternate_buffer_idx.as_mut() {
-                if *alt > buf_idx {
-                    *alt -= 1;
-                } else if *alt == buf_idx {
-                    *alt = 0;
                 }
             }
         }

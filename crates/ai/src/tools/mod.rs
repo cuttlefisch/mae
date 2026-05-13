@@ -5,6 +5,7 @@ mod dap_tools;
 mod kb_tools;
 mod lsp_tools;
 mod shell_tools;
+pub mod tool_search;
 mod web_tools;
 
 use std::collections::HashMap;
@@ -20,7 +21,13 @@ pub use categories::{
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.
-pub const AI_PROFILES: &[&str] = &["pair-programmer", "explorer", "planner", "reviewer"];
+pub const AI_PROFILES: &[&str] = &[
+    "pair-programmer",
+    "explorer",
+    "planner",
+    "reviewer",
+    "verifier",
+];
 
 /// Generate tool definitions from the CommandRegistry.
 /// Every command (builtin or Scheme) becomes a callable AI tool.
@@ -471,6 +478,11 @@ mod tests {
         };
         let defs = scheme_tools_to_definitions(&[st]);
         assert_eq!(defs[0].permission, Some(PermissionTier::Write));
+    }
+
+    #[test]
+    fn verifier_in_profiles() {
+        assert!(AI_PROFILES.contains(&"verifier"));
     }
 
     #[test]

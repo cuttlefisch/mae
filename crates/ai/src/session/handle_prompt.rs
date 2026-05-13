@@ -114,6 +114,9 @@ impl AgentSession {
                             content: MessageContent::Text(p),
                         });
                     }
+                    // Delegate and PingNetwork are top-level commands, not
+                    // meaningful during a tool loop — ignore them.
+                    AiCommand::Delegate { .. } | AiCommand::PingNetwork { .. } => {}
                 }
             }
 
@@ -583,6 +586,21 @@ impl AgentSession {
                                     added_names.push(tool.name.clone());
                                     self.tools.push(tool.clone());
                                 }
+                            }
+                        }
+                    }
+                    // Also accept specific tool names (from search_tools results)
+                    if let Some(tools_str) = call.arguments.get("tools").and_then(|v| v.as_str()) {
+                        for name in tools_str.split(',').map(|s| s.trim()) {
+                            if name.is_empty() {
+                                continue;
+                            }
+                            if self.tools.iter().any(|t| t.name == name) {
+                                continue; // already active
+                            }
+                            if let Some(tool) = self.all_tools.iter().find(|t| t.name == name) {
+                                added_names.push(tool.name.clone());
+                                self.tools.push(tool.clone());
                             }
                         }
                     }

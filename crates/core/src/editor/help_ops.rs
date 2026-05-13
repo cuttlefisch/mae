@@ -575,20 +575,12 @@ impl Editor {
             }
         }
         self.buffers.remove(help_idx);
-        self.syntax.shift_after_remove(help_idx);
-        self.adjust_ai_target_after_remove(help_idx);
+        self.notify_buffer_removed(help_idx);
         // Fix indices that were above the removed buffer.
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx > help_idx {
                 win.buffer_idx -= 1;
             }
-        }
-        if let Some(idx) = self.alternate_buffer_idx {
-            self.alternate_buffer_idx = match idx {
-                i if i == help_idx => None,
-                i if i > help_idx => Some(i - 1),
-                i => Some(i),
-            };
         }
     }
 
