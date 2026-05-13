@@ -274,6 +274,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             turn_tokens_in,
             turn_tokens_out,
             turn_cache_read,
+            latency_ms,
             ..
         } => {
             editor.ai_session_cost_usd = session_usd;
@@ -283,6 +284,10 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai_cache_creation_tokens = cache_creation_tokens;
             editor.ai_context_window = context_window;
             editor.ai_context_used_tokens = context_used_tokens;
+            // Network diagnostics
+            editor.ai_last_api_success = Some(std::time::Instant::now());
+            editor.ai_last_api_latency_ms = Some(latency_ms);
+            editor.ai_api_call_count += 1;
             // Attach per-turn usage to the last assistant entry.
             if turn_tokens_in > 0 || turn_tokens_out > 0 {
                 if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -533,6 +538,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         }
         AiEvent::Error(msg, transcript_path) => {
             error!(error = %msg, "AI error event");
+            editor.ai_last_api_error = Some(msg.clone());
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.push_system(format!("Error: {}", msg));
                 if let Some(ref path) = transcript_path {

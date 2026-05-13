@@ -65,6 +65,7 @@ impl super::Editor {
             "theme" => self.theme.name.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "splash_image_width" => self.splash_image_width.to_string(),
+            "splash_image_height" => self.splash_image_height.to_string(),
             "splash_show_logo" => self.splash_show_logo.to_string(),
             "debug_mode" => self.debug_mode.to_string(),
             "clipboard" => self.clipboard.clone(),
@@ -194,6 +195,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.splash_image_width = v.clamp(10, 80);
+            }
+            "splash_image_height" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.splash_image_height = v.clamp(5, 50);
             }
             "splash_show_logo" => {
                 self.splash_show_logo = parse_option_bool(value)?;

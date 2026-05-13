@@ -325,6 +325,15 @@ impl AgentSession {
     /// Unpriced models (Ollama / unknown ids): tokens accumulate, USD
     /// stays at zero. This is intentional — local models are free and
     /// the user should still see throughput info.
+    pub(super) async fn update_cost_with_latency(
+        &mut self,
+        response: &ProviderResponse,
+        latency_ms: u64,
+    ) {
+        self.last_latency_ms = latency_ms;
+        self.update_cost(response).await;
+    }
+
     pub(super) async fn update_cost(&mut self, response: &ProviderResponse) {
         let Some(usage) = response.usage else { return };
         self.session_tokens_in += usage.prompt_tokens;
@@ -357,6 +366,7 @@ impl AgentSession {
                 turn_tokens_in: usage.prompt_tokens,
                 turn_tokens_out: usage.completion_tokens,
                 turn_cache_read: usage.cache_read_tokens,
+                latency_ms: self.last_latency_ms,
             })
             .await;
         if !self.warned {

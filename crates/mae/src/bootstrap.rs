@@ -453,6 +453,48 @@ pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
+/// Load memory context from `.mae/memory/*.txt` files.
+///
+/// Returns a formatted block suitable for injection into system prompts.
+/// Files are sorted by name (newest first, since names contain timestamps),
+/// and the total is capped at 8000 chars to stay within ~2K tokens.
+pub fn load_memory_context(project_root: &std::path::Path) -> Option<String> {
+    let memory_dir = project_root.join(".mae/memory");
+    if !memory_dir.exists() {
+        return None;
+    }
+    let entries = std::fs::read_dir(&memory_dir).ok()?;
+    let mut files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    // Sort by filename descending (newest timestamp first)
+    files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+
+    let mut block = String::from("## Long-term Memory\n");
+    let cap = 8000;
+    for entry in &files {
+        if block.len() >= cap {
+            break;
+        }
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                let line = format!("- {}\n", trimmed);
+                block.push_str(&line);
+            }
+        }
+    }
+    if block.len() > cap {
+        block.truncate(cap);
+        block.push_str("\n...[truncated]\n");
+    }
+    Some(block)
+}
+
 pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTier) -> String {
     build_system_prompt_with_modules(profile, tier, &[])
 }
@@ -518,6 +560,8 @@ pub fn build_system_prompt_with_modules(
             ("planner", true) => include_str!("prompts/planner-compact.xml").to_string(),
             ("planner", false) => include_str!("prompts/planner.xml").to_string(),
             ("reviewer", false) => include_str!("prompts/reviewer.xml").to_string(),
+            ("verifier", true) => include_str!("prompts/verifier-compact.xml").to_string(),
+            ("verifier", false) => include_str!("prompts/verifier.xml").to_string(),
             _ => include_str!("prompts/pair-programmer.xml").to_string(),
         }
     });
@@ -562,16 +606,9 @@ pub fn build_system_prompt_with_modules(
         }
 
         // Add memory context from .mae/memory/*.txt
-        let memory_dir = cwd.join(".mae/memory");
-        if memory_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(memory_dir) {
-                prompt.push_str("\n## Long-term Memory\n");
-                for entry in entries.flatten() {
-                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                        prompt.push_str(&format!("- {}\n", content.trim()));
-                    }
-                }
-            }
+        if let Some(memory_block) = load_memory_context(&cwd) {
+            prompt.push('\n');
+            prompt.push_str(&memory_block);
         }
 
         // Add active plans from .mae/plans/*.md
@@ -1280,5 +1317,42 @@ mod tests {
         let count = load_init_files(&mut scheme, &mut editor);
         // Count depends on whether user has an init.scm, so just verify no panic
         let _ = count;
+    }
+
+    #[test]
+    fn load_memory_context_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        assert!(load_memory_context(dir.path()).is_none());
+    }
+
+    #[test]
+    fn load_memory_context_sorted_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_old.txt"), "old fact").unwrap();
+        std::fs::write(mem_dir.join("2000_new.txt"), "new fact").unwrap();
+        let result = load_memory_context(dir.path()).unwrap();
+        assert!(result.starts_with("## Long-term Memory\n"));
+        let new_pos = result.find("new fact").unwrap();
+        let old_pos = result.find("old fact").unwrap();
+        assert!(new_pos < old_pos, "newer entries should come first");
+    }
+
+    #[test]
+    fn load_memory_context_cap_enforcement() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        // Write enough files to exceed 8000 chars
+        for i in 0..100 {
+            let content = format!("fact number {} with padding {}", i, "x".repeat(100));
+            std::fs::write(mem_dir.join(format!("{:04}_entry.txt", i)), content).unwrap();
+        }
+        let result = load_memory_context(dir.path()).unwrap();
+        // Should be capped near 8000 + truncation message
+        assert!(result.len() < 8100);
     }
 }

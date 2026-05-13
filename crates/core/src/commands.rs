@@ -488,6 +488,8 @@ impl CommandRegistry {
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("ai-accept", "Accept proposed AI changes");
         reg.register_builtin("ai-reject", "Reject proposed AI changes");
+        reg.register_builtin("ai-ping", "Test AI API connectivity (SPC a n)");
+        reg.register_builtin("verify", "Spawn verifier sub-agent to run tests (SPC a v)");
         reg.register_builtin(
             "ai-set-mode",
             "Switch the AI operating mode (standard, plan, auto-accept)",
@@ -819,6 +821,14 @@ impl CommandRegistry {
             "Export org buffer to Markdown (SPC m e m)",
         );
         reg.register_builtin("org-export-subtree", "Export subtree at cursor (SPC m e s)");
+        reg.register_builtin(
+            "markdown-to-org",
+            "Convert current Markdown buffer to Org format",
+        );
+        reg.register_builtin(
+            "org-to-markdown",
+            "Convert current Org buffer to Markdown (in-buffer)",
+        );
         // KB federation
         reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
         reg.register_builtin("kb-unregister", "Remove a registered KB instance");

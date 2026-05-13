@@ -1302,5 +1302,23 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "convert_buffer".into(),
+            description: "Convert the current buffer between Org and Markdown formats in-place."
+                .into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "target_format".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Target format: 'org' (markdown→org) or 'markdown' (org→markdown)".into(),
+                        enum_values: Some(vec!["org".into(), "markdown".into()]),
+                    },
+                )]),
+                required: vec!["target_format".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }

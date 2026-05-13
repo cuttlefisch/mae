@@ -207,6 +207,44 @@ pub fn handle_command_mode(
                 return;
             }
 
+            // :ai-ping — test AI API connectivity
+            if cmd == "ai-ping" {
+                if let Some(tx) = ai_tx {
+                    if tx
+                        .try_send(AiCommand::Prompt("Reply with exactly: pong".to_string()))
+                        .is_err()
+                    {
+                        editor.set_status("[AI] Ping failed — channel closed");
+                    } else {
+                        editor.set_status("[AI] Ping sent...");
+                    }
+                } else {
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
+                }
+                return;
+            }
+
+            // :verify [objective] — spawn verifier sub-agent
+            if cmd == "verify" || cmd.starts_with("verify ") {
+                let objective = cmd.strip_prefix("verify").unwrap_or("").trim();
+                let objective = if objective.is_empty() {
+                    "Run all tests and report results"
+                } else {
+                    objective
+                };
+                if let Some(tx) = ai_tx {
+                    let prompt = format!("[delegate:verifier] {}", objective);
+                    if tx.try_send(AiCommand::Prompt(prompt)).is_err() {
+                        editor.set_status("[AI] Verify failed — channel closed");
+                    } else {
+                        editor.set_status("[AI] Verifier spawned...");
+                    }
+                } else {
+                    editor.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
+                }
+                return;
+            }
+
             // :ai <prompt> — send to AI agent
             if let Some(prompt) = cmd.strip_prefix("ai ") {
                 let prompt = prompt.trim();
@@ -501,6 +539,32 @@ fn build_ai_status_report(
     }
     lines.push(String::new());
 
+    // Network
+    lines.push("Network".to_string());
+    lines.push("-------".to_string());
+    lines.push(format!("  API Calls:  {}", editor.ai_api_call_count));
+    if let Some(ref instant) = editor.ai_last_api_success {
+        let elapsed = instant.elapsed();
+        let secs = elapsed.as_secs();
+        let ago = if secs < 60 {
+            format!("{}s ago", secs)
+        } else if secs < 3600 {
+            format!("{}m ago", secs / 60)
+        } else {
+            format!("{}h ago", secs / 3600)
+        };
+        lines.push(format!("  Last OK:    {}", ago));
+    } else {
+        lines.push("  Last OK:    (none)".to_string());
+    }
+    if let Some(ms) = editor.ai_last_api_latency_ms {
+        lines.push(format!("  Latency:    {}ms", ms));
+    }
+    if let Some(ref err) = editor.ai_last_api_error {
+        lines.push(format!("  Last Error: {}", err));
+    }
+    lines.push(String::new());
+
     // Scheme Tools
     lines.push("Scheme Tools".to_string());
     lines.push("------------".to_string());
@@ -588,6 +652,20 @@ mod tests {
         assert!(report.contains("Provider"));
         assert!(report.contains("Permission"));
         assert!(report.contains("Session"));
+        assert!(report.contains("Network"));
         assert!(report.contains("Configuration"));
+    }
+
+    #[test]
+    fn ai_status_report_network_with_data() {
+        let mut editor = mae_core::Editor::new();
+        editor.ai_api_call_count = 5;
+        editor.ai_last_api_latency_ms = Some(123);
+        editor.ai_last_api_success = Some(std::time::Instant::now());
+        editor.ai_last_api_error = Some("timeout".to_string());
+        let report = build_ai_status_report(&editor, &None);
+        assert!(report.contains("API Calls:  5"));
+        assert!(report.contains("Latency:    123ms"));
+        assert!(report.contains("Last Error: timeout"));
     }
 }

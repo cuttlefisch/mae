@@ -121,6 +121,8 @@ pub struct AgentSession {
     pub(super) transcript_path: Option<PathBuf>,
     /// Cached string representation of transcript_path (computed once).
     pub(super) transcript_path_str: Option<String>,
+    /// Latency of the most recent provider call in milliseconds.
+    pub(super) last_latency_ms: u64,
 }
 
 impl AgentSession {
@@ -222,6 +224,7 @@ impl AgentSession {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
             transcript_path,
+            last_latency_ms: 0,
         }
     }
 

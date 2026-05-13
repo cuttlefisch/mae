@@ -168,6 +168,8 @@ pub enum AiEvent {
         turn_tokens_in: u64,
         turn_tokens_out: u64,
         turn_cache_read: u64,
+        /// Latency of this API call in milliseconds.
+        latency_ms: u64,
     },
     /// Fired once the first time cumulative session cost crosses the
     /// configured warning threshold. The editor posts this to

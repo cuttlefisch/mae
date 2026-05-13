@@ -617,6 +617,8 @@ pub struct Editor {
     pub custom_splash_arts: Vec<crate::render_common::splash::CustomSplashArt>,
     /// Max width percentage for splash image rendering area (10–80). Default 25.
     pub splash_image_width: u32,
+    /// Max height percentage of viewport for splash image (5–50). Default 20.
+    pub splash_image_height: u32,
     /// Show ASCII MAE logo text below splash art/image. Default true.
     pub splash_show_logo: bool,
     /// Pending operator for operator-pending mode (`d`, `c`, `y`).
@@ -657,6 +659,14 @@ pub struct Editor {
     pub ai_context_window: u64,
     /// Estimated tokens currently used in context.
     pub ai_context_used_tokens: u64,
+    /// Timestamp of the last successful AI API call.
+    pub ai_last_api_success: Option<std::time::Instant>,
+    /// Last AI API error message (if any).
+    pub ai_last_api_error: Option<String>,
+    /// Latency of the last AI API call in milliseconds.
+    pub ai_last_api_latency_ms: Option<u64>,
+    /// Total number of AI API calls this session.
+    pub ai_api_call_count: u64,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -1065,6 +1075,7 @@ impl Editor {
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
             splash_image_width: 25,
+            splash_image_height: 20,
             splash_show_logo: true,
             pending_operator: None,
             operator_start: None,
@@ -1108,6 +1119,10 @@ impl Editor {
             ai_cache_creation_tokens: 0,
             ai_context_window: 0,
             ai_context_used_tokens: 0,
+            ai_last_api_success: None,
+            ai_last_api_error: None,
+            ai_last_api_latency_ms: None,
+            ai_api_call_count: 0,
             bell_until: None,
             project: None,
             git_branch: None,

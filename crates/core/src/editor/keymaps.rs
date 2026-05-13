@@ -223,6 +223,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
         normal.bind(parse_key_seq_spaced("SPC a m"), "ai-set-mode");
         normal.bind(parse_key_seq_spaced("SPC a P"), "ai-set-profile");
+        normal.bind(parse_key_seq_spaced("SPC a n"), "ai-ping");
+        normal.bind(parse_key_seq_spaced("SPC a v"), "verify");
         // +help
         normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");

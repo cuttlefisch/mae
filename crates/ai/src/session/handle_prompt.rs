@@ -322,21 +322,24 @@ impl AgentSession {
             // Token-aware trim before every provider call (not just the first)
             self.trim_messages();
 
+            let call_start = tokio::time::Instant::now();
             let response = match self
                 .provider
                 .send(&self.messages, &self.tools, &self.system_prompt)
                 .await
             {
                 Ok(r) => {
+                    let latency_ms = call_start.elapsed().as_millis() as u64;
                     debug!(
                         round,
+                        latency_ms,
                         stop_reason = ?r.stop_reason,
                         tool_calls = r.tool_calls.len(),
                         has_text = r.text.is_some(),
                         "AI provider response received"
                     );
                     self.consecutive_errors = 0; // Reset circuit breaker on success
-                    self.update_cost(&r).await;
+                    self.update_cost_with_latency(&r, latency_ms).await;
                     r
                 }
                 Err(e) => {

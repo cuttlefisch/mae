@@ -151,6 +151,18 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "spell_check" => execute_dispatch_command(editor, "spell-check-buffer"),
         "lookup_online" => execute_dispatch_command(editor, "lookup-online"),
         "next_error" => execute_dispatch_command(editor, "next-error"),
+        "convert_buffer" => {
+            let fmt = call
+                .arguments
+                .get("target_format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match fmt {
+                "org" => execute_dispatch_command(editor, "markdown-to-org"),
+                "markdown" => execute_dispatch_command(editor, "org-to-markdown"),
+                _ => Err("target_format must be 'org' or 'markdown'".into()),
+            }
+        }
         _ => return None,
     };
     Some(result)

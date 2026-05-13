@@ -147,6 +147,13 @@ impl Editor {
             "org-export-subtree" => {
                 self.org_export_subtree();
             }
+            // In-buffer format conversion
+            "markdown-to-org" => {
+                self.markdown_to_org();
+            }
+            "org-to-markdown" => {
+                self.org_to_markdown_buffer();
+            }
             // KB federation commands
             "kb-instances" => {
                 self.kb_instances();

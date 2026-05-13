@@ -447,6 +447,30 @@ impl Editor {
         }
     }
 
+    /// Convert current Markdown buffer to Org format (in-buffer).
+    /// Uses AI-aware buffer targeting.
+    pub fn markdown_to_org(&mut self) {
+        let buf_idx = self.ai_active_buffer_idx();
+        let source = self.buffers[buf_idx].rope().to_string();
+        let (meta, elements) = export::markdown_parser::parse_markdown_document(&source);
+        let writer = export::org_writer::OrgWriter;
+        let org_text = export::Exporter::export(&writer, &meta, &elements);
+        self.buffers[buf_idx].replace_contents(&org_text);
+        self.set_status("Converted Markdown → Org");
+    }
+
+    /// Convert current Org buffer to Markdown (in-buffer).
+    /// Uses AI-aware buffer targeting.
+    pub fn org_to_markdown_buffer(&mut self) {
+        let buf_idx = self.ai_active_buffer_idx();
+        let source = self.buffers[buf_idx].rope().to_string();
+        let (meta, elements) = export::parse_org_document(&source);
+        let exporter = MarkdownExporter;
+        let md_text = export::Exporter::export(&exporter, &meta, &elements);
+        self.buffers[buf_idx].replace_contents(&md_text);
+        self.set_status("Converted Org → Markdown");
+    }
+
     /// List KB instances — returns structured info for AI tools.
     pub fn kb_instances(&mut self) -> String {
         if self.kb_registry.instances.is_empty() {

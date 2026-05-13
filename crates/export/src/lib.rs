@@ -5,6 +5,8 @@
 
 pub mod html;
 pub mod markdown;
+pub mod markdown_parser;
+pub mod org_writer;
 
 /// Document-level metadata extracted from org keywords.
 #[derive(Debug, Clone, Default)]
@@ -857,5 +859,35 @@ mod tests {
         ];
         let sub = extract_subtree(&elements, 0);
         assert_eq!(sub.len(), 4); // H1, p1, H2, p2
+    }
+
+    #[test]
+    fn roundtrip_org_to_md_to_org() {
+        let org_src =
+            "#+title: Test\n\n* Heading\n\nSome paragraph text.\n\n- item one\n- item two\n";
+        let (meta, elements) = parse_org_document(org_src);
+        let md_exporter = markdown::MarkdownExporter;
+        let md = md_exporter.export(&meta, &elements);
+        let (meta2, elements2) = markdown_parser::parse_markdown_document(&md);
+        assert_eq!(meta2.title.as_deref(), Some("Test"));
+        // Should have heading + paragraph + list
+        assert!(elements2.len() >= 3, "got {} elements", elements2.len());
+    }
+
+    #[test]
+    fn roundtrip_md_to_org_to_md() {
+        let md_src = "# Heading\n\nA paragraph.\n\n```python\nprint(1)\n```\n\n- one\n- two\n";
+        let (meta, elements) = markdown_parser::parse_markdown_document(md_src);
+        let org_writer = org_writer::OrgWriter;
+        let org = org_writer.export(&meta, &elements);
+        let (meta2, elements2) = parse_org_document(&org);
+        // Should preserve structure
+        assert!(meta2.title.is_none()); // no title in original
+        assert!(elements2.len() >= 3, "got {} elements", elements2.len());
+        // Check heading survived
+        assert!(matches!(
+            &elements2[0],
+            OrgElement::Heading { level: 1, .. }
+        ));
     }
 }

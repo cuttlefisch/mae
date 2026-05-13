@@ -101,7 +101,8 @@ pub fn render_splash(
     let width_pct = editor.splash_image_width.clamp(10, 80) as f32 / 100.0;
     let area_px_w = area_width as f32 * cell_w;
     let render_box_w = area_px_w * width_pct;
-    let render_box_h = area_height as f32 * cell_h * 0.35;
+    let height_pct = editor.splash_image_height.clamp(5, 50) as f32 / 100.0;
+    let render_box_h = area_height as f32 * cell_h * height_pct;
 
     let mut image_lines = 0usize;
     let mut img_actual_w = 0.0f32;
@@ -210,13 +211,35 @@ pub fn render_splash(
         sections.push(sec);
     }
 
-    // --- Layout: compute vertical centering ---
-    let total_height: usize = sections.iter().map(|s| s.height()).sum();
-    let top_pad = area_height.saturating_sub(total_height) / 2;
+    // --- Layout: vertical centering + proportional inter-section spacing ---
+    //
+    // When an image is present the layout has a "hero" (image) above a "body"
+    // (tagline + version + quick actions + dismiss).  We insert a gap between
+    // hero and body that scales with available space but stays bounded:
+    //   - Minimum 2 lines (so the tagline never touches the image)
+    //   - Maximum ~8% of viewport height (so a small image doesn't create a
+    //     chasm, and a large image still has breathing room)
+    // The remaining free space is split evenly above and below the whole block.
+    let content_height: usize = sections.iter().map(|s| s.height()).sum();
+    let hero_gap = if has_image {
+        let min_gap = 2usize;
+        let max_gap = (area_height as f32 * 0.08).ceil() as usize;
+        min_gap
+            .max(max_gap)
+            .min(area_height.saturating_sub(content_height))
+    } else {
+        0
+    };
+    let total_with_gap = content_height + hero_gap;
+    let top_pad = area_height.saturating_sub(total_with_gap) / 2;
 
     // --- Render sections ---
     let mut row = area_row + top_pad;
-    for section in &sections {
+    for (sec_idx, section) in sections.iter().enumerate() {
+        // Insert hero-to-body gap after section 0 (image placeholder).
+        if sec_idx == 1 && has_image && hero_gap > 0 {
+            row += hero_gap;
+        }
         if section.is_empty() {
             continue;
         }
