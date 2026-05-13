@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # Stage: base — shared Rust toolchain + system deps
 # ---------------------------------------------------------------------------
-ARG RUST_VERSION=1.94
+ARG RUST_VERSION=1.95
 FROM rust:${RUST_VERSION}-slim-bookworm AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
