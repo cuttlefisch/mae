@@ -51,6 +51,7 @@ pub struct ToolProperty {
 /// A tool call requested by the AI model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    #[serde(default)]
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,

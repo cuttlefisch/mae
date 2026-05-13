@@ -8,7 +8,7 @@ models have been validated with the deterministic model exam.
 | Model | Provider | Verdict | Pass Rate | Date | Notes |
 |-------|----------|---------|-----------|------|-------|
 | claude-sonnet-4-20250514 | Claude | -- | -- | -- | Not yet tested |
-| claude-opus-4-20250514 | Claude | -- | -- | -- | Not yet tested |
+| claude-opus-4-6 | Claude | **PASS** | 100% | 2026-05-14 | 10/10 tests via Claude Code MCP |
 | gpt-4o | OpenAI | -- | -- | -- | Not yet tested |
 | gemini-2.5-pro | Gemini | -- | -- | -- | Not yet tested |
 | deepseek-chat | DeepSeek | -- | -- | -- | Not yet tested |
