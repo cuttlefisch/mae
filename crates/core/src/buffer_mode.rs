@@ -53,6 +53,12 @@ pub trait BufferMode {
     fn markup_flavor(&self) -> Option<crate::syntax::MarkupFlavor> {
         None
     }
+
+    /// Whether this buffer only allows Normal mode (blocks Insert, Visual, etc.).
+    /// Used for UI-only buffers like the splash Dashboard.
+    fn normal_mode_only(&self) -> bool {
+        false
+    }
 }
 
 impl BufferMode for BufferKind {
@@ -128,6 +134,10 @@ impl BufferMode for BufferKind {
             Self::Help | Self::Conversation => Some(crate::syntax::MarkupFlavor::Markdown),
             _ => None,
         }
+    }
+
+    fn normal_mode_only(&self) -> bool {
+        matches!(self, Self::Dashboard | Self::Modules)
     }
 
     fn read_only(&self) -> bool {
@@ -279,6 +289,16 @@ mod tests {
     #[test]
     fn diff_buffer_kind_mode_name() {
         assert_eq!(BufferKind::Diff.mode_name(), "Diff");
+    }
+
+    #[test]
+    fn buffer_mode_normal_mode_only() {
+        assert!(BufferKind::Dashboard.normal_mode_only());
+        assert!(BufferKind::Modules.normal_mode_only());
+        assert!(!BufferKind::Text.normal_mode_only());
+        assert!(!BufferKind::Help.normal_mode_only());
+        assert!(!BufferKind::GitStatus.normal_mode_only());
+        assert!(!BufferKind::Shell.normal_mode_only());
     }
 
     #[test]

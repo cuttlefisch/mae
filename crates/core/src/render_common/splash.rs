@@ -81,6 +81,7 @@ pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC h h", "Help", "help"),
     ("SPC h t", "Tutorial", "tutor"),
     ("SPC t s", "Set theme", "theme-picker"),
+    ("SPC x", "Scratch buffer", "toggle-scratch-buffer"),
     ("SPC q q", "Quit", "quit"),
 ];
 
@@ -129,9 +130,9 @@ pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
 
     let mut lines: Vec<SplashLine> = Vec::new();
 
-    // Art.
+    // Art (ASCII lines — for image-only arts these may be empty).
     let art_lines: Vec<&str> = art_str.lines().collect();
-    let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+    let art_text_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     for (i, line) in art_lines.iter().enumerate() {
         let key = if accent_lines.contains(&i) {
             "string"
@@ -145,16 +146,27 @@ pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
         });
     }
 
-    // Logo.
-    let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
-    let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
-    let logo_pad = art_width.saturating_sub(logo_width) / 2;
-    for line in &logo_lines {
-        lines.push(SplashLine {
-            text: format!("{:>pad$}{}", "", line, pad = logo_pad),
-            theme_key: "function",
-            is_selected: false,
-        });
+    // When art_text_width is 0 (image-only art, TUI can't render images),
+    // use a fallback width so text elements center properly.
+    let art_width = if art_text_width > 0 {
+        art_text_width
+    } else {
+        58 // fallback for image-only art (approx QA block width)
+    };
+
+    // Logo: auto-hide when image art is selected (image IS the logo).
+    let has_image = custom.is_some_and(|c| c.image_path.is_some());
+    if editor.splash_show_logo && !has_image {
+        let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
+        let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+        let logo_pad = art_width.saturating_sub(logo_width) / 2;
+        for line in &logo_lines {
+            lines.push(SplashLine {
+                text: format!("{:>pad$}{}", "", line, pad = logo_pad),
+                theme_key: "function",
+                is_selected: false,
+            });
+        }
     }
 
     // Subtitle.
@@ -200,40 +212,8 @@ pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
         is_selected: false,
     });
 
-    // Recent files.
-    let recent: Vec<&str> = editor
-        .recent_files
-        .list()
-        .iter()
-        .take(5)
-        .map(|p| p.to_str().unwrap_or("?"))
-        .collect();
-    if !recent.is_empty() {
-        let header = "Recent Files";
-        let header_pad = art_width.saturating_sub(header.len()) / 2;
-        lines.push(SplashLine {
-            text: format!("{:>w$}{}", "", header, w = header_pad),
-            theme_key: "comment",
-            is_selected: false,
-        });
-        for (i, path) in recent.iter().enumerate() {
-            let label = format!("  {}  {}", i + 1, truncate_path_simple(path, 50));
-            let label_pad = art_width.saturating_sub(label.len()) / 2;
-            lines.push(SplashLine {
-                text: format!("{:>w$}{}", "", label, w = label_pad),
-                theme_key: "type",
-                is_selected: false,
-            });
-        }
-        lines.push(SplashLine {
-            text: String::new(),
-            theme_key: "comment",
-            is_selected: false,
-        });
-    }
-
     // Dismiss hint.
-    let dismiss = "j/k to navigate, Enter to select, any other key to dismiss";
+    let dismiss = "j/k navigate · Enter select";
     let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
     lines.push(SplashLine {
         text: format!("{:>w$}{}", "", dismiss, w = dismiss_pad),
@@ -242,14 +222,6 @@ pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
     });
 
     (lines, art_width)
-}
-
-fn truncate_path_simple(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        path.to_string()
-    } else {
-        format!("...{}", &path[path.len() - max_len + 3..])
-    }
 }
 
 #[cfg(test)]

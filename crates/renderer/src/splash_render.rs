@@ -50,8 +50,12 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Art lines with two-tone coloring (TUI always uses ASCII, no images).
+    let has_image = custom.is_some_and(|c| c.image_path.is_some());
     let art_lines: Vec<&str> = art_str.lines().collect();
     let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+    // When art_width is 0 (image-only art, TUI can't render images),
+    // use the dismiss hint width as fallback so text centers properly.
+    let art_width = if art_width > 0 { art_width } else { 58 };
     for (i, line) in art_lines.iter().enumerate() {
         let style = if accent_lines.contains(&i) {
             art_accent
@@ -65,19 +69,21 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     let center_block_pad =
         |block_width: usize| -> usize { art_width.saturating_sub(block_width) / 2 };
 
-    // MAE logo.
-    let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
-    let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
-    let logo_pad = center_block_pad(logo_width);
-    for line in &logo_lines {
-        let padded = format!(
-            "{:>pad$}{:<width$}",
-            "",
-            line,
-            pad = logo_pad,
-            width = logo_width
-        );
-        lines.push(Line::styled(padded, logo_style));
+    // MAE logo (auto-hide when image art is selected — the image IS the logo).
+    if editor.splash_show_logo && !has_image {
+        let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
+        let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+        let logo_pad = center_block_pad(logo_width);
+        for line in &logo_lines {
+            let padded = format!(
+                "{:>pad$}{:<width$}",
+                "",
+                line,
+                pad = logo_pad,
+                width = logo_width
+            );
+            lines.push(Line::styled(padded, logo_style));
+        }
     }
 
     // Subtitle.
@@ -129,39 +135,8 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     }
     lines.push(Line::raw(""));
 
-    // Recent files (up to 5).
-    let recent: Vec<&std::path::Path> = editor
-        .recent_files
-        .list()
-        .iter()
-        .take(5)
-        .map(|p| p.as_path())
-        .collect();
-    if !recent.is_empty() {
-        let header = "Recent Files";
-        let header_pad = center_block_pad(header.len());
-        lines.push(Line::styled(
-            format!("{:>w$}{}", "", header, w = header_pad),
-            subtitle_style,
-        ));
-        for (i, path) in recent.iter().enumerate() {
-            let display = path.display().to_string();
-            let truncated = if display.len() > 50 {
-                format!("...{}", &display[display.len() - 47..])
-            } else {
-                display
-            };
-            lines.push(Line::from(vec![
-                Span::raw(" ".repeat(qa_pad)),
-                Span::styled(format!("  {}  ", i + 1), key_style),
-                Span::styled(truncated, desc_style),
-            ]));
-        }
-        lines.push(Line::raw(""));
-    }
-
     // Dismiss hint.
-    let dismiss = "j/k to navigate, Enter to select, any other key to dismiss";
+    let dismiss = "j/k navigate · Enter select";
     let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
     lines.push(Line::styled(
         format!("{:>width$}{}", "", dismiss, width = dismiss_pad),

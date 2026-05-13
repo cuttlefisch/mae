@@ -615,6 +615,10 @@ pub struct Editor {
     pub splash_art: Option<String>,
     /// Custom splash arts registered via `(register-splash-art! ...)`.
     pub custom_splash_arts: Vec<crate::render_common::splash::CustomSplashArt>,
+    /// Max width percentage for splash image rendering area (10–80). Default 25.
+    pub splash_image_width: u32,
+    /// Show ASCII MAE logo text below splash art/image. Default true.
+    pub splash_show_logo: bool,
     /// Pending operator for operator-pending mode (`d`, `c`, `y`).
     /// When set, the next motion completes the operator.
     pub pending_operator: Option<String>,
@@ -1060,6 +1064,8 @@ impl Editor {
             last_help_state: None,
             splash_art: Some("bat".to_string()),
             custom_splash_arts: Vec::new(),
+            splash_image_width: 25,
+            splash_show_logo: true,
             pending_operator: None,
             operator_start: None,
             operator_count: None,
@@ -1824,6 +1830,20 @@ impl Editor {
 
     /// Set the editor mode and fire the `mode-change` hook.
     pub fn set_mode(&mut self, mode: Mode) {
+        // Block non-Normal modes for buffers that only allow Normal mode
+        // (e.g. Dashboard, Modules).
+        if mode != Mode::Normal
+            && mode != Mode::Command
+            && mode != Mode::Search
+            && mode != Mode::CommandPalette
+            && mode != Mode::FilePicker
+            && mode != Mode::FileBrowser
+        {
+            use crate::BufferMode;
+            if self.active_buffer().kind.normal_mode_only() {
+                return;
+            }
+        }
         if self.mode != mode {
             self.mode = mode;
             self.fire_hook("mode-change");

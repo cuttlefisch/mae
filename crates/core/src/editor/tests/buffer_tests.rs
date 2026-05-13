@@ -87,6 +87,26 @@ fn toggle_scratch_buffer_switches() {
 }
 
 #[test]
+fn dashboard_blocks_insert_and_visual_mode() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    assert_eq!(editor.mode, crate::Mode::Normal);
+
+    // Insert mode should be blocked.
+    editor.set_mode(crate::Mode::Insert);
+    assert_eq!(editor.mode, crate::Mode::Normal);
+
+    // Visual mode should be blocked.
+    editor.set_mode(crate::Mode::Visual(crate::VisualType::Char));
+    assert_eq!(editor.mode, crate::Mode::Normal);
+
+    // Command mode should still work (needed for : commands).
+    editor.set_mode(crate::Mode::Command);
+    assert_eq!(editor.mode, crate::Mode::Command);
+    editor.set_mode(crate::Mode::Normal);
+}
+
+#[test]
 fn kill_buffer_single_becomes_scratch() {
     let mut editor = Editor::new();
     editor.dispatch_builtin("kill-buffer");
