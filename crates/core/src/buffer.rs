@@ -1157,7 +1157,11 @@ impl Buffer {
             let flat = conv.flat_text();
             let old_len = self.rope.len_chars();
             self.rope = Rope::from_str(&flat);
-            self.rope.len_chars() != old_len
+            let changed = self.rope.len_chars() != old_len;
+            if changed {
+                self.generation += 1;
+            }
+            changed
         } else {
             false
         }
@@ -2186,5 +2190,28 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert_eq!(saved, content);
         assert!(!buf.modified);
+    }
+
+    #[test]
+    fn generation_incremented_on_rope_sync() {
+        let mut buf = Buffer::new();
+        buf.view = BufferView::Conversation(Box::default());
+        let gen_before = buf.generation;
+
+        if let Some(conv) = buf.conversation_mut() {
+            conv.push_assistant("Hello");
+        }
+        let changed = buf.sync_conversation_rope();
+        assert!(changed);
+        assert!(
+            buf.generation > gen_before,
+            "generation should increment when rope content changes"
+        );
+
+        // Second sync with no new content — generation unchanged.
+        let gen_after_first = buf.generation;
+        let changed2 = buf.sync_conversation_rope();
+        assert!(!changed2);
+        assert_eq!(buf.generation, gen_after_first);
     }
 }

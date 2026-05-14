@@ -114,19 +114,128 @@ pub fn execute_tool(
         });
     }
 
-    // 4b. Handle self_test_suite (returns structured test plan).
+    // 4b. Handle self_test_suite (returns structured test plan or grades results).
     // Auto-save editor state so it can be restored when the session completes.
     if call.name == "self_test_suite" {
-        if !editor.self_test_active {
-            editor.save_state();
-            editor.self_test_active = true;
-        }
-        let filter = call
+        let action = call
             .arguments
-            .get("categories")
+            .get("action")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let output = super::self_test::build_self_test_plan(filter);
+            .unwrap_or("plan");
+
+        let output = match action {
+            "plan" => {
+                if !editor.self_test_active {
+                    editor.save_state();
+                    editor.self_test_active = true;
+                }
+                // Create sandbox if not already present.
+                if editor.test_sandbox_dir.is_none() {
+                    let project_root = editor
+                        .active_project_root()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let sandbox = super::sandbox::create_test_sandbox(&project_root);
+                    editor.test_sandbox_dir = Some(sandbox.dir);
+                }
+                let sandbox_path = editor
+                    .test_sandbox_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                let filter = call
+                    .arguments
+                    .get("categories")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                super::self_test::build_self_test_plan(filter, &sandbox_path)
+            }
+            "grade" => {
+                let model = call
+                    .arguments
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let results = call.arguments.get("results").and_then(|v| v.as_array());
+                match results {
+                    Some(arr) => {
+                        let mut grades = Vec::new();
+                        for entry in arr {
+                            let test_id =
+                                entry.get("test_id").and_then(|v| v.as_str()).unwrap_or("0");
+                            let output_text =
+                                entry.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                            let success = entry
+                                .get("success")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let tool_calls: Vec<ToolCall> = entry
+                                .get("tool_calls")
+                                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                .unwrap_or_default();
+                            let final_text = entry
+                                .get("final_text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+
+                            if let Some(grading_val) = entry.get("grading") {
+                                if let Ok(spec) =
+                                    serde_json::from_value::<super::grading::GradingSpec>(
+                                        grading_val.clone(),
+                                    )
+                                {
+                                    let grade = if !tool_calls.is_empty() || !final_text.is_empty()
+                                    {
+                                        super::grading::grade_prompt_result(
+                                            &spec,
+                                            test_id,
+                                            &tool_calls,
+                                            final_text,
+                                        )
+                                    } else {
+                                        super::grading::grade_tool_result(
+                                            &spec,
+                                            test_id,
+                                            output_text,
+                                            success,
+                                        )
+                                    };
+                                    grades.push(grade);
+                                }
+                            }
+                        }
+                        let result = super::model_exam::aggregate_grades(model, &grades);
+                        let mut output = serde_json::to_string_pretty(&result).unwrap_or_default();
+
+                        // Auto-save exam run.
+                        let run = super::model_exam::ExamRun {
+                            timestamp: chrono::Utc::now()
+                                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                            runner: "mae-builtin".to_string(),
+                            mae_version: env!("CARGO_PKG_VERSION").to_string(),
+                            result: result.clone(),
+                            grades: grades.clone(),
+                        };
+                        match super::model_exam::save_exam_run(&run) {
+                            Ok(path) => {
+                                output.push_str(&format!(
+                                    "\n\nExam results saved to: {}",
+                                    path.display()
+                                ));
+                            }
+                            Err(e) => {
+                                output.push_str(&format!(
+                                    "\n\nWarning: failed to save exam results: {e}"
+                                ));
+                            }
+                        }
+                        output
+                    }
+                    None => "Missing 'results' array for grade action".to_string(),
+                }
+            }
+            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+        };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             tool_name: call.name.clone(),
@@ -160,7 +269,7 @@ pub fn execute_tool(
         });
     }
 
-    // 4d. Handle model_exam (exam plan + grading).
+    // 4d. Handle model_exam (deprecated — delegates to self_test_suite).
     if call.name == "model_exam" {
         let action = call
             .arguments
@@ -168,8 +277,14 @@ pub fn execute_tool(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let output = match action {
-            "plan" => super::model_exam::build_exam_plan(),
+            "plan" => {
+                // Delegate to self_test_suite with exam-only categories.
+                let exam_cats =
+                    "tool_selection,parameter_accuracy,output_interpretation,multi_step,pushback";
+                super::self_test::build_self_test_plan(exam_cats, "")
+            }
             "grade" => {
+                // Legacy grading path — use original exam grading.
                 let model = call
                     .arguments
                     .get("model")
@@ -180,7 +295,6 @@ pub fn execute_tool(
                     Some(arr) => {
                         let tests: Vec<super::model_exam::ExamTest> =
                             serde_json::from_value(serde_json::Value::Array(
-                                // Re-read the canonical tests
                                 serde_json::from_str(&super::model_exam::build_exam_plan())
                                     .unwrap_or_default(),
                             ))
@@ -207,8 +321,6 @@ pub fn execute_tool(
                         }
                         let result = super::model_exam::aggregate_grades(model, &grades);
                         let mut output = serde_json::to_string_pretty(&result).unwrap_or_default();
-
-                        // Auto-save exam run
                         let run = super::model_exam::ExamRun {
                             timestamp: chrono::Utc::now()
                                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -275,6 +387,18 @@ pub fn execute_tool(
             success: true,
             output,
         });
+    }
+
+    // 4f. Sandbox guard — confine write-path tools during test mode.
+    if let Some(ref sandbox_dir) = editor.test_sandbox_dir {
+        if let Some(err) = sandbox_guard(&call.name, &call.arguments, sandbox_dir) {
+            return ExecuteResult::Immediate(ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: err,
+            });
+        }
     }
 
     // 5. Dispatch synchronous tools via submodules
@@ -418,6 +542,42 @@ fn validate_json_type(
         }
     }
     Ok(())
+}
+
+/// Check write-path tools against the sandbox directory during test mode.
+/// Returns `Some(error_message)` if the call should be blocked, `None` if OK.
+fn sandbox_guard(
+    tool_name: &str,
+    args: &serde_json::Value,
+    sandbox_dir: &std::path::Path,
+) -> Option<String> {
+    match tool_name {
+        "create_file" => {
+            if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                if let Err(e) = super::sandbox::validate_write_path(path, sandbox_dir) {
+                    return Some(e);
+                }
+            }
+        }
+        "rename_file" => {
+            for key in &["old_path", "new_path"] {
+                if let Some(path) = args.get(*key).and_then(|v| v.as_str()) {
+                    if let Err(e) = super::sandbox::validate_write_path(path, sandbox_dir) {
+                        return Some(e);
+                    }
+                }
+            }
+        }
+        "shell_exec" => {
+            if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                if let Err(e) = super::sandbox::filter_shell_command(cmd, sandbox_dir) {
+                    return Some(e);
+                }
+            }
+        }
+        _ => {}
+    }
+    None
 }
 
 fn json_type_name(v: &serde_json::Value) -> &'static str {

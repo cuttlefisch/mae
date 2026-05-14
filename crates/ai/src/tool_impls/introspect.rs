@@ -35,6 +35,9 @@ pub fn execute_introspect(editor: &Editor, args: &serde_json::Value) -> Result<S
     if section == "all" || section == "kb" {
         result.insert("kb".into(), build_kb_section(editor));
     }
+    if section == "all" || section == "lsp" {
+        result.insert("lsp".into(), build_lsp_section(editor));
+    }
     if section == "frame" {
         result.insert("frame".into(), build_frame_section(editor));
     }
@@ -258,6 +261,35 @@ fn build_kb_section(editor: &Editor) -> serde_json::Value {
     })
 }
 
+fn build_lsp_section(editor: &Editor) -> serde_json::Value {
+    let servers: Vec<serde_json::Value> = editor
+        .lsp_servers
+        .iter()
+        .map(|(lang, info)| {
+            json!({
+                "language": lang,
+                "status": format!("{:?}", info.status),
+                "command": info.command,
+                "binary_found": info.binary_found,
+            })
+        })
+        .collect();
+    let any_connected = editor
+        .lsp_servers
+        .values()
+        .any(|i| matches!(i.status, mae_core::editor::LspServerStatus::Connected));
+    let any_starting = editor
+        .lsp_servers
+        .values()
+        .any(|i| matches!(i.status, mae_core::editor::LspServerStatus::Starting));
+    json!({
+        "server_count": editor.lsp_servers.len(),
+        "servers": servers,
+        "any_connected": any_connected,
+        "any_starting": any_starting,
+    })
+}
+
 fn build_ai_section(editor: &Editor) -> serde_json::Value {
     let conv_entries = editor.conversation().map(|c| c.entries.len()).unwrap_or(0);
     let context_usage_pct = if editor.ai_context_window > 0 {
@@ -291,4 +323,52 @@ fn build_ai_section(editor: &Editor) -> serde_json::Value {
         "context_used_tokens": editor.ai_context_used_tokens,
         "context_usage_pct": context_usage_pct,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mae_core::editor::{LspServerInfo, LspServerStatus};
+    use mae_core::Editor;
+
+    #[test]
+    fn introspect_lsp_section_empty() {
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({"section": "lsp"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let lsp = &val["lsp"];
+        assert_eq!(lsp["server_count"], 0);
+        assert_eq!(lsp["any_connected"], false);
+        assert_eq!(lsp["any_starting"], false);
+        assert!(lsp["servers"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn introspect_lsp_section_with_servers() {
+        let mut editor = Editor::new();
+        editor.lsp_servers.insert(
+            "rust".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Connected,
+                command: "rust-analyzer".to_string(),
+                binary_found: true,
+            },
+        );
+        editor.lsp_servers.insert(
+            "python".to_string(),
+            LspServerInfo {
+                status: LspServerStatus::Starting,
+                command: "pyright".to_string(),
+                binary_found: true,
+            },
+        );
+        let result = execute_introspect(&editor, &json!({"section": "lsp"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let lsp = &val["lsp"];
+        assert_eq!(lsp["server_count"], 2);
+        assert_eq!(lsp["any_connected"], true);
+        assert_eq!(lsp["any_starting"], true);
+        let servers = lsp["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 2);
+    }
 }

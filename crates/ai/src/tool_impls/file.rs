@@ -103,10 +103,56 @@ pub fn execute_ai_save(editor: &mut Editor, args: &serde_json::Value) -> Result<
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
 
-    let p = Path::new(path);
-    match editor.ai_save(p) {
-        Ok(n) => Ok(format!("Saved {} entries to {}", n, p.display())),
+    let expanded = mae_core::file_picker::expand_tilde(path);
+    let p = Path::new(&expanded);
+
+    // If the path has no directory component or points directly into $HOME,
+    // redirect to the XDG transcripts directory so test runs and casual saves
+    // don't litter the home directory.
+    let resolved = if should_redirect_to_transcripts(p) {
+        let transcripts_dir = transcripts_dir();
+        let _ = std::fs::create_dir_all(&transcripts_dir);
+        let filename = p
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("conversation.json"));
+        transcripts_dir.join(filename)
+    } else {
+        PathBuf::from(p)
+    };
+
+    match editor.ai_save(&resolved) {
+        Ok(n) => Ok(format!("Saved {} entries to {}", n, resolved.display())),
         Err(e) => Err(e),
+    }
+}
+
+/// Returns true if the save path should be redirected to the transcripts dir.
+/// Catches: bare filenames, `~/foo.json`, `$HOME/foo.json` (no subdirectory).
+fn should_redirect_to_transcripts(p: &Path) -> bool {
+    // Bare filename with no directory component → redirect.
+    if p.parent().is_none_or(|parent| parent == Path::new("")) {
+        return true;
+    }
+    // Direct child of $HOME (e.g. ~/foo.json) → redirect.
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = PathBuf::from(&home);
+        if let Some(parent) = p.parent() {
+            if parent == home_path {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// XDG-compliant transcripts directory.
+fn transcripts_dir() -> PathBuf {
+    if let Ok(data) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(data).join("mae/transcripts")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".local/share/mae/transcripts")
+    } else {
+        PathBuf::from("/tmp/mae-transcripts")
     }
 }
 

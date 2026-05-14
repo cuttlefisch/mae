@@ -503,19 +503,46 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
-        // --- Self-test suite ---
+        // --- Self-test suite (v3: sandbox, grading, exam categories) ---
         ToolDefinition {
             name: "self_test_suite".into(),
-            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. IMPORTANT: This tool only returns the plan; it does NOT execute the tests. The agent must parse the plan and call the individual tools sequentially to perform the validation. Use 'categories' argument for targeted testing if the full plan is too large.".into(),
+            description: "Unified test suite for MAE's AI tool surface. Actions: 'plan' (default) returns a v3 JSON test plan with sandbox paths, deterministic grading specs, and both direct-tool + prompt-based tests. 'grade' accepts results array and returns deterministic ExamResult with verdict. File writes are confined to a sandbox directory during test mode.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "categories".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance".into(),
-                        enum_values: None,
-                    },                )]),
+                properties: HashMap::from([
+                    (
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Action: 'plan' to get test plan, 'grade' to grade results (default: plan)".into(),
+                            enum_values: Some(vec!["plan".into(), "grade".into()]),
+                        },
+                    ),
+                    (
+                        "categories".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Comma-separated categories (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance, scrolling, babel, modules, federation, guidance, tool_selection, parameter_accuracy, output_interpretation, multi_step, pushback".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "results".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "For 'grade' action: array of {test_id, output, success, grading, tool_calls?, final_text?}".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "model".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "For 'grade' action: model name for the exam result".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
@@ -1351,7 +1378,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         // --- Model Validation ---
         ToolDefinition {
             name: "model_exam".into(),
-            description: "Model validation exam \u{2014} deterministic known-answer tests that grade tool selection, parameter accuracy, output interpretation, and safety pushback. Actions: 'plan' returns the exam JSON, 'grade' accepts results and returns ExamResult with verdict.".into(),
+            description: "Deprecated: use self_test_suite instead. Model validation exam \u{2014} deterministic known-answer tests that grade tool selection, parameter accuracy, output interpretation, and safety pushback. Actions: 'plan' returns the exam JSON (via self_test_suite), 'grade' accepts results and returns ExamResult with verdict.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([

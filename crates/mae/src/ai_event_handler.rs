@@ -220,6 +220,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 };
                 editor.set_status(display);
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::ToolCallStarted { name } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -228,6 +230,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     mae_core::conversation::ToolCallState::Pending,
                 );
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::ToolCallFinished { success, output } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -252,6 +256,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     }
                 }
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::StreamChunk {
             text,
@@ -262,6 +268,16 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
             {
                 conv_buf.append_streaming_chunk(&text);
+            }
+            // Sync rope + scroll, but throttle to avoid per-chunk overhead.
+            editor.sync_conversation_buffer_rope();
+            let should_scroll = editor
+                .ai_last_output_scroll
+                .map(|t| t.elapsed() >= std::time::Duration::from_millis(50))
+                .unwrap_or(true);
+            if should_scroll {
+                crate::key_handling::conversation::scroll_output_to_bottom(editor);
+                editor.ai_last_output_scroll = Some(std::time::Instant::now());
             }
         }
         AiEvent::SessionComplete {
@@ -284,10 +300,17 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             crate::key_handling::conversation::scroll_output_to_bottom(editor);
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
+            editor.ai_work_window_id = None;
+            editor.ai_last_output_scroll = None;
 
-            // Auto-restore editor state after self-test session.
+            // Auto-restore editor state and clean up sandbox after self-test session.
             if editor.self_test_active {
                 editor.self_test_active = false;
+                // Clean up test sandbox.
+                if let Some(sandbox_dir) = editor.test_sandbox_dir.take() {
+                    mae_ai::executor::sandbox::cleanup_sandbox(&sandbox_dir);
+                    info!(sandbox = %sandbox_dir.display(), "cleaned up test sandbox");
+                }
                 match editor.restore_state() {
                     Ok(summary) => {
                         info!(summary = %summary, "auto-restored editor state after self-test");

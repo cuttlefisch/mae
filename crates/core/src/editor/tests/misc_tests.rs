@@ -598,3 +598,49 @@ fn poll_pending_git_diff_applies_result() {
         crate::render_common::gutter::GitLineStatus::Added
     );
 }
+
+#[test]
+fn ai_work_window_reused_across_open_file() {
+    let mut ed = Editor::new();
+    // Set up a conversation so switch_to_buffer_non_conversation splits.
+    let conv_idx = ed.ensure_conversation_buffer_idx();
+    ed.switch_to_buffer(conv_idx);
+
+    // Open first file — creates a split (work window).
+    ed.buffers.push(Buffer::new());
+    let idx1 = ed.buffers.len() - 1;
+    ed.switch_to_buffer_non_conversation(idx1);
+    let window_count_after_first = ed.window_mgr.window_count();
+    let work_id = ed.ai_work_window_id.expect("should record work window");
+
+    // Open second file — reuses the work window, no new split.
+    ed.buffers.push(Buffer::new());
+    let idx2 = ed.buffers.len() - 1;
+    ed.switch_to_buffer_non_conversation(idx2);
+    assert_eq!(
+        ed.window_mgr.window_count(),
+        window_count_after_first,
+        "should not create additional windows"
+    );
+    assert_eq!(ed.ai_work_window_id, Some(work_id));
+    let win = ed.window_mgr.window(work_id).unwrap();
+    assert_eq!(
+        win.buffer_idx, idx2,
+        "work window should show the latest buffer"
+    );
+}
+
+#[test]
+fn ai_work_window_cleared_on_stale() {
+    let mut ed = Editor::new();
+    // Set a fake work window ID that doesn't exist.
+    ed.ai_work_window_id = Some(999u32);
+
+    ed.buffers.push(Buffer::new());
+    let idx = ed.buffers.len() - 1;
+    // Should detect stale reference and fall through to normal logic.
+    let ok = ed.switch_to_buffer_non_conversation(idx);
+    assert!(ok);
+    // Stale ID should be cleared.
+    assert_ne!(ed.ai_work_window_id, Some(999u32));
+}

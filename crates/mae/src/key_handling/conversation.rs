@@ -63,10 +63,11 @@ pub fn scroll_output_to_bottom(editor: &mut Editor) {
             if let Some(win) = editor.window_mgr.window_mut(pair.output_window_id) {
                 let last_line = total_lines.saturating_sub(1);
                 win.cursor_row = last_line;
-                // Set scroll_offset intentionally high — the render cycle's
-                // ensure_scroll_wrapped_with_margin() will clamp it correctly,
-                // accounting for word-wrapped visual rows.
-                win.scroll_offset = last_line;
+                // Self-clamp: place last_line at the bottom of the viewport.
+                // This is standalone arithmetic — no dependency on
+                // ensure_scroll_wrapped_with_margin() which only runs on the
+                // focused window (the input pane has focus, not the output pane).
+                win.scroll_offset = last_line.saturating_sub(output_vh.saturating_sub(1));
                 win.scroll_pixel_offset = 0.0;
             }
         }
@@ -406,17 +407,23 @@ mod tests {
         let total = editor.buffers[pair.output_buffer_idx].display_line_count();
         let win = editor.window_mgr.window(pair.output_window_id).unwrap();
 
-        // scroll_output_to_bottom sets cursor_row and scroll_offset to last_line.
-        // The render cycle's ensure_scroll_wrapped_with_margin() will clamp
-        // scroll_offset to account for word wrap. Here we verify the intent:
-        // cursor is at the last line, and scroll_offset is set high enough
-        // that the render clamp will position the view at the bottom.
-        assert_eq!(win.cursor_row, total.saturating_sub(1));
+        // scroll_output_to_bottom self-clamps: last_line at the bottom of the
+        // viewport. scroll_offset = last_line - (output_vh - 1).
+        let last_line = total.saturating_sub(1);
+        assert_eq!(win.cursor_row, last_line);
+        // The output viewport height comes from layout_rects. With a 40-high
+        // layout and the conversation split, the output pane gets most of the
+        // height. Verify scroll_offset places the last line at the bottom.
         assert!(
-            win.scroll_offset >= total.saturating_sub(1),
-            "scroll_offset ({}) should be >= last line ({}) for render-cycle clamping",
+            win.scroll_offset <= last_line,
+            "scroll_offset ({}) should be <= last line ({}) — self-clamped, not over-set",
             win.scroll_offset,
-            total.saturating_sub(1),
+            last_line,
+        );
+        // Content (60+ lines) exceeds any reasonable viewport, so scroll_offset > 0.
+        assert!(
+            win.scroll_offset > 0,
+            "scroll_offset should be > 0 for content taller than viewport"
         );
     }
 
@@ -450,5 +457,54 @@ mod tests {
         let total = editor.buffers[pair.output_buffer_idx].display_line_count();
         let win = editor.window_mgr.window(pair.output_window_id).unwrap();
         assert_eq!(win.cursor_row, total.saturating_sub(1));
+    }
+
+    #[test]
+    fn scroll_output_short_content_no_scroll() {
+        let mut editor = editor_with_conversation(40);
+
+        let pair = editor.conversation_pair.clone().unwrap();
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
+            conv.push_assistant("Short");
+        }
+        editor.sync_conversation_buffer_rope();
+
+        scroll_output_to_bottom(&mut editor);
+
+        let win = editor.window_mgr.window(pair.output_window_id).unwrap();
+        // Content fits in viewport — no scrolling needed.
+        assert_eq!(win.scroll_offset, 0);
+    }
+
+    #[test]
+    fn scroll_output_idempotent() {
+        let mut editor = editor_with_conversation(40);
+
+        let pair = editor.conversation_pair.clone().unwrap();
+        if let Some(conv) = editor.buffers[pair.output_buffer_idx].conversation_mut() {
+            let long = (0..80)
+                .map(|i| format!("Line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            conv.push_assistant(&long);
+        }
+        editor.sync_conversation_buffer_rope();
+
+        scroll_output_to_bottom(&mut editor);
+        let first_offset = editor
+            .window_mgr
+            .window(pair.output_window_id)
+            .unwrap()
+            .scroll_offset;
+
+        // Calling again should produce the same offset — no drift.
+        scroll_output_to_bottom(&mut editor);
+        let second_offset = editor
+            .window_mgr
+            .window(pair.output_window_id)
+            .unwrap()
+            .scroll_offset;
+
+        assert_eq!(first_offset, second_offset, "scroll should be idempotent");
     }
 }

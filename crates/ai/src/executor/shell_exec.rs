@@ -22,7 +22,25 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "terminal_send" => execute_shell_send_input(editor, &call.arguments),
         "terminal_read" => execute_shell_read_output(editor, &call.arguments),
         "shell_scrollback" => execute_shell_scrollback(editor, &call.arguments),
-        "shell_exec" => execute_shell_exec_sync(&call.arguments),
+        "shell_exec" => {
+            // Apply sandbox shell filter during test mode.
+            if let Some(ref sandbox_dir) = editor.test_sandbox_dir {
+                if let Some(cmd) = call.arguments.get("command").and_then(|v| v.as_str()) {
+                    match super::sandbox::filter_shell_command(cmd, sandbox_dir) {
+                        Ok(filtered) => {
+                            let mut args = call.arguments.clone();
+                            args["command"] = serde_json::Value::String(filtered);
+                            execute_shell_exec_sync(&args)
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    execute_shell_exec_sync(&call.arguments)
+                }
+            } else {
+                execute_shell_exec_sync(&call.arguments)
+            }
+        }
         "github_pr_status" => execute_github_pr_status(editor),
         "github_pr_create" => execute_github_pr_create(editor, &call.arguments),
 
