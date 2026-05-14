@@ -277,6 +277,10 @@ pub(crate) async fn run_terminal_loop(
                 if let Err(e) = save_history(editor) {
                     error!(error = %e, "failed to save history");
                 }
+                // Save persistent project list
+                if let Some(data_dir) = editor.mae_data_dir() {
+                    let _ = editor.project_list.save(&data_dir);
+                }
             }
 
             // If debug mode is enabled, save a tombstone dump.

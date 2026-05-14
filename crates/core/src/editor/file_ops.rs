@@ -1104,7 +1104,7 @@ impl Editor {
                         let should_switch = self
                             .project
                             .as_ref()
-                            .map(|p| p.root != root)
+                            .map(|p| p.root != root && !root.starts_with(&p.root))
                             .unwrap_or(true);
                         if should_switch {
                             self.project = Some(crate::project::Project::from_root(root.clone()));
@@ -1112,6 +1112,10 @@ impl Editor {
                             // Signal LSP to update workspace folder on every project switch.
                             let root_path = root.display().to_string();
                             self.pending_lsp_root_change = Some(format!("file://{}", root_path));
+                        }
+                        // Persist to project list
+                        if let Some(ref proj) = self.project {
+                            self.project_list.touch(root.clone(), proj.name.clone());
                         }
                     }
                     // Ingest project as KB node

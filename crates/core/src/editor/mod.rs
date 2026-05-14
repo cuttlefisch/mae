@@ -723,6 +723,8 @@ pub struct Editor {
     pub recent_files: crate::project::RecentFiles,
     /// Recently used project roots (bounded, deduplicated).
     pub recent_projects: crate::project::RecentProjects,
+    /// Persistent project list (saved to `projects.toml`).
+    pub project_list: crate::project::ProjectList,
     /// Toggle: show line numbers in the gutter. Default true.
     pub show_line_numbers: bool,
     /// Toggle: use relative line numbers. Default false.
@@ -1179,6 +1181,7 @@ impl Editor {
             ai_permission_tier: "ReadOnly".to_string(),
             recent_files: crate::project::RecentFiles::default(),
             recent_projects: crate::project::RecentProjects::default(),
+            project_list: crate::project::ProjectList::default(),
             show_line_numbers: true,
             relative_line_numbers: false,
             word_wrap: false,

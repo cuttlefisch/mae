@@ -88,3 +88,28 @@ fn git_or_project_root_falls_back_to_project_root_without_git() {
     let result = editor.git_or_project_root().unwrap();
     assert_eq!(result, root.join("crates/core"));
 }
+
+#[test]
+fn open_file_does_not_switch_to_subcrate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // Workspace root with .git
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::write(root.join("Cargo.toml"), "[workspace]").unwrap();
+    // Subcrate
+    let subcrate = root.join("crates/core");
+    fs::create_dir_all(subcrate.join("src")).unwrap();
+    fs::write(subcrate.join("Cargo.toml"), "[package]").unwrap();
+    let file = subcrate.join("src/lib.rs");
+    fs::write(&file, "// test").unwrap();
+
+    let mut ed = Editor::new();
+    // Set project to workspace root
+    ed.project = Some(crate::project::Project::from_root(root.to_path_buf()));
+
+    // Open a file inside the subcrate
+    ed.open_file(file.display().to_string());
+
+    // Project should NOT have switched to the subcrate
+    assert_eq!(ed.project.as_ref().unwrap().root, root.to_path_buf());
+}

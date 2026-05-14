@@ -99,7 +99,7 @@ pub use mae_kb::{
 };
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
-pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
+pub use project::{detect_project_root, Project, ProjectConfig, ProjectList, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};

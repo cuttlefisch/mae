@@ -548,6 +548,7 @@ For full setup guide: :help ai-setup";
             "project-browse" => self.project_browse(),
             "project-recent-files" => self.project_recent_files(),
             "project-switch" => self.project_switch_palette(),
+            "project-clean" => self.project_clean(),
 
             // +notes (KB)
             "kb-find" => {

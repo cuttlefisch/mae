@@ -262,12 +262,24 @@ fn main() -> io::Result<()> {
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
     editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
+    // Load persistent project list from XDG data dir.
+    if !clean_mode {
+        if let Some(data_dir) = editor.mae_data_dir() {
+            editor.project_list = mae_core::ProjectList::load(&data_dir);
+            editor
+                .project_list
+                .sync_to_recent(&mut editor.recent_projects);
+        }
+    }
+
     // Auto-detect project from CWD if not already set (skipped in clean mode).
     if !clean_mode && editor.project.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
             if let Some(root) = mae_core::detect_project_root(&cwd) {
                 editor.recent_projects.push(root.clone());
-                editor.project = Some(mae_core::Project::from_root(root));
+                let proj = mae_core::Project::from_root(root.clone());
+                editor.project_list.touch(root, proj.name.clone());
+                editor.project = Some(proj);
             }
         }
     }
@@ -976,6 +988,10 @@ impl GuiApp {
         if !self.editor.clean_mode {
             if let Err(e) = bootstrap::save_history(&self.editor) {
                 error!(error = %e, "failed to save history");
+            }
+            // Save persistent project list
+            if let Some(data_dir) = self.editor.mae_data_dir() {
+                let _ = self.editor.project_list.save(&data_dir);
             }
         }
 

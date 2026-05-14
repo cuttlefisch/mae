@@ -124,7 +124,7 @@ impl Editor {
 
     /// Resolve the MAE data directory (~/.local/share/mae).
     /// Checks `data_dir_override` first (for test isolation).
-    fn mae_data_dir(&self) -> Option<PathBuf> {
+    pub fn mae_data_dir(&self) -> Option<PathBuf> {
         if let Some(ref dir) = self.data_dir_override {
             return Some(dir.clone());
         }

@@ -75,6 +75,8 @@ impl Editor {
     /// `project-switch` — palette with recently used project roots.
     /// Opens even when empty so the user can type a new project path.
     pub(crate) fn project_switch_palette(&mut self) {
+        // Auto-prune subprojects so the palette stays clean.
+        self.project_list.prune_subprojects();
         let roots: Vec<String> = self
             .recent_projects
             .list()
@@ -91,8 +93,11 @@ impl Editor {
         let path = std::path::PathBuf::from(crate::file_picker::expand_tilde(path_str));
         if path.is_dir() {
             self.recent_projects.push(path.clone());
-            self.project = Some(crate::project::Project::from_root(path.clone()));
+            let proj = crate::project::Project::from_root(path.clone());
+            self.project_list.touch(path.clone(), proj.name.clone());
+            self.project = Some(proj);
             self.refresh_git_branch();
+            self.save_project_list();
             self.set_status(format!("Added & switched to project: {}", path.display()));
         } else {
             self.set_status(format!("Not a directory: {}", path_str));
@@ -104,10 +109,36 @@ impl Editor {
         let path = std::path::PathBuf::from(path_str);
         let before = self.recent_projects.len();
         self.recent_projects.remove(&path);
+        self.project_list.remove(&path);
         if self.recent_projects.len() < before {
+            self.save_project_list();
             self.set_status(format!("Removed project: {}", path_str));
         } else {
             self.set_status(format!("Project not found: {}", path_str));
+        }
+    }
+
+    /// `project-clean` — prune subprojects and missing entries from the project list.
+    pub(crate) fn project_clean(&mut self) {
+        let before = self.project_list.projects.len();
+        self.project_list.prune_subprojects();
+        self.project_list.prune_missing();
+        let removed = before - self.project_list.projects.len();
+        // Sync back to in-memory recent_projects
+        self.recent_projects = crate::project::RecentProjects::default();
+        self.project_list.sync_to_recent(&mut self.recent_projects);
+        self.save_project_list();
+        self.set_status(format!(
+            "Project list cleaned: {} removed, {} remaining",
+            removed,
+            self.project_list.projects.len()
+        ));
+    }
+
+    /// Best-effort save of `projects.toml` to XDG data dir.
+    fn save_project_list(&self) {
+        if let Some(data_dir) = self.mae_data_dir() {
+            let _ = self.project_list.save(&data_dir);
         }
     }
 

@@ -269,6 +269,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC p r"), "project-recent-files");
         normal.bind(parse_key_seq_spaced("SPC p p"), "project-switch");
         normal.bind(parse_key_seq_spaced("SPC p a"), "add-project");
+        normal.bind(parse_key_seq_spaced("SPC p c"), "project-clean");
         // +file expansions
         normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
         normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
