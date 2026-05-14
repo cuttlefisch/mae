@@ -231,24 +231,55 @@ pub fn manage_shell_lifecycle(
             } else {
                 "Terminal exited — buffer closed"
             };
-            if editor.active_buffer_idx() == buf_idx {
-                // Switch away before removing
-                let alt = editor.alternate_buffer_idx.unwrap_or(0);
-                let target = if alt < editor.buffers.len() && alt != buf_idx {
-                    alt
+
+            // Collect ALL windows showing this buffer before removal.
+            let focused_id = editor.window_mgr.focused_id();
+            let orphan_ids: Vec<u32> = editor
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == buf_idx)
+                .map(|w| w.id)
+                .collect();
+
+            for win_id in orphan_ids {
+                if win_id == focused_id {
+                    // Retarget focused window to alternate buffer
+                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let target = if alt < editor.buffers.len() && alt != buf_idx {
+                        alt
+                    } else {
+                        0
+                    };
+                    editor.window_mgr.focused_window_mut().buffer_idx = target;
+                } else if editor.window_mgr.window_count() > 1 {
+                    // Close unfocused orphan (Emacs quit-window pattern)
+                    editor.window_mgr.close(win_id);
                 } else {
-                    0
-                };
-                editor.window_mgr.focused_window_mut().buffer_idx = target;
+                    // Last window — can't close, retarget to buffer 0
+                    if let Some(win) = editor.window_mgr.window_mut(win_id) {
+                        win.buffer_idx = 0;
+                        win.cursor_row = 0;
+                        win.cursor_col = 0;
+                    }
+                }
             }
+
             editor.buffers.remove(buf_idx);
             editor.notify_buffer_removed(buf_idx);
+            // Safety-net: retarget any windows still pointing at removed index,
+            // and adjust indices above the removed buffer.
             for win in editor.window_mgr.iter_windows_mut() {
-                if win.buffer_idx > buf_idx {
+                if win.buffer_idx == buf_idx {
+                    win.buffer_idx = buf_idx.min(editor.buffers.len().saturating_sub(1));
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                } else if win.buffer_idx > buf_idx {
                     win.buffer_idx -= 1;
                 }
             }
             editor.set_status(label);
+            // Sync mode for the now-focused buffer (Fix 2C).
+            editor.sync_mode_to_buffer();
         }
     }
 
@@ -370,23 +401,46 @@ pub fn health_check(
             shell.shutdown();
         }
         if buf_idx < editor.buffers.len() {
-            // Auto-close zombie shell buffer (same as normal exit)
-            if editor.active_buffer_idx() == buf_idx {
-                let alt = editor.alternate_buffer_idx.unwrap_or(0);
-                let target = if alt < editor.buffers.len() && alt != buf_idx {
-                    alt
-                } else {
-                    0
-                };
-                editor.window_mgr.focused_window_mut().buffer_idx = target;
+            // Auto-close zombie shell buffer (same as normal exit).
+            // Close/retarget ALL windows showing this buffer.
+            let focused_id = editor.window_mgr.focused_id();
+            let orphan_ids: Vec<u32> = editor
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == buf_idx)
+                .map(|w| w.id)
+                .collect();
+
+            for win_id in orphan_ids {
+                if win_id == focused_id {
+                    let alt = editor.alternate_buffer_idx.unwrap_or(0);
+                    let target = if alt < editor.buffers.len() && alt != buf_idx {
+                        alt
+                    } else {
+                        0
+                    };
+                    editor.window_mgr.focused_window_mut().buffer_idx = target;
+                } else if editor.window_mgr.window_count() > 1 {
+                    editor.window_mgr.close(win_id);
+                } else if let Some(win) = editor.window_mgr.window_mut(win_id) {
+                    win.buffer_idx = 0;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
             }
+
             editor.buffers.remove(buf_idx);
             editor.notify_buffer_removed(buf_idx);
             for win in editor.window_mgr.iter_windows_mut() {
-                if win.buffer_idx > buf_idx {
+                if win.buffer_idx == buf_idx {
+                    win.buffer_idx = buf_idx.min(editor.buffers.len().saturating_sub(1));
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                } else if win.buffer_idx > buf_idx {
                     win.buffer_idx -= 1;
                 }
             }
+            editor.sync_mode_to_buffer();
         }
     }
 

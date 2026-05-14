@@ -703,6 +703,13 @@ pub struct Editor {
     /// Last network connectivity check result (from :ai-ping).
     /// Fields: (endpoint, reachable, http_status, latency_ms, error).
     pub ai_last_network_check: Option<AiNetworkCheck>,
+    /// Throttle for AI output scroll during streaming. Only `StreamChunk`
+    /// events are throttled (50ms); discrete events always scroll immediately.
+    pub ai_last_output_scroll: Option<std::time::Instant>,
+    /// Dedicated window for AI file operations. Reused across all open_file/switch_buffer
+    /// calls during a session. Prevents the AI from creating multiple splits.
+    /// Cleared on session end.
+    pub ai_work_window_id: Option<crate::window::WindowId>,
     /// Visual bell: when set, the renderer inverts the status bar background
     /// until this instant passes. Emacs `visible-bell` equivalent.
     pub bell_until: Option<std::time::Instant>,
@@ -930,6 +937,9 @@ pub struct Editor {
     /// True while a self-test session is running. Set when `self_test_suite`
     /// is called (auto `save_state`), cleared on `SessionComplete` (auto `restore_state`).
     pub self_test_active: bool,
+    /// Sandbox directory for test execution. When `Some`, write-path tools
+    /// (create_file, rename_file, shell_exec) are confined to this directory.
+    pub test_sandbox_dir: Option<std::path::PathBuf>,
     /// Last time autosave fired. Compared against `autosave_interval` option.
     pub last_autosave: std::time::Instant,
     /// Autosave interval in seconds (0 = disabled). Parsed from option registry.
@@ -1160,6 +1170,8 @@ impl Editor {
             ai_last_api_error: None,
             ai_last_api_latency_ms: None,
             ai_api_call_count: 0,
+            ai_last_output_scroll: None,
+            ai_work_window_id: None,
             ai_last_network_check: None,
             bell_until: None,
             project: None,
@@ -1260,6 +1272,7 @@ impl Editor {
             event_recorder: crate::event_record::EventRecorder::new(),
             state_stack: Vec::new(),
             self_test_active: false,
+            test_sandbox_dir: None,
             last_autosave: std::time::Instant::now(),
             autosave_interval: 0,
             swap_file: true,
@@ -1978,6 +1991,7 @@ impl Editor {
         if prev_idx != idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
+        self.save_mode_to_buffer();
         // Check for external file changes before showing the buffer.
         self.check_and_reload_buffer(idx);
         let win = self.window_mgr.focused_window_mut();
@@ -1996,6 +2010,7 @@ impl Editor {
         // Recompute search matches for the new buffer so highlights and
         // `n`/`N` navigation are correct.
         self.recompute_search_matches();
+        self.sync_mode_to_buffer();
         true
     }
 
@@ -2126,6 +2141,22 @@ impl Editor {
 
         self.ai_target_buffer_idx = Some(idx);
 
+        // 0. Reuse the dedicated AI work window if it exists and is still valid.
+        if let Some(work_id) = self.ai_work_window_id {
+            if self.window_mgr.window(work_id).is_some() {
+                if let Some(win) = self.window_mgr.window_mut(work_id) {
+                    win.buffer_idx = idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+                self.ai_target_window_id = Some(work_id);
+                self.mark_full_redraw();
+                return true;
+            } else {
+                self.ai_work_window_id = None; // stale reference
+            }
+        }
+
         // 1. Is this buffer already visible?
         if self.window_mgr.iter_windows().any(|w| w.buffer_idx == idx) {
             return true;
@@ -2145,6 +2176,7 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
+            self.ai_work_window_id = Some(other_id);
             self.mark_full_redraw();
             return true;
         }
@@ -2162,8 +2194,17 @@ impl Editor {
             if let Some(id) = non_conv_win {
                 self.window_mgr.set_focused(id);
             } else if let Some(ref pair) = self.conversation_pair {
-                // All windows are conversation — split from the output window (larger pane).
-                self.window_mgr.set_focused(pair.output_window_id);
+                // All windows are conversation — steal the output window temporarily
+                // instead of splitting (which creates narrow panes beside the
+                // conversation group). The output window is restored on session end.
+                if let Some(win) = self.window_mgr.window_mut(pair.output_window_id) {
+                    win.buffer_idx = idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+                self.ai_work_window_id = Some(pair.output_window_id);
+                self.mark_full_redraw();
+                return true;
             }
         }
         let area = self.default_area();
@@ -2171,7 +2212,8 @@ impl Editor {
             .window_mgr
             .split(crate::window::SplitDirection::Vertical, idx, area)
         {
-            Ok(_new_id) => {
+            Ok(new_id) => {
+                self.ai_work_window_id = Some(new_id);
                 self.mark_full_redraw();
                 true
             }
@@ -2267,6 +2309,7 @@ impl Editor {
             return;
         }
         let prev_idx = self.active_buffer_idx();
+        self.save_mode_to_buffer();
         self.display_buffer(buf_idx);
         // Find the window now showing buf_idx and focus it.
         let win_id = self
@@ -2280,14 +2323,21 @@ impl Editor {
         if prev_idx != buf_idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
+        self.sync_mode_to_buffer();
     }
 
     /// Find a window showing a buffer of the given kind (non-conversation).
+    /// Excludes windows that are part of the conversation pair (output/input).
     fn find_window_with_kind(&self, kind: crate::BufferKind) -> Option<crate::window::WindowId> {
+        let conv_ids = self
+            .conversation_pair
+            .as_ref()
+            .map(|p| [p.output_window_id, p.input_window_id]);
         for w in self.window_mgr.iter_windows() {
             if w.buffer_idx < self.buffers.len()
                 && self.buffers[w.buffer_idx].kind == kind
                 && !self.is_conversation_buffer(w.buffer_idx)
+                && !conv_ids.is_some_and(|ids| ids.contains(&w.id))
             {
                 return Some(w.id);
             }

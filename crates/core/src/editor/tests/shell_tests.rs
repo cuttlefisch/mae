@@ -508,3 +508,145 @@ fn test_notify_buffer_removed_pending_queues() {
     // pending_buffer_removals should have an entry
     assert_eq!(editor.pending_buffer_removals, vec![1]);
 }
+
+// ---------------------------------------------------------------------------
+// Shell exit lifecycle & buffer readiness (Part 1 + Part 2 fixes)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn display_buffer_and_focus_syncs_shell_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    assert_eq!(editor.mode, Mode::Normal);
+    // display_buffer_and_focus should auto-sync to ShellInsert for a shell buffer.
+    editor.display_buffer_and_focus(1);
+    assert_eq!(editor.mode, Mode::ShellInsert);
+    // Switch back to text buffer — should revert to Normal.
+    editor.display_buffer_and_focus(0);
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn switch_to_buffer_syncs_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // switch_to_buffer should now auto-sync mode.
+    editor.switch_to_buffer(1);
+    assert_eq!(editor.mode, Mode::ShellInsert);
+    editor.switch_to_buffer(0);
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn window_move_saves_restores_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // Split and put shell in one window.
+    editor.dispatch_builtin("split-vertical");
+    editor.window_mgr.focused_window_mut().buffer_idx = 1;
+    editor.mode = Mode::ShellInsert;
+    editor.buffers[1].saved_mode = Some(Mode::ShellInsert);
+    // window-move should preserve mode state.
+    editor.dispatch_builtin("window-move-right");
+    assert_eq!(editor.mode, Mode::ShellInsert);
+}
+
+#[test]
+fn find_window_with_kind_excludes_conversation_pair() {
+    let mut editor = Editor::new();
+    // Buffer 0 = [scratch], buffer 1 = shell
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // Split to get two windows.
+    editor.dispatch_builtin("split-vertical");
+    // Put shell in window 1 (the new window from split).
+    let new_win_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != 0)
+        .map(|w| w.id)
+        .unwrap();
+    editor.window_mgr.window_mut(new_win_id).unwrap().buffer_idx = 1;
+    // Without conversation_pair, find_window_with_kind should find the shell window.
+    assert!(editor
+        .find_window_with_kind(crate::BufferKind::Shell)
+        .is_some());
+    // Mark that window as part of conversation pair — should now be excluded.
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 0,
+        output_window_id: new_win_id,
+        input_window_id: new_win_id,
+    });
+    assert!(editor
+        .find_window_with_kind(crate::BufferKind::Shell)
+        .is_none());
+}
+
+#[test]
+fn revert_buffer_fires_hooks() {
+    use std::io::Write;
+    let mut editor = Editor::new();
+    // Register hooks.
+    editor.hooks.add("before-revert", "test-before-revert-fn");
+    editor.hooks.add("after-revert", "test-after-revert-fn");
+    // Create a temp file so revert has something to load.
+    let dir = std::env::temp_dir();
+    let path = dir.join("mae_test_revert_hooks.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "hello").unwrap();
+    }
+    // Open the file.
+    editor.buffers[0] = Buffer::from_file(&path).unwrap();
+    // Revert — hooks should fire (pending_hook_evals populated).
+    editor.dispatch_builtin("revert-buffer");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "before-revert" && f == "test-before-revert-fn"),
+        "before-revert hook should fire"
+    );
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "after-revert" && f == "test-after-revert-fn"),
+        "after-revert hook should fire"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn split_fires_window_split_hook() {
+    let mut editor = Editor::new();
+    editor.hooks.add("window-split", "test-split-fn");
+    editor.dispatch_builtin("split-vertical");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "window-split" && f == "test-split-fn"),
+        "window-split hook should fire"
+    );
+}
+
+#[test]
+fn close_window_fires_window_close_hook() {
+    let mut editor = Editor::new();
+    // Need at least 2 windows to close one.
+    editor.dispatch_builtin("split-vertical");
+    editor.pending_hook_evals.clear(); // clear split hook
+    editor.hooks.add("window-close", "test-close-fn");
+    editor.dispatch_builtin("close-window");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "window-close" && f == "test-close-fn"),
+        "window-close hook should fire"
+    );
+}

@@ -15,7 +15,7 @@ impl Editor {
                     .window_mgr
                     .split(SplitDirection::Vertical, buf_idx, area)
                 {
-                    Ok(_) => {}
+                    Ok(_) => self.fire_hook("window-split"),
                     Err(e) => self.set_status(e),
                 }
             }
@@ -26,11 +26,12 @@ impl Editor {
                     .window_mgr
                     .split(SplitDirection::Horizontal, buf_idx, area)
                 {
-                    Ok(_) => {}
+                    Ok(_) => self.fire_hook("window-split"),
                     Err(e) => self.set_status(e),
                 }
             }
             "close-window" => {
+                self.fire_hook("window-close");
                 let focused = self.window_mgr.focused_id();
                 if self.window_mgr.is_in_group(focused) {
                     // Group-aware close: close all members of the group
@@ -110,20 +111,28 @@ impl Editor {
                 self.saved_maximize_layout = saved;
             }
             "window-move-left" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.move_window(Direction::Left, area);
+                self.sync_mode_to_buffer();
             }
             "window-move-right" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.move_window(Direction::Right, area);
+                self.sync_mode_to_buffer();
             }
             "window-move-up" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.move_window(Direction::Up, area);
+                self.sync_mode_to_buffer();
             }
             "window-move-down" => {
+                self.save_mode_to_buffer();
                 let area = self.default_area();
                 self.window_mgr.move_window(Direction::Down, area);
+                self.sync_mode_to_buffer();
             }
             "focus-next-window" => {
                 self.fire_hook("focus-out");
