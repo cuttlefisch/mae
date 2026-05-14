@@ -88,7 +88,10 @@ impl ProgressTracker {
         ProgressTracker {
             checkpoint_interval,
             stagnant_count: 0,
-            max_stagnant: if self_test { 4 } else { 2 },
+            // @ai-caution: [self-test] Stagnation threshold — 6 for self-test,
+            // 2 for normal. Too low = false aborts on slow LSP. Too high =
+            // wasted tokens on loops. Verify with full self-test after changes.
+            max_stagnant: if self_test { 6 } else { 2 },
             current: CheckpointSnapshot::default(),
             previous: None,
             checkpoint_count: 0,
@@ -387,20 +390,20 @@ mod tests {
     fn test_self_test_higher_tolerance() {
         let mut tracker = ProgressTracker::new(15, true);
         assert_eq!(tracker.checkpoint_interval, 15);
-        assert_eq!(tracker.max_stagnant(), 4);
+        assert_eq!(tracker.max_stagnant(), 6);
 
-        // Need 4 stagnant checkpoints to abort (not 2)
+        // Need 6 stagnant checkpoints to abort (not 2)
         // First: benefit of doubt with failure → score 2 → Warn
         tracker.record_tool_call("buffer_read", &json!({}), false);
         tracker.record_round();
         tracker.evaluate();
 
-        // 4 more stagnant windows needed
-        for i in 0..4 {
+        // 6 more stagnant windows needed
+        for i in 0..6 {
             tracker.record_tool_call("buffer_read", &json!({}), false);
             tracker.record_round();
             let v = tracker.evaluate();
-            if i < 3 {
+            if i < 5 {
                 assert!(matches!(v, CheckpointVerdict::Warn { .. }), "round {}", i);
             } else {
                 assert!(matches!(v, CheckpointVerdict::Abort { .. }), "round {}", i);

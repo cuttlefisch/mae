@@ -29,6 +29,11 @@ impl Editor {
         result
     }
 
+    // @ai-caution: [dispatch] Sequential category dispatch — order matters for
+    // performance (nav/edit first = hot path). Adding new categories: append at
+    // the end, don't insert before nav/edit. Each handler explicitly calls
+    // mark_full_redraw() — nav does NOT (cursor-only). Changing this regresses
+    // render perf 10x on large files.
     fn dispatch_builtin_inner(&mut self, name: &str) -> bool {
         // Auto-dismiss hover popup on any command that isn't hover-related.
         if self.hover_popup.is_some()

@@ -113,6 +113,9 @@ pub struct SplashLine {
 pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
 
+    // @ai-caution: [rendering] Splash art image paths resolve relative to module
+    // dir. Relative-to-CWD paths will silently fail. Always use absolute paths.
+    // Custom arts come from modules; built-in arts are compiled-in constants.
     // Look up art: first check custom, then built-in.
     let custom = editor
         .custom_splash_arts

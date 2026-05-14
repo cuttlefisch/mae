@@ -1,3 +1,8 @@
+// @ai-caution: [shell-lifecycle] Agent shell window placement, orphan cleanup,
+// and hook ordering have had 5+ bug fixes. Shell exit must: close window, sync
+// mode, fire hooks IN THAT ORDER. Reordering causes ghost windows or mode
+// desync. Test with agent shells + manual shells after any change.
+
 //! Shared shell terminal lifecycle management for terminal and GUI loops.
 //!
 //! Both event loops manage identical shell lifecycle: spawning, resizing,

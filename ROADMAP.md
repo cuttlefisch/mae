@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.9.0-dev · **Tests:** 3,039 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
+**Current version:** v0.9.0-dev · **Tests:** 3,186 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
 
 ---
 
@@ -25,6 +25,7 @@
 ## Known Bugs
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
+- [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
 
 ---
 
@@ -98,6 +99,12 @@
 - [ ] PR comment summaries (auto-summarize changes on PR amend)
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
+
+### Architecture Debt (v0.9.1+)
+
+- [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
+- [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
+- [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 
 ---
 
@@ -196,7 +203,7 @@
 
 These are non-negotiable constraints derived from Emacs git history analysis:
 
-1. **No file exceeds 3,000 lines** — Emacs's `xdisp.c` is 38,605 lines. We enforce module splits.
+1. **No file exceeds 3,500 lines** — Emacs's `xdisp.c` is 38,605 lines. We enforce module splits. (Exception: `window.rs` at ~3,434 lines — variable-height line math and smooth scrolling justify the size. Under active monitoring.)
 2. **No Global Interpreter Lock** — Emacs spent 23,901 commits on GC retrofit. We use Rust ownership.
 3. **AI is a peer, not a plugin** — same `dispatch_builtin()` for human and AI.
 4. **Module boundaries enable distributed ownership** — 11 crates with clear responsibilities.

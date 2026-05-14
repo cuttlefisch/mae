@@ -2577,6 +2577,10 @@
       "doc": "Prune stale/sub-project entries (SPC p c)"
     },
     {
+      "name": "project-forget",
+      "doc": "Remove a project from the known list (SPC p D)"
+    },
+    {
       "name": "search-buffer",
       "doc": "Search in current buffer (SPC s s)"
     },

@@ -359,6 +359,9 @@ pub struct AiNetworkCheck {
     pub error: Option<String>,
 }
 
+// @ai-caution: [dispatch] ~100+ fields. Growing toward Emacs buffer.c pattern.
+// Before adding fields, check if the state belongs in a sub-struct (LspContext,
+// DapContext, ModuleContext, RenderContext). See ROADMAP.md architecture debt.
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -1888,6 +1891,23 @@ impl Editor {
         self.buffers.iter().position(|b| b.name == name)
     }
 
+    /// Find a buffer by name, or create it with the provided closure.
+    /// Returns the buffer index.
+    pub fn find_or_create_buffer(&mut self, name: &str, create: impl FnOnce() -> Buffer) -> usize {
+        if let Some(idx) = self.find_buffer_by_name(name) {
+            idx
+        } else {
+            self.buffers.push(create());
+            self.buffers.len() - 1
+        }
+    }
+
+    /// Open a command palette popup and switch to CommandPalette mode.
+    pub fn open_palette(&mut self, palette: CommandPalette) {
+        self.command_palette = Some(palette);
+        self.set_mode(Mode::CommandPalette);
+    }
+
     /// First conversation attached to any buffer, if any.
     pub fn conversation(&self) -> Option<&crate::conversation::Conversation> {
         self.buffers.iter().find_map(|b| b.conversation())
@@ -2442,6 +2462,16 @@ impl Editor {
                 .map(|w| w.id);
             if let Some(nc_id) = non_conv_win {
                 self.window_mgr.set_focused(nc_id);
+            } else {
+                // All windows are conversation — split_root to place beside the group.
+                let area = self.default_area();
+                match self.window_mgr.split_root(direction, buf_idx, area, ratio) {
+                    Ok(new_win_id) => self.window_mgr.set_focused(new_win_id),
+                    Err(_) => {
+                        self.switch_to_buffer_non_conversation(buf_idx);
+                    }
+                }
+                return;
             }
         }
         let area = self.default_area();

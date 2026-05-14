@@ -1026,6 +1026,9 @@ impl WindowManager {
         Ok(new_id)
     }
 
+    // @ai-caution: [window-split] Pop-up windows and agent shells MUST use
+    // split_root() to place beside the conversation group. Plain split() splits
+    // within the focused window, stealing conversation layout. Fixed in 8a52851.
     /// Split at the root level: wraps the entire existing layout as the first
     /// child and creates a new leaf as the second child. This keeps window
     /// groups (like the conversation pair) intact on one side.

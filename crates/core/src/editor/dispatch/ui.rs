@@ -1,3 +1,8 @@
+// @ai-caution: [dispatch] At 1,100+ lines this file is a semantic dumping
+// ground — config, themes, terminal, help, registers, options, toggles,
+// projects, modules, AI, and file management. Planned split into
+// dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs. See ROADMAP.md.
+
 //! UI commands: palette, help, messages, config, themes, registers.
 
 use crate::buffer::Buffer;
@@ -876,7 +881,20 @@ For full setup guide: :help ai-setup";
                 if let Some(cwd) = agent_cwd {
                     self.pending_shell_cwds.insert(new_idx, cwd);
                 }
-                self.display_buffer_and_focus(new_idx);
+                // @ai-caution: [window-split] Agent shells MUST use
+                // switch_to_buffer_non_conversation() + split_root(), NOT
+                // display_buffer_and_focus(). The latter steals conversation
+                // windows. Fixed in commit 8a52851.
+                self.switch_to_buffer_non_conversation(new_idx);
+                // Focus the window showing the agent shell.
+                let agent_win_id = self
+                    .window_mgr
+                    .iter_windows()
+                    .find(|w| w.buffer_idx == new_idx)
+                    .map(|w| w.id);
+                if let Some(wid) = agent_win_id {
+                    self.window_mgr.set_focused(wid);
+                }
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);

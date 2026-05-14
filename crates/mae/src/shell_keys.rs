@@ -1,3 +1,7 @@
+// @ai-caution: [shell-lifecycle] Shell input modes (ShellInsert vs ShellNormal
+// vs ShellSelect) have subtle edge cases with bracketed paste, C-y, and mode
+// transitions. The exit sequence is configurable via keymap, not hardcoded.
+
 //! Shell key handling — ShellInsert mode key dispatch and PTY byte translation.
 
 use mae_core::{Editor, Key, KeyPress, Mode};

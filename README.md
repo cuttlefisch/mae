@@ -8,7 +8,7 @@
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling
 the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime. 3,039 tests.
+runtime. 3,186 tests.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">
@@ -109,7 +109,7 @@ mae (binary)
 
 ### Prerequisites
 
-- **Rust stable** (1.75+) via [rustup](https://rustup.rs)
+- **Rust stable** (1.95+) via [rustup](https://rustup.rs)
 - **GUI deps:** `clang`, `fontconfig-devel`, `freetype-devel` (Fedora) / `clang`, `libclang-dev`, `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
 - **TUI-only:** `make build-tui` — no clang or GUI deps needed
 - **Optional:** `make setup-dev` installs `clang`, `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage

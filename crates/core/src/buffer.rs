@@ -14,6 +14,18 @@ use crate::help_view::HelpView;
 use crate::visual_buffer::VisualBuffer;
 use crate::window::Window;
 
+/// Well-known buffer names used across the codebase.
+pub mod buffer_names {
+    pub const AGENDA: &str = "*Agenda*";
+    pub const GIT_STATUS: &str = "*git-status*";
+    pub const HELP: &str = "*Help*";
+    pub const MESSAGES: &str = "*Messages*";
+    pub const CHANGES: &str = "*Changes*";
+    pub const SCRATCH: &str = "[scratch]";
+    pub const AI: &str = "*AI*";
+    pub const AI_INPUT: &str = "*ai-input*";
+}
+
 /// What kind of content this buffer holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferKind {
@@ -187,6 +199,9 @@ pub struct Buffer {
     /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
+    // @ai-caution: [rendering] Fold boundaries are NOT adjusted on line
+    // insert/delete. Code that modifies buffer content near folds must
+    // invalidate fold state. After structural edits, refresh with `zx`.
     /// Line indices that are currently folded (hidden).
     /// NOTE: Fold boundaries are NOT adjusted on line insert/delete.
     /// After structural edits, refresh folds with `zx`. A proper fix

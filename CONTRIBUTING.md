@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Rust stable** (1.75+) via [rustup](https://rustup.rs)
+- **Rust stable** (1.95+) via [rustup](https://rustup.rs)
 - **GUI deps:** `clang`, `fontconfig-devel`, `freetype-devel` (Fedora) / `clang`, `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
 - **TUI-only:** skip GUI deps — `make build-tui`
 - Run **`make doctor`** first — it checks all prerequisites and prints install commands for anything missing.

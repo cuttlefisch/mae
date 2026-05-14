@@ -70,6 +70,9 @@ struct WindowRenderCache {
     generation: u64,
     /// Viewport scroll position.
     scroll_offset: usize,
+    // @ai-caution: [scroll] Per-window scroll inertia, velocity sampling, and
+    // pixel offset accumulation. Floating-point drift causes ghost lines.
+    // Always clamp scroll_offset to [0, max_scroll].
     /// Sub-pixel scroll offset (f32 stored as bits for exact comparison).
     scroll_pixel_offset_bits: u32,
     /// Window pixel rectangle (invalidates on resize).

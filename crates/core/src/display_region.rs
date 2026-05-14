@@ -1,3 +1,8 @@
+// @ai-caution: [rendering] O(log n) display region lookup via partition_point.
+// Regions MUST be sorted by byte_start. Unsorted regions cause silent rendering
+// corruption — no assertion guards this at runtime. If you modify region
+// creation, ensure the output is sorted.
+
 //! Display regions: buffer text ranges with display overrides.
 //!
 //! Emacs text-property `invisible` + `display` equivalent. A `DisplayRegion`

@@ -1,3 +1,8 @@
+// @ai-caution: [self-test] Oscillation thresholds, LSP readiness polling, sandbox
+// cleanup are all hand-tuned. Changes cascade. Run full self-test suite after
+// any edit. The grading specs are deterministic — changing tool names or output
+// format in other crates will break assertions here.
+
 //! Self-test plan builder (v3).
 //!
 //! Produces a structured JSON test plan with sandbox paths, deterministic
@@ -396,6 +401,7 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                 "  c. Retry up to 5 times (rust-analyzer needs ~5-15s to index a small crate).",
                 "  d. If still empty after 5 retries → SKIP entire category (server can't index this file).",
                 "  HARD LIMIT: 6 total tool calls for readiness check (5 polls + 1 sleep each).",
+                "NOTE: LSP 'file not found' errors for sandbox paths are expected — rust-analyzer may not index sandbox fixture files. If readiness polling fails, SKIP the category immediately. Do NOT retry the same approach.",
                 "IMPORTANT: Do NOT retry any individual LSP test more than once — if it returns empty, mark FAIL and move on."
             ],
             "tests": [
