@@ -378,6 +378,51 @@ fn open_file_in_project_sets_pending_lsp_root_change_when_no_project() {
 }
 
 #[test]
+fn switching_project_sets_pending_lsp_root_change() {
+    use std::io::Write;
+    // Create two separate project directories.
+    let dir_a = tempfile::tempdir().unwrap();
+    fs::File::create(dir_a.path().join("Cargo.toml"))
+        .unwrap()
+        .write_all(b"[package]\nname = \"proj-a\"")
+        .unwrap();
+    let src_a = dir_a.path().join("main.rs");
+    fs::File::create(&src_a)
+        .unwrap()
+        .write_all(b"fn a() {}")
+        .unwrap();
+
+    let dir_b = tempfile::tempdir().unwrap();
+    fs::File::create(dir_b.path().join("Cargo.toml"))
+        .unwrap()
+        .write_all(b"[package]\nname = \"proj-b\"")
+        .unwrap();
+    let src_b = dir_b.path().join("lib.rs");
+    fs::File::create(&src_b)
+        .unwrap()
+        .write_all(b"fn b() {}")
+        .unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(src_a.to_str().unwrap());
+    assert!(editor.pending_lsp_root_change.is_some());
+    // Consume the pending change from project A.
+    editor.pending_lsp_root_change = None;
+
+    // Open a file in project B — should trigger a new LSP root notification.
+    editor.open_file(src_b.to_str().unwrap());
+    let root_uri = editor
+        .pending_lsp_root_change
+        .as_ref()
+        .expect("should signal LSP root change on project switch");
+    assert!(
+        root_uri.contains(dir_b.path().to_str().unwrap()),
+        "URI should point to project B root, got: {}",
+        root_uri
+    );
+}
+
+#[test]
 fn open_second_file_same_project_does_not_set_pending_lsp_root_change() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();

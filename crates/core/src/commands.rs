@@ -76,13 +76,29 @@ impl CommandRegistry {
     }
 
     /// Register a Scheme-defined command.
+    /// Logs a warning if overwriting an existing command.
+    /// Returns true if it overwrote a builtin (for the caller to surface).
     pub fn register_scheme(
         &mut self,
         name: impl Into<String>,
         doc: impl Into<String>,
         scheme_fn: impl Into<String>,
-    ) {
+    ) -> bool {
         let name = name.into();
+        let overwrote_builtin = if let Some(existing) = self.commands.get(&name) {
+            match &existing.source {
+                CommandSource::Builtin => {
+                    tracing::warn!(command = %name, "module overrides builtin command with Scheme function");
+                    true
+                }
+                _ => {
+                    tracing::info!(command = %name, "command overwritten by Scheme");
+                    false
+                }
+            }
+        } else {
+            false
+        };
         self.commands.insert(
             name.clone(),
             Command {
@@ -91,9 +107,12 @@ impl CommandRegistry {
                 source: CommandSource::Scheme(scheme_fn.into()),
             },
         );
+
+        overwrote_builtin
     }
 
     /// Register a command that will `(require FEATURE)` on first invocation.
+    /// Logs a warning if overwriting an existing command.
     pub fn register_autoload(
         &mut self,
         name: impl Into<String>,
@@ -101,6 +120,11 @@ impl CommandRegistry {
         feature: impl Into<String>,
     ) {
         let name = name.into();
+        if let Some(existing) = self.commands.get(&name) {
+            if existing.source != CommandSource::Builtin {
+                eprintln!("[warn] Command '{}' already registered (overwriting)", name);
+            }
+        }
         self.commands.insert(
             name.clone(),
             Command {
@@ -111,6 +135,11 @@ impl CommandRegistry {
                 },
             },
         );
+    }
+
+    /// Unregister a command by name (for module unload). Returns true if found.
+    pub fn unregister(&mut self, name: &str) -> bool {
+        self.commands.remove(name).is_some()
     }
 
     /// Look up a command by name.
@@ -459,6 +488,8 @@ impl CommandRegistry {
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("ai-accept", "Accept proposed AI changes");
         reg.register_builtin("ai-reject", "Reject proposed AI changes");
+        reg.register_builtin("ai-ping", "Test AI API connectivity (SPC a n)");
+        reg.register_builtin("verify", "Spawn verifier sub-agent to run tests (SPC a v)");
         reg.register_builtin(
             "ai-set-mode",
             "Switch the AI operating mode (standard, plan, auto-accept)",
@@ -790,6 +821,14 @@ impl CommandRegistry {
             "Export org buffer to Markdown (SPC m e m)",
         );
         reg.register_builtin("org-export-subtree", "Export subtree at cursor (SPC m e s)");
+        reg.register_builtin(
+            "markdown-to-org",
+            "Convert current Markdown buffer to Org format",
+        );
+        reg.register_builtin(
+            "org-to-markdown",
+            "Convert current Org buffer to Markdown (in-buffer)",
+        );
         // KB federation
         reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
         reg.register_builtin("kb-unregister", "Remove a registered KB instance");
@@ -874,6 +913,11 @@ impl CommandRegistry {
         reg.register_builtin("project-browse", "Browse project directory (SPC p d)");
         reg.register_builtin("project-recent-files", "Recent files in project (SPC p r)");
         reg.register_builtin("project-switch", "Switch to a recent project (SPC p p)");
+        reg.register_builtin("project-clean", "Prune stale/sub-project entries (SPC p c)");
+        reg.register_builtin(
+            "project-forget",
+            "Remove a project from the known list (SPC p D)",
+        );
 
         // Search aliases
         reg.register_builtin("search-buffer", "Search in current buffer (SPC s s)");
@@ -909,8 +953,32 @@ impl CommandRegistry {
             "Show a configuration health report (AI, LSP, DAP status)",
         );
         reg.register_builtin(
+            "kb-health",
+            "Show KB health report (orphans, broken links, namespace counts)",
+        );
+        reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
+        );
+        reg.register_builtin(
+            "describe-bindings",
+            "Show all keybindings for the current mode",
+        );
+        reg.register_builtin(
+            "describe-module",
+            "Show module summary or detail (:describe-module [name])",
+        );
+        reg.register_builtin(
+            "describe-module-at-cursor",
+            "Open detail view for module name under cursor",
+        );
+        reg.register_builtin(
+            "describe-mode",
+            "Show current buffer's mode, keymap, and active options",
+        );
+        reg.register_builtin(
+            "module-reload",
+            "Reload a module's autoloads (:module-reload <name>)",
         );
         reg.register_builtin(
             "set-save",
@@ -1004,6 +1072,19 @@ impl CommandRegistry {
 
         // Notes/KB commands
         reg.register_builtin("kb-find", "Search KB nodes (SPC n f)");
+        reg.register_builtin(
+            "kb-edit-source",
+            "Jump to source .org file for current help node (SPC n e)",
+        );
+        reg.register_builtin(
+            "kb-create",
+            "Create a new KB node: kb-create <id> <title> (SPC n c)",
+        );
+        reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
+        reg.register_builtin(
+            "kb-instances",
+            "Show all registered KB federation instances (SPC n i)",
+        );
 
         // Help / KB navigation
         reg.register_builtin("help", "Open the *Help* buffer at the knowledge-base index");
@@ -1024,6 +1105,26 @@ impl CommandRegistry {
         reg.register_builtin("help-close", "Close help buffer");
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed help buffer");
+        reg.register_builtin(
+            "kb-view",
+            "Return to rendered KB view from source editing (SPC n v)",
+        );
+        reg.register_builtin(
+            "help-cycle",
+            "Fold/unfold heading at cursor, or next link if not on heading (Tab)",
+        );
+        reg.register_builtin(
+            "help-global-cycle",
+            "Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab)",
+        );
+        reg.register_builtin(
+            "help-close-all-folds",
+            "Fold all headings in help buffer (zM)",
+        );
+        reg.register_builtin(
+            "help-open-all-folds",
+            "Unfold all headings in help buffer (zR)",
+        );
         reg.register_builtin(
             "help-edit",
             "Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>)",
@@ -1066,6 +1167,14 @@ impl CommandRegistry {
             "shell-scroll-to-bottom",
             "Scroll shell terminal to latest output",
         );
+        reg.register_builtin(
+            "shell-select-mode",
+            "Copy mode — snapshot shell output for selection (SPC y)",
+        );
+        reg.register_builtin(
+            "close-shell-select",
+            "Close the shell-select buffer and return to the shell",
+        );
 
         // Ex-command parity: commands that were only inline in execute_command()
         // are now registered so the AI can invoke them via command_* tools.
@@ -1096,6 +1205,10 @@ impl CommandRegistry {
         reg.register_builtin(
             "ai-load",
             "Load AI conversation from JSON file (:ai-load <path>)",
+        );
+        reg.register_builtin(
+            "ai-status!",
+            "Open detailed AI diagnostics buffer (provider, session, config)",
         );
 
         // Agent bootstrap

@@ -7,13 +7,19 @@
         "mae-core",
         "mae-dap",
         "mae-gui",
+        "mae-kb",
         "mae-lsp",
         "mae-mcp",
         "mae-renderer",
         "mae-scheme",
         "mae-shell"
       ],
-      "public_items": []
+      "public_items": [
+        {
+          "name": "pkg",
+          "kind": "mod"
+        }
+      ]
     },
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
@@ -23,6 +29,10 @@
       "public_items": [
         {
           "name": "claude",
+          "kind": "mod"
+        },
+        {
+          "name": "connectivity",
           "kind": "mod"
         },
         {
@@ -67,18 +77,127 @@
         }
       ]
     },
+    "mae-babel": {
+      "path": "crates/babel/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "backend",
+          "kind": "mod"
+        },
+        {
+          "name": "execute",
+          "kind": "mod"
+        },
+        {
+          "name": "noweb",
+          "kind": "mod"
+        },
+        {
+          "name": "results",
+          "kind": "mod"
+        },
+        {
+          "name": "safety",
+          "kind": "mod"
+        },
+        {
+          "name": "session",
+          "kind": "mod"
+        },
+        {
+          "name": "tangle",
+          "kind": "mod"
+        },
+        {
+          "name": "vars",
+          "kind": "mod"
+        },
+        {
+          "name": "SrcBlock",
+          "kind": "struct"
+        },
+        {
+          "name": "HeaderArgs",
+          "kind": "struct"
+        },
+        {
+          "name": "EvalPolicy",
+          "kind": "enum"
+        },
+        {
+          "name": "ResultsType",
+          "kind": "enum"
+        },
+        {
+          "name": "ResultsFormat",
+          "kind": "enum"
+        },
+        {
+          "name": "ExportsType",
+          "kind": "enum"
+        },
+        {
+          "name": "TangleTarget",
+          "kind": "enum"
+        },
+        {
+          "name": "NowebMode",
+          "kind": "enum"
+        },
+        {
+          "name": "VarSource",
+          "kind": "enum"
+        },
+        {
+          "name": "parse_src_blocks",
+          "kind": "fn"
+        },
+        {
+          "name": "parse_header_args",
+          "kind": "fn"
+        },
+        {
+          "name": "find_results_block",
+          "kind": "fn"
+        },
+        {
+          "name": "find_named_block",
+          "kind": "fn"
+        },
+        {
+          "name": "parse_buffer_header_args",
+          "kind": "fn"
+        },
+        {
+          "name": "merge_header_args",
+          "kind": "fn"
+        },
+        {
+          "name": "expand_tilde",
+          "kind": "fn"
+        },
+        {
+          "name": "find_block_at_line",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-core": {
       "path": "crates/core/src/lib.rs",
       "dependencies": [
-        "mae-kb"
+        "mae-babel",
+        "mae-export",
+        "mae-format",
+        "mae-kb",
+        "mae-lookup",
+        "mae-make",
+        "mae-snippets",
+        "mae-spell"
       ],
       "public_items": [
         {
           "name": "agenda_view",
-          "kind": "mod"
-        },
-        {
-          "name": "babel",
           "kind": "mod"
         },
         {
@@ -143,10 +262,6 @@
         },
         {
           "name": "event_record",
-          "kind": "mod"
-        },
-        {
-          "name": "export",
           "kind": "mod"
         },
         {
@@ -266,6 +381,10 @@
           "kind": "mod"
         },
         {
+          "name": "SchemeToolDef",
+          "kind": "struct"
+        },
+        {
           "name": "redraw",
           "kind": "mod"
         },
@@ -303,6 +422,100 @@
         }
       ]
     },
+    "mae-export": {
+      "path": "crates/export/src/lib.rs",
+      "dependencies": [
+        "mae-babel"
+      ],
+      "public_items": [
+        {
+          "name": "html",
+          "kind": "mod"
+        },
+        {
+          "name": "markdown",
+          "kind": "mod"
+        },
+        {
+          "name": "markdown_parser",
+          "kind": "mod"
+        },
+        {
+          "name": "org_writer",
+          "kind": "mod"
+        },
+        {
+          "name": "OrgMeta",
+          "kind": "struct"
+        },
+        {
+          "name": "ExportOptions",
+          "kind": "struct"
+        },
+        {
+          "name": "OrgElement",
+          "kind": "enum"
+        },
+        {
+          "name": "ListItem",
+          "kind": "struct"
+        },
+        {
+          "name": "Exporter",
+          "kind": "trait"
+        },
+        {
+          "name": "parse_org_document",
+          "kind": "fn"
+        },
+        {
+          "name": "InlineTarget",
+          "kind": "enum"
+        },
+        {
+          "name": "convert_inline_markup_str",
+          "kind": "fn"
+        },
+        {
+          "name": "html_escape",
+          "kind": "fn"
+        },
+        {
+          "name": "filter_by_tags",
+          "kind": "fn"
+        },
+        {
+          "name": "extract_subtree",
+          "kind": "fn"
+        }
+      ]
+    },
+    "mae-format": {
+      "path": "crates/format/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "external",
+          "kind": "mod"
+        },
+        {
+          "name": "FormatResult",
+          "kind": "struct"
+        },
+        {
+          "name": "ExternalFormatter",
+          "kind": "struct"
+        },
+        {
+          "name": "FormatConfig",
+          "kind": "struct"
+        },
+        {
+          "name": "format_with_external",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-gui": {
       "path": "crates/gui/src/lib.rs",
       "dependencies": [
@@ -334,6 +547,10 @@
           "kind": "mod"
         },
         {
+          "name": "fuzzy",
+          "kind": "mod"
+        },
+        {
           "name": "org",
           "kind": "mod"
         },
@@ -362,8 +579,34 @@
           "kind": "fn"
         },
         {
+          "name": "BrokenLinkKind",
+          "kind": "enum"
+        },
+        {
+          "name": "BrokenLink",
+          "kind": "struct"
+        },
+        {
+          "name": "KbHealthReport",
+          "kind": "struct"
+        },
+        {
           "name": "KnowledgeBase",
           "kind": "struct"
+        }
+      ]
+    },
+    "mae-lookup": {
+      "path": "crates/lookup/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "dumb_jump",
+          "kind": "mod"
+        },
+        {
+          "name": "online",
+          "kind": "mod"
         }
       ]
     },
@@ -389,10 +632,36 @@
         }
       ]
     },
+    "mae-make": {
+      "path": "crates/make/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "detect",
+          "kind": "mod"
+        },
+        {
+          "name": "errorformat",
+          "kind": "mod"
+        },
+        {
+          "name": "systems",
+          "kind": "mod"
+        }
+      ]
+    },
     "mae-mcp": {
       "path": "crates/mcp/src/lib.rs",
       "dependencies": [],
       "public_items": [
+        {
+          "name": "client",
+          "kind": "mod"
+        },
+        {
+          "name": "client_mgr",
+          "kind": "mod"
+        },
         {
           "name": "protocol",
           "kind": "mod"
@@ -454,6 +723,34 @@
         },
         {
           "name": "grid_types",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-snippets": {
+      "path": "crates/snippets/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "parser",
+          "kind": "mod"
+        },
+        {
+          "name": "snippet",
+          "kind": "mod"
+        },
+        {
+          "name": "store",
+          "kind": "mod"
+        }
+      ]
+    },
+    "mae-spell": {
+      "path": "crates/spell/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "checker",
           "kind": "mod"
         }
       ]
@@ -629,6 +926,134 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "define-option!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "module-loaded?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "module-version",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "module-list",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "register-module!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "module-flags",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "mae-declare-module!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "mae-declared-modules",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "mae-declare-package!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "undefine-command!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "undefine-option!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "unload-feature",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "define-kb-node!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "deprecate-function!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "register-ai-tool!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "ai-tool-param!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "ai-tool-require!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "register-splash-art!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "register-splash-art-image!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-split",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-join",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-trim",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-contains?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-replace",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-upcase",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "string-downcase",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "shell-command",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "create-buffer",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kill-buffer-by-name",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "advice-add!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "advice-remove!",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "check-deprecated",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "buffer-line",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -638,6 +1063,58 @@
     },
     {
       "name": "shell-read-output",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-buffer-name",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-buffer-file",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-line-number",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "current-column",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "point",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "point-min",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "point-max",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "line-beginning-position",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "line-end-position",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "region-active?",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "region-beginning",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "region-end",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "get-selection",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -1296,6 +1773,14 @@
       "doc": "Reject proposed AI changes"
     },
     {
+      "name": "ai-ping",
+      "doc": "Test AI API connectivity (SPC a n)"
+    },
+    {
+      "name": "verify",
+      "doc": "Spawn verifier sub-agent to run tests (SPC a v)"
+    },
+    {
       "name": "ai-set-mode",
       "doc": "Switch the AI operating mode (standard, plan, auto-accept)"
     },
@@ -1900,6 +2385,14 @@
       "doc": "Export subtree at cursor (SPC m e s)"
     },
     {
+      "name": "markdown-to-org",
+      "doc": "Convert current Markdown buffer to Org format"
+    },
+    {
+      "name": "org-to-markdown",
+      "doc": "Convert current Org buffer to Markdown (in-buffer)"
+    },
+    {
       "name": "kb-register",
       "doc": "Register org-roam directory as KB instance"
     },
@@ -2080,6 +2573,14 @@
       "doc": "Switch to a recent project (SPC p p)"
     },
     {
+      "name": "project-clean",
+      "doc": "Prune stale/sub-project entries (SPC p c)"
+    },
+    {
+      "name": "project-forget",
+      "doc": "Remove a project from the known list (SPC p D)"
+    },
+    {
       "name": "search-buffer",
       "doc": "Search in current buffer (SPC s s)"
     },
@@ -2128,8 +2629,32 @@
       "doc": "Show a configuration health report (AI, LSP, DAP status)"
     },
     {
+      "name": "kb-health",
+      "doc": "Show KB health report (orphans, broken links, namespace counts)"
+    },
+    {
       "name": "describe-display-policy",
       "doc": "Show the active display policy rules (how buffers are placed in windows)"
+    },
+    {
+      "name": "describe-bindings",
+      "doc": "Show all keybindings for the current mode"
+    },
+    {
+      "name": "describe-module",
+      "doc": "Show module summary or detail (:describe-module [name])"
+    },
+    {
+      "name": "describe-module-at-cursor",
+      "doc": "Open detail view for module name under cursor"
+    },
+    {
+      "name": "describe-mode",
+      "doc": "Show current buffer's mode, keymap, and active options"
+    },
+    {
+      "name": "module-reload",
+      "doc": "Reload a module's autoloads (:module-reload <name>)"
     },
     {
       "name": "set-save",
@@ -2292,6 +2817,22 @@
       "doc": "Search KB nodes (SPC n f)"
     },
     {
+      "name": "kb-edit-source",
+      "doc": "Jump to source .org file for current help node (SPC n e)"
+    },
+    {
+      "name": "kb-create",
+      "doc": "Create a new KB node: kb-create <id> <title> (SPC n c)"
+    },
+    {
+      "name": "kb-delete",
+      "doc": "Delete a KB node by ID (SPC n d)"
+    },
+    {
+      "name": "kb-instances",
+      "doc": "Show all registered KB federation instances (SPC n i)"
+    },
+    {
       "name": "help",
       "doc": "Open the *Help* buffer at the knowledge-base index"
     },
@@ -2326,6 +2867,26 @@
     {
       "name": "help-reopen",
       "doc": "Reopen the last-closed help buffer"
+    },
+    {
+      "name": "kb-view",
+      "doc": "Return to rendered KB view from source editing (SPC n v)"
+    },
+    {
+      "name": "help-cycle",
+      "doc": "Fold/unfold heading at cursor, or next link if not on heading (Tab)"
+    },
+    {
+      "name": "help-global-cycle",
+      "doc": "Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab)"
+    },
+    {
+      "name": "help-close-all-folds",
+      "doc": "Fold all headings in help buffer (zM)"
+    },
+    {
+      "name": "help-open-all-folds",
+      "doc": "Unfold all headings in help buffer (zR)"
     },
     {
       "name": "help-edit",
@@ -2372,6 +2933,14 @@
       "doc": "Scroll shell terminal to latest output"
     },
     {
+      "name": "shell-select-mode",
+      "doc": "Copy mode — snapshot shell output for selection (SPC y)"
+    },
+    {
+      "name": "close-shell-select",
+      "doc": "Close the shell-select buffer and return to the shell"
+    },
+    {
       "name": "nohlsearch",
       "doc": "Clear search highlights (alias for clear-search-highlight)"
     },
@@ -2398,6 +2967,10 @@
     {
       "name": "ai-load",
       "doc": "Load AI conversation from JSON file (:ai-load <path>)"
+    },
+    {
+      "name": "ai-status!",
+      "doc": "Open detailed AI diagnostics buffer (provider, session, config)"
     },
     {
       "name": "agent-list",

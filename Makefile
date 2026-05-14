@@ -74,6 +74,11 @@ install: build
 	@mkdir -p $(DATADIR)/icons/hicolor/scalable/apps
 	@install -m 644 $(ICON_FILE) $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Installed icon -> $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
+	@mkdir -p $(DATADIR)/mae/modules
+	@if [ -d modules ]; then \
+		cp -r modules/* $(DATADIR)/mae/modules/; \
+		echo "Installed modules -> $(DATADIR)/mae/modules/"; \
+	fi
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi
@@ -109,6 +114,8 @@ uninstall:
 	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
 	@echo "Removed $(DATADIR)/applications/mae.desktop"
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
+	@rm -rf $(DATADIR)/mae/modules
+	@echo "Removed $(DATADIR)/mae/modules/"
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(DATADIR)/applications 2>/dev/null || true; \
 	fi

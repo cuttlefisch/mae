@@ -10,29 +10,48 @@ graph TD
     mae --> mae_core
     mae --> mae_dap
     mae --> mae_gui
+    mae --> mae_kb
     mae --> mae_lsp
     mae --> mae_mcp
     mae --> mae_renderer
     mae --> mae_scheme
     mae --> mae_shell
     mae_ai --> mae_core
+    mae_babel[mae-babel]
+    mae_core --> mae_babel
+    mae_core --> mae_export
+    mae_core --> mae_format
     mae_core --> mae_kb
+    mae_core --> mae_lookup
+    mae_core --> mae_make
+    mae_core --> mae_snippets
+    mae_core --> mae_spell
     mae_dap --> mae_core
+    mae_export --> mae_babel
+    mae_format[mae-format]
     mae_gui --> mae_core
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
     mae_kb[mae-kb]
+    mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
+    mae_make[mae-make]
     mae_mcp[mae-mcp]
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_core
     mae_shell[mae-shell]
+    mae_snippets[mae-snippets]
+    mae_spell[mae-spell]
 ```
 
 ## mae
 
 Source: `crates/mae/src/main.rs`
+
+| Item | Kind |
+|------|------|
+| `pkg` | mod |
 
 ## mae-ai
 
@@ -41,6 +60,7 @@ Source: `crates/ai/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `claude` | mod |
+| `connectivity` | mod |
 | `context_limits` | mod |
 | `executor` | mod |
 | `gemini` | mod |
@@ -52,6 +72,38 @@ Source: `crates/ai/src/lib.rs`
 | `tools` | mod |
 | `types` | mod |
 
+## mae-babel
+
+Source: `crates/babel/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `backend` | mod |
+| `execute` | mod |
+| `noweb` | mod |
+| `results` | mod |
+| `safety` | mod |
+| `session` | mod |
+| `tangle` | mod |
+| `vars` | mod |
+| `SrcBlock` | struct |
+| `HeaderArgs` | struct |
+| `EvalPolicy` | enum |
+| `ResultsType` | enum |
+| `ResultsFormat` | enum |
+| `ExportsType` | enum |
+| `TangleTarget` | enum |
+| `NowebMode` | enum |
+| `VarSource` | enum |
+| `parse_src_blocks` | fn |
+| `parse_header_args` | fn |
+| `find_results_block` | fn |
+| `find_named_block` | fn |
+| `parse_buffer_header_args` | fn |
+| `merge_header_args` | fn |
+| `expand_tilde` | fn |
+| `find_block_at_line` | fn |
+
 ## mae-core
 
 Source: `crates/core/src/lib.rs`
@@ -59,7 +111,6 @@ Source: `crates/core/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `agenda_view` | mod |
-| `babel` | mod |
 | `buffer` | mod |
 | `buffer_mode` | mod |
 | `buffer_view` | mod |
@@ -76,7 +127,6 @@ Source: `crates/core/src/lib.rs`
 | `display_region` | mod |
 | `editor` | mod |
 | `event_record` | mod |
-| `export` | mod |
 | `file_browser` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
@@ -106,6 +156,7 @@ Source: `crates/core/src/lib.rs`
 | `window` | mod |
 | `word` | mod |
 | `wrap` | mod |
+| `SchemeToolDef` | struct |
 | `redraw` | mod |
 | `VisualType` | enum |
 | `Mode` | enum |
@@ -120,6 +171,40 @@ Source: `crates/dap/src/lib.rs`
 | `manager` | mod |
 | `protocol` | mod |
 | `transport` | mod |
+
+## mae-export
+
+Source: `crates/export/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `html` | mod |
+| `markdown` | mod |
+| `markdown_parser` | mod |
+| `org_writer` | mod |
+| `OrgMeta` | struct |
+| `ExportOptions` | struct |
+| `OrgElement` | enum |
+| `ListItem` | struct |
+| `Exporter` | trait |
+| `parse_org_document` | fn |
+| `InlineTarget` | enum |
+| `convert_inline_markup_str` | fn |
+| `html_escape` | fn |
+| `filter_by_tags` | fn |
+| `extract_subtree` | fn |
+
+## mae-format
+
+Source: `crates/format/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `external` | mod |
+| `FormatResult` | struct |
+| `ExternalFormatter` | struct |
+| `FormatConfig` | struct |
+| `format_with_external` | fn |
 
 ## mae-gui
 
@@ -138,6 +223,7 @@ Source: `crates/kb/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `federation` | mod |
+| `fuzzy` | mod |
 | `org` | mod |
 | `persist` | mod |
 | `watch` | mod |
@@ -145,7 +231,19 @@ Source: `crates/kb/src/lib.rs`
 | `NodeSource` | enum |
 | `Node` | struct |
 | `parse_links` | fn |
+| `BrokenLinkKind` | enum |
+| `BrokenLink` | struct |
+| `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
+
+## mae-lookup
+
+Source: `crates/lookup/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `dumb_jump` | mod |
+| `online` | mod |
 
 ## mae-lsp
 
@@ -158,12 +256,24 @@ Source: `crates/lsp/src/lib.rs`
 | `protocol` | mod |
 | `transport` | mod |
 
+## mae-make
+
+Source: `crates/make/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `detect` | mod |
+| `errorformat` | mod |
+| `systems` | mod |
+
 ## mae-mcp
 
 Source: `crates/mcp/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `client` | mod |
+| `client_mgr` | mod |
 | `protocol` | mod |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
@@ -195,6 +305,24 @@ Source: `crates/shell/src/lib.rs`
 |------|------|
 | `path` | mod |
 | `grid_types` | mod |
+
+## mae-snippets
+
+Source: `crates/snippets/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `parser` | mod |
+| `snippet` | mod |
+| `store` | mod |
+
+## mae-spell
+
+Source: `crates/spell/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `checker` | mod |
 
 ## Scheme API
 
@@ -244,16 +372,61 @@ Source: `crates/shell/src/lib.rs`
 | `load-path` | `crates/scheme/src/runtime.rs` |
 | `add-to-load-path!` | `crates/scheme/src/runtime.rs` |
 | `autoload` | `crates/scheme/src/runtime.rs` |
+| `define-option!` | `crates/scheme/src/runtime.rs` |
+| `module-loaded?` | `crates/scheme/src/runtime.rs` |
+| `module-version` | `crates/scheme/src/runtime.rs` |
+| `module-list` | `crates/scheme/src/runtime.rs` |
+| `register-module!` | `crates/scheme/src/runtime.rs` |
+| `module-flags` | `crates/scheme/src/runtime.rs` |
+| `mae-declare-module!` | `crates/scheme/src/runtime.rs` |
+| `mae-declared-modules` | `crates/scheme/src/runtime.rs` |
+| `mae-declare-package!` | `crates/scheme/src/runtime.rs` |
+| `undefine-command!` | `crates/scheme/src/runtime.rs` |
+| `undefine-option!` | `crates/scheme/src/runtime.rs` |
+| `unload-feature` | `crates/scheme/src/runtime.rs` |
+| `define-kb-node!` | `crates/scheme/src/runtime.rs` |
+| `deprecate-function!` | `crates/scheme/src/runtime.rs` |
+| `register-ai-tool!` | `crates/scheme/src/runtime.rs` |
+| `ai-tool-param!` | `crates/scheme/src/runtime.rs` |
+| `ai-tool-require!` | `crates/scheme/src/runtime.rs` |
+| `register-splash-art!` | `crates/scheme/src/runtime.rs` |
+| `register-splash-art-image!` | `crates/scheme/src/runtime.rs` |
+| `string-split` | `crates/scheme/src/runtime.rs` |
+| `string-join` | `crates/scheme/src/runtime.rs` |
+| `string-trim` | `crates/scheme/src/runtime.rs` |
+| `string-contains?` | `crates/scheme/src/runtime.rs` |
+| `string-replace` | `crates/scheme/src/runtime.rs` |
+| `string-upcase` | `crates/scheme/src/runtime.rs` |
+| `string-downcase` | `crates/scheme/src/runtime.rs` |
+| `shell-command` | `crates/scheme/src/runtime.rs` |
+| `create-buffer` | `crates/scheme/src/runtime.rs` |
+| `kill-buffer-by-name` | `crates/scheme/src/runtime.rs` |
+| `advice-add!` | `crates/scheme/src/runtime.rs` |
+| `advice-remove!` | `crates/scheme/src/runtime.rs` |
+| `check-deprecated` | `crates/scheme/src/runtime.rs` |
 | `buffer-line` | `crates/scheme/src/runtime.rs` |
 | `shell-cwd` | `crates/scheme/src/runtime.rs` |
 | `shell-read-output` | `crates/scheme/src/runtime.rs` |
+| `current-buffer-name` | `crates/scheme/src/runtime.rs` |
+| `current-buffer-file` | `crates/scheme/src/runtime.rs` |
+| `current-line-number` | `crates/scheme/src/runtime.rs` |
+| `current-column` | `crates/scheme/src/runtime.rs` |
+| `point` | `crates/scheme/src/runtime.rs` |
+| `point-min` | `crates/scheme/src/runtime.rs` |
+| `point-max` | `crates/scheme/src/runtime.rs` |
+| `line-beginning-position` | `crates/scheme/src/runtime.rs` |
+| `line-end-position` | `crates/scheme/src/runtime.rs` |
+| `region-active?` | `crates/scheme/src/runtime.rs` |
+| `region-beginning` | `crates/scheme/src/runtime.rs` |
+| `region-end` | `crates/scheme/src/runtime.rs` |
+| `get-selection` | `crates/scheme/src/runtime.rs` |
 | `buffer-text-range` | `crates/scheme/src/runtime.rs` |
 | `get-buffer-by-name` | `crates/scheme/src/runtime.rs` |
 | `get-option` | `crates/scheme/src/runtime.rs` |
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (455 built-in)
+## Commands (479 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -415,6 +588,8 @@ Source: `crates/shell/src/lib.rs`
 | `ai-cancel` | Cancel current AI operation |
 | `ai-accept` | Accept proposed AI changes |
 | `ai-reject` | Reject proposed AI changes |
+| `ai-ping` | Test AI API connectivity (SPC a n) |
+| `verify` | Spawn verifier sub-agent to run tests (SPC a v) |
 | `ai-set-mode` | Switch the AI operating mode (standard, plan, auto-accept) |
 | `ai-set-profile` | Switch the active AI prompt profile (pair-programmer, explorer, planner, reviewer) |
 | `describe-key` | Show what a key does |
@@ -566,6 +741,8 @@ Source: `crates/shell/src/lib.rs`
 | `org-export-html` | Export org buffer to HTML (SPC m e h) |
 | `org-export-markdown` | Export org buffer to Markdown (SPC m e m) |
 | `org-export-subtree` | Export subtree at cursor (SPC m e s) |
+| `markdown-to-org` | Convert current Markdown buffer to Org format |
+| `org-to-markdown` | Convert current Org buffer to Markdown (in-buffer) |
 | `kb-register` | Register org-roam directory as KB instance |
 | `kb-unregister` | Remove a registered KB instance |
 | `kb-reimport` | Re-import KB instance from org files |
@@ -611,6 +788,8 @@ Source: `crates/shell/src/lib.rs`
 | `project-browse` | Browse project directory (SPC p d) |
 | `project-recent-files` | Recent files in project (SPC p r) |
 | `project-switch` | Switch to a recent project (SPC p p) |
+| `project-clean` | Prune stale/sub-project entries (SPC p c) |
+| `project-forget` | Remove a project from the known list (SPC p D) |
 | `search-buffer` | Search in current buffer (SPC s s) |
 | `yank-file-path` | Copy buffer file path to clipboard (SPC f y) |
 | `rename-file` | Rename current file (SPC f R) |
@@ -623,7 +802,13 @@ Source: `crates/shell/src/lib.rs`
 | `reload-config` | Reload config.toml and re-evaluate init.scm |
 | `describe-option` | Show documentation for an editor option (SPC h o) |
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
+| `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
 | `describe-display-policy` | Show the active display policy rules (how buffers are placed in windows) |
+| `describe-bindings` | Show all keybindings for the current mode |
+| `describe-module` | Show module summary or detail (:describe-module [name]) |
+| `describe-module-at-cursor` | Open detail view for module name under cursor |
+| `describe-mode` | Show current buffer's mode, keymap, and active options |
+| `module-reload` | Reload a module's autoloads (:module-reload <name>) |
 | `set-save` | Set an option and persist to config.toml (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |
@@ -664,6 +849,10 @@ Source: `crates/shell/src/lib.rs`
 | `git-stash-drop` | Drop stash at cursor (z d in git status) |
 | `show-buffer-keys` | Show all keybindings for the current buffer (?) |
 | `kb-find` | Search KB nodes (SPC n f) |
+| `kb-edit-source` | Jump to source .org file for current help node (SPC n e) |
+| `kb-create` | Create a new KB node: kb-create <id> <title> (SPC n c) |
+| `kb-delete` | Delete a KB node by ID (SPC n d) |
+| `kb-instances` | Show all registered KB federation instances (SPC n i) |
 | `help` | Open the *Help* buffer at the knowledge-base index |
 | `help-follow-link` | Follow the focused link in the *Help* buffer |
 | `help-back` | Navigate back in help history (C-o) |
@@ -673,6 +862,11 @@ Source: `crates/shell/src/lib.rs`
 | `help-close` | Close help buffer |
 | `help-search` | Search help topics |
 | `help-reopen` | Reopen the last-closed help buffer |
+| `kb-view` | Return to rendered KB view from source editing (SPC n v) |
+| `help-cycle` | Fold/unfold heading at cursor, or next link if not on heading (Tab) |
+| `help-global-cycle` | Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab) |
+| `help-close-all-folds` | Fold all headings in help buffer (zM) |
+| `help-open-all-folds` | Unfold all headings in help buffer (zR) |
 | `help-edit` | Edit a user help topic in ~/.config/mae/help/ (:help-edit <topic>) |
 | `terminal` | Open a terminal emulator buffer (:terminal) |
 | `terminal-here` | Open terminal in current buffer's file directory (SPC o T) |
@@ -684,6 +878,8 @@ Source: `crates/shell/src/lib.rs`
 | `shell-scroll-page-up` | Scroll shell terminal up one page |
 | `shell-scroll-page-down` | Scroll shell terminal down one page |
 | `shell-scroll-to-bottom` | Scroll shell terminal to latest output |
+| `shell-select-mode` | Copy mode — snapshot shell output for selection (SPC y) |
+| `close-shell-select` | Close the shell-select buffer and return to the shell |
 | `nohlsearch` | Clear search highlights (alias for clear-search-highlight) |
 | `kb-save` | Save knowledge base to SQLite file (:kb-save <path>) |
 | `kb-load` | Load knowledge base from SQLite file (:kb-load <path>) |
@@ -691,6 +887,7 @@ Source: `crates/shell/src/lib.rs`
 | `kb-rebuild` | Rebuild the knowledge base with current keybindings and hooks |
 | `ai-save` | Save AI conversation to JSON file (:ai-save <path>) |
 | `ai-load` | Load AI conversation from JSON file (:ai-load <path>) |
+| `ai-status!` | Open detailed AI diagnostics buffer (provider, session, config) |
 | `agent-list` | List all AI agents MAE can bootstrap for MCP tool discovery |
 | `agent-setup` | Bootstrap an AI agent: write .mcp.json and approval settings (:agent-setup <name>) |
 | `self-test` | Run AI-driven self-test to validate editor tools and integrations (:self-test [categories]) |

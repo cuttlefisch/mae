@@ -36,6 +36,7 @@ pub enum PalettePurpose {
     AiMode,
     AiProfile,
     GitBranch,
+    ForgetProject,
     MiniDialog,
 }
 
@@ -54,6 +55,7 @@ impl PalettePurpose {
             Self::AiMode => "AI Operating Mode",
             Self::AiProfile => "AI Prompt Profile",
             Self::GitBranch => "Git Branch",
+            Self::ForgetProject => "Forget Project",
             Self::MiniDialog => "Dialog",
         }
     }
@@ -273,13 +275,18 @@ impl CommandPalette {
         Self::with_name_list(branches, PalettePurpose::GitBranch)
     }
 
-    /// Splash art picker palette. More art variants will be added in a
-    /// follow-up PR — the infrastructure supports any number of entries.
-    pub fn for_splash_art() -> Self {
-        let entries = vec![PaletteEntry {
-            name: "bat".to_string(),
-            doc: "Bat with spread wings".to_string(),
-        }];
+    /// Forget project palette. Used by `SPC p d` / `project-forget`.
+    pub fn for_forget_project(roots: &[&str]) -> Self {
+        Self::with_name_list(roots, PalettePurpose::ForgetProject)
+    }
+
+    /// Splash art picker palette. Lists built-in + custom registered arts.
+    pub fn for_splash_art(editor: &crate::Editor) -> Self {
+        let names = crate::render_common::splash::available_splash_names(editor);
+        let entries: Vec<PaletteEntry> = names
+            .into_iter()
+            .map(|(name, kind)| PaletteEntry { name, doc: kind })
+            .collect();
         let filtered: Vec<usize> = (0..entries.len()).collect();
         CommandPalette {
             query: String::new(),
@@ -405,6 +412,7 @@ mod tests {
             PalettePurpose::AiMode,
             PalettePurpose::AiProfile,
             PalettePurpose::GitBranch,
+            PalettePurpose::ForgetProject,
             PalettePurpose::MiniDialog,
         ];
         for p in &purposes {
@@ -412,6 +420,7 @@ mod tests {
         }
         assert_eq!(PalettePurpose::Execute.label(), "Commands");
         assert_eq!(PalettePurpose::GitBranch.label(), "Git Branch");
+        assert_eq!(PalettePurpose::ForgetProject.label(), "Forget Project");
     }
 
     #[test]

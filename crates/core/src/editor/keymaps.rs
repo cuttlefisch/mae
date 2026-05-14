@@ -74,24 +74,7 @@ impl Editor {
         normal.bind(parse_key_seq(","), "repeat-find-reverse");
         // Reselect visual (gv)
         normal.bind(parse_key_seq("gv"), "reselect-visual");
-        // Search
-        normal.bind(parse_key_seq("/"), "search-forward-start");
-        normal.bind(parse_key_seq("?"), "search-backward-start");
-        normal.bind(parse_key_seq("n"), "search-next");
-        normal.bind(parse_key_seq("N"), "search-prev");
-        normal.bind(parse_key_seq("*"), "search-word-under-cursor");
-        normal.bind(parse_key_seq("#"), "search-word-under-cursor-backward");
-        // gn / gN — select next/prev search match as visual selection.
-        // Operator variants: dgn, cgn, ygn (and capital-N backward equivalents).
-        // Practical Vim tip 86: `cgn<text><Esc>` + `.` for single-key global replace.
-        normal.bind(parse_key_seq("gn"), "visual-select-next-match");
-        normal.bind(parse_key_seq("gN"), "visual-select-prev-match");
-        normal.bind(parse_key_seq("dgn"), "delete-next-match");
-        normal.bind(parse_key_seq("dgN"), "delete-prev-match");
-        normal.bind(parse_key_seq("cgn"), "change-next-match");
-        normal.bind(parse_key_seq("cgN"), "change-prev-match");
-        normal.bind(parse_key_seq("ygn"), "yank-next-match");
-        normal.bind(parse_key_seq("ygN"), "yank-prev-match");
+        // Search (/, ?, n, N, *, #, gn/gN) — moved to modules/search/autoloads.scm
         // Editing
         normal.bind(parse_key_seq("x"), "delete-char-forward");
         normal.bind(parse_key_seq("dd"), "delete-line");
@@ -121,13 +104,8 @@ impl Editor {
         // intercepts C-o / C-i before keymap lookup and routes them to
         // help-back / help-forward. Everywhere else these drive the
         // vim-style jump list.
-        normal.bind(parse_key_seq("C-o"), "jump-backward");
-        normal.bind(parse_key_seq("C-i"), "jump-forward");
-        // Change list (Practical Vim ch. 9): g; walks back through edit
-        // positions, g, walks forward. Symmetric to Ctrl-o / Ctrl-i but
-        // scoped to edit locations, not motion targets.
-        normal.bind(parse_key_seq("g;"), "change-backward");
-        normal.bind(parse_key_seq("g,"), "change-forward");
+        // Jump list (C-o/C-i), marks (m/'), change list (g;/g,)
+        // — moved to modules/marks-jumps/autoloads.scm
         // gf — open file under cursor. Resolves absolute paths, relative
         // paths (cwd first, then buffer's dir), and ~-expanded home paths.
         normal.bind(parse_key_seq("gf"), "goto-file-under-cursor");
@@ -135,15 +113,8 @@ impl Editor {
         normal.bind(parse_key_seq("gx"), "open-link-at-cursor");
         // gl — edit link at cursor (jump into link region + insert mode)
         normal.bind(parse_key_seq("gl"), "edit-link");
-        // Marks (m<letter> sets, '<letter> jumps)
-        normal.bind(parse_key_seq("m"), "set-mark-await");
-        normal.bind(parse_key_seq("'"), "jump-mark-await");
-        // Macros (q<letter> records, @<letter> replays, @@ repeats last).
-        // @@ is handled by dispatch_char_motion: if the register char is '@',
-        // last_macro_register is used. This avoids the keymap prefix conflict
-        // that would arise from binding both "@" (exact) and "@@" (longer).
-        normal.bind(parse_key_seq("q"), "start-recording-await");
-        normal.bind(parse_key_seq("@"), "replay-macro-await");
+        // Marks (m/') — moved to modules/marks-jumps/autoloads.scm
+        // Macros (q, @) — moved to modules/macros/autoloads.scm
         // Join, indent, dedent
         normal.bind(parse_key_seq("J"), "join-lines");
         normal.bind(parse_key_seq(">>"), "indent-line");
@@ -176,15 +147,9 @@ impl Editor {
         normal.bind(parse_key_seq("yy"), "yank-line");
         normal.bind(parse_key_seq("p"), "paste-after");
         normal.bind(parse_key_seq("P"), "paste-before");
-        // Register prompt: `"<char>` selects the register for the next
-        // yank/delete/paste. Resolved by the key-handling layer via
-        // `pending_register_prompt` — dispatch just arms the flag.
-        normal.bind(parse_key_seq("\""), "prompt-register");
-        // Surrounds (vim-surround)
-        normal.bind(parse_key_seq("ds"), "delete-surround-await");
-        normal.bind(parse_key_seq("cs"), "change-surround-await");
-        normal.bind(parse_key_seq("ys"), "operator-surround");
-        normal.bind(parse_key_seq("yss"), "surround-line-await");
+        // Register prompt (") — moved to modules/registers/autoloads.scm
+        // Surrounds (vim-surround) — keybindings moved to modules/surround/autoloads.scm
+        // Commands remain registered as builtins; keys come from the module.
         // Undo/Redo
         normal.bind(parse_key_seq("u"), "undo");
         normal.bind(parse_key_seq("C-r"), "redo");
@@ -226,7 +191,7 @@ impl Editor {
         // vim/dirvish convention, but it's already bound to
         // `move-line-prev-non-blank` — keep the motion primitive.)
         normal.bind(parse_key_seq_spaced("SPC f d"), "file-browser");
-        normal.bind(parse_key_seq_spaced("SPC f t"), "file-tree-toggle");
+        // SPC f t (file-tree-toggle) — moved to modules/file-tree/autoloads.scm
         normal.bind(parse_key_seq_spaced("SPC f s"), "save");
         // +window
         normal.bind(parse_key_seq_spaced("SPC w v"), "split-vertical");
@@ -258,6 +223,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC a c"), "ai-cancel");
         normal.bind(parse_key_seq_spaced("SPC a m"), "ai-set-mode");
         normal.bind(parse_key_seq_spaced("SPC a P"), "ai-set-profile");
+        normal.bind(parse_key_seq_spaced("SPC a n"), "ai-ping");
+        normal.bind(parse_key_seq_spaced("SPC a v"), "verify");
         // +help
         normal.bind(parse_key_seq_spaced("SPC h h"), "help");
         normal.bind(parse_key_seq_spaced("SPC h k"), "describe-key");
@@ -270,40 +237,25 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC h q"), "help-close");
         normal.bind(parse_key_seq_spaced("SPC h l"), "help-reopen");
         normal.bind(parse_key_seq_spaced("SPC h d"), "dashboard");
+        normal.bind(parse_key_seq_spaced("SPC h B"), "describe-bindings");
+        normal.bind(parse_key_seq_spaced("SPC h m"), "describe-mode");
         normal.bind(parse_key_seq_spaced("SPC h D"), "describe-display-policy");
         // +scratch
         normal.bind(parse_key_seq_spaced("SPC x"), "toggle-scratch-buffer");
         // +theme
         normal.bind(parse_key_seq_spaced("SPC t t"), "cycle-theme");
         normal.bind(parse_key_seq_spaced("SPC t S"), "set-theme");
-        // +debug
-        normal.bind(parse_key_seq_spaced("SPC d d"), "debug-start");
-        normal.bind(parse_key_seq_spaced("SPC d s"), "debug-self");
-        normal.bind(parse_key_seq_spaced("SPC d q"), "debug-stop");
-        normal.bind(parse_key_seq_spaced("SPC d c"), "debug-continue");
-        normal.bind(parse_key_seq_spaced("SPC d n"), "debug-step-over");
-        normal.bind(parse_key_seq_spaced("SPC d i"), "debug-step-into");
-        normal.bind(parse_key_seq_spaced("SPC d o"), "debug-step-out");
-        normal.bind(parse_key_seq_spaced("SPC d b"), "debug-toggle-breakpoint");
-        normal.bind(parse_key_seq_spaced("SPC d v"), "debug-inspect");
-        normal.bind(parse_key_seq_spaced("SPC d p"), "debug-panel");
-        normal.bind(parse_key_seq_spaced("SPC d w"), "debug-add-watch");
-        normal.bind(parse_key_seq_spaced("SPC d W"), "debug-remove-watch");
-        normal.bind(parse_key_seq_spaced("SPC d e"), "debug-exceptions");
+        // +debug — moved to modules/debug/autoloads.scm
         // +quit
         normal.bind(parse_key_seq_spaced("SPC q q"), "quit");
         normal.bind(parse_key_seq_spaced("SPC q Q"), "force-quit");
         normal.bind(parse_key_seq_spaced("SPC q s"), "save-and-quit");
         normal.bind(parse_key_seq_spaced("SPC q S"), "save-all-and-quit");
-        // +search/syntax (tree-sitter structural selection + search)
-        normal.bind(parse_key_seq_spaced("SPC s s"), "search-buffer");
+        // +search/syntax — search keys moved to modules/search/autoloads.scm
+        // Syntax selection stays in kernel (tree-sitter bridge)
         normal.bind(parse_key_seq_spaced("SPC s n"), "syntax-select-node");
         normal.bind(parse_key_seq_spaced("SPC s e"), "syntax-expand-selection");
         normal.bind(parse_key_seq_spaced("SPC s c"), "syntax-contract-selection");
-        normal.bind(parse_key_seq_spaced("SPC s p"), "project-search");
-        normal.bind(parse_key_seq_spaced("SPC s h"), "clear-search-highlight");
-        // SPC / — Doom shortcut for project search
-        normal.bind(parse_key_seq_spaced("SPC /"), "project-search");
         // +eval (Scheme REPL / lisp machine)
         normal.bind(parse_key_seq_spaced("SPC e l"), "eval-line");
         normal.bind(parse_key_seq_spaced("SPC e b"), "eval-buffer");
@@ -317,6 +269,8 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC p r"), "project-recent-files");
         normal.bind(parse_key_seq_spaced("SPC p p"), "project-switch");
         normal.bind(parse_key_seq_spaced("SPC p a"), "add-project");
+        normal.bind(parse_key_seq_spaced("SPC p D"), "project-forget");
+        normal.bind(parse_key_seq_spaced("SPC p c"), "project-clean");
         // +file expansions
         normal.bind(parse_key_seq_spaced("SPC f r"), "recent-files");
         normal.bind(parse_key_seq_spaced("SPC f y"), "yank-file-path");
@@ -346,27 +300,24 @@ impl Editor {
             parse_key_seq_spaced("SPC t d"),
             "toggle-lsp-diagnostics-inline",
         );
-        // +git
-        normal.bind(parse_key_seq_spaced("SPC g s"), "git-status");
-        normal.bind(parse_key_seq_spaced("SPC g g"), "git-status");
-        normal.bind(parse_key_seq_spaced("SPC g b"), "git-blame");
-        normal.bind(parse_key_seq_spaced("SPC g d"), "git-diff");
-        normal.bind(parse_key_seq_spaced("SPC g l"), "git-log");
-        normal.bind(parse_key_seq_spaced("SPC g c"), "git-commit");
-        normal.bind(parse_key_seq_spaced("SPC g S"), "git-stage-all");
-        normal.bind(parse_key_seq_spaced("SPC g U"), "git-unstage-all");
+        // +git — moved to modules/git-status/autoloads.scm
         // +open
         normal.bind(parse_key_seq_spaced("SPC o t"), "terminal");
         normal.bind(parse_key_seq_spaced("SPC o T"), "terminal-here");
         normal.bind(parse_key_seq_spaced("SPC o r"), "terminal-reset");
         normal.bind(parse_key_seq_spaced("SPC o c"), "terminal-close");
-        normal.bind(parse_key_seq_spaced("SPC o a"), "open-agenda");
-        normal.bind(parse_key_seq_spaced("SPC o A"), "agenda-add");
-        // +register
-        normal.bind(parse_key_seq_spaced("SPC r r"), "show-registers");
-        normal.bind(parse_key_seq_spaced("SPC r y"), "paste-from-yank");
+        // SPC o a / SPC o A — moved to modules/agenda/autoloads.scm
+        // +register — moved to modules/registers/autoloads.scm
         // +notes (KB shortcuts)
         normal.bind(parse_key_seq_spaced("SPC n f"), "kb-find");
+        normal.bind(parse_key_seq_spaced("SPC n v"), "kb-view");
+        normal.bind(parse_key_seq_spaced("SPC n e"), "kb-edit-source");
+        normal.bind(parse_key_seq_spaced("SPC n c"), "kb-create");
+        normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
+        normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
+        normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
+        normal.bind(parse_key_seq_spaced("SPC n i"), "kb-instances");
+        normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)
         normal.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");
         normal.bind(parse_key_seq_spaced("SPC c r"), "lsp-find-references");
@@ -401,14 +352,7 @@ impl Editor {
         normal.set_group_name(parse_key_seq_spaced("SPC r"), "+register");
         normal.set_group_name(parse_key_seq_spaced("SPC m"), "+multicursor");
 
-        // Multi-cursor (SPC m group)
-        normal.bind(parse_key_seq_spaced("SPC m j"), "mc-add-cursor-below");
-        normal.bind(parse_key_seq_spaced("SPC m k"), "mc-add-cursor-above");
-        normal.bind(parse_key_seq_spaced("SPC m d"), "mc-add-at-next-word");
-        normal.bind(parse_key_seq_spaced("SPC m a"), "mc-add-all-word");
-        normal.bind(parse_key_seq_spaced("SPC m s"), "mc-skip-next");
-        normal.bind(parse_key_seq_spaced("SPC m c"), "mc-clear");
-        normal.bind(parse_key_seq_spaced("SPC m l"), "mc-align");
+        // Multi-cursor (SPC m) — moved to modules/multicursor/autoloads.scm
 
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
@@ -464,9 +408,7 @@ impl Editor {
         visual.bind(parse_key_seq("F"), "find-char-backward-await");
         visual.bind(parse_key_seq("t"), "till-char-forward-await");
         visual.bind(parse_key_seq("T"), "till-char-backward-await");
-        // Marks
-        visual.bind(parse_key_seq("m"), "set-mark-await");
-        visual.bind(parse_key_seq("'"), "jump-mark-await");
+        // Marks (m/') — moved to modules/marks-jumps/autoloads.scm
         // Scroll
         visual.bind(parse_key_seq("C-u"), "scroll-half-up");
         visual.bind(parse_key_seq("C-d"), "scroll-half-down");
@@ -497,10 +439,8 @@ impl Editor {
         // Repeat find in visual mode
         visual.bind(parse_key_seq(";"), "repeat-find");
         visual.bind(parse_key_seq(","), "repeat-find-reverse");
-        // Register prompt (same as Normal: `"<char>` routes the next op).
-        visual.bind(parse_key_seq("\""), "prompt-register");
-        // Surround visual selection: `S<char>`.
-        visual.bind(parse_key_seq("S"), "surround-visual-await");
+        // Register prompt (") — moved to modules/registers/autoloads.scm
+        // Surround visual (S) — moved to modules/surround/autoloads.scm
         // Block visual insert (I inserts at left edge on all rows)
         visual.bind(parse_key_seq("I"), "block-visual-insert");
         // Block visual append (A appends at right edge on all rows)
@@ -528,335 +468,68 @@ impl Editor {
         shell_insert.bind(parse_key_seq_spaced("C-\\ C-n"), "shell-normal-mode");
         shell_insert.bind(parse_key_seq("C-y"), "paste-after");
 
-        // Git status keymap (Magit-parity)
-        let mut git_status = Keymap::with_parent("git-status", "normal");
-        // Navigation
-        git_status.bind(parse_key_seq("j"), "move-down");
-        git_status.bind(parse_key_seq("k"), "move-up");
-        git_status.bind(parse_key_seq("n"), "git-next-hunk");
-        git_status.bind(parse_key_seq("p"), "git-prev-hunk");
-        git_status.bind(parse_key_seq("G"), "move-to-last-line");
-        git_status.bind(parse_key_seq("gg"), "move-to-first-line");
-        // Stage/Unstage (context-aware: hunk on diff lines, file on file lines)
-        git_status.bind(parse_key_seq("s"), "git-stage");
-        git_status.bind(parse_key_seq("u"), "git-unstage");
-        git_status.bind(parse_key_seq("S"), "git-stage-all");
-        git_status.bind(parse_key_seq("U"), "git-unstage-all");
-        // Commit
-        git_status.bind(parse_key_seq("c c"), "git-commit");
-        git_status.bind(parse_key_seq("c a"), "git-amend");
-        // Log
-        git_status.bind(parse_key_seq("l l"), "git-log");
-        // Discard (context-aware)
-        git_status.bind(parse_key_seq("x"), "git-discard");
-        // Fold/unfold (multi-level: section → file → hunk)
-        git_status.bind(vec![KeyPress::special(Key::Tab)], "git-toggle-fold");
-        // Open file
-        git_status.bind(vec![KeyPress::special(Key::Enter)], "git-status-open");
-        // Push/Pull/Fetch
-        git_status.bind(parse_key_seq("P p"), "git-push");
-        git_status.bind(parse_key_seq("P u"), "git-push");
-        git_status.bind(parse_key_seq("f f"), "git-fetch");
-        git_status.bind(parse_key_seq("F p"), "git-pull");
-        git_status.bind(parse_key_seq("F u"), "git-pull");
-        // Branch
-        git_status.bind(parse_key_seq("b b"), "git-branch-switch");
-        git_status.bind(parse_key_seq("b n"), "git-branch-create");
-        git_status.bind(parse_key_seq("b d"), "git-branch-delete");
-        // Stash
-        git_status.bind(parse_key_seq("z z"), "git-stash-push");
-        git_status.bind(parse_key_seq("z p"), "git-stash-pop");
-        git_status.bind(parse_key_seq("z a"), "git-stash-apply");
-        git_status.bind(parse_key_seq("z d"), "git-stash-drop");
-        // Misc
-        git_status.bind(parse_key_seq("q"), "kill-buffer");
-        git_status.bind(vec![KeyPress::special(Key::Escape)], "kill-buffer");
-        git_status.bind(parse_key_seq("?"), "show-buffer-keys");
-        git_status.bind(parse_key_seq("g r"), "git-status"); // Refresh
-                                                             // Local leader (SPC m) — Doom-style mode menu
-        git_status.bind(parse_key_seq_spaced("SPC m s"), "git-stage");
-        git_status.bind(parse_key_seq_spaced("SPC m u"), "git-unstage");
-        git_status.bind(parse_key_seq_spaced("SPC m S"), "git-stage-all");
-        git_status.bind(parse_key_seq_spaced("SPC m U"), "git-unstage-all");
-        git_status.bind(parse_key_seq_spaced("SPC m x"), "git-discard");
-        git_status.bind(parse_key_seq_spaced("SPC m c"), "git-commit");
-        git_status.bind(parse_key_seq_spaced("SPC m a"), "git-amend");
-        git_status.bind(parse_key_seq_spaced("SPC m p"), "git-push");
-        git_status.bind(parse_key_seq_spaced("SPC m f"), "git-fetch");
-        git_status.bind(parse_key_seq_spaced("SPC m F"), "git-pull");
-        git_status.bind(parse_key_seq_spaced("SPC m r"), "git-status");
-        git_status.set_group_name(parse_key_seq_spaced("SPC m"), "+git");
-        // Group labels for which-key
-        git_status.set_group_name(parse_key_seq("c"), "+commit");
-        git_status.set_group_name(parse_key_seq("l"), "+log");
-        git_status.set_group_name(parse_key_seq("P"), "+push");
-        git_status.set_group_name(parse_key_seq("f"), "+fetch");
-        git_status.set_group_name(parse_key_seq("F"), "+pull");
-        git_status.set_group_name(parse_key_seq("b"), "+branch");
-        git_status.set_group_name(parse_key_seq("z"), "+stash");
+        // Git status keymap — moved to modules/git-status/autoloads.scm
 
-        // Org-mode keymap
-        let mut org = Keymap::with_parent("org", "normal");
-        org.bind(vec![KeyPress::special(Key::Tab)], "org-cycle");
-        org.bind(vec![KeyPress::special(Key::BackTab)], "org-global-cycle");
-        org.bind(parse_key_seq_spaced("S-Left"), "org-todo-prev");
-        org.bind(parse_key_seq_spaced("S-Right"), "org-todo-next");
-        org.bind(parse_key_seq_spaced("S-Up"), "org-priority-up");
-        org.bind(parse_key_seq_spaced("S-Down"), "org-priority-down");
-        org.bind(vec![KeyPress::special(Key::Enter)], "smart-enter");
-        // Promote/demote headings (M-Left/M-Right + M-h/M-l)
-        org.bind(
-            vec![KeyPress {
-                key: Key::Left,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "org-promote",
-        );
-        org.bind(
-            vec![KeyPress {
-                key: Key::Right,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "org-demote",
-        );
-        org.bind(parse_key_seq("M-h"), "org-promote");
-        org.bind(parse_key_seq("M-l"), "org-demote");
-        // Move subtrees (M-j/M-k + M-Up/M-Down)
-        org.bind(parse_key_seq("M-j"), "org-move-subtree-down");
-        org.bind(parse_key_seq("M-k"), "org-move-subtree-up");
-        // Insert heading (M-Enter)
-        org.bind(
-            vec![KeyPress {
-                key: Key::Enter,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "org-insert-heading",
-        );
-        // Narrow/widen
-        org.bind(parse_key_seq_spaced("SPC m s n"), "org-narrow-subtree");
-        org.bind(parse_key_seq_spaced("SPC m s N"), "org-widen");
-        org.bind(parse_key_seq_spaced("SPC m s w"), "org-widen");
-        org.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
-        org.bind(parse_key_seq_spaced("SPC m t"), "org-set-tags");
-        // Table commands
-        org.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
-        org.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
-        org.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
-        org.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
-        org.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
-        // Babel commands
-        org.bind(parse_key_seq_spaced("SPC m x"), "babel-execute");
-        org.bind(parse_key_seq_spaced("SPC m X"), "babel-execute-all");
-        org.bind(parse_key_seq_spaced("SPC m T"), "babel-tangle");
-        // C-c C-c for babel execute
-        org.bind(
-            vec![
-                KeyPress {
-                    key: Key::Char('c'),
-                    ctrl: true,
-                    alt: false,
-                    shift: false,
-                },
-                KeyPress {
-                    key: Key::Char('c'),
-                    ctrl: true,
-                    alt: false,
-                    shift: false,
-                },
-            ],
-            "babel-execute",
-        );
-        // Export commands
-        org.bind(parse_key_seq_spaced("SPC m e h"), "org-export-html");
-        org.bind(parse_key_seq_spaced("SPC m e m"), "org-export-markdown");
-        org.bind(parse_key_seq_spaced("SPC m e s"), "org-export-subtree");
-        org.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
-        org.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
-        org.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
-        org.set_group_name(parse_key_seq_spaced("SPC m b"), "+table");
-        org.set_group_name(parse_key_seq_spaced("SPC m b i"), "+insert");
-        org.set_group_name(parse_key_seq_spaced("SPC m b d"), "+delete");
-        org.set_group_name(parse_key_seq_spaced("SPC m e"), "+export");
-        org.bind(
-            vec![KeyPress {
-                key: Key::Up,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "org-move-subtree-up",
-        );
-        org.bind(
-            vec![KeyPress {
-                key: Key::Down,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "org-move-subtree-down",
-        );
+        // Org-mode keymap — moved to modules/org/autoloads.scm
 
         maps.insert("normal".to_string(), normal);
         maps.insert("insert".to_string(), insert);
         maps.insert("visual".to_string(), visual);
         maps.insert("command".to_string(), Keymap::new("command"));
         maps.insert("shell-insert".to_string(), shell_insert);
-        maps.insert("git-status".to_string(), git_status);
-        maps.insert("org".to_string(), org);
 
-        // Markdown keymap (mirrors org keybindings with md-* commands)
-        let mut markdown = Keymap::with_parent("markdown", "normal");
-        markdown.bind(vec![KeyPress::special(Key::Tab)], "md-cycle");
-        markdown.bind(vec![KeyPress::special(Key::BackTab)], "md-global-cycle");
-        // Promote/demote headings
-        markdown.bind(
-            vec![KeyPress {
-                key: Key::Left,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "md-promote",
-        );
-        markdown.bind(
-            vec![KeyPress {
-                key: Key::Right,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "md-demote",
-        );
-        markdown.bind(parse_key_seq("M-h"), "md-promote");
-        markdown.bind(parse_key_seq("M-l"), "md-demote");
-        // Move subtrees
-        markdown.bind(parse_key_seq("M-j"), "md-move-subtree-down");
-        markdown.bind(parse_key_seq("M-k"), "md-move-subtree-up");
-        markdown.bind(
-            vec![KeyPress {
-                key: Key::Up,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "md-move-subtree-up",
-        );
-        markdown.bind(
-            vec![KeyPress {
-                key: Key::Down,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "md-move-subtree-down",
-        );
+        // Shell-normal keymap: inherits normal mode, adds shell-specific bindings.
+        // `i` is inherited from parent `normal` (→ enter-insert-mode → ShellInsert).
+        let mut shell_normal = Keymap::with_parent("shell-normal", "normal");
+        shell_normal.bind(parse_key_seq("v"), "shell-select-mode");
+        shell_normal.bind(parse_key_seq("q"), "enter-insert-mode");
+        shell_normal.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("shell-normal".to_string(), shell_normal);
 
-        // Insert heading (M-Enter)
-        markdown.bind(
-            vec![KeyPress {
-                key: Key::Enter,
-                ctrl: false,
-                alt: true,
-                shift: false,
-            }],
-            "md-insert-heading",
+        // Shell-select keymap: read-only vim buffer for shell scrollback.
+        // Inherits normal mode for motions; q/Esc exit back to the shell.
+        let mut shell_select = Keymap::with_parent("shell-select", "normal");
+        shell_select.bind(parse_key_seq("q"), "close-shell-select");
+        shell_select.bind(vec![KeyPress::special(Key::Escape)], "close-shell-select");
+        shell_select.bind(parse_key_seq("?"), "show-buffer-keys");
+        maps.insert("shell-select".to_string(), shell_select);
+
+        // Module list keymap — Enter to expand, q to close
+        let mut modules_km = Keymap::with_parent("modules", "normal");
+        modules_km.bind(
+            vec![KeyPress::special(Key::Enter)],
+            "describe-module-at-cursor",
         );
-        // Smart enter (link follow, checkbox toggle, TODO cycle)
-        markdown.bind(vec![KeyPress::special(Key::Enter)], "smart-enter");
-        // Narrow/widen
-        markdown.bind(parse_key_seq_spaced("SPC m s n"), "md-narrow-subtree");
-        markdown.bind(parse_key_seq_spaced("SPC m s N"), "md-widen");
-        markdown.bind(parse_key_seq_spaced("SPC m s w"), "md-widen");
-        markdown.bind(parse_key_seq_spaced("SPC m l"), "edit-link");
-        // Table commands
-        markdown.bind(parse_key_seq_spaced("SPC m b a"), "table-align");
-        markdown.bind(parse_key_seq_spaced("SPC m b i r"), "table-insert-row");
-        markdown.bind(parse_key_seq_spaced("SPC m b d r"), "table-delete-row");
-        markdown.bind(parse_key_seq_spaced("SPC m b i c"), "table-insert-column");
-        markdown.bind(parse_key_seq_spaced("SPC m b d c"), "table-delete-column");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m"), "+mode");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m s"), "+subtree");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m l"), "+link");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m b"), "+table");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m b i"), "+insert");
-        markdown.set_group_name(parse_key_seq_spaced("SPC m b d"), "+delete");
+        modules_km.bind(parse_key_seq("q"), "kill-buffer");
+        maps.insert("modules".to_string(), modules_km);
 
-        maps.insert("markdown".to_string(), markdown);
+        // Git-status, org, markdown keymaps — moved to modules/
 
-        // File tree keymap (NERDTree-style)
-        let mut file_tree = Keymap::with_parent("file-tree", "normal");
-        // Navigation
-        file_tree.bind(parse_key_seq("j"), "file-tree-down");
-        file_tree.bind(parse_key_seq("k"), "file-tree-up");
-        file_tree.bind(parse_key_seq("gg"), "file-tree-first");
-        file_tree.bind(parse_key_seq("G"), "file-tree-last");
-        // Scroll
-        file_tree.bind(parse_key_seq("C-e"), "file-tree-scroll-down");
-        file_tree.bind(parse_key_seq("C-y"), "file-tree-scroll-up");
-        file_tree.bind(parse_key_seq("C-d"), "file-tree-half-page-down");
-        file_tree.bind(parse_key_seq("C-u"), "file-tree-half-page-up");
-        // Actions
-        file_tree.bind(vec![KeyPress::special(Key::Enter)], "file-tree-open");
-        file_tree.bind(parse_key_seq("o"), "file-tree-open");
-        file_tree.bind(parse_key_seq("s"), "file-tree-open-vsplit");
-        file_tree.bind(parse_key_seq("i"), "file-tree-open-hsplit");
-        file_tree.bind(vec![KeyPress::special(Key::Tab)], "file-tree-expand");
-        file_tree.bind(
-            vec![KeyPress::special(Key::BackTab)],
-            "file-tree-global-cycle",
-        );
-        file_tree.bind(parse_key_seq("x"), "file-tree-close-parent");
-        file_tree.bind(parse_key_seq("u"), "file-tree-parent");
-        file_tree.bind(parse_key_seq("C"), "file-tree-cd");
-        file_tree.bind(parse_key_seq("R"), "file-tree-refresh");
-        file_tree.bind(parse_key_seq("m a"), "file-tree-create");
-        file_tree.bind(parse_key_seq("d"), "file-tree-delete");
-        file_tree.bind(parse_key_seq("r"), "file-tree-rename");
-        file_tree.bind(parse_key_seq("q"), "file-tree-toggle");
-        file_tree.bind(parse_key_seq("?"), "show-buffer-keys");
-        maps.insert("file-tree".to_string(), file_tree);
+        // File tree keymap + bindings — moved to modules/file-tree/autoloads.scm
 
-        // Help buffer keymap
+        // Help buffer keymap — org-mode Tab conventions:
+        // Tab = fold heading (or next link if not on heading)
+        // S-Tab = global visibility cycle
+        // n/p = link navigation (moved from Tab/S-Tab)
+        // e = edit source (Obsidian-style toggle)
         let mut help = Keymap::with_parent("help", "normal");
         help.bind(vec![KeyPress::special(Key::Enter)], "help-follow-link");
-        help.bind(vec![KeyPress::special(Key::Tab)], "help-next-link");
-        help.bind(vec![KeyPress::special(Key::BackTab)], "help-prev-link");
+        help.bind(vec![KeyPress::special(Key::Tab)], "help-cycle");
+        help.bind(vec![KeyPress::special(Key::BackTab)], "help-global-cycle");
+        help.bind(parse_key_seq("n"), "help-next-link");
+        help.bind(parse_key_seq("p"), "help-prev-link");
+        help.bind(parse_key_seq("e"), "kb-edit-source");
         help.bind(parse_key_seq("q"), "help-close");
         help.bind(parse_key_seq("C-o"), "help-back");
         help.bind(parse_key_seq("C-i"), "help-forward");
+        help.bind(parse_key_seq("za"), "help-cycle");
+        help.bind(parse_key_seq("zM"), "help-close-all-folds");
+        help.bind(parse_key_seq("zR"), "help-open-all-folds");
         help.bind(parse_key_seq("?"), "show-buffer-keys");
         maps.insert("help".to_string(), help);
 
-        // Debug panel keymap
-        let mut debug = Keymap::with_parent("debug", "normal");
-        debug.bind(parse_key_seq("j"), "debug-move-down");
-        debug.bind(parse_key_seq("k"), "debug-move-up");
-        debug.bind(vec![KeyPress::special(Key::Enter)], "debug-panel-select");
-        debug.bind(parse_key_seq("q"), "close-debug-panel");
-        debug.bind(parse_key_seq("o"), "debug-toggle-output");
-        debug.bind(parse_key_seq("r"), "dap-refresh");
-        debug.bind(parse_key_seq("c"), "debug-continue");
-        debug.bind(parse_key_seq("n"), "debug-step-over");
-        debug.bind(parse_key_seq("s"), "debug-step-into");
-        debug.bind(parse_key_seq("S"), "debug-step-out");
-        debug.bind(parse_key_seq("?"), "show-buffer-keys");
-        maps.insert("debug".to_string(), debug);
-
-        // Agenda keymap
-        let mut agenda = Keymap::with_parent("agenda", "normal");
-        agenda.bind(vec![KeyPress::special(Key::Enter)], "agenda-goto");
-        agenda.bind(parse_key_seq("q"), "kill-buffer");
-        agenda.bind(parse_key_seq("r"), "agenda-refresh");
-        agenda.bind(parse_key_seq("t"), "agenda-filter-todo");
-        agenda.bind(parse_key_seq("p"), "agenda-filter-priority");
-        agenda.bind(parse_key_seq("?"), "show-buffer-keys");
-        maps.insert("agenda".to_string(), agenda);
+        // Debug panel keymap — moved to modules/debug/autoloads.scm
+        // Agenda keymap — moved to modules/agenda/autoloads.scm
 
         maps
     }
@@ -872,30 +545,12 @@ mod tests {
         let mut ed = Editor::new();
         ed.syntax.set_language(0, Language::Org);
         let names = ed.current_keymap_names();
+        // Org keymap moved to modules/org/ — falls back to normal at construction
         assert_eq!(names, Some(("org", Some("normal"))));
     }
 
-    #[test]
-    fn org_keymap_spc_m_s_n_widens() {
-        let ed = Editor::new();
-        let org_map = ed.keymaps.get("org").unwrap();
-        let keys = parse_key_seq_spaced("SPC m s N");
-        assert!(matches!(
-            org_map.lookup(&keys),
-            crate::keymap::LookupResult::Exact("org-widen")
-        ));
-    }
-
-    #[test]
-    fn md_keymap_spc_m_s_n_widens() {
-        let ed = Editor::new();
-        let md_map = ed.keymaps.get("markdown").unwrap();
-        let keys = parse_key_seq_spaced("SPC m s N");
-        assert!(matches!(
-            md_map.lookup(&keys),
-            crate::keymap::LookupResult::Exact("md-widen")
-        ));
-    }
+    // org_keymap_spc_m_s_n_widens — moved to module tests (modules/org/)
+    // md_keymap_spc_m_s_n_widens — moved to module tests (modules/markdown/)
 
     #[test]
     fn all_spc_bindings_resolve_to_registered_commands() {
@@ -923,15 +578,12 @@ mod tests {
     fn new_spc_bindings_resolve_correctly() {
         let ed = Editor::new();
         let normal = ed.keymaps.get("normal").unwrap();
+        // SPC g bindings moved to modules/git-status/
         let cases = vec![
             ("SPC w w", "focus-next-window"),
             ("SPC w d", "close-window"),
             ("SPC b k", "kill-buffer"),
             ("SPC b i", "file-info"),
-            ("SPC g c", "git-commit"),
-            ("SPC g S", "git-stage-all"),
-            ("SPC g U", "git-unstage-all"),
-            ("SPC g g", "git-status"),
             ("SPC f n", "new-buffer"),
             ("SPC f C", "copy-this-file"),
             ("SPC f P", "edit-settings"),
@@ -962,37 +614,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn org_keymap_fallback_to_normal() {
-        // A key not in org keymap (e.g. `u` for undo) should resolve via
-        // normal keymap fallback.
-        let ed = Editor::new();
-        let org_map = ed.keymaps.get("org").unwrap();
-        let normal_map = ed.keymaps.get("normal").unwrap();
-        let u_key = crate::keymap::parse_key_seq("u");
-        // `u` is not bound in org keymap
-        assert_eq!(org_map.lookup(&u_key), crate::keymap::LookupResult::None);
-        // but is bound in normal keymap (undo)
-        assert!(matches!(
-            normal_map.lookup(&u_key),
-            crate::keymap::LookupResult::Exact("undo")
-        ));
-    }
+    // org_keymap_fallback_to_normal — org keymap moved to modules/org/
 
+    // File-tree keymap + bindings moved to modules/file-tree/autoloads.scm.
+    // Verify commands remain registered as kernel builtins.
     #[test]
-    fn file_tree_keymap_exists_with_bindings() {
+    fn file_tree_commands_registered() {
         let ed = Editor::new();
-        let ft_map = ed.keymaps.get("file-tree").unwrap();
-        let j_key = parse_key_seq("j");
-        assert_eq!(
-            ft_map.lookup(&j_key),
-            crate::keymap::LookupResult::Exact("file-tree-down")
-        );
-        let q_key = parse_key_seq("q");
-        assert_eq!(
-            ft_map.lookup(&q_key),
-            crate::keymap::LookupResult::Exact("file-tree-toggle")
-        );
+        assert!(ed.commands.contains("file-tree-toggle"));
+        assert!(ed.commands.contains("file-tree-down"));
+        assert!(ed.commands.contains("file-tree-open"));
+        assert!(ed.commands.contains("file-tree-create"));
     }
 
     #[test]
@@ -1024,22 +656,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn debug_keymap_exists_with_bindings() {
-        let ed = Editor::new();
-        let debug_map = ed.keymaps.get("debug").unwrap();
-        assert_eq!(debug_map.parent.as_deref(), Some("normal"));
-        let j_key = parse_key_seq("j");
-        assert_eq!(
-            debug_map.lookup(&j_key),
-            crate::keymap::LookupResult::Exact("debug-move-down")
-        );
-        let c_key = parse_key_seq("c");
-        assert_eq!(
-            debug_map.lookup(&c_key),
-            crate::keymap::LookupResult::Exact("debug-continue")
-        );
-    }
+    // debug_keymap_exists_with_bindings — debug keymap moved to modules/debug/
 
     #[test]
     fn help_buffer_uses_help_keymap() {
@@ -1058,89 +675,43 @@ mod tests {
     #[test]
     fn overlay_keymaps_have_parent_field() {
         let ed = Editor::new();
-        assert_eq!(
-            ed.keymaps.get("git-status").unwrap().parent.as_deref(),
-            Some("normal")
-        );
-        assert_eq!(
-            ed.keymaps.get("org").unwrap().parent.as_deref(),
-            Some("normal")
-        );
-        assert_eq!(
-            ed.keymaps.get("markdown").unwrap().parent.as_deref(),
-            Some("normal")
-        );
-        assert_eq!(
-            ed.keymaps.get("file-tree").unwrap().parent.as_deref(),
-            Some("normal")
-        );
+        // git-status, org, markdown keymaps moved to modules
+        // Only kernel keymaps remain at construction
         assert!(ed.keymaps.get("normal").unwrap().parent.is_none());
-    }
-
-    #[test]
-    fn git_status_q_binds_to_kill_buffer() {
-        let ed = Editor::new();
-        let gs = ed.keymaps.get("git-status").unwrap();
-        let q_key = parse_key_seq("q");
         assert_eq!(
-            gs.lookup(&q_key),
-            crate::keymap::LookupResult::Exact("kill-buffer")
+            ed.keymaps.get("help").unwrap().parent.as_deref(),
+            Some("normal")
         );
     }
 
+    // git_status_q_binds_to_kill_buffer — git-status keymap moved to modules/git-status/
+    // overlay_keymaps_have_show_buffer_keys — git-status, debug keymaps moved to modules/
+    // git_status_spc_m_local_leader — git-status keymap moved to modules/git-status/
+
     #[test]
-    fn overlay_keymaps_have_show_buffer_keys() {
+    fn overlay_keymaps_have_show_buffer_keys_help() {
         let ed = Editor::new();
         let q_key = parse_key_seq("?");
-        for name in &["git-status", "help", "debug", "file-tree"] {
-            let km = ed.keymaps.get(*name).unwrap();
-            assert_eq!(
-                km.lookup(&q_key),
-                crate::keymap::LookupResult::Exact("show-buffer-keys"),
-                "{} keymap should bind ? to show-buffer-keys",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn git_status_spc_m_local_leader() {
-        let ed = Editor::new();
-        let gs = ed.keymaps.get("git-status").unwrap();
-        let cases = vec![
-            ("SPC m s", "git-stage"),
-            ("SPC m u", "git-unstage"),
-            ("SPC m c", "git-commit"),
-            ("SPC m p", "git-push"),
-            ("SPC m f", "git-fetch"),
-            ("SPC m r", "git-status"),
-        ];
-        for (seq, expected) in cases {
-            let keys = parse_key_seq_spaced(seq);
-            assert_eq!(
-                gs.lookup(&keys),
-                crate::keymap::LookupResult::Exact(expected),
-                "git-status {} should resolve to {}",
-                seq,
-                expected
-            );
-        }
+        // Only help keymap remains in kernel
+        let km = ed.keymaps.get("help").unwrap();
+        assert_eq!(
+            km.lookup(&q_key),
+            crate::keymap::LookupResult::Exact("show-buffer-keys"),
+        );
     }
 
     #[test]
     fn buffer_keys_entries_returns_entries() {
         let mut ed = Editor::new();
-        // Create a git-status buffer and focus it
+        // Create a help buffer and focus it (help keymap is still in kernel)
         let mut buf = crate::buffer::Buffer::new();
-        buf.kind = crate::buffer::BufferKind::GitStatus;
+        buf.kind = crate::buffer::BufferKind::Help;
+        buf.name = "*Help*".to_string();
         ed.buffers.push(buf);
         let idx = ed.buffers.len() - 1;
         ed.window_mgr.focused_window_mut().buffer_idx = idx;
         let entries = ed.buffer_keys_entries();
-        // Should have entries from git-status + normal keymaps
+        // Should have entries from help + normal keymaps
         assert!(!entries.is_empty());
-        // Check that a git-status-specific binding is present
-        let has_stage = entries.iter().any(|e| e.label.contains("stage"));
-        assert!(has_stage, "buffer_keys_entries should include git-stage");
     }
 }

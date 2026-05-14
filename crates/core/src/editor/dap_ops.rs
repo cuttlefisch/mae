@@ -95,7 +95,22 @@ impl Editor {
         // Canonicalize the program path — debugpy (and some other adapters)
         // require absolute paths for stop_on_entry and breakpoint matching.
         let abs_program = canonicalize_source_path(program);
-        let launch_args = default_launch_args(adapter, &abs_program, extra_args, stop_on_entry);
+        // Resolve cwd: project root > program's parent directory.
+        let cwd = self
+            .active_project_root()
+            .map(|p| p.to_string_lossy().to_string())
+            .or_else(|| {
+                std::path::Path::new(&abs_program)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+            });
+        let launch_args = default_launch_args(
+            adapter,
+            &abs_program,
+            extra_args,
+            stop_on_entry,
+            cwd.as_deref(),
+        );
         self.dap_start_session(spawn, abs_program, launch_args, false);
         Ok(())
     }
@@ -804,9 +819,10 @@ fn default_launch_args(
     program: &str,
     extra: &[String],
     stop_on_entry: bool,
+    cwd: Option<&str>,
 ) -> serde_json::Value {
     let base_args: Vec<String> = extra.to_vec();
-    match adapter {
+    let mut v = match adapter {
         "debugpy" | "python" => serde_json::json!({
             "type": "python",
             "program": program,
@@ -819,7 +835,11 @@ fn default_launch_args(
             "args": base_args,
             "stopOnEntry": stop_on_entry,
         }),
+    };
+    if let Some(dir) = cwd {
+        v["cwd"] = serde_json::Value::String(dir.to_string());
     }
+    v
 }
 
 #[cfg(test)]
@@ -1294,7 +1314,7 @@ mod tests {
 
     #[test]
     fn default_launch_args_python_shape() {
-        let v = default_launch_args("debugpy", "/tmp/x.py", &[], false);
+        let v = default_launch_args("debugpy", "/tmp/x.py", &[], false, None);
         assert_eq!(v["type"], "python");
         assert_eq!(v["program"], "/tmp/x.py");
         // "request" must NOT be in arguments — it's a VS Code launch.json field,
@@ -1307,13 +1327,21 @@ mod tests {
 
     #[test]
     fn default_launch_args_lldb_shape() {
-        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()], false);
+        let v = default_launch_args("lldb", "/bin/ls", &["--help".to_string()], false, None);
         assert_eq!(v["program"], "/bin/ls");
         assert_eq!(v["args"][0], "--help");
         assert!(
             v.get("request").is_none(),
             "launch args must not contain 'request'"
         );
+    }
+
+    #[test]
+    fn default_launch_args_includes_cwd() {
+        let v = default_launch_args("debugpy", "/tmp/x.py", &[], false, Some("/home/user/proj"));
+        assert_eq!(v["cwd"], "/home/user/proj");
+        let v2 = default_launch_args("lldb", "/bin/ls", &[], false, None);
+        assert!(v2.get("cwd").is_none());
     }
 
     #[test]

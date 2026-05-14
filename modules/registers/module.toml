@@ -1,0 +1,10 @@
+[module]
+name = "registers"
+version = "0.1.0"
+description = "Named registers, yank ring, and clipboard integration"
+mae_version = ">=0.8.0"
+category = "editor"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

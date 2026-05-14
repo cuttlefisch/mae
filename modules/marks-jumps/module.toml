@@ -1,0 +1,6 @@
+[module]
+name = "marks-jumps"
+version = "0.1.0"
+description = "Vi marks (m/'), jump list (C-o/C-i), and change list (g;/g,)"
+mae_version = ">=0.8.0"
+category = "editor"

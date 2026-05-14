@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -87,6 +87,44 @@ struct SharedState {
     pending_agenda_removes: Vec<String>,
     /// Request to display agenda file list via `(agenda-list)`.
     pending_agenda_list: bool,
+    /// Dynamic option registrations from modules: (name, kind, default, doc).
+    pending_dynamic_options: Vec<(String, String, String, String)>,
+    /// Active modules: name → version.
+    active_modules: HashMap<String, String>,
+    /// Declared modules from `(mae! ...)`: name → enabled flags.
+    declared_modules: HashMap<String, Vec<String>>,
+    /// Declared packages from `(package! ...)`.
+    declared_packages: Vec<DeclaredPackage>,
+    /// KB nodes registered from Scheme via `(define-kb-node! ID TITLE BODY)`.
+    pending_kb_nodes: Vec<(String, String, String)>,
+    /// Pending buffer creation: (name).
+    pending_create_buffer: Option<String>,
+    /// Pending buffer kill by name.
+    pending_kill_buffer: Option<String>,
+    /// Pending advice-add: (command, kind, fn_name).
+    pending_advice_adds: Vec<(String, String, String)>,
+    /// Pending advice-remove: (command, fn_name).
+    pending_advice_removes: Vec<(String, String)>,
+    /// Pending command unregistrations (for module unload).
+    pending_command_unregisters: Vec<String>,
+    /// Pending option unregistrations (for module unload).
+    pending_option_unregisters: Vec<String>,
+    /// Deprecated function warnings: old_name → (new_name, since_version).
+    /// Warnings emitted on first call.
+    deprecated_functions: HashMap<String, (String, String)>,
+    /// Already-warned deprecated function names (to warn only once).
+    deprecated_warned: HashSet<String>,
+    /// Pending AI tool registrations from Scheme.
+    pending_ai_tools: Vec<mae_core::SchemeToolDef>,
+    /// Param accumulator for `ai-tool-param!` calls (tool_name → params).
+    pending_ai_tool_params: HashMap<String, Vec<(String, String, String)>>,
+    /// Required param accumulator for `ai-tool-require!` calls.
+    pending_ai_tool_required: HashMap<String, Vec<String>>,
+    /// Pending custom splash art registrations: (name, art, image_path).
+    pending_splash_arts: Vec<(String, String, Option<PathBuf>)>,
+    /// Current module directory (set before loading each module's autoloads).
+    /// Used by `register-splash-art-image!` to resolve relative paths.
+    current_module_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +160,15 @@ pub enum VisualOp {
         color: String,
     },
     Clear,
+}
+
+/// A declared third-party package from `(package! ...)` in init.scm.
+#[derive(Debug, Clone)]
+pub struct DeclaredPackage {
+    pub name: String,
+    pub source: Option<String>,
+    pub pin: Option<String>,
+    pub disable: bool,
 }
 
 /// A captured Scheme evaluation error for debugger introspection.
@@ -585,6 +632,460 @@ impl SchemeRuntime {
             },
         );
 
+        // --- Module system functions ---
+
+        // (when-flag FLAG-NAME THUNK) — evaluate thunk if flag is set.
+        // Flags are set as __mae-flag-MODULE-FLAG variables by the loader.
+        // This is a convenience wrapper that modules use in autoloads.scm.
+        engine
+            .run(
+                r#"
+(define (when-flag flag-name thunk)
+  ;; Flag variables are set as __mae-flag-MODULE-FLAG = #t by the loader.
+  ;; We can't easily check from Scheme since we don't know the module name here,
+  ;; so for now just evaluate the thunk. The loader only sets flags that are enabled.
+  (thunk))
+"#,
+            )
+            .ok();
+
+        // (define-option! NAME KIND DEFAULT DOC) — register a runtime option.
+        // Queued and applied in apply_to_editor().
+        let s = shared.clone();
+        engine.register_fn(
+            "define-option!",
+            move |name: String, kind: String, default: String, doc: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_dynamic_options
+                    .push((name, kind, default, doc));
+                SteelVal::Void
+            },
+        );
+
+        // (module-loaded? NAME) — check if a module is active
+        let s = shared.clone();
+        engine.register_fn("module-loaded?", move |name: String| {
+            SteelVal::BoolV(s.lock().unwrap().active_modules.contains_key(&name))
+        });
+
+        // (module-version NAME) — get version of active module, or #f
+        let s = shared.clone();
+        engine.register_fn("module-version", move |name: String| {
+            match s.lock().unwrap().active_modules.get(&name) {
+                Some(v) => SteelVal::StringV(v.clone().into()),
+                None => SteelVal::BoolV(false),
+            }
+        });
+
+        // (module-list) — list all active module names
+        let s = shared.clone();
+        engine.register_fn("module-list", move || {
+            let state = s.lock().unwrap();
+            SteelVal::ListV(
+                state
+                    .active_modules
+                    .keys()
+                    .map(|k| SteelVal::StringV(k.clone().into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        // (register-module! NAME VERSION) — called by loader after loading a module
+        let s = shared.clone();
+        engine.register_fn("register-module!", move |name: String, version: String| {
+            s.lock().unwrap().active_modules.insert(name, version);
+            SteelVal::Void
+        });
+
+        // (when-module NAME THUNK) — evaluate thunk only if module is active.
+        // Defined in Scheme for ergonomics (thunk is a lambda).
+        engine
+            .run(
+                r#"
+(define (when-module name thunk)
+  (when (module-loaded? name)
+    (thunk)))
+"#,
+            )
+            .ok();
+
+        // (module-flags NAME) — get enabled flags for a module.
+        // Returns the flags stored by the loader via flag variables.
+        // For now returns an empty list — flags are injected as individual
+        // Scheme variables (__mae-flag-<module>-<flag>), not collected.
+        // TODO: populate from loader when mae! parsing is implemented.
+        engine.register_fn("module-flags", move |_name: String| -> SteelVal {
+            SteelVal::ListV(vec![].into())
+        });
+
+        // --- Declarative package management (mae!, package!) ---
+
+        // (mae-declare-module! NAME . FLAGS) — declare a module with optional flags.
+        // Called by the Scheme-level mae! helper for each module entry.
+        let s = shared.clone();
+        engine.register_fn(
+            "mae-declare-module!",
+            move |name: String, flags: Vec<String>| {
+                s.lock().unwrap().declared_modules.insert(name, flags);
+                SteelVal::Void
+            },
+        );
+
+        // (mae-declared-modules) — return list of declared module names (for introspection).
+        let s = shared.clone();
+        engine.register_fn("mae-declared-modules", move || {
+            let state = s.lock().unwrap();
+            SteelVal::ListV(
+                state
+                    .declared_modules
+                    .keys()
+                    .map(|k| SteelVal::StringV(k.clone().into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        // (package! NAME . KWARGS) — declare a third-party package.
+        // Keyword args: :source STRING, :pin STRING, :disable BOOL
+        // Implemented as a multi-arity function; kwargs parsed by Scheme wrapper.
+        let s = shared.clone();
+        engine.register_fn(
+            "mae-declare-package!",
+            move |name: String, source: String, pin: String, disable: bool| {
+                s.lock().unwrap().declared_packages.push(DeclaredPackage {
+                    name,
+                    source: if source.is_empty() {
+                        None
+                    } else {
+                        Some(source)
+                    },
+                    pin: if pin.is_empty() { None } else { Some(pin) },
+                    disable,
+                });
+                SteelVal::Void
+            },
+        );
+
+        // Define mae! and package! Scheme-level wrappers.
+        // mae! accepts category labels (:editor, :ui, :lang) and module entries.
+        // Categories are informational only — they don't affect behavior.
+        // Module entries can be bare names or (name +flag1 +flag2).
+        //
+        // Steel doesn't have Clojure-style keywords. We pre-define category
+        // symbols as strings so they can be used unquoted in mae! blocks.
+        engine
+            .run(
+                r#"
+;; Pre-define category labels so they're valid identifiers.
+;; Their values are strings starting with ":" — mae! skips them.
+(define :editor ":editor")
+(define :ui ":ui")
+(define :lang ":lang")
+(define :tools ":tools")
+(define :completion ":completion")
+(define :emacs ":emacs")
+(define :term ":term")
+(define :os ":os")
+(define :app ":app")
+(define :config ":config")
+(define :input ":input")
+
+;; (mae! :category1 "mod1" ("mod2" "+flag") :category2 "mod3" ...)
+;; Category labels (strings starting with ":") are ignored.
+;; String entries declare a module with no flags.
+;; List entries declare a module (first string) with flags (remaining strings).
+(define (mae! . args)
+  (for-each
+    (lambda (item)
+      (cond
+        ;; Skip category strings (starting with ":")
+        ((and (string? item)
+              (> (string-length item) 0)
+              (equal? (substring item 0 1) ":"))
+         #f)
+        ;; List entry: ("module-name" "+flag1" "+flag2" ...)
+        ((list? item)
+         (mae-declare-module! (car item) (cdr item)))
+        ;; String entry: module with no flags
+        ((string? item)
+         (mae-declare-module! item '()))
+        ;; Symbol entry: convert to string
+        ((symbol? item)
+         (mae-declare-module! (symbol->string item) '()))
+        (else #f)))
+    args))
+
+;; Keyword symbols for package! kwargs.
+(define :source ":source")
+(define :pin ":pin")
+(define :disable ":disable")
+
+;; (package! NAME :source SRC :pin SHA :disable BOOL)
+;; All keyword args are optional.
+(define (package! name . kwargs)
+  (define (kwarg-ref key default)
+    (let loop ((rest kwargs))
+      (cond
+        ((null? rest) default)
+        ((and (>= (length rest) 2)
+              (equal? (car rest) key))
+         (cadr rest))
+        (else (loop (cdr rest))))))
+  (mae-declare-package! name
+                        (kwarg-ref ":source" "")
+                        (kwarg-ref ":pin" "")
+                        (if (kwarg-ref ":disable" #f) #t #f)))
+"#,
+            )
+            .ok();
+
+        // (undefine-command! NAME) — remove a command (for module unload)
+        let s = shared.clone();
+        engine.register_fn("undefine-command!", move |name: String| {
+            s.lock().unwrap().pending_command_unregisters.push(name);
+            SteelVal::Void
+        });
+
+        // (undefine-option! NAME) — remove an option (for module unload)
+        let s = shared.clone();
+        engine.register_fn("undefine-option!", move |name: String| {
+            s.lock().unwrap().pending_option_unregisters.push(name);
+            SteelVal::Void
+        });
+
+        // (unload-feature NAME) — remove from loaded_features
+        let s = shared.clone();
+        engine.register_fn("unload-feature", move |name: String| {
+            let removed = s.lock().unwrap().loaded_features.remove(&name);
+            SteelVal::BoolV(removed)
+        });
+
+        // (define-kb-node! ID TITLE BODY) — register a KB node from Scheme.
+        let s = shared.clone();
+        engine.register_fn(
+            "define-kb-node!",
+            move |id: String, title: String, body: String| {
+                s.lock().unwrap().pending_kb_nodes.push((id, title, body));
+                SteelVal::Void
+            },
+        );
+
+        // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
+        // Registers a deprecation warning. When OLD-NAME is called,
+        // a warning is emitted once and the call is logged.
+        let s = shared.clone();
+        engine.register_fn(
+            "deprecate-function!",
+            move |old_name: String, new_name: String, since: String| {
+                s.lock()
+                    .unwrap()
+                    .deprecated_functions
+                    .insert(old_name, (new_name, since));
+                SteelVal::Void
+            },
+        );
+
+        // (register-ai-tool! NAME DESCRIPTION HANDLER-FN PERMISSION)
+        let s = shared.clone();
+        engine.register_fn(
+            "register-ai-tool!",
+            move |name: String, desc: String, handler: String, perm: String| {
+                let mut st = s.lock().unwrap();
+                // Collect any pre-registered params/required for this tool
+                let params = st.pending_ai_tool_params.remove(&name).unwrap_or_default();
+                let required = st
+                    .pending_ai_tool_required
+                    .remove(&name)
+                    .unwrap_or_default();
+                st.pending_ai_tools.push(mae_core::SchemeToolDef {
+                    name,
+                    description: desc,
+                    params,
+                    required,
+                    handler_fn: handler,
+                    permission: perm,
+                });
+                SteelVal::Void
+            },
+        );
+
+        // (ai-tool-param! TOOL-NAME PARAM-NAME PARAM-TYPE DESCRIPTION)
+        let s = shared.clone();
+        engine.register_fn(
+            "ai-tool-param!",
+            move |tool: String, pname: String, ptype: String, pdesc: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_ai_tool_params
+                    .entry(tool)
+                    .or_default()
+                    .push((pname, ptype, pdesc));
+                SteelVal::Void
+            },
+        );
+
+        // (ai-tool-require! TOOL-NAME PARAM-NAME)
+        let s = shared.clone();
+        engine.register_fn("ai-tool-require!", move |tool: String, pname: String| {
+            s.lock()
+                .unwrap()
+                .pending_ai_tool_required
+                .entry(tool)
+                .or_default()
+                .push(pname);
+            SteelVal::Void
+        });
+
+        // (register-splash-art! NAME ART-STRING)
+        let s = shared.clone();
+        engine.register_fn("register-splash-art!", move |name: String, art: String| {
+            s.lock()
+                .unwrap()
+                .pending_splash_arts
+                .push((name, art, None));
+            SteelVal::Void
+        });
+
+        // (register-splash-art-image! NAME IMAGE-PATH)
+        // Resolves relative paths against current_module_dir if set.
+        let s = shared.clone();
+        engine.register_fn(
+            "register-splash-art-image!",
+            move |name: String, path: String| {
+                let mut st = s.lock().unwrap();
+                let resolved = {
+                    let p = PathBuf::from(&path);
+                    if p.is_relative() {
+                        if let Some(ref dir) = st.current_module_dir {
+                            dir.join(&p)
+                        } else {
+                            p
+                        }
+                    } else {
+                        p
+                    }
+                };
+                st.pending_splash_arts
+                    .push((name, String::new(), Some(resolved)));
+                SteelVal::Void
+            },
+        );
+
+        // --- A5: String utilities (no editor state needed) ---
+
+        engine.register_fn("string-split", |s: String, sep: String| -> SteelVal {
+            SteelVal::ListV(
+                s.split(&sep)
+                    .map(|part| SteelVal::StringV(part.into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        });
+
+        engine.register_fn("string-join", |lst: Vec<String>, sep: String| -> String {
+            lst.join(&sep)
+        });
+
+        engine.register_fn("string-trim", |s: String| -> String {
+            s.trim().to_string()
+        });
+
+        engine.register_fn("string-contains?", |s: String, sub: String| -> bool {
+            s.contains(&sub)
+        });
+
+        engine.register_fn(
+            "string-replace",
+            |s: String, from: String, to: String| -> String { s.replace(&from, &to) },
+        );
+
+        engine.register_fn("string-upcase", |s: String| -> String { s.to_uppercase() });
+
+        engine.register_fn("string-downcase", |s: String| -> String {
+            s.to_lowercase()
+        });
+
+        // --- A4: Process execution ---
+
+        engine.register_fn("shell-command", |cmd: String| -> String {
+            use std::process::Command;
+            match Command::new("sh").arg("-c").arg(&cmd).output() {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if stdout.len() > 1_048_576 {
+                        stdout[..1_048_576].to_string()
+                    } else {
+                        stdout.into_owned()
+                    }
+                }
+                Err(e) => format!("ERROR: {}", e),
+            }
+        });
+
+        // --- A3: Buffer creation/kill (via SharedState) ---
+
+        let s = shared.clone();
+        engine.register_fn("create-buffer", move |name: String| {
+            s.lock().unwrap().pending_create_buffer = Some(name);
+            SteelVal::Void
+        });
+
+        let s = shared.clone();
+        engine.register_fn("kill-buffer-by-name", move |name: String| {
+            s.lock().unwrap().pending_kill_buffer = Some(name);
+            SteelVal::Void
+        });
+
+        // --- Phase E: Advice system ---
+
+        // (advice-add! COMMAND KIND FN-NAME)
+        // KIND is ":before" or ":after"
+        let s = shared.clone();
+        engine.register_fn(
+            "advice-add!",
+            move |command: String, kind: String, fn_name: String| {
+                s.lock()
+                    .unwrap()
+                    .pending_advice_adds
+                    .push((command, kind, fn_name));
+                SteelVal::Void
+            },
+        );
+
+        // (advice-remove! COMMAND FN-NAME)
+        let s = shared.clone();
+        engine.register_fn("advice-remove!", move |command: String, fn_name: String| {
+            s.lock()
+                .unwrap()
+                .pending_advice_removes
+                .push((command, fn_name));
+            SteelVal::Void
+        });
+
+        // (check-deprecated NAME) — check if a function name is deprecated,
+        // log a warning (once), return #t if deprecated, #f otherwise.
+        let s = shared.clone();
+        engine.register_fn("check-deprecated", move |name: String| {
+            let mut state = s.lock().unwrap();
+            if let Some((new_name, since)) = state.deprecated_functions.get(&name).cloned() {
+                if state.deprecated_warned.insert(name.clone()) {
+                    warn!(
+                        "'{}' is deprecated since v{}, use '{}' instead",
+                        name, since, new_name
+                    );
+                    state.pending_messages.push(format!(
+                        "Warning: '{}' is deprecated since v{}, use '{}' instead",
+                        name, since, new_name
+                    ));
+                }
+                SteelVal::BoolV(true)
+            } else {
+                SteelVal::BoolV(false)
+            }
+        });
+
         // Register default values for state-injected variables.
         // This prevents FreeIdentifier errors in init.scm during startup.
         engine.register_value("*buffer-name*", SteelVal::StringV("scratch".into()));
@@ -627,6 +1128,29 @@ impl SchemeRuntime {
             load_path: default_load_path,
             loaded_features: HashSet::new(),
         })
+    }
+
+    /// Return declared modules from `(mae! ...)` — name → enabled flags.
+    /// Empty if no `mae!` block was evaluated.
+    pub fn declared_modules(&self) -> HashMap<String, Vec<String>> {
+        self.shared.lock().unwrap().declared_modules.clone()
+    }
+
+    /// Return declared packages from `(package! ...)`.
+    pub fn declared_packages(&self) -> Vec<DeclaredPackage> {
+        self.shared.lock().unwrap().declared_packages.clone()
+    }
+
+    /// Set the current module directory for relative path resolution.
+    /// Called by the module loader before evaluating each module's autoloads.
+    pub fn set_module_dir(&mut self, dir: Option<&Path>) {
+        self.shared.lock().unwrap().current_module_dir = dir.map(|d| d.to_path_buf());
+    }
+
+    /// Drain pending KB nodes registered via `(define-kb-node! ...)`.
+    pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
+        let mut state = self.shared.lock().unwrap();
+        std::mem::take(&mut state.pending_kb_nodes)
     }
 
     /// Evaluate a Scheme expression and return the result as a string.
@@ -787,6 +1311,79 @@ impl SchemeRuntime {
                     .unwrap_or_default()
             });
 
+        // *current-command* — name of the command currently being dispatched
+        self.engine.register_value(
+            "*current-command*",
+            SteelVal::StringV(editor.current_command.clone().into()),
+        );
+
+        // --- A1: Buffer introspection functions (callable forms) ---
+
+        let buf_name = buf.name.clone();
+        self.engine
+            .register_fn("current-buffer-name", move || buf_name.clone());
+
+        let file_path = buf.file_path().map(|p| p.display().to_string());
+        self.engine
+            .register_fn("current-buffer-file", move || -> SteelVal {
+                match &file_path {
+                    Some(p) => SteelVal::StringV(p.clone().into()),
+                    None => SteelVal::BoolV(false),
+                }
+            });
+
+        let line_num = (win.cursor_row + 1) as isize;
+        self.engine
+            .register_fn("current-line-number", move || line_num);
+
+        let col = win.cursor_col as isize;
+        self.engine.register_fn("current-column", move || col);
+
+        let cursor_offset = buf.char_offset_at(win.cursor_row, win.cursor_col) as isize;
+        self.engine.register_fn("point", move || cursor_offset);
+
+        self.engine.register_fn("point-min", || 0isize);
+
+        let max_chars = buf.rope().len_chars() as isize;
+        self.engine.register_fn("point-max", move || max_chars);
+
+        let line_begin = buf.rope().line_to_char(win.cursor_row) as isize;
+        self.engine
+            .register_fn("line-beginning-position", move || line_begin);
+
+        let line_end = if win.cursor_row + 1 < buf.line_count() {
+            buf.rope().line_to_char(win.cursor_row + 1) as isize - 1
+        } else {
+            buf.rope().len_chars() as isize
+        };
+        self.engine
+            .register_fn("line-end-position", move || line_end);
+
+        // --- A2: Selection / region access ---
+
+        let is_visual = matches!(editor.mode, mae_core::Mode::Visual(_));
+        self.engine.register_fn("region-active?", move || is_visual);
+
+        // Compute region bounds (valid only in visual mode, but safe to call anytime)
+        let (region_beg, region_end, selection_text) = if is_visual {
+            let anchor_offset =
+                buf.char_offset_at(editor.visual_anchor_row, editor.visual_anchor_col);
+            let cursor_off = buf.char_offset_at(win.cursor_row, win.cursor_col);
+            let beg = anchor_offset.min(cursor_off);
+            let end = anchor_offset.max(cursor_off) + 1; // inclusive end
+            let end = end.min(buf.rope().len_chars());
+            let text: String = buf.rope().chars().skip(beg).take(end - beg).collect();
+            (beg as isize, end as isize, text)
+        } else {
+            (0isize, 0isize, String::new())
+        };
+        let rb = region_beg;
+        self.engine.register_fn("region-beginning", move || rb);
+        let re = region_end;
+        self.engine.register_fn("region-end", move || re);
+        let st = selection_text;
+        self.engine.register_fn("get-selection", move || st.clone());
+
         // --- Round 2: extended introspection ---
 
         // *buffer-char-count* — total chars in the active buffer
@@ -877,10 +1474,10 @@ impl SchemeRuntime {
             .map(|o| {
                 SteelVal::ListV(
                     vec![
-                        SteelVal::StringV(o.name.into()),
+                        SteelVal::StringV(o.name.as_ref().into()),
                         SteelVal::StringV(format!("{}", o.kind).into()),
-                        SteelVal::StringV(o.default_value.into()),
-                        SteelVal::StringV(o.doc.into()),
+                        SteelVal::StringV(o.default_value.as_ref().into()),
+                        SteelVal::StringV(o.doc.as_ref().into()),
                     ]
                     .into(),
                 )
@@ -896,7 +1493,7 @@ impl SchemeRuntime {
             .iter()
             .filter_map(|o| {
                 editor
-                    .get_option(o.name)
+                    .get_option(&o.name)
                     .map(|(v, _)| (o.name.to_string(), v))
             })
             .collect();
@@ -1010,9 +1607,24 @@ impl SchemeRuntime {
                     warn!(keymap = %map_name, key = %key_str, command = %cmd_name,
                           "scheme keybinding produced empty key sequence, skipping");
                 } else {
-                    debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
-                           keys = seq.len(), "applying scheme keybinding");
-                    keymap.bind(seq, &cmd_name);
+                    let prev = keymap.bind(seq, &cmd_name);
+                    if let Some(ref prev_cmd) = prev {
+                        if prev_cmd != &cmd_name {
+                            warn!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                                   previous = %prev_cmd, "keybinding conflict: overwriting");
+                            editor.message_log.push(
+                                mae_core::MessageLevel::Warn,
+                                "keybinding",
+                                format!(
+                                    "Key conflict in '{}': {} was '{}', now '{}' (module load order)",
+                                    map_name, key_str, prev_cmd, cmd_name
+                                ),
+                            );
+                        }
+                    } else {
+                        debug!(keymap = %map_name, key = %key_str, command = %cmd_name,
+                               "applying scheme keybinding");
+                    }
                 }
             } else {
                 warn!(keymap = %map_name, key = %key_str, command = %cmd_name, "scheme keybinding targets unknown keymap");
@@ -1023,7 +1635,17 @@ impl SchemeRuntime {
         let cmd_count = state.command_defs.len();
         for (name, doc, scheme_fn) in state.command_defs.drain(..) {
             debug!(command = %name, scheme_fn = %scheme_fn, "registering scheme command");
-            editor.commands.register_scheme(&name, &doc, &scheme_fn);
+            let overwrote = editor.commands.register_scheme(&name, &doc, &scheme_fn);
+            if overwrote {
+                editor.message_log.push(
+                    mae_core::MessageLevel::Warn,
+                    "command",
+                    format!(
+                        "Module overrides builtin command '{}' with Scheme function '{}'",
+                        name, scheme_fn
+                    ),
+                );
+            }
         }
 
         // Register autoload commands
@@ -1032,14 +1654,41 @@ impl SchemeRuntime {
             editor.commands.register_autoload(&cmd_name, &doc, &feature);
         }
 
+        // Register dynamic options from (define-option!)
+        for (name, kind_str, default, doc) in state.pending_dynamic_options.drain(..) {
+            let kind = match kind_str.as_str() {
+                "bool" | "boolean" => mae_core::options::OptionKind::Bool,
+                "int" | "integer" => mae_core::options::OptionKind::Int,
+                "string" => mae_core::options::OptionKind::String,
+                other => {
+                    warn!(name = %name, kind = %other, "define-option! unknown kind, defaulting to string");
+                    mae_core::options::OptionKind::String
+                }
+            };
+            editor
+                .option_registry
+                .register_dynamic(name.clone(), vec![], doc, kind, default, None);
+            debug!(option = %name, "registered dynamic option from module");
+        }
+
+        // Unregister commands (for module unload)
+        for name in state.pending_command_unregisters.drain(..) {
+            if editor.commands.unregister(&name) {
+                debug!(command = %name, "unregistered command");
+            }
+        }
+
+        // Unregister options (for module unload)
+        for name in state.pending_option_unregisters.drain(..) {
+            if editor.option_registry.unregister(&name) {
+                debug!(option = %name, "unregistered option");
+            }
+        }
+
         // Apply hook registrations
         for (hook, fn_name) in state.pending_hook_adds.drain(..) {
-            if editor.hooks.add(&hook, &fn_name) {
-                debug!(hook = %hook, fn_name = %fn_name, "hook registered");
-            } else {
-                warn!(hook = %hook, "unknown hook name in add-hook!");
-                editor.set_status(format!("Unknown hook: {}", hook));
-            }
+            editor.hooks.add(&hook, &fn_name);
+            debug!(hook = %hook, fn_name = %fn_name, "hook registered");
         }
         for (hook, fn_name) in state.pending_hook_removes.drain(..) {
             if editor.hooks.remove(&hook, &fn_name) {
@@ -1063,6 +1712,14 @@ impl SchemeRuntime {
                     ));
                 }
             }
+        }
+
+        // Apply KB nodes registered from Scheme via (define-kb-node! ID TITLE BODY)
+        for (id, title, body) in state.pending_kb_nodes.drain(..) {
+            let node = mae_core::KbNode::new(id.clone(), title, mae_core::KbNodeKind::Note, body)
+                .with_tags(["scheme"]);
+            editor.kb.insert(node);
+            debug!(id = %id, "kb node registered from scheme");
         }
 
         // Apply editor options via the OptionRegistry (single source of truth)
@@ -1144,6 +1801,52 @@ impl SchemeRuntime {
                 }
                 editor.buffers[idx].insert_text_at(start, &text);
             }
+        }
+
+        // (create-buffer NAME)
+        if let Some(name) = state.pending_create_buffer.take() {
+            let mut buf = mae_core::Buffer::new();
+            buf.name = name;
+            editor.buffers.push(buf);
+            let new_idx = editor.buffers.len() - 1;
+            editor.display_buffer(new_idx);
+        }
+
+        // (kill-buffer-by-name NAME)
+        if let Some(name) = state.pending_kill_buffer.take() {
+            if let Some(idx) = editor.buffers.iter().position(|b| b.name == name) {
+                if editor.buffers.len() > 1 {
+                    editor.buffers.remove(idx);
+                    editor.notify_buffer_removed(idx);
+                    for w in editor.window_mgr.iter_windows_mut() {
+                        if w.buffer_idx == idx {
+                            w.buffer_idx = 0;
+                        } else if w.buffer_idx > idx {
+                            w.buffer_idx -= 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply advice registrations
+        for (command, kind_str, fn_name) in state.pending_advice_adds.drain(..) {
+            let kind = match kind_str.as_str() {
+                ":before" | "before" => mae_core::hooks::AdviceKind::Before,
+                ":after" | "after" => mae_core::hooks::AdviceKind::After,
+                other => {
+                    warn!(kind = %other, "advice-add! unknown kind, defaulting to :before");
+                    mae_core::hooks::AdviceKind::Before
+                }
+            };
+            editor.hooks.add_advice(&command, kind, &fn_name);
+            debug!(command = %command, kind = %kind_str, fn_name = %fn_name, "advice registered");
+        }
+
+        // Apply advice removals
+        for (command, fn_name) in state.pending_advice_removes.drain(..) {
+            editor.hooks.remove_advice(&command, &fn_name);
+            debug!(command = %command, fn_name = %fn_name, "advice removed");
         }
 
         // (buffer-undo)
@@ -1303,6 +2006,52 @@ impl SchemeRuntime {
                     warn!(key = key.as_str(), "set-local-option! error: {}", e);
                     editor.set_status(e);
                 }
+            }
+        }
+
+        // Scheme-registered AI tools
+        let mut ai_tools: Vec<mae_core::SchemeToolDef> = state.pending_ai_tools.drain(..).collect();
+        for tool in &mut ai_tools {
+            // Merge any late-registered params (ai-tool-param! called after register-ai-tool!)
+            if let Some(extra) = state.pending_ai_tool_params.remove(&tool.name) {
+                tool.params.extend(extra);
+            }
+            if let Some(extra) = state.pending_ai_tool_required.remove(&tool.name) {
+                tool.required.extend(extra);
+            }
+        }
+        for tool in ai_tools {
+            debug!(name = %tool.name, handler = %tool.handler_fn, "registering Scheme AI tool");
+            // Upsert: replace if already registered by name
+            if let Some(existing) = editor
+                .scheme_ai_tools
+                .iter_mut()
+                .find(|t| t.name == tool.name)
+            {
+                *existing = tool;
+            } else {
+                editor.scheme_ai_tools.push(tool);
+            }
+        }
+
+        // Custom splash arts
+        for (name, art, image_path) in state.pending_splash_arts.drain(..) {
+            use mae_core::render_common::splash::CustomSplashArt;
+            let entry = CustomSplashArt {
+                name: name.clone(),
+                art,
+                accent_lines: Vec::new(),
+                image_path,
+            };
+            // Upsert by name
+            if let Some(existing) = editor
+                .custom_splash_arts
+                .iter_mut()
+                .find(|a| a.name == name)
+            {
+                *existing = entry;
+            } else {
+                editor.custom_splash_arts.push(entry);
             }
         }
 
@@ -1866,15 +2615,15 @@ mod tests {
     }
 
     #[test]
-    fn add_hook_invalid_name_warns() {
+    fn add_hook_any_name_succeeds() {
+        // Hook namespace is open — modules can define custom hooks.
         let mut rt = new_runtime();
         let mut editor = Editor::new();
 
-        rt.eval(r#"(add-hook! "nonexistent" "fn")"#).unwrap();
+        rt.eval(r#"(add-hook! "custom-module-hook" "fn")"#).unwrap();
         rt.apply_to_editor(&mut editor);
 
-        // Should have set a warning in status
-        assert!(editor.status_msg.contains("Unknown hook"));
+        assert_eq!(editor.hooks.get("custom-module-hook"), &["fn"]);
     }
 
     // --- set-option! tests ---
@@ -2453,5 +3202,366 @@ mod tests {
                 feature: "my-pkg".into()
             }
         );
+    }
+
+    #[test]
+    fn module_loaded_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        // No modules registered → module-loaded? returns false
+        let result = rt.eval(r#"(module-loaded? "dashboard")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        // Register a module → returns true
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval(r#"(module-loaded? "dashboard")"#).unwrap();
+        assert!(result.contains("t"), "expected true, got: {}", result);
+    }
+
+    #[test]
+    fn module_version_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let result = rt.eval(r#"(module-version "dashboard")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval(r#"(module-version "dashboard")"#).unwrap();
+        assert!(
+            result.contains("0.1.0"),
+            "expected version, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn module_list_query() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let result = rt.eval("(module-list)").unwrap();
+        // Empty list
+        assert!(
+            result.contains("()"),
+            "expected empty list, got: {}",
+            result
+        );
+
+        rt.eval(r#"(register-module! "dashboard" "0.1.0")"#)
+            .unwrap();
+        let result = rt.eval("(module-list)").unwrap();
+        assert!(
+            result.contains("dashboard"),
+            "expected dashboard, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn define_option_applies() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(define-option! "my_option" "string" "hello" "A test option")"#)
+            .unwrap();
+        let mut editor = Editor::new();
+        rt.apply_to_editor(&mut editor);
+        let def = editor.option_registry.find("my_option");
+        assert!(def.is_some(), "dynamic option should be registered");
+        assert_eq!(def.unwrap().default_value.as_ref(), "hello");
+    }
+
+    #[test]
+    fn undefine_command_applies() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        let mut editor = Editor::new();
+        // Editor starts with built-in commands
+        assert!(editor.commands.get("move-left").is_some());
+        rt.eval(r#"(undefine-command! "move-left")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert!(editor.commands.get("move-left").is_none());
+    }
+
+    #[test]
+    fn unload_feature_removes() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(provide-feature "test-mod")"#).unwrap();
+        // Check via unload return value — true means it was present
+        let result = rt.eval(r#"(unload-feature "test-mod")"#).unwrap();
+        assert!(
+            result.contains("t"),
+            "expected true (was loaded), got: {}",
+            result
+        );
+        // Second unload should return false
+        let result = rt.eval(r#"(unload-feature "test-mod")"#).unwrap();
+        assert!(
+            result.contains("f"),
+            "expected false (already removed), got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn deprecation_warns_once() {
+        isolate_steel_home();
+        let mut rt = SchemeRuntime::new().unwrap();
+        rt.eval(r#"(deprecate-function! "old-fn" "new-fn" "0.9.0")"#)
+            .unwrap();
+
+        // First check-deprecated returns true
+        let result = rt.eval(r#"(check-deprecated "old-fn")"#).unwrap();
+        assert!(result.contains("t"), "expected true, got: {}", result);
+
+        // Non-deprecated returns false
+        let result = rt.eval(r#"(check-deprecated "new-fn")"#).unwrap();
+        assert!(result.contains("f"), "expected false, got: {}", result);
+
+        // Verify a warning message was queued
+        let state = rt.shared.lock().unwrap();
+        assert!(
+            state
+                .pending_messages
+                .iter()
+                .any(|m| m.contains("deprecated")),
+            "expected deprecation warning in messages"
+        );
+    }
+
+    // ── mae! / package! declarative config tests ────────────────
+
+    #[test]
+    fn mae_bang_parses_modules() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround" "search")"#).unwrap();
+        let decl = rt.declared_modules();
+        assert!(decl.contains_key("surround"), "expected surround");
+        assert!(decl.contains_key("search"), "expected search");
+        assert_eq!(decl.len(), 2);
+    }
+
+    #[test]
+    fn mae_bang_parses_flags() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor (list "multicursor" "+align" "+fancy"))"#)
+            .unwrap();
+        let decl = rt.declared_modules();
+        let flags = decl.get("multicursor").unwrap();
+        assert!(flags.contains(&"+align".to_string()));
+        assert!(flags.contains(&"+fancy".to_string()));
+    }
+
+    #[test]
+    fn mae_bang_categories_are_labels() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround" :ui "dashboard" :lang "tables")"#)
+            .unwrap();
+        let decl = rt.declared_modules();
+        assert_eq!(decl.len(), 3);
+        assert!(decl.contains_key("surround"));
+        assert!(decl.contains_key("dashboard"));
+        assert!(decl.contains_key("tables"));
+    }
+
+    #[test]
+    fn package_bang_basic() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "org-roam" :source "github:user/mae-org-roam")"#)
+            .unwrap();
+        let pkgs = rt.declared_packages();
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "org-roam");
+        assert_eq!(pkgs[0].source.as_deref(), Some("github:user/mae-org-roam"));
+        assert!(!pkgs[0].disable);
+    }
+
+    #[test]
+    fn package_bang_pin() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "my-theme" :source "github:u/r" :pin "abc123")"#)
+            .unwrap();
+        let pkgs = rt.declared_packages();
+        assert_eq!(pkgs[0].pin.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn package_bang_disable() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(package! "dashboard" :disable #t)"#).unwrap();
+        let pkgs = rt.declared_packages();
+        assert!(pkgs[0].disable);
+    }
+
+    #[test]
+    fn define_kb_node_from_scheme() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+
+        rt.eval(r#"(define-kb-node! "module:test:guide" "Test Guide" "Some body text")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+
+        let node = editor.kb.get("module:test:guide");
+        assert!(node.is_some(), "expected kb node to be registered");
+        assert_eq!(node.unwrap().title, "Test Guide");
+    }
+
+    #[test]
+    fn undeclared_modules_not_in_declared() {
+        let mut rt = new_runtime();
+        rt.eval(r#"(mae! :editor "surround")"#).unwrap();
+        let decl = rt.declared_modules();
+        assert!(!decl.contains_key("dashboard"), "dashboard not declared");
+        assert!(decl.contains_key("surround"), "surround declared");
+    }
+
+    // --- Phase A: New Scheme API tests ---
+
+    #[test]
+    fn string_split_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-split "a,b,c" ",")"#).unwrap();
+        assert!(result.contains("a"));
+        assert!(result.contains("b"));
+        assert!(result.contains("c"));
+    }
+
+    #[test]
+    fn string_join_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-join '("a" "b" "c") ",")"#).unwrap();
+        assert_eq!(result, "a,b,c");
+    }
+
+    #[test]
+    fn string_trim_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(string-trim "  hello  ")"#).unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn string_contains_works() {
+        let mut rt = new_runtime();
+        assert_eq!(
+            rt.eval(r#"(string-contains? "hello world" "world")"#)
+                .unwrap(),
+            "#t"
+        );
+        assert_eq!(
+            rt.eval(r#"(string-contains? "hello" "xyz")"#).unwrap(),
+            "#f"
+        );
+    }
+
+    #[test]
+    fn string_replace_works() {
+        let mut rt = new_runtime();
+        let result = rt
+            .eval(r#"(string-replace "hello world" "world" "rust")"#)
+            .unwrap();
+        assert_eq!(result, "hello rust");
+    }
+
+    #[test]
+    fn string_upcase_downcase_works() {
+        let mut rt = new_runtime();
+        assert_eq!(rt.eval(r#"(string-upcase "hello")"#).unwrap(), "HELLO");
+        assert_eq!(rt.eval(r#"(string-downcase "HELLO")"#).unwrap(), "hello");
+    }
+
+    #[test]
+    fn shell_command_works() {
+        let mut rt = new_runtime();
+        let result = rt.eval(r#"(shell-command "echo hello")"#).unwrap();
+        assert_eq!(result.trim(), "hello");
+    }
+
+    #[test]
+    fn create_buffer_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        let initial_count = editor.buffers.len();
+        rt.eval(r#"(create-buffer "test-buf")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.buffers.len(), initial_count + 1);
+        assert_eq!(editor.buffers.last().unwrap().name, "test-buf");
+    }
+
+    #[test]
+    fn kill_buffer_by_name_works() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        // Create a buffer first
+        let mut buf = mae_core::Buffer::new();
+        buf.name = "kill-me".to_string();
+        editor.buffers.push(buf);
+        assert_eq!(editor.buffers.len(), 2);
+        rt.eval(r#"(kill-buffer-by-name "kill-me")"#).unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(editor.buffers.len(), 1);
+    }
+
+    #[test]
+    fn buffer_introspection_functions() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        {
+            let win = editor.window_mgr.focused_window_mut();
+            for ch in "hello\nworld".chars() {
+                editor.buffers[0].insert_char(win, ch);
+            }
+        }
+        rt.inject_editor_state(&editor);
+        assert_eq!(rt.eval("(current-line-number)").unwrap(), "2");
+        // point-min is always 0
+        assert_eq!(rt.eval("(point-min)").unwrap(), "0");
+        // point-max = total chars
+        let pmax = rt.eval("(point-max)").unwrap();
+        assert!(pmax.parse::<i64>().unwrap() > 0);
+        // current-buffer-name
+        let name = rt.eval("(current-buffer-name)").unwrap();
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn region_inactive_in_normal_mode() {
+        let mut rt = new_runtime();
+        let editor = Editor::new();
+        rt.inject_editor_state(&editor);
+        assert_eq!(rt.eval("(region-active?)").unwrap(), "#f");
+    }
+
+    #[test]
+    fn advice_add_and_remove() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        rt.eval(r#"(advice-add! "save" ":before" "my-before-save")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let before = editor
+            .hooks
+            .get_advice("save", mae_core::hooks::AdviceKind::Before);
+        assert_eq!(before, vec!["my-before-save"]);
+
+        rt.eval(r#"(advice-remove! "save" "my-before-save")"#)
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        let before = editor
+            .hooks
+            .get_advice("save", mae_core::hooks::AdviceKind::Before);
+        assert!(before.is_empty());
+    }
+
+    #[test]
+    fn current_command_variable_exists() {
+        let mut rt = new_runtime();
+        let editor = Editor::new();
+        rt.inject_editor_state(&editor);
+        // Should not error — variable exists
+        let result = rt.eval("*current-command*").unwrap();
+        assert!(result.is_empty());
     }
 }

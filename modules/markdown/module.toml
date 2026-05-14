@@ -1,0 +1,9 @@
+[module]
+name = "markdown"
+version = "0.1.0"
+description = "Markdown keybindings — headings, promotion/demotion, narrowing"
+mae_version = ">=0.9.0"
+category = "lang"
+
+[entry]
+autoloads = "autoloads.scm"

@@ -1,10 +1,13 @@
 mod ai_exec;
 mod core_exec;
 mod dap_exec;
+pub(crate) mod grading;
 mod kb_exec;
 mod lsp_exec;
+pub(crate) mod model_exam;
 mod perf;
 mod permission;
+pub mod sandbox;
 pub(crate) mod self_test;
 mod shell_exec;
 mod tool_dispatch;
@@ -561,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn self_test_suite_lsp_has_open_file() {
+    fn self_test_suite_lsp_has_readiness_check() {
         let mut editor = Editor::new();
         let call = make_call("self_test_suite", serde_json::json!({"categories": "lsp"}));
         let result = unwrap_immediate(execute_tool(
@@ -574,9 +577,21 @@ mod tests {
         let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         let cats = plan["categories"].as_array().unwrap();
         let lsp_cat = &cats[0];
+        // Setup should create fixture files in sandbox (not rely on test_fixtures/)
+        let setup = serde_json::to_string(&lsp_cat["setup"]).unwrap();
+        assert!(
+            setup.contains("lsp-fixture"),
+            "setup should create fixture in sandbox"
+        );
+        // Precondition steps should use lsp_document_symbols as functional readiness check
+        let precondition = serde_json::to_string(&lsp_cat["precondition_steps"]).unwrap();
+        assert!(
+            precondition.contains("lsp_document_symbols"),
+            "precondition should use lsp_document_symbols for readiness"
+        );
+        // First test should be introspect (LSP readiness check)
         let tests = lsp_cat["tests"].as_array().unwrap();
-        // First test should be open_file to trigger LSP didOpen
-        assert_eq!(tests[0]["tool"], "open_file");
+        assert_eq!(tests[0]["tool"], "introspect");
     }
 
     #[test]
@@ -922,7 +937,12 @@ mod tests {
             &PermissionPolicy::default(),
         ));
         assert!(!result.success);
-        assert!(result.output.contains("Unknown step"));
+        // Validation catches the bad enum value before the DAP executor
+        assert!(
+            result.output.contains("not in") || result.output.contains("Unknown step"),
+            "expected validation or DAP error, got: {}",
+            result.output
+        );
     }
 
     #[test]
@@ -1070,7 +1090,7 @@ mod tests {
         ));
         assert!(result.success);
         let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
-        assert_eq!(plan["version"], 2);
+        assert_eq!(plan["version"], 3);
         let cats = plan["categories"].as_array().unwrap();
         let names: Vec<&str> = cats.iter().map(|c| c["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"introspection"));
@@ -1081,7 +1101,7 @@ mod tests {
     }
 
     #[test]
-    fn self_test_plan_v2_has_setup_and_instructions() {
+    fn self_test_plan_v3_has_setup_and_instructions() {
         let mut editor = Editor::new();
         let call = make_call("self_test_suite", serde_json::json!({}));
         let result = unwrap_immediate(execute_tool(
@@ -1176,7 +1196,7 @@ mod tests {
 
     #[test]
     fn self_test_plan_instructions_no_manual_save_restore() {
-        let plan_json = build_self_test_plan("");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let instructions = plan["instructions"].as_array().unwrap();
         let all_text: String = instructions
@@ -1277,7 +1297,7 @@ mod tests {
     /// tracker can track progress correctly.
     #[test]
     fn self_test_plan_tools_all_classified() {
-        let plan_json = build_self_test_plan("");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
 
@@ -1285,7 +1305,10 @@ mod tests {
         for cat in categories {
             if let Some(tests) = cat["tests"].as_array() {
                 for test in tests {
-                    let tool = test["tool"].as_str().unwrap();
+                    // Skip prompt-based tests (no tool field).
+                    let Some(tool) = test["tool"].as_str() else {
+                        continue;
+                    };
                     // shell_exec is a general utility (used for wait/sleep steps)
                     if tool != "shell_exec"
                         && crate::session::workflow::classify_tool_to_self_test_step(tool).is_none()
@@ -1307,7 +1330,7 @@ mod tests {
     /// in the tool registry (or be a special tool like self_test_suite).
     #[test]
     fn self_test_plan_tools_match_registry() {
-        let plan_json = build_self_test_plan("");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
 
@@ -1321,7 +1344,10 @@ mod tests {
         for cat in categories {
             if let Some(tests) = cat["tests"].as_array() {
                 for test in tests {
-                    let tool = test["tool"].as_str().unwrap();
+                    // Skip prompt-based tests (no tool field).
+                    let Some(tool) = test["tool"].as_str() else {
+                        continue;
+                    };
                     if !tool_names.contains(tool) && !special_tools.contains(&tool) {
                         missing.push(tool.to_string());
                     }
@@ -1338,7 +1364,7 @@ mod tests {
 
     #[test]
     fn guidance_category_exists() {
-        let plan_json = build_self_test_plan("guidance");
+        let plan_json = build_self_test_plan("guidance", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
         assert_eq!(categories.len(), 1);
@@ -1347,7 +1373,7 @@ mod tests {
 
     #[test]
     fn guidance_category_has_expected_test_count() {
-        let plan_json = build_self_test_plan("guidance");
+        let plan_json = build_self_test_plan("guidance", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let tests = plan["categories"][0]["tests"].as_array().unwrap();
         assert_eq!(tests.len(), 5, "Guidance category should have 5 tests");
@@ -1365,9 +1391,53 @@ mod tests {
 
     #[test]
     fn executor_submodule_self_test_plan_parses() {
-        let json = super::self_test::build_self_test_plan("");
+        let json = super::self_test::build_self_test_plan("", "", "");
         let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["version"], 2);
+        assert_eq!(val["version"], 3);
         assert!(val["categories"].as_array().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn self_test_plan_has_project_root_field() {
+        let json = build_self_test_plan("", "/tmp/sandbox", "/home/user/project");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(plan["project_root"], "/home/user/project");
+    }
+
+    #[test]
+    fn self_test_plan_has_step0_project_context() {
+        let json = build_self_test_plan("", "", "");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let instructions = plan["instructions"].as_array().unwrap();
+        let all_text: String = instructions
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            all_text.contains("project_info") || all_text.contains("switch_project"),
+            "Instructions should mention project context verification"
+        );
+    }
+
+    #[test]
+    fn self_test_scrolling_no_repeat_instructions() {
+        let json = build_self_test_plan("scrolling", "", "");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+        let scrolling = categories
+            .iter()
+            .find(|c| c["name"] == "scrolling")
+            .unwrap();
+        let tests = scrolling["tests"].as_array().unwrap();
+        for test in tests {
+            let assert_str = test["assert"].as_str().unwrap_or("");
+            assert!(
+                !assert_str.to_lowercase().contains("repeat"),
+                "Scrolling test {} assert should not contain 'repeat': {}",
+                test["id"],
+                assert_str
+            );
+        }
     }
 }

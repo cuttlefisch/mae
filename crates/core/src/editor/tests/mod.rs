@@ -13,8 +13,13 @@ mod misc_tests;
 mod mouse_tests;
 mod navigation_tests;
 mod operator_tests;
+mod option_tests;
+mod org_checkbox_tests;
+mod performance_tests;
+mod project_tests;
 mod search_tests;
 mod shell_tests;
+mod table_tests;
 mod text_object_tests;
 mod visual_tests;
 

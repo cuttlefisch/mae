@@ -503,19 +503,46 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             },
             permission: Some(PermissionTier::Write),
         },
-        // --- Self-test suite ---
+        // --- Self-test suite (v3: sandbox, grading, exam categories) ---
         ToolDefinition {
             name: "self_test_suite".into(),
-            description: "Get the structured self-test plan for MAE's AI tool surface. Returns a JSON object with test categories, each containing an array of tests specifying: tool to call, arguments, assertion to check, and PASS/FAIL/SKIP criteria. IMPORTANT: This tool only returns the plan; it does NOT execute the tests. The agent must parse the plan and call the individual tools sequentially to perform the validation. Use 'categories' argument for targeted testing if the full plan is too large.".into(),
+            description: "Unified test suite for MAE's AI tool surface. Actions: 'plan' (default) returns a v3 JSON test plan with sandbox paths, deterministic grading specs, and both direct-tool + prompt-based tests. 'grade' accepts results array and returns deterministic ExamResult with verdict. File writes are confined to a sandbox directory during test mode.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "categories".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Comma-separated list of categories to include (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance".into(),
-                        enum_values: None,
-                    },                )]),
+                properties: HashMap::from([
+                    (
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Action: 'plan' to get test plan, 'grade' to grade results (default: plan)".into(),
+                            enum_values: Some(vec!["plan".into(), "grade".into()]),
+                        },
+                    ),
+                    (
+                        "categories".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Comma-separated categories (default: all). Options: introspection, editing, help, project, lsp, dap, git, performance, scrolling, babel, modules, federation, guidance, tool_selection, parameter_accuracy, output_interpretation, multi_step, pushback".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "results".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "For 'grade' action: array of {test_id, output, success, grading, tool_calls?, final_text?}".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "model".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "For 'grade' action: model name for the exam result".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
                 required: vec![],
             },
             permission: Some(PermissionTier::ReadOnly),
@@ -594,7 +621,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         prop_type: "string".into(),
                         description: "Name of the hook to fire (e.g. 'app-start', 'buffer-open')".into(),
                         enum_values: Some(
-                            mae_core::hooks::HOOK_NAMES
+                            mae_core::hooks::WELL_KNOWN_HOOKS
                                 .iter()
                                 .map(|s: &&str| s.to_string())
                                 .collect(),
@@ -902,7 +929,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "perf_benchmark".into(),
-            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source), 'scroll_stress' (scroll N times in current buffer, returns min/max/p50/p95/mean frame times).".into(),
+            description: "Run a micro-benchmark and return timing results. Types: 'buffer_insert' (insert N lines), 'buffer_delete' (delete N lines), 'syntax_parse' (parse N-line Rust source), 'scroll_stress' (scroll N times, returns latency stats), 'kb_search_stress' (search N-node KB, returns p50/p95), 'kb_graph_stress' (BFS depth-2 on N-node graph, returns latency stats).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -911,7 +938,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Benchmark type".into(),
-                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into(), "scroll_stress".into()]),
+                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into(), "scroll_stress".into(), "kb_search_stress".into(), "kb_graph_stress".into()]),
                         },
                     ),
                     (
@@ -1197,6 +1224,190 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                 schema_type: "object".into(),
                 properties: HashMap::new(),
                 required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Module tools ---
+        ToolDefinition {
+            name: "list_modules".into(),
+            description: "List all active modules with full details (name, version, status, category, description, commands, options, flags, path). MAE has a Doom-style module system — use this to discover available modules.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "pkg_sync".into(),
+            description: "Synchronize packages — clone missing modules and update lockfile. Equivalent to `mae pkg sync`. Requires restart to apply.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "pkg_upgrade".into(),
+            description: "Upgrade all packages to latest versions. Equivalent to `mae pkg upgrade`. Requires restart to apply.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "pkg_doctor".into(),
+            description: "Run package health checks — verify lockfile integrity, detect missing modules, check for version conflicts. Equivalent to `mae pkg doctor`.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Format/Build/Spell/Lookup tools ---
+        ToolDefinition {
+            name: "format_buffer".into(),
+            description: "Format the current buffer using the configured external formatter or LSP.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "run_build".into(),
+            description: "Detect the project build system (Cargo, Make, npm, etc.) and run the build command. Parse compiler errors for navigation.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "run_test".into(),
+            description: "Detect the project build system and run the test command.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Shell),
+        },
+        ToolDefinition {
+            name: "spell_check".into(),
+            description: "Run spell check on the current buffer using aspell or hunspell.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "lookup_online".into(),
+            description: "Look up documentation URL for the word at cursor (docs.rs, MDN, devdocs.io).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "next_error".into(),
+            description: "Navigate to the next build error after running a build command.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "convert_buffer".into(),
+            description: "Convert the current buffer between Org and Markdown formats in-place."
+                .into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "target_format".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Target format: 'org' (markdown→org) or 'markdown' (org→markdown)".into(),
+                        enum_values: Some(vec!["org".into(), "markdown".into()]),
+                    },
+                )]),
+                required: vec!["target_format".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        // --- Tool Discovery ---
+        ToolDefinition {
+            name: "search_tools".into(),
+            description: "Fuzzy search over all available tools by name or description. Use this to discover tools when you don't know the exact name. Example: search for 'breakpoint' to find dap_set_breakpoint.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "query".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Natural language search query (e.g. 'set breakpoint', 'find references')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "limit".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Max results to return (default: 10)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["query".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        // --- Model Validation ---
+        ToolDefinition {
+            name: "model_exam".into(),
+            description: "Deprecated: use self_test_suite instead. Model validation exam \u{2014} deterministic known-answer tests that grade tool selection, parameter accuracy, output interpretation, and safety pushback. Actions: 'plan' returns the exam JSON (via self_test_suite), 'grade' accepts results and returns ExamResult with verdict.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "action".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Action: 'plan' to get exam tests, 'grade' to grade results".into(),
+                            enum_values: Some(vec!["plan".into(), "grade".into()]),
+                        },
+                    ),
+                    (
+                        "results".into(),
+                        ToolProperty {
+                            prop_type: "array".into(),
+                            description: "Array of {test_id, tool_calls: [{name, arguments}], final_text} for grading".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "model".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Model name for the grade report".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["action".into()],
             },
             permission: Some(PermissionTier::ReadOnly),
         },

@@ -35,6 +35,7 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -58,6 +59,8 @@ pub struct OrgDirWatcher {
     _watcher: RecommendedWatcher,
     rx: mpsc::Receiver<notify::Result<Event>>,
     path_to_ids: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
+    /// Cumulative count of watcher errors (channel recv errors).
+    errors: Arc<AtomicU64>,
 }
 
 impl OrgDirWatcher {
@@ -74,6 +77,7 @@ impl OrgDirWatcher {
             _watcher: watcher,
             rx,
             path_to_ids: Arc::new(Mutex::new(HashMap::new())),
+            errors: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -102,13 +106,21 @@ impl OrgDirWatcher {
         }
     }
 
+    /// Cumulative count of watcher errors since creation.
+    pub fn error_count(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
+    }
+
     /// Drain all pending events and return coalesced `OrgChange`s.
     /// Non-blocking: returns an empty vec if nothing has happened.
     pub fn drain(&self) -> Vec<OrgChange> {
         let mut changes: Vec<OrgChange> = Vec::new();
         let mut seen_upsert: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         while let Ok(ev) = self.rx.try_recv() {
-            let Ok(ev) = ev else { continue };
+            let Ok(ev) = ev else {
+                self.errors.fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
             match ev.kind {
                 EventKind::Create(_) | EventKind::Modify(_) => {
                     for p in ev.paths {

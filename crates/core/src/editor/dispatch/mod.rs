@@ -29,6 +29,11 @@ impl Editor {
         result
     }
 
+    // @ai-caution: [dispatch] Sequential category dispatch — order matters for
+    // performance (nav/edit first = hot path). Adding new categories: append at
+    // the end, don't insert before nav/edit. Each handler explicitly calls
+    // mark_full_redraw() — nav does NOT (cursor-only). Changing this regresses
+    // render perf 10x on large files.
     fn dispatch_builtin_inner(&mut self, name: &str) -> bool {
         // Auto-dismiss hover popup on any command that isn't hover-related.
         if self.hover_popup.is_some()
@@ -144,6 +149,225 @@ impl Editor {
             return v;
         }
 
+        // Snippet commands
+        match name {
+            "snippet-expand-or-next" => {
+                if let Some(ref mut session) = self.snippet_session {
+                    if let Some((_offset, _len)) = session.next_field() {
+                        // Field navigation — cursor positioning handled by caller
+                        self.mark_full_redraw();
+                    } else {
+                        // Session complete
+                        self.snippet_session = None;
+                    }
+                }
+                // If no active session, fall through (let Tab do its normal thing)
+                return self.snippet_session.is_some();
+            }
+            "snippet-prev-field" => {
+                if let Some(ref mut session) = self.snippet_session {
+                    session.prev_field();
+                    self.mark_full_redraw();
+                    return true;
+                }
+                return false;
+            }
+            "snippet-commit" => {
+                self.snippet_session = None;
+                return true;
+            }
+            _ => {}
+        }
+
+        // Format commands
+        match name {
+            "format-buffer" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let lang = self.buffers[idx]
+                    .file_path()
+                    .and_then(crate::lsp_intent::language_id_from_path)
+                    .unwrap_or_default()
+                    .to_string();
+                if let Some(fmt) = self.format_config.get(&lang).cloned() {
+                    let content = self.buffers[idx].rope().to_string();
+                    let path = self.buffers[idx]
+                        .file_path()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_default();
+                    match mae_format::format_with_external(&fmt, &content, &path) {
+                        Ok(result) if result.changed => {
+                            self.buffers[idx]
+                                .replace_rope(ropey::Rope::from_str(&result.formatted));
+                            self.set_status("Formatted with external formatter");
+                        }
+                        Ok(_) => self.set_status("Already formatted"),
+                        Err(e) => self.set_status(format!("Format error: {}", e)),
+                    }
+                    self.mark_full_redraw();
+                    return true;
+                }
+                return false; // Fall through to LSP format
+            }
+            "format-before-save" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let lang = self.buffers[idx]
+                    .file_path()
+                    .and_then(crate::lsp_intent::language_id_from_path)
+                    .unwrap_or_default()
+                    .to_string();
+                if let Some(fmt) = self.format_config.get(&lang).cloned() {
+                    let content = self.buffers[idx].rope().to_string();
+                    let path = self.buffers[idx]
+                        .file_path()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_default();
+                    if let Ok(result) = mae_format::format_with_external(&fmt, &content, &path) {
+                        if result.changed {
+                            self.buffers[idx]
+                                .replace_rope(ropey::Rope::from_str(&result.formatted));
+                        }
+                    }
+                }
+                return true;
+            }
+            _ => {}
+        }
+
+        // Build commands
+        match name {
+            "run-build" | "run-test" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let path = self.buffers[idx].file_path().map(|p| p.to_path_buf());
+                let start = path.as_deref().unwrap_or(std::path::Path::new("."));
+                if let Some(bs) = mae_make::detect_build_system(start) {
+                    let cmd = if name == "run-test" {
+                        bs.test_cmd.unwrap_or(bs.build_cmd)
+                    } else {
+                        bs.build_cmd
+                    };
+                    self.set_status(format!("[{}] Run: {}", bs.kind, cmd));
+                    // Shell command execution is handled by the binary event loop
+                    // via pending_scheme_eval or direct shell spawn
+                    self.pending_scheme_eval
+                        .push(format!("(shell-command \"{}\")", cmd.replace('\"', "\\\"")));
+                } else {
+                    self.set_status("No build system detected");
+                }
+                return true;
+            }
+            "next-error" => {
+                if !self.build_errors.is_empty() {
+                    if self.build_error_idx < self.build_errors.len().saturating_sub(1) {
+                        self.build_error_idx += 1;
+                    }
+                    let e = &self.build_errors[self.build_error_idx];
+                    self.set_status(format!("{}:{}: {}", e.file, e.line, e.message));
+                    self.mark_full_redraw();
+                } else {
+                    self.set_status("No build errors");
+                }
+                return true;
+            }
+            "prev-error" => {
+                if !self.build_errors.is_empty() {
+                    self.build_error_idx = self.build_error_idx.saturating_sub(1);
+                    let e = &self.build_errors[self.build_error_idx];
+                    self.set_status(format!("{}:{}: {}", e.file, e.line, e.message));
+                    self.mark_full_redraw();
+                } else {
+                    self.set_status("No build errors");
+                }
+                return true;
+            }
+            _ => {}
+        }
+
+        // Lookup commands
+        if name == "lookup-online" {
+            let idx = self.window_mgr.focused_window().buffer_idx;
+            let win = self.window_mgr.focused_window();
+            let char_off = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+            let word = crate::search::word_at_offset(self.buffers[idx].rope(), char_off)
+                .unwrap_or_default();
+            let lang = self.buffers[idx]
+                .file_path()
+                .and_then(crate::lsp_intent::language_id_from_path)
+                .unwrap_or_default()
+                .to_string();
+            if let Some(url) = mae_lookup::docs_url(&word, &lang) {
+                self.set_status(format!("Docs: {}", url));
+            } else {
+                self.set_status("No docs URL for this language");
+            }
+            return true;
+        }
+
+        // Spell commands
+        match name {
+            "spell-check-buffer" | "spell-toggle" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let text = self.buffers[idx].rope().to_string();
+                if let Some(backend) = mae_spell::check_available() {
+                    match mae_spell::check_text(&text, &backend) {
+                        Ok(results) => {
+                            let count = results.len();
+                            self.spell_results.insert(idx, results);
+                            self.set_status(format!("{} misspelling(s) found", count));
+                        }
+                        Err(e) => self.set_status(format!("Spell check error: {}", e)),
+                    }
+                } else {
+                    self.set_status("No spell checker found (install aspell or hunspell)");
+                }
+                self.mark_full_redraw();
+                return true;
+            }
+            "spell-next" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let win = self.window_mgr.focused_window();
+                let cursor_byte = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+                if let Some(results) = self.spell_results.get(&idx) {
+                    if let Some(m) = results.iter().find(|m| m.offset > cursor_byte) {
+                        let hint = m
+                            .suggestions
+                            .first()
+                            .map(|s| s.as_str())
+                            .unwrap_or("no suggestions");
+                        self.set_status(format!("Misspelled: {} ({})", m.word, hint));
+                    }
+                }
+                return true;
+            }
+            "spell-prev" => {
+                return true; // placeholder
+            }
+            "spell-suggest" => {
+                let idx = self.window_mgr.focused_window().buffer_idx;
+                let win = self.window_mgr.focused_window();
+                let cursor_byte = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
+                if let Some(results) = self.spell_results.get(&idx) {
+                    if let Some(m) = results
+                        .iter()
+                        .find(|m| cursor_byte >= m.offset && cursor_byte < m.offset + m.length)
+                    {
+                        if m.suggestions.is_empty() {
+                            self.set_status(format!("No suggestions for '{}'", m.word));
+                        } else {
+                            let top: Vec<&str> =
+                                m.suggestions.iter().take(5).map(|s| s.as_str()).collect();
+                            self.set_status(format!(
+                                "Suggestions for '{}': {}",
+                                m.word,
+                                top.join(", ")
+                            ));
+                        }
+                    }
+                }
+                return true;
+            }
+            _ => {}
+        }
+
         false
     }
 
@@ -233,17 +457,36 @@ impl Editor {
             win.cursor_col = 0;
             self.set_status("Buffer killed — [scratch]");
         } else {
+            // If killing a FileTree buffer, close its dedicated window.
+            if self.buffers[idx].kind == crate::buffer::BufferKind::FileTree {
+                if let Some(win_id) = self.file_tree_window_id.take() {
+                    self.window_mgr.close(win_id);
+                }
+            }
             self.lsp_notify_did_close_for_buffer(idx);
             self.buffers.remove(idx);
-            self.syntax.shift_after_remove(idx);
-            self.adjust_ai_target_after_remove(idx);
+            self.notify_buffer_removed(idx);
+            // Collect dedicated window IDs before mutable iteration.
+            let dedicated: Vec<crate::window::WindowId> = self
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == idx)
+                .map(|w| w.id)
+                .collect();
             for win in self.window_mgr.iter_windows_mut() {
                 if win.buffer_idx == idx {
-                    win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
+                    win.buffer_idx = find_replacement_buffer(&self.buffers, idx);
                     win.cursor_row = 0;
                     win.cursor_col = 0;
                 } else if win.buffer_idx > idx {
                     win.buffer_idx -= 1;
+                }
+            }
+            // Close dedicated windows whose buffer was killed rather than
+            // reassigning them to an unrelated buffer.
+            for wid in dedicated {
+                if self.is_dedicated_window(wid) {
+                    self.window_mgr.close(wid);
                 }
             }
             let new_idx = self.active_buffer_idx();
@@ -260,13 +503,10 @@ impl Editor {
         }
         self.lsp_notify_did_close_for_buffer(idx);
         self.buffers.remove(idx);
-        self.syntax.shift_after_remove(idx);
-        self.adjust_ai_target_after_remove(idx);
+        self.notify_buffer_removed(idx);
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx == idx {
-                win.buffer_idx = idx
-                    .saturating_sub(1)
-                    .min(self.buffers.len().saturating_sub(1));
+                win.buffer_idx = find_replacement_buffer(&self.buffers, idx);
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             } else if win.buffer_idx > idx {
@@ -313,4 +553,24 @@ impl Editor {
             self.buffers[idx].insert_text_at(line_start, &transformed);
         }
     }
+}
+
+/// Find a non-sidebar buffer near `near` to use as a replacement when
+/// a buffer is killed. Prefers buffers at lower indices first, then higher.
+fn find_replacement_buffer(buffers: &[Buffer], near: usize) -> usize {
+    let start = near.min(buffers.len().saturating_sub(1));
+    for offset in 0..buffers.len() {
+        if start >= offset {
+            let j = start - offset;
+            if !buffers[j].kind.is_sidebar() {
+                return j;
+            }
+        }
+        let j = start + offset + 1;
+        if j < buffers.len() && !buffers[j].kind.is_sidebar() {
+            return j;
+        }
+    }
+    // Fallback: everything is a sidebar, just pick the nearest.
+    start
 }

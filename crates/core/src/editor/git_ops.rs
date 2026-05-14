@@ -1063,9 +1063,9 @@ impl Editor {
         );
     }
 
-    /// Parse `git diff HEAD --unified=0` output for a buffer and populate
-    /// its `git_diff_lines` map.
-    pub(crate) fn refresh_git_diff(&mut self, buffer_idx: usize) {
+    /// Spawn a background thread to run `git diff HEAD --unified=0` for a buffer.
+    /// Results are polled via `poll_pending_git_diff()` on idle ticks.
+    pub(crate) fn request_git_diff(&mut self, buffer_idx: usize) {
         let file_path = match self.buffers[buffer_idx].file_path() {
             Some(p) => p.to_path_buf(),
             None => return,
@@ -1076,20 +1076,59 @@ impl Editor {
             .map(|p| p.root.clone())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let output = match std::process::Command::new("git")
-            .args(["diff", "HEAD", "--unified=0", "--"])
-            .arg(&file_path)
-            .current_dir(&root)
-            .output()
-        {
-            Ok(o) if o.status.success() => o,
-            _ => {
-                self.buffers[buffer_idx].git_diff_lines.clear();
-                return;
-            }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let fp = file_path.clone();
+        std::thread::spawn(move || {
+            let result = match std::process::Command::new("git")
+                .args(["diff", "HEAD", "--unified=0", "--"])
+                .arg(&fp)
+                .current_dir(&root)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    parse_diff_hunks(&stdout)
+                }
+                _ => std::collections::HashMap::new(),
+            };
+            let _ = tx.send(result);
+        });
+
+        // Latest request wins — any prior pending result is dropped.
+        self.pending_git_diff = Some(super::PendingGitDiff {
+            file_path,
+            receiver: rx,
+        });
+    }
+
+    /// Poll for a completed async git diff result. Called from `idle_work()`.
+    pub(crate) fn poll_pending_git_diff(&mut self) {
+        let pending = match self.pending_git_diff.as_ref() {
+            Some(p) => p,
+            None => return,
         };
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        self.buffers[buffer_idx].git_diff_lines = parse_diff_hunks(&stdout);
+        match pending.receiver.try_recv() {
+            Ok(diff_lines) => {
+                let path = pending.file_path.clone();
+                self.pending_git_diff = None;
+                // Find the buffer by file path (not index) to avoid stale-index bugs.
+                if let Some(idx) = self
+                    .buffers
+                    .iter()
+                    .position(|b| b.file_path() == Some(&path))
+                {
+                    self.buffers[idx].git_diff_lines = diff_lines;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // Still running — leave pending.
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Thread panicked or channel closed — drop silently.
+                self.pending_git_diff = None;
+            }
+        }
     }
 }
 

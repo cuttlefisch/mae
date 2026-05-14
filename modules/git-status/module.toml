@@ -1,0 +1,9 @@
+[module]
+name = "git-status"
+version = "0.1.0"
+description = "Magit-style git status buffer keybindings and SPC g leader"
+mae_version = ">=0.9.0"
+category = "tools"
+
+[entry]
+autoloads = "autoloads.scm"

@@ -150,6 +150,11 @@ impl Editor {
                 }
                 true
             }
+            "describe-module" => {
+                let module_name = args.map(str::trim).filter(|s| !s.is_empty());
+                self.show_module_report(module_name);
+                true
+            }
             "diagnostics" | "diag" => {
                 self.dispatch_builtin("lsp-show-diagnostics");
                 true
@@ -173,6 +178,67 @@ impl Editor {
                             report.skipped_no_id,
                             report.read_errors.len()
                         ));
+                    }
+                }
+                true
+            }
+            "kb-create" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-create <id> <title>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-create <id> <title>");
+                        } else {
+                            let id = parts[0];
+                            let title = parts[1].trim();
+                            match self.kb_create_node(id, title, "", mae_kb::NodeKind::Note) {
+                                Ok(()) => {}
+                                Err(e) => self.set_status(e),
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            "kb-delete" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-delete <id>"),
+                    Some(id) => match self.kb_delete_node(id) {
+                        Ok(()) => {}
+                        Err(e) => self.set_status(e),
+                    },
+                }
+                true
+            }
+            "kb-register" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-register <name> <directory>"),
+                    Some(input) => {
+                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
+                        if parts.len() < 2 {
+                            self.set_status("Usage: :kb-register <name> <directory>");
+                        } else {
+                            let name = parts[0];
+                            let dir = crate::file_picker::expand_tilde(parts[1].trim());
+                            self.kb_register(name, std::path::Path::new(&dir));
+                        }
+                    }
+                }
+                true
+            }
+            "kb-unregister" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-unregister <name>"),
+                    Some(name) => self.kb_unregister(name),
+                }
+                true
+            }
+            "kb-reimport" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-reimport <name>"),
+                    Some(name) => {
+                        self.kb_reimport(name);
                     }
                 }
                 true
@@ -501,7 +567,7 @@ impl Editor {
                         },
                         SetAction::Disable(name) => match self.get_option(&name) {
                             Some((_, def)) if def.kind == crate::options::OptionKind::Bool => {
-                                match self.set_option(def.name, "false") {
+                                match self.set_option(&name, "false") {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
                                 }
@@ -529,9 +595,9 @@ impl Editor {
                         }
                         SetAction::Toggle(name) => {
                             // Toggle: read effective, flip, set local
-                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            let def_name = self.option_registry.find(&name).map(|d| d.name.clone());
                             if let Some(dn) = def_name {
-                                let current = match dn {
+                                let current = match dn.as_ref() {
                                     "word_wrap" => self.effective_word_wrap(),
                                     "line_numbers" => {
                                         self.line_numbers_for(self.active_buffer_idx())
@@ -554,7 +620,7 @@ impl Editor {
                                     }
                                 };
                                 let new_val = if current { "false" } else { "true" };
-                                match self.set_local_option(dn, new_val) {
+                                match self.set_local_option(&dn, new_val) {
                                     Ok(msg) => self.set_status(msg),
                                     Err(e) => self.set_status(e),
                                 }
@@ -571,10 +637,10 @@ impl Editor {
                             Err(e) => self.set_status(e),
                         },
                         SetAction::Query(name) => {
-                            let def_name = self.option_registry.find(&name).map(|d| d.name);
+                            let def_name = self.option_registry.find(&name).map(|d| d.name.clone());
                             if let Some(dn) = def_name {
                                 let idx = self.active_buffer_idx();
-                                let local_val = match dn {
+                                let local_val = match dn.as_ref() {
                                     "word_wrap" => self.buffers[idx]
                                         .local_options
                                         .word_wrap
@@ -889,6 +955,47 @@ impl Editor {
                     "Saved",
                     "to",
                 );
+                true
+            }
+            // H1-H5 Doom parity commands
+            "format-buffer" | "format" => {
+                self.dispatch_builtin("format-buffer");
+                true
+            }
+            "spell-check" | "spell-toggle" => {
+                self.dispatch_builtin("spell-check-buffer");
+                true
+            }
+            "spell-next" => {
+                self.dispatch_builtin("spell-next");
+                true
+            }
+            "spell-prev" => {
+                self.dispatch_builtin("spell-prev");
+                true
+            }
+            "spell-suggest" => {
+                self.dispatch_builtin("spell-suggest");
+                true
+            }
+            "run-build" | "make" => {
+                self.dispatch_builtin("run-build");
+                true
+            }
+            "run-test" => {
+                self.dispatch_builtin("run-test");
+                true
+            }
+            "next-error" => {
+                self.dispatch_builtin("next-error");
+                true
+            }
+            "prev-error" => {
+                self.dispatch_builtin("prev-error");
+                true
+            }
+            "lookup-online" => {
+                self.dispatch_builtin("lookup-online");
                 true
             }
             _ => {

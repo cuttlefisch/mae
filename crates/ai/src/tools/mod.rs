@@ -5,6 +5,7 @@ mod dap_tools;
 mod kb_tools;
 mod lsp_tools;
 mod shell_tools;
+pub mod tool_search;
 mod web_tools;
 
 use std::collections::HashMap;
@@ -20,7 +21,13 @@ pub use categories::{
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.
-pub const AI_PROFILES: &[&str] = &["pair-programmer", "explorer", "planner", "reviewer"];
+pub const AI_PROFILES: &[&str] = &[
+    "pair-programmer",
+    "explorer",
+    "planner",
+    "reviewer",
+    "verifier",
+];
 
 /// Generate tool definitions from the CommandRegistry.
 /// Every command (builtin or Scheme) becomes a callable AI tool.
@@ -32,7 +39,8 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
         .list_commands()
         .iter()
         .map(|cmd| {
-            let tool_name = format!("command_{}", cmd.name.replace('-', "_"));
+            let sanitized = cmd.name.replace('-', "_").replace('!', "");
+            let tool_name = format!("command_{}", sanitized);
             ToolDefinition {
                 name: tool_name,
                 description: cmd.doc.clone(),
@@ -42,6 +50,45 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
                     required: vec![],
                 },
                 permission: Some(classify_command_permission(&cmd.name)),
+            }
+        })
+        .collect()
+}
+
+/// Convert Scheme-registered AI tools to ToolDefinitions for the provider.
+pub fn scheme_tools_to_definitions(
+    scheme_tools: &[mae_core::SchemeToolDef],
+) -> Vec<ToolDefinition> {
+    scheme_tools
+        .iter()
+        .map(|st| {
+            let mut properties = HashMap::new();
+            for (name, ty, desc) in &st.params {
+                properties.insert(
+                    name.clone(),
+                    ToolProperty {
+                        prop_type: ty.clone(),
+                        description: desc.clone(),
+                        enum_values: None,
+                    },
+                );
+            }
+            let permission = match st.permission.as_str() {
+                "read" | "readonly" => PermissionTier::ReadOnly,
+                "write" => PermissionTier::Write,
+                "shell" => PermissionTier::Shell,
+                "privileged" => PermissionTier::Privileged,
+                _ => PermissionTier::Write,
+            };
+            ToolDefinition {
+                name: st.name.clone(),
+                description: st.description.clone(),
+                parameters: ToolParameters {
+                    schema_type: "object".into(),
+                    properties,
+                    required: st.required.clone(),
+                },
+                permission: Some(permission),
             }
         })
         .collect()
@@ -108,8 +155,8 @@ mod tests {
     fn ai_specific_tools_count() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         assert!(
-            tools.len() >= 106,
-            "Expected at least 106 AI tools, got {}",
+            tools.len() >= 109,
+            "Expected at least 109 AI tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -207,8 +254,8 @@ mod tests {
             .filter(|t| classify_tool_tier(&t.name) == ToolTier::Core)
             .count();
         assert!(
-            core_count < 55,
-            "core tools should be < 55, got {}",
+            core_count < 70,
+            "core tools should be < 70, got {}",
             core_count
         );
         assert!(
@@ -348,6 +395,24 @@ mod tests {
     }
 
     #[test]
+    fn prompt_mentions_modules() {
+        let full = include_str!("../../../mae/src/prompts/pair-programmer.xml");
+        assert!(
+            full.contains("module") || full.contains("list_modules"),
+            "full prompt should mention modules or list_modules"
+        );
+    }
+
+    #[test]
+    fn list_modules_tool_defined() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert!(
+            tools.iter().any(|t| t.name == "list_modules"),
+            "list_modules tool should be defined"
+        );
+    }
+
+    #[test]
     fn compact_prompt_has_guardrails() {
         let compact = include_str!("../../../mae/src/prompts/pair-programmer-compact.xml");
         assert!(compact.contains("When You Are Stuck"));
@@ -378,6 +443,46 @@ mod tests {
             classify_tool_category("shell_list"),
             Some(ToolCategory::ShellMgmt)
         );
+    }
+
+    #[test]
+    fn scheme_tool_def_to_definition() {
+        let st = mae_core::SchemeToolDef {
+            name: "my_tool".into(),
+            description: "Does stuff".into(),
+            params: vec![
+                ("name".into(), "string".into(), "The name".into()),
+                ("count".into(), "integer".into(), "How many".into()),
+            ],
+            required: vec!["name".into()],
+            handler_fn: "my-handler".into(),
+            permission: "write".into(),
+        };
+        let defs = scheme_tools_to_definitions(&[st]);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "my_tool");
+        assert_eq!(defs[0].parameters.properties.len(), 2);
+        assert_eq!(defs[0].parameters.required, vec!["name"]);
+        assert_eq!(defs[0].permission, Some(PermissionTier::Write));
+    }
+
+    #[test]
+    fn scheme_tool_unknown_permission_defaults_write() {
+        let st = mae_core::SchemeToolDef {
+            name: "t".into(),
+            description: String::new(),
+            params: vec![],
+            required: vec![],
+            handler_fn: "h".into(),
+            permission: "bogus".into(),
+        };
+        let defs = scheme_tools_to_definitions(&[st]);
+        assert_eq!(defs[0].permission, Some(PermissionTier::Write));
+    }
+
+    #[test]
+    fn verifier_in_profiles() {
+        assert!(AI_PROFILES.contains(&"verifier"));
     }
 
     #[test]

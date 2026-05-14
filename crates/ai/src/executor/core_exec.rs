@@ -5,9 +5,10 @@ use crate::tool_impls::{
     execute_command_list, execute_create_file, execute_cursor_info, execute_debug_state,
     execute_editor_restore_state, execute_editor_save_state, execute_editor_state,
     execute_file_read, execute_get_option, execute_image_info, execute_image_list,
-    execute_list_buffers, execute_open_file, execute_project_files, execute_project_info,
-    execute_project_search, execute_read_messages, execute_rename_file, execute_set_option,
-    execute_switch_buffer, execute_switch_project, execute_syntax_tree, execute_window_layout,
+    execute_list_buffers, execute_list_modules, execute_open_file, execute_pkg_command,
+    execute_project_files, execute_project_info, execute_project_search, execute_read_messages,
+    execute_rename_file, execute_set_option, execute_switch_buffer, execute_switch_project,
+    execute_syntax_tree, execute_window_layout,
 };
 use crate::types::ToolCall;
 
@@ -39,6 +40,20 @@ fn execute_command_dispatch(
         .ok_or("Missing 'command' argument")?;
     if editor.dispatch_builtin_in_target(cmd) {
         Ok(format!("Executed: {}", cmd))
+    } else {
+        Err(format!("Unknown command: {}", cmd))
+    }
+}
+
+/// Dispatch a builtin command by name (no arguments).
+fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, String> {
+    if editor.dispatch_builtin_in_target(cmd) {
+        let status = editor.status_msg.clone();
+        if status.is_empty() {
+            Ok(format!("Executed: {}", cmd))
+        } else {
+            Ok(status)
+        }
     } else {
         Err(format!("Unknown command: {}", cmd))
     }
@@ -128,6 +143,26 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "image_info" => execute_image_info(&call.arguments),
         "image_list" => execute_image_list(editor),
         "set_ai_target" => execute_set_ai_target(editor, &call.arguments),
+        "list_modules" => execute_list_modules(editor),
+        "pkg_sync" | "pkg_upgrade" | "pkg_doctor" => execute_pkg_command(editor, &call.name),
+        "format_buffer" => execute_dispatch_command(editor, "format-buffer"),
+        "run_build" => execute_dispatch_command(editor, "run-build"),
+        "run_test" => execute_dispatch_command(editor, "run-test"),
+        "spell_check" => execute_dispatch_command(editor, "spell-check-buffer"),
+        "lookup_online" => execute_dispatch_command(editor, "lookup-online"),
+        "next_error" => execute_dispatch_command(editor, "next-error"),
+        "convert_buffer" => {
+            let fmt = call
+                .arguments
+                .get("target_format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match fmt {
+                "org" => execute_dispatch_command(editor, "markdown-to-org"),
+                "markdown" => execute_dispatch_command(editor, "org-to-markdown"),
+                _ => Err("target_format must be 'org' or 'markdown'".into()),
+            }
+        }
         _ => return None,
     };
     Some(result)

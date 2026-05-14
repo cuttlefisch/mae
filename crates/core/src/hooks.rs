@@ -12,8 +12,25 @@
 
 use std::collections::HashMap;
 
-/// Valid hook names. Requests for unknown hooks are rejected.
-pub const HOOK_NAMES: &[&str] = &[
+/// Advice kind: wrap a command with before/after Scheme functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdviceKind {
+    Before,
+    After,
+}
+
+/// A per-command advice entry.
+#[derive(Debug, Clone)]
+pub struct AdviceEntry {
+    pub command: String,
+    pub kind: AdviceKind,
+    pub fn_name: String,
+}
+
+/// Well-known hook names. These are documented and used by the kernel.
+/// The hook namespace is OPEN — modules can register any hook name.
+/// This list exists for documentation and `mae pkg doctor` validation only.
+pub const WELL_KNOWN_HOOKS: &[&str] = &[
     "before-save",
     "after-save",
     "buffer-open",
@@ -32,12 +49,17 @@ pub const HOOK_NAMES: &[&str] = &[
     "window-split",
     "window-close",
     "after-load",
+    "module-loaded",
+    "module-unloaded",
+    "after-kb-change",
 ];
 
 /// A registry of named hooks, each with an ordered list of Scheme function names.
+/// Also manages per-command advice (before/after wrappers).
 #[derive(Debug, Clone)]
 pub struct HookRegistry {
     hooks: HashMap<String, Vec<String>>,
+    advice: Vec<AdviceEntry>,
 }
 
 impl Default for HookRegistry {
@@ -50,15 +72,13 @@ impl HookRegistry {
     pub fn new() -> Self {
         HookRegistry {
             hooks: HashMap::new(),
+            advice: Vec::new(),
         }
     }
 
-    /// Register a function for a hook. Returns false if the hook name is invalid.
+    /// Register a function for a hook. Always succeeds — the hook namespace is open.
     /// Duplicate registrations are silently ignored (idempotent).
     pub fn add(&mut self, hook_name: &str, fn_name: &str) -> bool {
-        if !Self::is_valid(hook_name) {
-            return false;
-        }
         let fns = self.hooks.entry(hook_name.to_string()).or_default();
         if !fns.iter().any(|f| f == fn_name) {
             fns.push(fn_name.to_string());
@@ -103,19 +123,59 @@ impl HookRegistry {
             .collect()
     }
 
-    /// Check if a hook name is valid.
-    /// Supports parameterized hooks: `buffer-open:rust` is valid because
-    /// `buffer-open` is a valid base hook name.
-    pub fn is_valid(name: &str) -> bool {
-        if HOOK_NAMES.contains(&name) {
+    /// Check if a hook name is well-known (documented kernel hook).
+    /// The hook namespace is open — any name is valid for registration.
+    /// This method is for documentation and diagnostics only.
+    pub fn is_well_known(name: &str) -> bool {
+        if WELL_KNOWN_HOOKS.contains(&name) {
             return true;
         }
         // Check for parameterized form: "base-hook:param"
         if let Some(base) = name.split(':').next() {
-            HOOK_NAMES.contains(&base)
+            WELL_KNOWN_HOOKS.contains(&base)
         } else {
             false
         }
+    }
+
+    /// Check if a hook name is valid. Always returns true — the hook namespace
+    /// is open so modules can define custom hooks.
+    pub fn is_valid(_name: &str) -> bool {
+        true
+    }
+
+    // --- Per-command advice (defadvice equivalent) ---
+
+    /// Add advice to a command. Duplicate registrations are silently ignored.
+    pub fn add_advice(&mut self, command: &str, kind: AdviceKind, fn_name: &str) {
+        if !self
+            .advice
+            .iter()
+            .any(|a| a.command == command && a.kind == kind && a.fn_name == fn_name)
+        {
+            self.advice.push(AdviceEntry {
+                command: command.to_string(),
+                kind,
+                fn_name: fn_name.to_string(),
+            });
+        }
+    }
+
+    /// Remove advice from a command by function name (any kind).
+    pub fn remove_advice(&mut self, command: &str, fn_name: &str) -> bool {
+        let before = self.advice.len();
+        self.advice
+            .retain(|a| !(a.command == command && a.fn_name == fn_name));
+        self.advice.len() < before
+    }
+
+    /// Get all advice function names for a command and kind.
+    pub fn get_advice(&self, command: &str, kind: AdviceKind) -> Vec<String> {
+        self.advice
+            .iter()
+            .filter(|a| a.command == command && a.kind == kind)
+            .map(|a| a.fn_name.clone())
+            .collect()
     }
 }
 
@@ -139,10 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn add_invalid_hook_returns_false() {
+    fn add_any_hook_succeeds() {
+        // Hook namespace is open — any hook name is accepted.
         let mut reg = HookRegistry::new();
-        assert!(!reg.add("nonexistent-hook", "fn"));
-        assert!(reg.get("nonexistent-hook").is_empty());
+        assert!(reg.add("custom-module-hook", "fn"));
+        assert_eq!(reg.get("custom-module-hook"), &["fn"]);
     }
 
     #[test]
@@ -197,11 +258,18 @@ mod tests {
     }
 
     #[test]
-    fn all_hook_names_valid() {
-        for name in HOOK_NAMES {
-            assert!(HookRegistry::is_valid(name));
+    fn well_known_hooks_recognized() {
+        for name in WELL_KNOWN_HOOKS {
+            assert!(HookRegistry::is_well_known(name));
         }
-        assert!(!HookRegistry::is_valid("bogus"));
+        assert!(!HookRegistry::is_well_known("bogus"));
+    }
+
+    #[test]
+    fn any_hook_is_valid() {
+        // Hook namespace is open.
+        assert!(HookRegistry::is_valid("bogus"));
+        assert!(HookRegistry::is_valid("my-module-hook"));
     }
 
     #[test]
@@ -212,8 +280,58 @@ mod tests {
     }
 
     #[test]
-    fn parameterized_hook_invalid_base() {
-        assert!(!HookRegistry::is_valid("nonexistent:rust"));
+    fn parameterized_hook_any_base_valid() {
+        // Hook namespace is open — even unknown base names are valid.
+        assert!(HookRegistry::is_valid("nonexistent:rust"));
+        // But well_known check still rejects unknown bases.
+        assert!(!HookRegistry::is_well_known("nonexistent:rust"));
+    }
+
+    // --- Advice system tests ---
+
+    #[test]
+    fn add_and_get_advice() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "my-before-save");
+        reg.add_advice("save", AdviceKind::After, "my-after-save");
+        assert_eq!(
+            reg.get_advice("save", AdviceKind::Before),
+            vec!["my-before-save"]
+        );
+        assert_eq!(
+            reg.get_advice("save", AdviceKind::After),
+            vec!["my-after-save"]
+        );
+    }
+
+    #[test]
+    fn add_advice_duplicate_idempotent() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        assert_eq!(reg.get_advice("save", AdviceKind::Before).len(), 1);
+    }
+
+    #[test]
+    fn remove_advice_works() {
+        let mut reg = HookRegistry::new();
+        reg.add_advice("save", AdviceKind::Before, "fn-a");
+        reg.add_advice("save", AdviceKind::After, "fn-b");
+        assert!(reg.remove_advice("save", "fn-a"));
+        assert!(reg.get_advice("save", AdviceKind::Before).is_empty());
+        assert_eq!(reg.get_advice("save", AdviceKind::After), vec!["fn-b"]);
+    }
+
+    #[test]
+    fn remove_advice_nonexistent_returns_false() {
+        let mut reg = HookRegistry::new();
+        assert!(!reg.remove_advice("save", "nonexistent"));
+    }
+
+    #[test]
+    fn get_advice_empty_for_unknown_command() {
+        let reg = HookRegistry::new();
+        assert!(reg.get_advice("nonexistent", AdviceKind::Before).is_empty());
     }
 
     #[test]

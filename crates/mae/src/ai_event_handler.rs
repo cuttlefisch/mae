@@ -78,6 +78,10 @@ pub enum PendingInteractiveEvent {
     ProposeChanges(tokio::sync::oneshot::Sender<bool>),
 }
 
+/// Shared reference to the MCP client manager for external tool dispatch.
+pub type McpClientMgrRef =
+    std::sync::Arc<tokio::sync::Mutex<mae_mcp::client_mgr::McpClientManager>>;
+
 /// Context required for AI event dispatching.
 pub struct AiEventContext<'a> {
     pub all_tools: &'a [mae_ai::ToolDefinition],
@@ -91,6 +95,7 @@ pub struct AiEventContext<'a> {
     #[allow(dead_code)]
     pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pub scheme: &'a mut mae_scheme::SchemeRuntime,
+    pub mcp_client_mgr: &'a McpClientMgrRef,
 }
 
 /// Handle a single AI event. Shared between terminal and GUI loops.
@@ -107,6 +112,40 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     mae_core::conversation::ToolCallState::Running,
                 );
             }
+            // Intercept mcp_* external tool calls — dispatch async via client manager
+            if let Some(rest) = call.name.strip_prefix("mcp_") {
+                if let Some((server, tool)) = rest.split_once('_') {
+                    let mgr = ctx.mcp_client_mgr.clone();
+                    let server_name = server.to_string();
+                    let tool_name = tool.to_string();
+                    let call_id = call.id.clone();
+                    let call_name = call.name.clone();
+                    let arguments = call.arguments.clone();
+                    tokio::spawn(async move {
+                        let result = {
+                            let mgr = mgr.lock().await;
+                            mgr.call_tool(&server_name, &tool_name, arguments).await
+                        };
+                        let tool_result = match result {
+                            Ok(output) => mae_ai::ToolResult {
+                                tool_call_id: call_id,
+                                tool_name: call_name,
+                                success: true,
+                                output,
+                            },
+                            Err(e) => mae_ai::ToolResult {
+                                tool_call_id: call_id,
+                                tool_name: call_name,
+                                success: false,
+                                output: e,
+                            },
+                        };
+                        let _ = reply.send(tool_result);
+                    });
+                    return;
+                }
+            }
+
             let tool_start = std::time::Instant::now();
             let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
@@ -181,6 +220,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 };
                 editor.set_status(display);
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::ToolCallStarted { name } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -189,6 +230,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     mae_core::conversation::ToolCallState::Pending,
                 );
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::ToolCallFinished { success, output } => {
             if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -213,6 +256,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     }
                 }
             }
+            editor.sync_conversation_buffer_rope();
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
         }
         AiEvent::StreamChunk {
             text,
@@ -223,6 +268,16 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 find_buffer_by_name_or_default_mut(editor, target_buffer.as_deref())
             {
                 conv_buf.append_streaming_chunk(&text);
+            }
+            // Sync rope + scroll, but throttle to avoid per-chunk overhead.
+            editor.sync_conversation_buffer_rope();
+            let should_scroll = editor
+                .ai_last_output_scroll
+                .map(|t| t.elapsed() >= std::time::Duration::from_millis(50))
+                .unwrap_or(true);
+            if should_scroll {
+                crate::key_handling::conversation::scroll_output_to_bottom(editor);
+                editor.ai_last_output_scroll = Some(std::time::Instant::now());
             }
         }
         AiEvent::SessionComplete {
@@ -240,22 +295,17 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             }
             editor.sync_conversation_buffer_rope();
+            // Explicit scroll-to-bottom on session complete — the common epilogue
+            // also scrolls, but this ensures it happens before state restore.
+            crate::key_handling::conversation::scroll_output_to_bottom(editor);
             editor.ai_streaming = false;
             editor.input_lock = InputLock::None;
+            editor.ai_work_window_id = None;
+            editor.ai_last_output_scroll = None;
 
-            // Auto-restore editor state after self-test session.
-            if editor.self_test_active {
-                editor.self_test_active = false;
-                match editor.restore_state() {
-                    Ok(summary) => {
-                        info!(summary = %summary, "auto-restored editor state after self-test");
-                        editor.set_status(format!("[AI] Done — {}", summary));
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to auto-restore state after self-test");
-                        editor.set_status("[AI] Done (state restore failed)");
-                    }
-                }
+            // Auto-restore editor state and clean up sandbox after self-test session.
+            if editor.cleanup_self_test() {
+                editor.set_status("[AI] Done — state restored");
             } else {
                 editor.set_status("[AI] Done");
             }
@@ -271,6 +321,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             turn_tokens_in,
             turn_tokens_out,
             turn_cache_read,
+            latency_ms,
             ..
         } => {
             editor.ai_session_cost_usd = session_usd;
@@ -280,6 +331,10 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai_cache_creation_tokens = cache_creation_tokens;
             editor.ai_context_window = context_window;
             editor.ai_context_used_tokens = context_used_tokens;
+            // Network diagnostics
+            editor.ai_last_api_success = Some(std::time::Instant::now());
+            editor.ai_last_api_latency_ms = Some(latency_ms);
+            editor.ai_api_call_count += 1;
             // Attach per-turn usage to the last assistant entry.
             if turn_tokens_in > 0 || turn_tokens_out > 0 {
                 if let Some(conv) = find_conversation_buffer_mut(editor) {
@@ -393,6 +448,27 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ProposeChanges(reply));
         }
+        AiEvent::NetworkDiagnostic(result) => {
+            let status = if result.reachable {
+                format!(
+                    "[AI] Network OK \u{2014} {}ms to {}",
+                    result.latency_ms, result.endpoint
+                )
+            } else {
+                format!(
+                    "[AI] Network FAIL \u{2014} {}",
+                    result.error.as_deref().unwrap_or("unknown")
+                )
+            };
+            editor.set_status(&status);
+            editor.ai_last_network_check = Some(mae_core::editor::AiNetworkCheck {
+                endpoint: result.endpoint,
+                reachable: result.reachable,
+                http_status: result.http_status,
+                latency_ms: result.latency_ms,
+                error: result.error,
+            });
+        }
         AiEvent::Delegate {
             profile,
             objective,
@@ -437,10 +513,42 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 _ => Box::new(mae_ai::ClaudeProvider::new(config.clone())),
             };
 
-            let tools = {
+            // Scope verifier tools: read-only + shell, no write/create/modify.
+            let all_tools = {
                 let mut t = mae_ai::tools_from_registry(&editor.commands);
                 t.extend(mae_ai::ai_specific_tools(&editor.option_registry));
                 t
+            };
+            let tools = if profile == "verifier" {
+                all_tools
+                    .into_iter()
+                    .filter(|t| {
+                        matches!(
+                            t.name.as_str(),
+                            "buffer_read"
+                                | "project_search"
+                                | "project_files"
+                                | "project_info"
+                                | "run_test"
+                                | "run_build"
+                                | "shell_exec"
+                                | "cursor_info"
+                                | "editor_state"
+                                | "list_buffers"
+                                | "kb_search"
+                                | "kb_get"
+                                | "introspect"
+                                | "lsp_diagnostics"
+                                | "open_file"
+                                | "file_read"
+                                | "read_messages"
+                                | "model_exam"
+                                | "self_test_suite"
+                        ) || t.name.starts_with("command_")
+                    })
+                    .collect()
+            } else {
+                all_tools
             };
 
             let effective_tier = {
@@ -530,6 +638,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
         }
         AiEvent::Error(msg, transcript_path) => {
             error!(error = %msg, "AI error event");
+            editor.ai_last_api_error = Some(msg.clone());
             if let Some(conv_buf) = find_conversation_buffer_mut(editor) {
                 conv_buf.push_system(format!("Error: {}", msg));
                 if let Some(ref path) = transcript_path {

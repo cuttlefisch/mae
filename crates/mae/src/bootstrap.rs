@@ -376,6 +376,19 @@ pub fn setup_ai(
         let budget = config.budget.clone();
         let config_ai = &file_config.ai;
         info!(provider = %provider_name, model = %model, "initializing AI provider");
+
+        // Warn about untested models so users know tool calling may be unreliable
+        let limits = mae_ai::context_limits::lookup(&model);
+        match limits.verification {
+            mae_ai::ModelVerification::Untested => {
+                tracing::warn!(model = %model, "model has not been tested with MAE — tool calling may be unreliable");
+            }
+            mae_ai::ModelVerification::Testing => {
+                info!(model = %model, "model is in testing — report issues at github.com/cuttlefisch/mae");
+            }
+            mae_ai::ModelVerification::Verified => {}
+        }
+
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
             "gemini" => Box::new(GeminiProvider::new(config)),
@@ -385,6 +398,7 @@ pub fn setup_ai(
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
             t.extend(ai_specific_tools(&editor.option_registry));
+            t.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
             t
         };
 
@@ -395,7 +409,12 @@ pub fn setup_ai(
             .unwrap_or_else(|| mae_ai::context_limits::tier(&model));
         info!(tier = effective_tier.as_str(), "selected prompt tier");
 
-        let mut prompt = build_system_prompt("pair-programmer", effective_tier);
+        let mut prompt = build_system_prompt_with_model(
+            "pair-programmer",
+            effective_tier,
+            &editor.active_modules,
+            &model,
+        );
 
         // Inject provider-specific hints for non-Claude models
         let provider_hint = mae_ai::context_limits::ProviderHint::from_model(&model);
@@ -435,7 +454,212 @@ pub fn load_ai_config(editor: &Editor) -> Option<ProviderConfig> {
     crate::config::resolve_ai_config_with_scheme(&file, &scheme)
 }
 
+/// Load memory context from `.mae/memory/*.txt` files.
+///
+/// Returns a formatted block suitable for injection into system prompts.
+/// Files are sorted by name (newest first, since names contain timestamps),
+/// and the total is capped at 8000 chars to stay within ~2K tokens.
+pub fn load_memory_context(project_root: &std::path::Path) -> Option<String> {
+    let memory_dir = project_root.join(".mae/memory");
+    if !memory_dir.exists() {
+        return None;
+    }
+    let entries = std::fs::read_dir(&memory_dir).ok()?;
+    let mut files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    // Sort by filename descending (newest timestamp first)
+    files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+
+    let mut block = String::from("## Long-term Memory\n");
+    let cap = 8000;
+    for entry in &files {
+        if block.len() >= cap {
+            break;
+        }
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                let line = format!("- {}\n", trimmed);
+                block.push_str(&line);
+            }
+        }
+    }
+    if block.len() > cap {
+        block.truncate(cap);
+        block.push_str("\n...[truncated]\n");
+    }
+    Some(block)
+}
+
+/// Synthesize memory context from `.mae/memory/*.txt` files with
+/// model-aware formatting and budget.
+///
+/// Facts are categorized, deduplicated (newer wins), and truncated to
+/// `budget_chars`. Format adapts to model tier and provider:
+/// - Compact/DeepSeek/Local/Qwen → numbered lists per category
+/// - Full + Claude/OpenAI/Gemini → grouped sections with headers
+pub fn synthesize_memory(
+    project_root: &std::path::Path,
+    tier: mae_ai::context_limits::ModelTier,
+    provider: mae_ai::context_limits::ProviderHint,
+    budget_chars: usize,
+) -> Option<String> {
+    let memory_dir = project_root.join(".mae/memory");
+    if !memory_dir.exists() {
+        return None;
+    }
+    let entries = std::fs::read_dir(&memory_dir).ok()?;
+    let mut files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    // Sort by filename descending (newest timestamp first — for dedup priority)
+    files.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+
+    // Collect facts
+    let mut facts: Vec<String> = Vec::new();
+    for entry in &files {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                facts.push(trimmed.to_string());
+            }
+        }
+    }
+    if facts.is_empty() {
+        return None;
+    }
+
+    // Categorize by keyword matching
+    let mut conventions = Vec::new();
+    let mut architecture = Vec::new();
+    let mut bugs = Vec::new();
+    let mut decisions = Vec::new();
+    let mut other = Vec::new();
+
+    for fact in &facts {
+        let lower = fact.to_ascii_lowercase();
+        if lower.contains("always")
+            || lower.contains("never")
+            || lower.contains("prefer")
+            || lower.contains("convention")
+            || lower.contains("style")
+            || lower.contains("rule")
+            || lower.contains("don't")
+        {
+            conventions.push(fact.as_str());
+        } else if lower.contains("crate")
+            || lower.contains("module")
+            || lower.contains("struct")
+            || lower.contains("trait")
+            || lower.contains("pattern")
+            || lower.contains("design")
+            || lower.contains("directory")
+        {
+            architecture.push(fact.as_str());
+        } else if lower.contains("bug")
+            || lower.contains("fix")
+            || lower.contains("workaround")
+            || lower.contains("broken")
+            || lower.contains("issue")
+            || lower.contains("error")
+            || lower.contains("crash")
+        {
+            bugs.push(fact.as_str());
+        } else if lower.contains("decided")
+            || lower.contains("chose")
+            || lower.contains("because")
+            || lower.contains("rationale")
+            || lower.contains("tradeoff")
+            || lower.contains("instead")
+        {
+            decisions.push(fact.as_str());
+        } else {
+            other.push(fact.as_str());
+        }
+    }
+
+    // Priority order: conventions > architecture > bugs > decisions > other
+    let categories: Vec<(&str, &[&str])> = vec![
+        ("Conventions", &conventions),
+        ("Architecture", &architecture),
+        ("Bugs & Fixes", &bugs),
+        ("Decisions", &decisions),
+        ("Other", &other),
+    ];
+
+    // Choose format based on tier + provider
+    let use_numbered = tier == mae_ai::context_limits::ModelTier::Compact
+        || matches!(
+            provider,
+            mae_ai::context_limits::ProviderHint::DeepSeek
+                | mae_ai::context_limits::ProviderHint::Local
+                | mae_ai::context_limits::ProviderHint::Qwen
+        );
+
+    let mut block = String::from("## Project Memory\n");
+    let mut counter = 1;
+
+    for (label, items) in &categories {
+        if items.is_empty() {
+            continue;
+        }
+        if block.len() >= budget_chars {
+            break;
+        }
+        if use_numbered {
+            // Numbered list per category
+            block.push_str(&format!("### {}\n", label));
+            for item in *items {
+                let line = format!("{}. {}\n", counter, item);
+                if block.len() + line.len() > budget_chars {
+                    break;
+                }
+                block.push_str(&line);
+                counter += 1;
+            }
+        } else {
+            // Grouped sections with brief headers
+            block.push_str(&format!("### {}\n", label));
+            for item in *items {
+                let line = format!("- {}\n", item);
+                if block.len() + line.len() > budget_chars {
+                    break;
+                }
+                block.push_str(&line);
+            }
+        }
+    }
+
+    Some(block)
+}
+
 pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTier) -> String {
+    build_system_prompt_with_modules(profile, tier, &[])
+}
+
+pub fn build_system_prompt_with_modules(
+    profile: &str,
+    tier: mae_ai::context_limits::ModelTier,
+    modules: &[mae_core::editor::ModuleInfo],
+) -> String {
+    build_system_prompt_with_model(profile, tier, modules, "")
+}
+
+pub fn build_system_prompt_with_model(
+    profile: &str,
+    tier: mae_ai::context_limits::ModelTier,
+    modules: &[mae_core::editor::ModuleInfo],
+    model: &str,
+) -> String {
     let mut prompt = String::new();
 
     // 1. Load the profile-specific base from prioritized locations:
@@ -489,8 +713,11 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
             ("explorer", true) => include_str!("prompts/explorer-compact.xml").to_string(),
             ("reviewer", true) => include_str!("prompts/reviewer-compact.xml").to_string(),
             ("explorer", false) => include_str!("prompts/explorer.xml").to_string(),
-            ("planner", _) => include_str!("prompts/planner.xml").to_string(),
+            ("planner", true) => include_str!("prompts/planner-compact.xml").to_string(),
+            ("planner", false) => include_str!("prompts/planner.xml").to_string(),
             ("reviewer", false) => include_str!("prompts/reviewer.xml").to_string(),
+            ("verifier", true) => include_str!("prompts/verifier-compact.xml").to_string(),
+            ("verifier", false) => include_str!("prompts/verifier.xml").to_string(),
             _ => include_str!("prompts/pair-programmer.xml").to_string(),
         }
     });
@@ -535,16 +762,18 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
         }
 
         // Add memory context from .mae/memory/*.txt
-        let memory_dir = cwd.join(".mae/memory");
-        if memory_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(memory_dir) {
-                prompt.push_str("\n## Long-term Memory\n");
-                for entry in entries.flatten() {
-                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                        prompt.push_str(&format!("- {}\n", content.trim()));
-                    }
-                }
+        // When model is known, use synthesized format with budget; otherwise raw injection.
+        if !model.is_empty() {
+            let limits = mae_ai::context_limits::lookup(model);
+            let provider = mae_ai::context_limits::ProviderHint::from_model(model);
+            if let Some(mem) = synthesize_memory(&cwd, tier, provider, limits.memory_budget_chars())
+            {
+                prompt.push('\n');
+                prompt.push_str(&mem);
             }
+        } else if let Some(memory_block) = load_memory_context(&cwd) {
+            prompt.push('\n');
+            prompt.push_str(&memory_block);
         }
 
         // Add active plans from .mae/plans/*.md
@@ -578,22 +807,38 @@ pub fn build_system_prompt(profile: &str, tier: mae_ai::context_limits::ModelTie
                 }
             }
         }
+        // Inject module context if any are loaded
+        if !modules.is_empty() {
+            prompt.push_str("\n## Modules\n");
+            prompt
+                .push_str("MAE has a Doom-style module system. Use `list_modules` for details.\n");
+            let names: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
+            prompt.push_str(&format!("Active: {}\n", names.join(", ")));
+            prompt.push_str("KB docs: `kb_search \"module:\"` or `kb_get \"module:<name>\"`\n");
+        }
+
         prompt.push_str("</context>\n");
     }
 
     prompt
 }
 
-/// Load init.scm files in layers: user → project.
-/// Each layer is independent — errors in one don't block others.
+/// Load init files, discover/load modules, then load config.scm.
 ///
-/// Loading order:
-/// 1. `~/.config/mae/init.scm` (user config)
-/// 2. `$PROJECT_ROOT/.mae/init.scm` (project-local, if cwd has .mae/)
+/// This implements the three-file loading model:
+///   1. init.scm (module declarations) — user → project
+///   2. Module autoloads (topo-sorted, before user config)
+///   3. config.scm (user customization, overrides module defaults)
 ///
-/// Legacy fallbacks: `init.scm` and `scheme/init.scm` in cwd (for v0.6 compat).
-pub fn load_init_file(scheme: &mut SchemeRuntime, editor: &mut Editor) {
+/// Returns the ModuleRegistry for the caller to store.
+pub fn load_init_file(
+    scheme: &mut SchemeRuntime,
+    editor: &mut Editor,
+) -> crate::pkg::loader::ModuleRegistry {
     load_init_files(scheme, editor);
+    let registry = load_modules(scheme, editor);
+    load_config_scm(scheme, editor);
+    registry
 }
 
 /// Layered init loading — returns the number of files loaded.
@@ -684,6 +929,315 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
     loaded
 }
 
+/// Discover, resolve, and load module autoloads.
+///
+/// Module loading happens between init.scm and config.scm:
+///   1. Discover modules in built-in `modules/` dir and user `~/.config/mae/packages/`
+///   2. Resolve dependencies (topological sort)
+///   3. Load each module's autoloads.scm (registers commands, keys, options, hooks)
+///   4. config.scm runs AFTER this, so users can override any module setting
+///
+/// Returns the populated ModuleRegistry.
+pub fn load_modules(
+    scheme: &mut SchemeRuntime,
+    editor: &mut Editor,
+) -> crate::pkg::loader::ModuleRegistry {
+    use crate::pkg::{
+        loader::{load_module_autoloads, ModuleRegistry},
+        manifest::discover_modules,
+        resolver::resolve_load_order,
+    };
+
+    let mut all_modules = Vec::new();
+
+    // Built-in modules — search multiple locations so both dev builds
+    // (run from repo root) and installed binaries work.
+    let mut builtin_dirs = vec![
+        // 1. CWD/modules (dev: `cargo run` from repo root)
+        PathBuf::from("modules"),
+        // 2. Next to the executable (installed: ~/.local/bin/../share/mae/modules)
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("modules")))
+            .unwrap_or_default(),
+    ];
+    // 3. XDG data dir: ~/.local/share/mae/modules (installed modules)
+    if let Some(data) = dirs_candidate("mae/modules") {
+        builtin_dirs.push(data);
+    }
+    // 4. Compile-time CARGO_MANIFEST_DIR (dev builds only)
+    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("modules"))
+        .unwrap_or_default();
+    builtin_dirs.push(manifest_modules);
+    for dir in &builtin_dirs {
+        if dir.exists() && all_modules.is_empty() {
+            all_modules.extend(discover_modules(dir));
+        }
+    }
+
+    // User-installed modules
+    if let Some(user_pkg) = dirs_candidate("mae/packages") {
+        if user_pkg.exists() {
+            all_modules.extend(discover_modules(&user_pkg));
+        }
+    }
+
+    if all_modules.is_empty() {
+        debug!("no modules discovered");
+        return ModuleRegistry::new();
+    }
+
+    // Use declared modules from (mae! ...) if present; otherwise enable all.
+    let declared = scheme.declared_modules();
+    let enabled: HashMap<String, Vec<String>> = if declared.is_empty() {
+        // No mae! block — enable all discovered modules (backward compat).
+        all_modules
+            .iter()
+            .map(|(_, m)| (m.name().to_string(), vec![]))
+            .collect()
+    } else {
+        declared
+    };
+
+    let resolved = match resolve_load_order(&all_modules, &enabled) {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "module resolution failed");
+            editor.set_status(format!("Module error: {}", e));
+            return ModuleRegistry::new();
+        }
+    };
+
+    let mut registry = ModuleRegistry::new();
+    registry.register_resolved(&resolved);
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    for module in &resolved {
+        // F2: Enforce version constraints at load time
+        if let Err(e) = module.manifest.check_mae_version(current_version) {
+            registry.mark_failed(&module.name, e.clone());
+            error!(module = %module.name, error = %e, "module version constraint failed");
+            editor.set_status(format!("Module '{}' skipped: {}", module.name, e));
+            continue;
+        }
+
+        // A5: Snapshot keymaps before module eval for conflict detection
+        let pre_snapshot = mae_core::keymap::snapshot_all_keymaps(&editor.keymaps);
+
+        match load_module_autoloads(module, scheme, editor) {
+            Ok(()) => {
+                registry.mark_loaded(&module.name);
+                info!(module = %module.name, "module loaded");
+
+                // Detect keybinding conflicts introduced by this module
+                let post_snapshot = mae_core::keymap::snapshot_all_keymaps(&editor.keymaps);
+                for ((km_name, seq), new_cmd) in &post_snapshot {
+                    if let Some(old_cmd) = pre_snapshot.get(&(km_name.clone(), seq.clone())) {
+                        if old_cmd != new_cmd {
+                            let key_str = mae_core::keymap::format_key_seq(seq);
+                            let warning = format!(
+                                "[module: {}] overrides '{}' in keymap '{}' (was: {}, now: {})",
+                                module.name, key_str, km_name, old_cmd, new_cmd
+                            );
+                            info!("{}", warning);
+                            editor.message_log.push(
+                                mae_core::messages::MessageLevel::Warn,
+                                "modules",
+                                &warning,
+                            );
+                            editor.module_binding_warnings.push(warning);
+                        }
+                    }
+                }
+
+                // Fire module-loaded hook
+                editor.fire_hook(&format!("module-loaded:{}", module.name));
+            }
+            Err(e) => {
+                registry.mark_failed(&module.name, e.clone());
+                error!(module = %module.name, error = %e, "module load failed");
+                editor.set_status(format!("Module '{}' failed: {}", module.name, e));
+                // Continue loading other modules — error isolation
+            }
+        }
+    }
+
+    // Populate editor's active_modules for :describe-module, list_modules, audit
+    editor.active_modules = registry
+        .list()
+        .iter()
+        .map(|m| {
+            let status = match &m.status {
+                crate::pkg::loader::ModuleStatus::Loaded => "loaded".to_string(),
+                crate::pkg::loader::ModuleStatus::Failed(e) => format!("failed: {}", e),
+                crate::pkg::loader::ModuleStatus::Disabled => "disabled".to_string(),
+                crate::pkg::loader::ModuleStatus::Discovered => "discovered".to_string(),
+            };
+            mae_core::editor::ModuleInfo {
+                name: m.name.clone(),
+                version: m.version.clone(),
+                status,
+                category: m.manifest.module.category.clone(),
+                description: m.manifest.module.description.clone(),
+                commands: m.commands.clone(),
+                options: m.options.clone(),
+                flags: m
+                    .manifest
+                    .flags
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.doc.clone()))
+                    .collect(),
+                path: m.path.display().to_string(),
+                depends: m.manifest.dependencies.keys().cloned().collect(),
+                enabled_flags: m.enabled_flags.clone(),
+            }
+        })
+        .collect();
+
+    // Generate module:* KB nodes from loaded module data
+    {
+        use mae_core::kb_seed::modules::{install_module_nodes, ModuleKbData};
+        let module_data: Vec<ModuleKbData> = registry
+            .list()
+            .iter()
+            .map(|m| ModuleKbData {
+                name: m.name.clone(),
+                version: m.version.clone(),
+                category: m.manifest.module.category.clone(),
+                description: m.manifest.module.description.clone(),
+                status: match &m.status {
+                    crate::pkg::loader::ModuleStatus::Loaded => "loaded".to_string(),
+                    crate::pkg::loader::ModuleStatus::Failed(e) => format!("failed: {}", e),
+                    crate::pkg::loader::ModuleStatus::Disabled => "disabled".to_string(),
+                    crate::pkg::loader::ModuleStatus::Discovered => "discovered".to_string(),
+                },
+                flags: m
+                    .manifest
+                    .flags
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.doc.clone()))
+                    .collect(),
+                commands: m.commands.clone(),
+                options: m.options.clone(),
+                path: m.path.display().to_string(),
+            })
+            .collect();
+        install_module_nodes(&mut editor.kb, &module_data);
+    }
+
+    // Also drain any KB nodes registered from Scheme during module autoloads
+    for (id, title, body) in scheme.drain_kb_nodes() {
+        let node = mae_core::KbNode::new(id, title, mae_core::KbNodeKind::Note, body)
+            .with_tags(["scheme"]);
+        editor.kb.insert(node);
+    }
+
+    let loaded_count = resolved
+        .iter()
+        .filter(|m| registry.is_loaded(&m.name))
+        .count();
+    if loaded_count > 0 {
+        info!(
+            count = loaded_count,
+            total = resolved.len(),
+            "modules loaded"
+        );
+    }
+
+    registry
+}
+
+/// Reload a single module's autoloads.scm.
+///
+/// Scans discovered modules for the named one, re-evaluates its autoloads,
+/// and applies the result to the editor. This is a hot-reload path for
+/// module development — no restart needed.
+pub fn reload_module(name: &str, scheme: &mut SchemeRuntime, editor: &mut Editor) {
+    use crate::pkg::loader::load_module_autoloads;
+    use crate::pkg::manifest::discover_modules;
+    use crate::pkg::resolver::ResolvedModule;
+
+    // Find the module in known locations
+    let mut found = None;
+    let manifest_modules = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|repo| repo.join("modules"))
+        .unwrap_or_default();
+    let search_dirs = [
+        std::path::PathBuf::from("modules"),
+        dirs_candidate("mae/modules").unwrap_or_default(),
+        dirs_candidate("mae/packages").unwrap_or_default(),
+        manifest_modules,
+    ];
+    for dir in &search_dirs {
+        if !dir.exists() {
+            continue;
+        }
+        for (path, manifest) in discover_modules(dir) {
+            if manifest.name() == name {
+                found = Some((path, manifest));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+
+    let Some((path, manifest)) = found else {
+        editor.set_status(format!("Module '{}' not found", name));
+        return;
+    };
+
+    let resolved = ResolvedModule {
+        name: name.to_string(),
+        path,
+        manifest,
+        enabled_flags: vec![],
+    };
+
+    match load_module_autoloads(&resolved, scheme, editor) {
+        Ok(()) => {
+            info!(module = %name, "module reloaded");
+            editor.set_status(format!("Module '{}' reloaded", name));
+            editor.fire_hook(&format!("module-loaded:{}", name));
+        }
+        Err(e) => {
+            error!(module = %name, error = %e, "module reload failed");
+            editor.set_status(format!("Module '{}' reload failed: {}", name, e));
+        }
+    }
+}
+
+/// Load user config.scm — runs AFTER module autoloads so users can override.
+///
+/// This is the second half of the three-file model:
+///   init.scm → module autoloads → config.scm
+pub fn load_config_scm(scheme: &mut SchemeRuntime, editor: &mut Editor) -> bool {
+    if let Some(config_scm) = dirs_candidate("mae/config.scm") {
+        if config_scm.exists() {
+            info!(path = %config_scm.display(), "loading config.scm");
+            scheme.inject_editor_state(editor);
+            match scheme.load_file(&config_scm) {
+                Ok(()) => {
+                    scheme.apply_to_editor(editor);
+                    info!("config.scm loaded");
+                    return true;
+                }
+                Err(e) => {
+                    error!(error = %e, "config.scm load failed");
+                    editor.set_status(format!("Error in config.scm: {}", e));
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Find the first conversation buffer's Conversation, if any.
 /// Thin forwarder to `Editor::conversation_mut`; kept as a free function
 /// because `main.rs` uses it ergonomically alongside other `bootstrap::`
@@ -737,9 +1291,15 @@ pub fn setup_lsp(
     let mut server_info: HashMap<String, mae_core::LspServerInfo> = HashMap::new();
 
     // Phase 1: Populate from defaults, overridden by config.toml, overridden by env vars.
+    // Only include servers whose binary is actually on PATH — avoids spawning
+    // unnecessary processes for languages not used in the current project.
     for &(lang, env_var, default_cmd, default_args) in defaults {
         let (command, args) = resolve_lsp_config(lang, env_var, default_cmd, default_args, config);
         let binary_found = find_binary(&command);
+        if !binary_found {
+            info!(lang, command, "LSP server binary not found, skipping");
+            continue;
+        }
         server_info.insert(
             lang.to_string(),
             mae_core::LspServerInfo {
@@ -773,6 +1333,10 @@ pub fn setup_lsp(
             config,
         );
         let binary_found = find_binary(&command);
+        if !binary_found {
+            info!(lang, command, "LSP server binary not found, skipping");
+            continue;
+        }
         server_info.insert(
             lang.to_string(),
             mae_core::LspServerInfo {
@@ -918,5 +1482,152 @@ mod tests {
         let count = load_init_files(&mut scheme, &mut editor);
         // Count depends on whether user has an init.scm, so just verify no panic
         let _ = count;
+    }
+
+    #[test]
+    fn load_memory_context_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        assert!(load_memory_context(dir.path()).is_none());
+    }
+
+    #[test]
+    fn load_memory_context_sorted_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_old.txt"), "old fact").unwrap();
+        std::fs::write(mem_dir.join("2000_new.txt"), "new fact").unwrap();
+        let result = load_memory_context(dir.path()).unwrap();
+        assert!(result.starts_with("## Long-term Memory\n"));
+        let new_pos = result.find("new fact").unwrap();
+        let old_pos = result.find("old fact").unwrap();
+        assert!(new_pos < old_pos, "newer entries should come first");
+    }
+
+    // --- synthesize_memory tests ---
+
+    #[test]
+    fn synthesize_memory_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn synthesize_memory_small_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use snake_case").unwrap();
+        std::fs::write(mem_dir.join("2000_fact.txt"), "the crate uses ropey").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        assert!(result.contains("## Project Memory"));
+        assert!(result.contains("always use snake_case"));
+        assert!(result.contains("the crate uses ropey"));
+    }
+
+    #[test]
+    fn synthesize_memory_exceeds_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        for i in 0..50 {
+            let content = format!("always follow convention rule {}", i);
+            std::fs::write(mem_dir.join(format!("{:04}_fact.txt", i)), content).unwrap();
+        }
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            200, // tiny budget
+        )
+        .unwrap();
+        assert!(result.len() <= 250); // budget + header
+    }
+
+    #[test]
+    fn synthesize_memory_compact_numbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use bun").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Compact,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        // Compact tier → numbered list
+        assert!(result.contains("1. always use bun"));
+    }
+
+    #[test]
+    fn synthesize_memory_deepseek_forces_numbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_fact.txt"), "always use bun").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full, // Full tier, but DeepSeek → numbered
+            mae_ai::context_limits::ProviderHint::DeepSeek,
+            4000,
+        )
+        .unwrap();
+        assert!(result.contains("1. always use bun"));
+    }
+
+    #[test]
+    fn synthesize_memory_categories_ordered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("1000_a.txt"), "bug: crash on startup").unwrap();
+        std::fs::write(mem_dir.join("2000_b.txt"), "always use tabs").unwrap();
+        let result = synthesize_memory(
+            dir.path(),
+            mae_ai::context_limits::ModelTier::Full,
+            mae_ai::context_limits::ProviderHint::Claude,
+            4000,
+        )
+        .unwrap();
+        // Conventions should appear before bugs
+        let conv_pos = result.find("always use tabs").unwrap();
+        let bug_pos = result.find("crash on startup").unwrap();
+        assert!(
+            conv_pos < bug_pos,
+            "conventions should appear before bugs: conv={}, bug={}",
+            conv_pos,
+            bug_pos
+        );
+    }
+
+    #[test]
+    fn load_memory_context_cap_enforcement() {
+        let dir = tempfile::tempdir().unwrap();
+        let mem_dir = dir.path().join(".mae/memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        // Write enough files to exceed 8000 chars
+        for i in 0..100 {
+            let content = format!("fact number {} with padding {}", i, "x".repeat(100));
+            std::fs::write(mem_dir.join(format!("{:04}_entry.txt", i)), content).unwrap();
+        }
+        let result = load_memory_context(dir.path()).unwrap();
+        // Should be capped near 8000 + truncation message
+        assert!(result.len() < 8100);
     }
 }

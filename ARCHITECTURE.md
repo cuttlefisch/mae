@@ -1,7 +1,7 @@
 # Architecture Guide
 
 This document is for AI agents and contributors modifying MAE internals.
-For user-facing docs, see README.org. For build instructions, see CLAUDE.md.
+For user-facing docs, see README.md. For build instructions, see CLAUDE.md.
 
 ## Crate Layout
 

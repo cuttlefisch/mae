@@ -175,7 +175,7 @@ impl Editor {
                 let killed = to_remove.len();
                 for &i in to_remove.iter().rev() {
                     self.buffers.remove(i);
-                    self.adjust_ai_target_after_remove(i);
+                    self.notify_buffer_removed(i);
                 }
                 let buf_count = self.buffers.len();
                 for win in self.window_mgr.iter_windows_mut() {
@@ -196,12 +196,14 @@ impl Editor {
             "revert-buffer" => {
                 let idx = self.active_buffer_idx();
                 if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    self.fire_hook("before-revert");
                     match Buffer::from_file(&path) {
                         Ok(buf) => {
                             let name = buf.name.clone();
                             self.buffers[idx] = buf;
                             self.window_mgr.focused_window_mut().cursor_row = 0;
                             self.window_mgr.focused_window_mut().cursor_col = 0;
+                            self.fire_hook("after-revert");
                             self.set_status(format!("Reverted: {}", name));
                         }
                         Err(e) => self.set_status(format!("Revert failed: {}", e)),

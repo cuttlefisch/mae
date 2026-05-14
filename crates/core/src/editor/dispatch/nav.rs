@@ -1,3 +1,9 @@
+// @ai-caution: [rendering] Nav dispatch does NOT call mark_full_redraw() —
+// cursor movements stay CursorOnly redraw level. Adding mark_full_redraw()
+// here regresses render perf 10x on large files. Scroll commands call
+// mark_scrolled() instead. Only add mark_full_redraw() for commands that
+// actually change buffer content.
+
 //! Navigation: cursor movement, scrolling, jumps, search, marks.
 
 use super::super::Editor;

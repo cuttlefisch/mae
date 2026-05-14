@@ -58,7 +58,7 @@ print(list(fibonacci(10)))
 - Regular list item
 - *Bold list item* with =code=
 - Item with /italic/ emphasis
-- Item with a [[https://example.com][link]] inside
+- Item with a [[https://github.com/cuttlefisch/mae][link]] inside
   + Nested sub-item
   + Another sub-item
 
@@ -152,5 +152,5 @@ Deadline: [2026-05-15 Thu]
 ** Everything Together
 
 This paragraph has *bold*, /italic/, =code=, ~verbatim~, +strikethrough+, and a
-[[https://example.com][concealed link]] all in one place. The heading above
+[[https://github.com/cuttlefisch/mae][concealed link]] all in one place. The heading above
 should have extra top padding, and code blocks should have a tinted background.

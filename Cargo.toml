@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/babel",
+    "crates/export",
     "crates/core",
     "crates/renderer",
     "crates/gui",
@@ -11,7 +13,11 @@ members = [
     "crates/mae",
     "crates/shell",
     "crates/mcp",
-    "test_fixtures",
+    "crates/snippets",
+    "crates/format",
+    "crates/make",
+    "crates/lookup",
+    "crates/spell",
 ]
 exclude = ["tools/code-map"]
 resolver = "2"

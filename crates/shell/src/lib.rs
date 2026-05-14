@@ -1,5 +1,8 @@
 //! Terminal emulator for MAE, wrapping `alacritty_terminal`.
 //!
+//! @stability: stable
+//! @since: 0.6.0
+//!
 //! This crate provides a `ShellTerminal` type that embeds a full VT100/VT500
 //! terminal emulator backed by alacritty_terminal. It manages PTY lifecycle,
 //! input/output, and exposes grid state for rendering.

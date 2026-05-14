@@ -1,3 +1,8 @@
+//! mae-renderer: Display rendering — Renderer trait + terminal backend.
+//!
+//! @stability: stable
+//! @since: 0.1.0
+
 use std::io::{self, Stdout};
 
 use crossterm::{

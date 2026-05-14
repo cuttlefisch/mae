@@ -206,5 +206,622 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
 }
 
 // ---------------------------------------------------------------------------
+// shell-select-mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_select_mode_creates_temp_buffer() {
+    let mut editor = Editor::new();
+    // Create a shell buffer with viewport data.
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor.shell_viewports.insert(
+        shell_idx,
+        vec!["$ echo hello".into(), "hello".into(), "$ ".into()],
+    );
+
+    editor.dispatch_builtin("shell-select-mode");
+
+    // A *shell-select* buffer should now exist and be displayed.
+    let select_idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.name == "*shell-select*")
+        .expect("*shell-select* buffer should exist");
+    assert!(editor.buffers[select_idx].read_only);
+    // BufferKind should be ShellSelect with its own keymap.
+    assert_eq!(
+        editor.buffers[select_idx].kind,
+        crate::BufferKind::ShellSelect
+    );
+    // Content should be the joined viewport lines.
+    let text: String = editor.buffers[select_idx].rope().to_string();
+    assert!(text.contains("echo hello"));
+    assert!(text.contains("hello"));
+    // Cursor should be at the last line.
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(
+        win.cursor_row,
+        editor.buffers[select_idx]
+            .display_line_count()
+            .saturating_sub(1)
+    );
+}
+
+#[test]
+fn shell_select_non_shell_buffer_shows_error() {
+    let mut editor = Editor::new();
+    // Active buffer is [scratch] (Text), not a shell.
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.status_msg.contains("Not a shell buffer"));
+}
+
+#[test]
+fn shell_select_empty_shows_error() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    // No viewport data inserted → empty content.
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.status_msg.contains("No shell output to select"));
+}
+
+#[test]
+fn shell_select_mode_reuses_existing_buffer() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["first".into()]);
+
+    editor.dispatch_builtin("shell-select-mode");
+    let count_after_first = editor.buffers.len();
+
+    // Switch back to the shell buffer and run again with updated content.
+    editor.switch_to_buffer(shell_idx);
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["second".into()]);
+    editor.dispatch_builtin("shell-select-mode");
+
+    // Should reuse the buffer, not create another one.
+    assert_eq!(editor.buffers.len(), count_after_first);
+    let select_idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.name == "*shell-select*")
+        .unwrap();
+    let text: String = editor.buffers[select_idx].rope().to_string();
+    assert!(text.contains("second"));
+}
+
+// ---------------------------------------------------------------------------
+// close-shell-select
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_select_q_closes_and_returns() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    let shell_idx = editor.active_buffer_idx();
+    editor
+        .shell_viewports
+        .insert(shell_idx, vec!["output".into()]);
+
+    editor.dispatch_builtin("shell-select-mode");
+    assert!(editor.buffers.iter().any(|b| b.name == "*shell-select*"));
+
+    editor.dispatch_builtin("close-shell-select");
+    // Buffer should be removed.
+    assert!(!editor.buffers.iter().any(|b| b.name == "*shell-select*"));
+    // Focus should return to the shell buffer.
+    assert_eq!(editor.active_buffer().kind, crate::BufferKind::Shell);
+}
+
+#[test]
+fn shell_select_keymap_has_q_and_esc_bindings() {
+    use crate::keymap::{parse_key_seq, Key, KeyPress, LookupResult};
+    let editor = Editor::new();
+    let km = editor
+        .keymaps
+        .get("shell-select")
+        .expect("shell-select keymap must exist");
+    assert_eq!(
+        km.lookup(&parse_key_seq("q")),
+        LookupResult::Exact("close-shell-select")
+    );
+    assert_eq!(
+        km.lookup(&[KeyPress::special(Key::Escape)]),
+        LookupResult::Exact("close-shell-select")
+    );
+    assert_eq!(
+        km.lookup(&parse_key_seq("?")),
+        LookupResult::Exact("show-buffer-keys")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// shell-normal keymap resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shell_buffer_normal_mode_uses_shell_normal_keymap() {
+    use crate::buffer_mode::BufferMode;
+    use crate::keymap::LookupResult;
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    editor.switch_to_buffer(1);
+    editor.mode = Mode::Normal;
+    // Resolve keymap for Shell buffer in Normal mode — should be "shell-normal".
+    let km_name = editor.active_buffer().kind.keymap_name();
+    assert_eq!(km_name, Some("shell-normal"));
+    let km = editor.keymaps.get("shell-normal").unwrap();
+    // `v` should map to shell-select-mode (not visual mode from parent).
+    assert_eq!(
+        km.lookup(&crate::keymap::parse_key_seq("v")),
+        LookupResult::Exact("shell-select-mode")
+    );
+    // `q` should map to enter-insert-mode (returns to ShellInsert).
+    assert_eq!(
+        km.lookup(&crate::keymap::parse_key_seq("q")),
+        LookupResult::Exact("enter-insert-mode")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Mouse handling (Phase 8 — Step 8)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// rekey_after_remove + notify_buffer_removed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rekey_after_remove() {
+    use crate::editor::rekey_after_remove;
+    let mut map = std::collections::HashMap::new();
+    map.insert(1, "a");
+    map.insert(3, "b");
+    map.insert(5, "c");
+    rekey_after_remove(&mut map, 3);
+    // key 3 removed, key 5 shifted to 4, key 1 unchanged
+    assert_eq!(map.get(&1), Some(&"a"));
+    assert!(!map.contains_key(&3));
+    assert_eq!(map.get(&4), Some(&"c"));
+    assert!(!map.contains_key(&5));
+    assert_eq!(map.len(), 2);
+}
+
+#[test]
+fn test_rekey_at_zero() {
+    use crate::editor::rekey_after_remove;
+    let mut map = std::collections::HashMap::new();
+    map.insert(0, "x");
+    map.insert(1, "y");
+    map.insert(2, "z");
+    rekey_after_remove(&mut map, 0);
+    // key 0 ("x") removed, key 1 ("y") shifted to 0, key 2 ("z") shifted to 1
+    assert_eq!(map.get(&0), Some(&"y"));
+    assert_eq!(map.get(&1), Some(&"z"));
+    assert!(!map.contains_key(&2));
+    assert_eq!(map.len(), 2);
+}
+
+#[test]
+fn test_notify_buffer_removed_viewports() {
+    let mut editor = Editor::new();
+    // Set up 3 buffers
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    editor.shell_viewports.insert(0, vec!["a".into()]);
+    editor.shell_viewports.insert(2, vec!["c".into()]);
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // Key 0 unchanged, key 2 shifted to 1
+    assert!(editor.shell_viewports.contains_key(&0));
+    assert_eq!(
+        editor.shell_viewports.get(&1).unwrap(),
+        &vec!["c".to_string()]
+    );
+    assert!(!editor.shell_viewports.contains_key(&2));
+}
+
+#[test]
+fn test_notify_buffer_removed_alternate() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    // alternate points to buffer 2
+    editor.alternate_buffer_idx = Some(2);
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // alternate should shift from 2 to 1
+    assert_eq!(editor.alternate_buffer_idx, Some(1));
+
+    // Now test clearing when alternate matches removed
+    editor.alternate_buffer_idx = Some(1);
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    assert_eq!(editor.alternate_buffer_idx, None);
+}
+
+#[test]
+fn test_notify_buffer_removed_saved_view_states() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    // Populate saved_view_states on the focused window
+    let win = editor.window_mgr.focused_window_mut();
+    win.saved_view_states.insert(
+        0,
+        crate::window::BufferViewState {
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_offset: 0,
+            col_offset: 0,
+        },
+    );
+    win.saved_view_states.insert(
+        2,
+        crate::window::BufferViewState {
+            cursor_row: 10,
+            cursor_col: 5,
+            scroll_offset: 3,
+            col_offset: 0,
+        },
+    );
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    let win = editor.window_mgr.focused_window();
+    assert!(win.saved_view_states.contains_key(&0));
+    assert!(win.saved_view_states.contains_key(&1)); // was key 2, shifted
+    assert!(!win.saved_view_states.contains_key(&2));
+    assert_eq!(win.saved_view_states.get(&1).unwrap().cursor_row, 10);
+}
+
+#[test]
+fn test_notify_buffer_removed_pending_queues() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.buffers.push(Buffer::new());
+    editor.pending_shell_spawns = vec![0, 1, 2];
+    editor.pending_shell_resets = vec![2];
+    editor.pending_agent_spawns = vec![(1, "cmd".into()), (2, "cmd2".into())];
+    // Remove buffer 1
+    editor.buffers.remove(1);
+    editor.notify_buffer_removed(1);
+    // idx 1 dropped, idx 2 shifted to 1
+    assert_eq!(editor.pending_shell_spawns, vec![0, 1]);
+    assert_eq!(editor.pending_shell_resets, vec![1]);
+    assert_eq!(editor.pending_agent_spawns, vec![(1, "cmd2".into())]);
+    // pending_buffer_removals should have an entry
+    assert_eq!(editor.pending_buffer_removals, vec![1]);
+}
+
+// ---------------------------------------------------------------------------
+// Shell exit lifecycle & buffer readiness (Part 1 + Part 2 fixes)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn display_buffer_and_focus_syncs_shell_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    assert_eq!(editor.mode, Mode::Normal);
+    // display_buffer_and_focus should auto-sync to ShellInsert for a shell buffer.
+    editor.display_buffer_and_focus(1);
+    assert_eq!(editor.mode, Mode::ShellInsert);
+    // Switch back to text buffer — should revert to Normal.
+    editor.display_buffer_and_focus(0);
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn switch_to_buffer_syncs_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // switch_to_buffer should now auto-sync mode.
+    editor.switch_to_buffer(1);
+    assert_eq!(editor.mode, Mode::ShellInsert);
+    editor.switch_to_buffer(0);
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn window_move_saves_restores_mode() {
+    let mut editor = Editor::new();
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // Split and put shell in one window.
+    editor.dispatch_builtin("split-vertical");
+    editor.window_mgr.focused_window_mut().buffer_idx = 1;
+    editor.mode = Mode::ShellInsert;
+    editor.buffers[1].saved_mode = Some(Mode::ShellInsert);
+    // window-move should preserve mode state.
+    editor.dispatch_builtin("window-move-right");
+    assert_eq!(editor.mode, Mode::ShellInsert);
+}
+
+#[test]
+fn find_window_with_kind_excludes_conversation_pair() {
+    let mut editor = Editor::new();
+    // Buffer 0 = [scratch], buffer 1 = shell
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    // Split to get two windows.
+    editor.dispatch_builtin("split-vertical");
+    // Put shell in window 1 (the new window from split).
+    let new_win_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != 0)
+        .map(|w| w.id)
+        .unwrap();
+    editor.window_mgr.window_mut(new_win_id).unwrap().buffer_idx = 1;
+    // Without conversation_pair, find_window_with_kind should find the shell window.
+    assert!(editor
+        .find_window_with_kind(crate::BufferKind::Shell)
+        .is_some());
+    // Mark that window as part of conversation pair — should now be excluded.
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 0,
+        output_window_id: new_win_id,
+        input_window_id: new_win_id,
+    });
+    assert!(editor
+        .find_window_with_kind(crate::BufferKind::Shell)
+        .is_none());
+}
+
+#[test]
+fn revert_buffer_fires_hooks() {
+    use std::io::Write;
+    let mut editor = Editor::new();
+    // Register hooks.
+    editor.hooks.add("before-revert", "test-before-revert-fn");
+    editor.hooks.add("after-revert", "test-after-revert-fn");
+    // Create a temp file so revert has something to load.
+    let dir = std::env::temp_dir();
+    let path = dir.join("mae_test_revert_hooks.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "hello").unwrap();
+    }
+    // Open the file.
+    editor.buffers[0] = Buffer::from_file(&path).unwrap();
+    // Revert — hooks should fire (pending_hook_evals populated).
+    editor.dispatch_builtin("revert-buffer");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "before-revert" && f == "test-before-revert-fn"),
+        "before-revert hook should fire"
+    );
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "after-revert" && f == "test-after-revert-fn"),
+        "after-revert hook should fire"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn split_fires_window_split_hook() {
+    let mut editor = Editor::new();
+    editor.hooks.add("window-split", "test-split-fn");
+    editor.dispatch_builtin("split-vertical");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "window-split" && f == "test-split-fn"),
+        "window-split hook should fire"
+    );
+}
+
+#[test]
+fn close_window_fires_window_close_hook() {
+    let mut editor = Editor::new();
+    // Need at least 2 windows to close one.
+    editor.dispatch_builtin("split-vertical");
+    editor.pending_hook_evals.clear(); // clear split hook
+    editor.hooks.add("window-close", "test-close-fn");
+    editor.dispatch_builtin("close-window");
+    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    assert!(
+        evals
+            .iter()
+            .any(|(h, f)| h == "window-close" && f == "test-close-fn"),
+        "window-close hook should fire"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Window group integrity: agent shell vs conversation (Fixes 0-3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn switch_to_buffer_non_conv_sets_target_window_id() {
+    let mut editor = Editor::new();
+    // Add a second buffer (Text).
+    editor.buffers.push(Buffer::new());
+    // Split so we have two windows.
+    editor.dispatch_builtin("split-vertical");
+    assert_eq!(editor.window_mgr.window_count(), 2);
+    // Call switch_to_buffer_non_conversation for buffer 1.
+    let ok = editor.switch_to_buffer_non_conversation(1);
+    assert!(ok);
+    // ai_target_window_id must be set.
+    assert!(
+        editor.ai_target_window_id.is_some(),
+        "ai_target_window_id must be set by switch_to_buffer_non_conversation"
+    );
+    // The target window should show buffer 1.
+    let tw_id = editor.ai_target_window_id.unwrap();
+    let tw = editor.window_mgr.window(tw_id).unwrap();
+    assert_eq!(tw.buffer_idx, 1);
+}
+
+#[test]
+fn switch_to_buffer_non_conv_visible_sets_target_window() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.dispatch_builtin("split-vertical");
+    // Put buffer 1 in one of the windows.
+    let second_win_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != 0)
+        .map(|w| w.id)
+        .unwrap();
+    editor
+        .window_mgr
+        .window_mut(second_win_id)
+        .unwrap()
+        .buffer_idx = 1;
+    // Step 1 path: buffer already visible.
+    let ok = editor.switch_to_buffer_non_conversation(1);
+    assert!(ok);
+    assert_eq!(editor.ai_target_window_id, Some(second_win_id));
+}
+
+#[test]
+fn agent_shell_does_not_steal_conversation_output() {
+    let mut editor = Editor::new();
+    // Set up conversation pair: buffer 0 = output, buffer 1 = input.
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".to_string();
+    editor.buffers.push(input_buf);
+    // Split to create the conversation layout.
+    editor.dispatch_builtin("split-vertical");
+    let win_ids: Vec<_> = editor.window_mgr.iter_windows().map(|w| w.id).collect();
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: win_ids[0],
+        input_window_id: win_ids[1],
+    });
+    // Mark buffer 0 as conversation.
+    editor.buffers[0].kind = crate::BufferKind::Conversation;
+    // Now add an agent shell buffer.
+    let mut shell_buf = Buffer::new_shell("*agent-shell*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    // Try to display it. The steal path should be skipped for agent shells.
+    let result = editor.switch_to_buffer_non_conversation(shell_idx);
+    // Should succeed via split (or at least not steal the output window).
+    assert!(result);
+    // The conversation output window should NOT show the shell buffer.
+    let out_win = editor.window_mgr.window(win_ids[0]).unwrap();
+    assert_ne!(
+        out_win.buffer_idx, shell_idx,
+        "Agent shell must not steal the conversation output window"
+    );
+}
+
+#[test]
+fn display_buffer_and_focus_places_text_buffer() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    // display_buffer_and_focus for buffer 1, which is not in any window.
+    // AvoidConversation policy should place it in the focused window.
+    editor.display_buffer_and_focus(1);
+    assert_eq!(
+        editor.active_buffer_idx(),
+        1,
+        "Buffer should be visible after display_buffer_and_focus"
+    );
+}
+
+/// Reproduction test for the exact user scenario:
+/// Focus on *ai-input* → open agent shell → shell must NOT steal *AI* window.
+#[test]
+fn agent_shell_opens_beside_conversation_group() {
+    let mut editor = Editor::new();
+    // Buffer 0 = *AI* (Conversation output)
+    editor.buffers[0].name = "*AI*".to_string();
+    editor.buffers[0].kind = crate::BufferKind::Conversation;
+
+    // Buffer 1 = *ai-input* (Conversation input)
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".to_string();
+    input_buf.kind = crate::BufferKind::Conversation;
+    editor.buffers.push(input_buf);
+
+    // Create conversation layout: split horizontal, output on top, input below.
+    let area = editor.default_area();
+    let input_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Horizontal, 1, area)
+        .expect("split should succeed");
+    // Window 0 = *AI*, input_win_id = *ai-input*.
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: 0,
+        input_window_id: input_win_id,
+    });
+
+    // Simulate user's init.scm: dashboard_dismiss_on_split = true
+    editor.dashboard_dismiss_on_split = true;
+
+    // Focus the *ai-input* window (as the user had).
+    editor.window_mgr.set_focused(input_win_id);
+    assert_eq!(editor.active_buffer_idx(), 1);
+
+    // Buffer 2 = agent shell
+    let mut shell_buf = Buffer::new_shell("*AI:claude*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = 2;
+
+    // This is the code path triggered by `open-ai-agent` → `display_buffer_and_focus`.
+    editor.display_buffer_and_focus(shell_idx);
+
+    // Verify: 3 windows (conversation pair + new shell window).
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        3,
+        "Should have 3 windows: *AI* + *ai-input* + agent shell"
+    );
+
+    // Verify: *AI* output window still shows buffer 0 (not stolen).
+    let out_win = editor.window_mgr.window(0).unwrap();
+    assert_eq!(
+        out_win.buffer_idx, 0,
+        "*AI* output window must still show the conversation buffer"
+    );
+
+    // Verify: *ai-input* window still shows buffer 1.
+    let in_win = editor.window_mgr.window(input_win_id).unwrap();
+    assert_eq!(
+        in_win.buffer_idx, 1,
+        "*ai-input* window must still show the input buffer"
+    );
+
+    // Verify: agent shell is visible in a window.
+    let shell_win = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.buffer_idx == shell_idx);
+    assert!(
+        shell_win.is_some(),
+        "Agent shell must be visible in its own window"
+    );
+}

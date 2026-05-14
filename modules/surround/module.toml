@@ -1,0 +1,6 @@
+[module]
+name = "surround"
+version = "0.1.0"
+description = "Vim-surround style commands (ds, cs, ys, yss, S in visual)"
+mae_version = ">=0.8.0"
+category = "editor"

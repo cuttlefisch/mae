@@ -1,0 +1,9 @@
+[package]
+name = "mae-lookup"
+description = "Definition lookup fallbacks and documentation URL builders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+regex = "1"

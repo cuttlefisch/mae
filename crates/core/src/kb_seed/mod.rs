@@ -18,7 +18,9 @@
 mod concepts;
 mod keys;
 mod lessons;
+pub mod modules;
 mod scheme_api;
+mod terminology;
 mod tutorials;
 
 use std::collections::HashMap;
@@ -34,6 +36,7 @@ use concepts::*;
 use keys::*;
 use lessons::*;
 use scheme_api::install_scheme_nodes;
+use terminology::install_terminology_nodes;
 use tutorials::install_tutorial_nodes;
 
 /// Build the initial KB: hand-authored concept/index nodes + generated
@@ -49,6 +52,7 @@ pub fn seed_kb(
     install_tutor_nodes(&mut kb);
     install_tutorial_nodes(&mut kb);
     install_scheme_nodes(&mut kb);
+    install_terminology_nodes(&mut kb);
     let keybinding_map = collect_keybindings(keymaps);
     install_command_nodes(&mut kb, registry, &keybinding_map, hooks);
     install_category_nodes(&mut kb, registry, &keybinding_map);
@@ -303,6 +307,13 @@ fn tutor_nodes() -> Vec<Node> {
             LESSON_OBSERVABILITY,
         )
         .with_tags(["tutorial"]),
+        Node::new(
+            "lesson:kb-import-roam",
+            "Lesson 13: Importing Your Knowledge Base",
+            NodeKind::Concept,
+            LESSON_KB_IMPORT,
+        )
+        .with_tags(["tutorial", "kb", "federation", "org-roam"]),
     ]
 }
 
@@ -436,7 +447,7 @@ fn install_option_nodes(kb: &mut KnowledgeBase) {
                     .join(", ")
             )
         };
-        let config_line = match def.config_key {
+        let config_line = match def.config_key.as_deref() {
             Some(key) => format!("\n**Config key:** `{}`", key),
             None => String::new(),
         };
@@ -460,7 +471,11 @@ fn install_option_nodes(kb: &mut KnowledgeBase) {
             aliases = aliases,
             config = config_line,
             name = def.name,
-            scheme_name = def.aliases.first().unwrap_or(&def.name),
+            scheme_name = def
+                .aliases
+                .first()
+                .map(|c| c.as_ref())
+                .unwrap_or(def.name.as_ref()),
         );
         let id = format!("option:{}", def.name);
         let title = format!("Option: {}", def.name);
@@ -480,14 +495,16 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_BUFFER,
         )
-        .with_tags(["data-model", "core"]),
+        .with_tags(["data-model", "core"])
+        .with_aliases(["file", "tab", "document"]),
         Node::new(
             "concept:window",
             "Concept: Window",
             NodeKind::Concept,
             CONCEPT_WINDOW,
         )
-        .with_tags(["data-model", "core"]),
+        .with_tags(["data-model", "core"])
+        .with_aliases(["pane", "split", "panel"]),
         Node::new(
             "concept:mode",
             "Concept: Mode",
@@ -508,7 +525,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_AI_AS_PEER,
         )
-        .with_tags(["ai", "architecture"]),
+        .with_tags(["ai", "architecture"])
+        .with_aliases(["copilot", "assistant", "llm", "chatbot"]),
         Node::new(
             "concept:knowledge-base",
             "Concept: Knowledge Base",
@@ -516,6 +534,30 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_KB,
         )
         .with_tags(["kb", "architecture"]),
+        Node::new(
+            "concept:kb-federation",
+            "Concept: KB Federation",
+            NodeKind::Concept,
+            CONCEPT_KB_FEDERATION,
+        )
+        .with_tags(["kb", "federation", "org-roam"])
+        .with_aliases(["federation", "kb-register", "org-roam import"]),
+        Node::new(
+            "concept:kb-workflows",
+            "Concept: KB Workflows",
+            NodeKind::Concept,
+            CONCEPT_KB_WORKFLOWS,
+        )
+        .with_tags(["kb", "workflow", "help"])
+        .with_aliases(["kb usage", "help authoring", "backup"]),
+        Node::new(
+            "concept:kb-vs-alternatives",
+            "Concept: KB vs Obsidian / Roam Research",
+            NodeKind::Concept,
+            CONCEPT_KB_ALTERNATIVES,
+        )
+        .with_tags(["kb", "comparison", "obsidian", "roam"])
+        .with_aliases(["obsidian", "roam research", "notion", "logseq"]),
         Node::new(
             "key:normal-mode",
             "Keys: Normal Mode",
@@ -543,7 +585,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_TERMINAL,
         )
-        .with_tags(["terminal", "shell", "phase-6"]),
+        .with_tags(["terminal", "shell", "phase-6"])
+        .with_aliases(["console", "command-line", "bash"]),
         Node::new(
             "concept:hooks",
             "Concept: Hooks",
@@ -578,7 +621,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_DEBUGGING,
         )
-        .with_tags(["dap", "debugging", "ai"]),
+        .with_tags(["dap", "debugging", "ai"])
+        .with_aliases(["debugger", "breakpoints", "stepping"]),
         Node::new(
             "concept:gui",
             "Concept: GUI Backend",
@@ -620,7 +664,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_RENDER_PROFILING,
         )
-        .with_tags(["performance", "rendering", "observability"]),
+        .with_tags(["performance", "rendering", "observability"])
+        .with_aliases(["display", "graphics", "skia"]),
         Node::new(
             "concept:git-status",
             "Concept: Git Status (Magit-lite)",
@@ -732,7 +777,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_SCHEME_API,
         )
-        .with_tags(["extensibility", "scheme", "api"]),
+        .with_tags(["extensibility", "scheme", "api"])
+        .with_aliases(["lisp", "scripting", "extension-api", "elisp"]),
         Node::new(
             "concept:ai-modes",
             "Concept: AI Agent vs AI Chat",
@@ -761,6 +807,35 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_MCP_DEVELOPMENT,
         )
         .with_tags(["mcp", "ai", "tools", "development"]),
+        Node::new(
+            "concept:modules",
+            "Concept: Module System",
+            NodeKind::Concept,
+            CONCEPT_MODULES,
+        )
+        .with_tags(["modules", "extensibility", "packages"])
+        .with_aliases(["plugins", "packages", "extensions", "addons"]),
+        Node::new(
+            "concept:flags",
+            "Concept: Module Flags",
+            NodeKind::Concept,
+            CONCEPT_FLAGS,
+        )
+        .with_tags(["modules", "flags", "configuration"]),
+        Node::new(
+            "concept:design-philosophy",
+            "Concept: Design Philosophy",
+            NodeKind::Concept,
+            CONCEPT_DESIGN_PHILOSOPHY,
+        )
+        .with_tags(["modules", "architecture", "extensibility"]),
+        Node::new(
+            "guide:extension-authoring",
+            "Guide: Extension Authoring",
+            NodeKind::Concept,
+            GUIDE_EXTENSION_AUTHORING,
+        )
+        .with_tags(["modules", "guide", "extensibility"]),
     ]
 }
 
@@ -803,6 +878,14 @@ mod tests {
             "concept:dap-attach",
             "concept:introspect",
             "concept:ai-modes",
+            "concept:modules",
+            "concept:flags",
+            "concept:design-philosophy",
+            "concept:kb-federation",
+            "concept:kb-workflows",
+            "concept:kb-vs-alternatives",
+            "guide:extension-authoring",
+            "lesson:kb-import-roam",
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);

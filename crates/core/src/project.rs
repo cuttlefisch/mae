@@ -4,8 +4,9 @@
 //! `Cargo.toml`, or similar marker. The optional `.project` TOML file
 //! adds metadata (name, required resources, symlinks).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Configuration loaded from a `.project` TOML file.
@@ -64,10 +65,13 @@ impl Project {
     }
 }
 
-/// Marker files used to detect project roots, in priority order.
-const PROJECT_MARKERS: &[&str] = &[
-    ".project",
-    ".git",
+/// Anchor markers — VCS roots and `.project` files.  These are authoritative
+/// project roots: if found, they win immediately over build markers.
+const ANCHOR_MARKERS: &[&str] = &[".project", ".git", ".hg", ".svn"];
+
+/// Build markers — present in both workspace roots and subcrates/subpackages.
+/// Only used as a fallback when no anchor is found.
+const BUILD_MARKERS: &[&str] = &[
     "Cargo.toml",
     "package.json",
     "go.mod",
@@ -76,22 +80,47 @@ const PROJECT_MARKERS: &[&str] = &[
 ];
 
 /// Walk up from `start` looking for a project root.
+///
+/// Anchors (VCS dirs, `.project`) win immediately.  Build markers
+/// (`Cargo.toml`, `package.json`, …) are tracked as fallbacks so that a
+/// subcrate `Cargo.toml` doesn't beat the workspace `.git`.
+///
+/// Returns `None` if the detected root is `$HOME` (matches Projectile's
+/// default `projectile-ignored-projects` behavior).
 pub fn detect_project_root(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_file() {
         start.parent()?.to_path_buf()
     } else {
         start.to_path_buf()
     };
+    let mut build_fallback: Option<PathBuf> = None;
     loop {
-        for marker in PROJECT_MARKERS {
+        // Anchors win immediately.
+        for marker in ANCHOR_MARKERS {
             if dir.join(marker).exists() {
-                return Some(dir);
+                return Some(dir).filter(|r| !is_home_dir(r));
+            }
+        }
+        // Track nearest build marker as fallback.
+        if build_fallback.is_none() {
+            for marker in BUILD_MARKERS {
+                if dir.join(marker).exists() {
+                    build_fallback = Some(dir.clone());
+                    break;
+                }
             }
         }
         if !dir.pop() {
-            return None;
+            return build_fallback.filter(|r| !is_home_dir(r));
         }
     }
+}
+
+/// Returns `true` if `path` is the user's home directory.
+fn is_home_dir(path: &Path) -> bool {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|home| path == home)
 }
 
 /// Bounded list of recently used project roots.
@@ -193,6 +222,139 @@ impl RecentFiles {
     pub fn filter_by_dir(&self, dir: &Path) -> Vec<&PathBuf> {
         self.files.iter().filter(|p| p.starts_with(dir)).collect()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Persistent project list (projects.toml)
+// ---------------------------------------------------------------------------
+
+/// A single entry in the persistent project list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectEntry {
+    pub root: PathBuf,
+    pub name: String,
+    pub last_opened: String, // ISO-8601
+}
+
+/// Persistent list of known projects, stored as TOML.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectList {
+    #[serde(default)]
+    pub projects: Vec<ProjectEntry>,
+}
+
+impl ProjectList {
+    /// Load from `data_dir/projects.toml`.  Returns default on any error.
+    pub fn load(data_dir: &Path) -> Self {
+        let path = data_dir.join("projects.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Save to `data_dir/projects.toml`.
+    pub fn save(&self, data_dir: &Path) -> io::Result<()> {
+        let path = data_dir.join("projects.toml");
+        let _ = std::fs::create_dir_all(data_dir);
+        let content = toml::to_string_pretty(self).map_err(io::Error::other)?;
+        std::fs::write(&path, content)
+    }
+
+    /// Upsert: add or update timestamp.  Returns `true` if this is a new entry.
+    pub fn touch(&mut self, root: PathBuf, name: String) -> bool {
+        let now = now_iso8601();
+        if let Some(entry) = self.projects.iter_mut().find(|e| e.root == root) {
+            entry.last_opened = now;
+            entry.name = name;
+            false
+        } else {
+            self.projects.push(ProjectEntry {
+                root,
+                name,
+                last_opened: now,
+            });
+            true
+        }
+    }
+
+    /// Remove entry by root path.
+    pub fn remove(&mut self, root: &Path) {
+        self.projects.retain(|e| e.root != root);
+    }
+
+    /// Remove entries whose root is inside another entry's root.
+    ///
+    /// Safety: requires the "parent" to have ≥3 path components (excludes
+    /// `/home/user`) AND to have an anchor marker on disk proving it's a real
+    /// project root. This prevents `$HOME` from nuking all projects beneath it.
+    pub fn prune_subprojects(&mut self) {
+        let roots: Vec<PathBuf> = self.projects.iter().map(|e| e.root.clone()).collect();
+        self.projects.retain(|e| {
+            !roots.iter().any(|r| {
+                r != &e.root
+                    && e.root.starts_with(r)
+                    && r.components().count() > 2
+                    && ANCHOR_MARKERS.iter().any(|m| r.join(m).exists())
+            })
+        });
+    }
+
+    /// Remove entries whose root directory no longer exists on disk.
+    pub fn prune_missing(&mut self) {
+        self.projects.retain(|e| e.root.is_dir());
+    }
+
+    /// Sorted by `last_opened` descending (most recent first).
+    pub fn sorted(&self) -> Vec<&ProjectEntry> {
+        let mut refs: Vec<&ProjectEntry> = self.projects.iter().collect();
+        refs.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        refs
+    }
+
+    /// Sync entries into a `RecentProjects` (for palette display).
+    pub fn sync_to_recent(&self, recent: &mut RecentProjects) {
+        for entry in self.sorted().iter().rev() {
+            recent.push(entry.root.clone());
+        }
+    }
+}
+
+/// Simple ISO-8601 timestamp without pulling in `chrono`.
+fn now_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Approximate: good enough for ordering.  No TZ libs needed.
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let h = time_of_day / 3600;
+    let m = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+    // Days since 1970-01-01
+    let (y, mo, d) = days_to_ymd(days);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    // Algorithm from Howard Hinnant
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    if mo <= 2 {
+        days = y + 1;
+    } else {
+        days = y;
+    }
+    (days, mo, d)
 }
 
 #[cfg(test)]
@@ -356,5 +518,164 @@ link = "FOO.org"
         rf.push(PathBuf::from("/other/c.rs"));
         let filtered = rf.filter_by_dir(Path::new("/proj"));
         assert_eq!(filtered.len(), 2);
+    }
+
+    // --- Anchor-first detection tests ---
+
+    #[test]
+    fn detect_project_root_prefers_git_over_subcrate_cargo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Workspace root with .git
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]").unwrap();
+        // Subcrate with its own Cargo.toml
+        let subcrate = root.join("crates/core");
+        fs::create_dir_all(&subcrate).unwrap();
+        fs::write(subcrate.join("Cargo.toml"), "[package]").unwrap();
+
+        // Starting from subcrate, should find workspace root (anchor), not subcrate
+        let detected = detect_project_root(&subcrate).unwrap();
+        assert_eq!(detected, root.to_path_buf());
+    }
+
+    #[test]
+    fn detect_project_root_fallback_to_build_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // No VCS, just Cargo.toml at root
+        fs::write(root.join("Cargo.toml"), "[package]").unwrap();
+        let sub = root.join("src");
+        fs::create_dir_all(&sub).unwrap();
+
+        let detected = detect_project_root(&sub).unwrap();
+        assert_eq!(detected, root.to_path_buf());
+    }
+
+    // --- ProjectList tests ---
+
+    #[test]
+    fn project_list_touch_upserts() {
+        let mut pl = ProjectList::default();
+        let is_new = pl.touch(PathBuf::from("/proj/a"), "A".into());
+        assert!(is_new);
+        assert_eq!(pl.projects.len(), 1);
+
+        // Touch again — should update, not add
+        let is_new2 = pl.touch(PathBuf::from("/proj/a"), "A-renamed".into());
+        assert!(!is_new2);
+        assert_eq!(pl.projects.len(), 1);
+        assert_eq!(pl.projects[0].name, "A-renamed");
+    }
+
+    #[test]
+    fn project_list_prune_subprojects() {
+        // Use real tempdir so the anchor check (.git exists) passes.
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        fs::create_dir_all(workspace.join(".git")).unwrap();
+        let subcrate = workspace.join("crates/core");
+        fs::create_dir_all(&subcrate).unwrap();
+
+        let mut pl = ProjectList::default();
+        pl.touch(workspace.clone(), "WS".into());
+        pl.touch(subcrate.clone(), "Core".into());
+        pl.touch(PathBuf::from("/other"), "Other".into());
+
+        pl.prune_subprojects();
+        assert_eq!(pl.projects.len(), 2);
+        let roots: Vec<&Path> = pl.projects.iter().map(|e| e.root.as_path()).collect();
+        assert!(roots.contains(&workspace.as_path()));
+        assert!(roots.contains(&Path::new("/other")));
+        assert!(!roots.contains(&subcrate.as_path()));
+    }
+
+    #[test]
+    fn project_list_prune_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut pl = ProjectList::default();
+        pl.touch(tmp.path().to_path_buf(), "Exists".into());
+        pl.touch(PathBuf::from("/nonexistent_mae_test_xyz_42"), "Gone".into());
+
+        pl.prune_missing();
+        assert_eq!(pl.projects.len(), 1);
+        assert_eq!(pl.projects[0].root, tmp.path());
+    }
+
+    #[test]
+    fn project_list_save_load_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+
+        let mut pl = ProjectList::default();
+        pl.touch(PathBuf::from("/proj/alpha"), "Alpha".into());
+        pl.touch(PathBuf::from("/proj/beta"), "Beta".into());
+        pl.save(data_dir).unwrap();
+
+        let loaded = ProjectList::load(data_dir);
+        assert_eq!(loaded.projects.len(), 2);
+        assert_eq!(loaded.projects[0].name, "Alpha");
+        assert_eq!(loaded.projects[1].name, "Beta");
+    }
+
+    #[test]
+    fn prune_subprojects_does_not_nuke_from_home() {
+        // Simulate $HOME in the project list — should NOT remove everything beneath it.
+        // The component count guard (≤2 for /home/user) prevents pruning.
+        let mut pl = ProjectList::default();
+        pl.touch(PathBuf::from("/home/user"), "Home".into());
+        pl.touch(PathBuf::from("/home/user/src/foo"), "Foo".into());
+        pl.touch(PathBuf::from("/home/user/src/bar"), "Bar".into());
+
+        pl.prune_subprojects();
+        // All 3 should survive: /home/user has only 2 components so it's excluded
+        assert_eq!(pl.projects.len(), 3);
+    }
+
+    #[test]
+    fn prune_subprojects_works_for_deep_parents() {
+        // A proper parent with >2 components AND an anchor on disk should prune.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        // Create .git so the anchor check passes
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let sub = root.join("crates/core");
+
+        let mut pl = ProjectList::default();
+        pl.touch(root.clone(), "Workspace".into());
+        pl.touch(sub.clone(), "Core".into());
+        pl.touch(PathBuf::from("/other/project"), "Other".into());
+
+        pl.prune_subprojects();
+        // Sub should be pruned (parent has >2 components + .git on disk)
+        let roots: Vec<&Path> = pl.projects.iter().map(|e| e.root.as_path()).collect();
+        assert!(roots.contains(&root.as_path()));
+        assert!(roots.contains(&Path::new("/other/project")));
+        assert!(!roots.contains(&sub.as_path()));
+    }
+
+    #[test]
+    fn detect_project_root_skips_home_dir() {
+        // If HOME is set and has a .git, detect_project_root should return None
+        // when starting from HOME itself.
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_home = tmp.path().to_path_buf();
+        fs::create_dir_all(fake_home.join(".git")).unwrap();
+
+        // Temporarily override HOME
+        let orig = std::env::var_os("HOME");
+        std::env::set_var("HOME", &fake_home);
+
+        let result = detect_project_root(&fake_home);
+        assert_eq!(
+            result, None,
+            "$HOME should not be detected as a project root"
+        );
+
+        // Restore
+        match orig {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }

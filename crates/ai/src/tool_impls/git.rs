@@ -10,8 +10,7 @@ use std::process::Command;
 /// Run a git command in the project root and return (success, stdout, stderr).
 fn run_git(editor: &Editor, args: &[&str]) -> (bool, String, String) {
     let root = editor
-        .active_project_root()
-        .map(|p| p.to_path_buf())
+        .git_or_project_root()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
 
@@ -335,8 +334,7 @@ pub fn execute_github_pr_create(
 
 fn run_gh(editor: &Editor, args: &[&str]) -> (bool, String, String) {
     let root = editor
-        .active_project_root()
-        .map(|p| p.to_path_buf())
+        .git_or_project_root()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
 

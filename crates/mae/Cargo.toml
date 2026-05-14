@@ -17,6 +17,7 @@ mae-ai = { path = "../ai" }
 mae-lsp = { path = "../lsp" }
 mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
+mae-kb = { path = "../kb" }
 mae-mcp = { path = "../mcp" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
@@ -29,6 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
 dirs = "6.0.0"
+semver = { version = "1", features = ["serde"] }
 libc = "0.2"
 
 [features]

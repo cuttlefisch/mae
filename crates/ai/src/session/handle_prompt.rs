@@ -114,6 +114,9 @@ impl AgentSession {
                             content: MessageContent::Text(p),
                         });
                     }
+                    // Delegate and PingNetwork are top-level commands, not
+                    // meaningful during a tool loop — ignore them.
+                    AiCommand::Delegate { .. } | AiCommand::PingNetwork { .. } => {}
                 }
             }
 
@@ -322,21 +325,24 @@ impl AgentSession {
             // Token-aware trim before every provider call (not just the first)
             self.trim_messages();
 
+            let call_start = tokio::time::Instant::now();
             let response = match self
                 .provider
                 .send(&self.messages, &self.tools, &self.system_prompt)
                 .await
             {
                 Ok(r) => {
+                    let latency_ms = call_start.elapsed().as_millis() as u64;
                     debug!(
                         round,
+                        latency_ms,
                         stop_reason = ?r.stop_reason,
                         tool_calls = r.tool_calls.len(),
                         has_text = r.text.is_some(),
                         "AI provider response received"
                     );
                     self.consecutive_errors = 0; // Reset circuit breaker on success
-                    self.update_cost(&r).await;
+                    self.update_cost_with_latency(&r, latency_ms).await;
                     r
                 }
                 Err(e) => {
@@ -416,17 +422,38 @@ impl AgentSession {
             };
 
             if !response.tool_calls.is_empty() {
+                // Auto-detect self-test mode when the model calls self_test_suite.
+                // The prompt-based detection (above) only catches `:self-test`;
+                // this catches interactive sessions where the user asks the agent
+                // to run self-tests via normal chat.
+                if !self.is_self_test
+                    && response
+                        .tool_calls
+                        .iter()
+                        .any(|c| c.name == "self_test_suite")
+                {
+                    info!("auto-detected self_test_suite tool call — enabling self-test mode");
+                    self.is_self_test = true;
+                    self.progress = super::progress::ProgressTracker::new(15, true);
+                }
+
                 // Signature: sorted tool names + arguments for robust comparison.
-                // Exclude pure debug_state polls from oscillation detection — repeated
-                // state reads during debugging are legitimate, not loops.
+                // Exclude pure read-only observation tools from oscillation
+                // detection — repeated state reads during debugging or
+                // self-tests are legitimate, not loops.
+                const OBSERVATION_TOOLS: &[&str] =
+                    &["debug_state", "cursor_info", "editor_state", "perf_stats"];
                 let sig_calls: Vec<String> = response
                     .tool_calls
                     .iter()
-                    .filter(|c| c.name != "debug_state" || response.tool_calls.len() > 1)
+                    .filter(|c| {
+                        !OBSERVATION_TOOLS.contains(&c.name.as_str())
+                            || response.tool_calls.len() > 1
+                    })
                     .map(|c| format!("{}:{}", c.name, c.arguments))
                     .collect();
                 let turn_sig = if sig_calls.is_empty() {
-                    // Pure debug_state poll — use a unique non-repeating signature
+                    // Pure observation poll — use a unique non-repeating signature
                     format!("_poll_{}", self.turn_history.len())
                 } else {
                     let mut sorted = sig_calls;
@@ -580,6 +607,21 @@ impl AgentSession {
                                     added_names.push(tool.name.clone());
                                     self.tools.push(tool.clone());
                                 }
+                            }
+                        }
+                    }
+                    // Also accept specific tool names (from search_tools results)
+                    if let Some(tools_str) = call.arguments.get("tools").and_then(|v| v.as_str()) {
+                        for name in tools_str.split(',').map(|s| s.trim()) {
+                            if name.is_empty() {
+                                continue;
+                            }
+                            if self.tools.iter().any(|t| t.name == name) {
+                                continue; // already active
+                            }
+                            if let Some(tool) = self.all_tools.iter().find(|t| t.name == name) {
+                                added_names.push(tool.name.clone());
+                                self.tools.push(tool.clone());
                             }
                         }
                     }

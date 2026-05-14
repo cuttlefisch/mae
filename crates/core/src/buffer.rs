@@ -1,6 +1,7 @@
 use ropey::Rope;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -12,6 +13,18 @@ use crate::git_status::GitStatusView;
 use crate::help_view::HelpView;
 use crate::visual_buffer::VisualBuffer;
 use crate::window::Window;
+
+/// Well-known buffer names used across the codebase.
+pub mod buffer_names {
+    pub const AGENDA: &str = "*Agenda*";
+    pub const GIT_STATUS: &str = "*git-status*";
+    pub const HELP: &str = "*Help*";
+    pub const MESSAGES: &str = "*Messages*";
+    pub const CHANGES: &str = "*Changes*";
+    pub const SCRATCH: &str = "[scratch]";
+    pub const AI: &str = "*AI*";
+    pub const AI_INPUT: &str = "*ai-input*";
+}
 
 /// What kind of content this buffer holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +60,28 @@ pub enum BufferKind {
     Agenda,
     /// Interactive demo buffer — editable but not saveable.
     Demo,
+    /// Shell select buffer — read-only snapshot of shell scrollback for
+    /// vim-style selection and yanking.
+    ShellSelect,
+    /// Module list/detail buffer — `:describe-module` output.
+    /// Read-only, Enter navigates to module detail.
+    Modules,
+}
+
+impl BufferKind {
+    /// Kinds that belong in dedicated side windows — never valid as a
+    /// kill-buffer fallback or AI file-open target for editing windows.
+    pub fn is_sidebar(&self) -> bool {
+        matches!(
+            self,
+            BufferKind::FileTree
+                | BufferKind::Conversation
+                | BufferKind::Debug
+                | BufferKind::Messages
+                | BufferKind::Dashboard
+                | BufferKind::ShellSelect
+        )
+    }
 }
 
 /// A single edit operation, stored for undo/redo.
@@ -164,6 +199,9 @@ pub struct Buffer {
     /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
+    // @ai-caution: [rendering] Fold boundaries are NOT adjusted on line
+    // insert/delete. Code that modifies buffer content near folds must
+    // invalidate fold state. After structural edits, refresh with `zx`.
     /// Line indices that are currently folded (hidden).
     /// NOTE: Fold boundaries are NOT adjusted on line insert/delete.
     /// After structural edits, refresh folds with `zx`. A proper fix
@@ -216,6 +254,25 @@ pub struct Buffer {
     /// Invalidated automatically by generation/display_regions_gen changes
     /// and explicitly when wrap-affecting options change.
     pub visual_rows_cache: Option<VisualRowsCache>,
+    /// When set, this buffer is an edit-special buffer for a babel src block.
+    /// `SPC m '` (or `C-c '`) commits changes back to the source buffer.
+    pub babel_edit_source: Option<BabelEditContext>,
+}
+
+/// Context for a babel edit-special buffer (Emacs `C-c '` / `org-edit-special`).
+/// Tracks the source buffer and block location so changes can be written back.
+#[derive(Debug, Clone)]
+pub struct BabelEditContext {
+    /// Buffer index of the source org file.
+    pub source_buffer: usize,
+    /// Line range of the src block in the source buffer (begin_src..end_src, inclusive).
+    pub block_line_range: (usize, usize),
+    /// Byte range of the body within the source buffer.
+    pub body_byte_range: (usize, usize),
+    /// Block name (for status display).
+    pub block_name: Option<String>,
+    /// Language (for restoring context).
+    pub language: String,
 }
 
 /// Cached visual-row counts for a contiguous range of buffer lines.
@@ -272,6 +329,7 @@ impl Buffer {
             display_reveal_cursor: None,
             swap: crate::swap::SwapState::default(),
             visual_rows_cache: None,
+            babel_edit_source: None,
         }
     }
 
@@ -427,7 +485,10 @@ impl Buffer {
             // (disk full, crash, etc.). rename(2) is atomic on POSIX.
             let parent = path.parent().unwrap_or(Path::new("."));
             let tmp_path = parent.join(format!(".mae-save-{}.tmp", std::process::id()));
-            fs::write(&tmp_path, self.rope.to_string())?;
+            let file = fs::File::create(&tmp_path)?;
+            let mut writer = std::io::BufWriter::new(file);
+            self.rope.write_to(&mut writer)?;
+            writer.flush()?;
             if let Err(e) = fs::rename(&tmp_path, path) {
                 // Clean up temp file on rename failure.
                 let _ = fs::remove_file(&tmp_path);
@@ -1120,10 +1181,20 @@ impl Buffer {
 
     /// Rebuild the buffer's rope from the flattened conversation text.
     /// This allows standard motions and visual mode to work on the AI history.
-    pub fn sync_conversation_rope(&mut self) {
+    /// Returns `true` if the rope content actually changed (length differs),
+    /// allowing callers to skip expensive redraw escalation on no-op syncs.
+    pub fn sync_conversation_rope(&mut self) -> bool {
         if let Some(conv) = self.view.conversation() {
             let flat = conv.flat_text();
+            let old_len = self.rope.len_chars();
             self.rope = Rope::from_str(&flat);
+            let changed = self.rope.len_chars() != old_len;
+            if changed {
+                self.generation += 1;
+            }
+            changed
+        } else {
+            false
         }
     }
 
@@ -2134,5 +2205,44 @@ mod tests {
         buf.recompute_display_regions(true);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(!has_image, "no image regions when inline_images disabled");
+    }
+
+    #[test]
+    fn save_streaming_preserves_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stream_test.txt");
+        // Build a multi-chunk rope (ropey uses ~1KB chunks internally).
+        let chunk = "abcdefghij\n".repeat(200); // ~2.2KB per repeat
+        let content = chunk.repeat(5); // ~11KB total, multiple rope chunks
+        let mut buf = Buffer::new();
+        buf.rope = ropey::Rope::from_str(&content);
+        buf.set_file_path(path.clone());
+        buf.save().unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(saved, content);
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn generation_incremented_on_rope_sync() {
+        let mut buf = Buffer::new();
+        buf.view = BufferView::Conversation(Box::default());
+        let gen_before = buf.generation;
+
+        if let Some(conv) = buf.conversation_mut() {
+            conv.push_assistant("Hello");
+        }
+        let changed = buf.sync_conversation_rope();
+        assert!(changed);
+        assert!(
+            buf.generation > gen_before,
+            "generation should increment when rope content changes"
+        );
+
+        // Second sync with no new content — generation unchanged.
+        let gen_after_first = buf.generation;
+        let changed2 = buf.sync_conversation_rope();
+        assert!(!changed2);
+        assert_eq!(buf.generation, gen_after_first);
     }
 }

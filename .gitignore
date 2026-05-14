@@ -28,8 +28,10 @@ tools/*/target/
 tools/*/Cargo.lock
 
 # AI agent configs (user-local settings, not project config)
-.claude/
-**/.claude/
+# Ignore all .claude/ contents except shared project commands (skills).
+# settings.local.json, plans/, etc. remain user-local and untracked.
+.claude/*
+!.claude/commands/
 .gemini/
 **/.gemini/
 .cursorrules

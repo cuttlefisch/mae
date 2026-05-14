@@ -53,6 +53,12 @@ pub trait BufferMode {
     fn markup_flavor(&self) -> Option<crate::syntax::MarkupFlavor> {
         None
     }
+
+    /// Whether this buffer only allows Normal mode (blocks Insert, Visual, etc.).
+    /// Used for UI-only buffers like the splash Dashboard.
+    fn normal_mode_only(&self) -> bool {
+        false
+    }
 }
 
 impl BufferMode for BufferKind {
@@ -72,6 +78,8 @@ impl BufferMode for BufferKind {
             Self::Diff => "Diff",
             Self::Agenda => "Agenda",
             Self::Demo => "Demo",
+            Self::ShellSelect => "Shell Select",
+            Self::Modules => "Modules",
         }
     }
 
@@ -82,6 +90,9 @@ impl BufferMode for BufferKind {
             Self::Help => Some("help"),
             Self::Debug => Some("debug"),
             Self::Agenda => Some("agenda"),
+            Self::Shell => Some("shell-normal"),
+            Self::ShellSelect => Some("shell-select"),
+            Self::Modules => Some("modules"),
             _ => None,
         }
     }
@@ -99,6 +110,7 @@ impl BufferMode for BufferKind {
             Self::Debug => Some("Press ? for key help"),
             Self::FileTree => Some("Press ? for key help"),
             Self::Agenda => Some("Enter: goto  q: close  r: refresh  /: filter"),
+            Self::ShellSelect => Some("v to select, y to yank, q/Esc to exit, ? for help"),
             _ => None,
         }
     }
@@ -124,6 +136,10 @@ impl BufferMode for BufferKind {
         }
     }
 
+    fn normal_mode_only(&self) -> bool {
+        matches!(self, Self::Dashboard | Self::Modules)
+    }
+
     fn read_only(&self) -> bool {
         matches!(
             self,
@@ -134,8 +150,10 @@ impl BufferMode for BufferKind {
                 | Self::GitStatus
                 | Self::FileTree
                 | Self::Shell
+                | Self::ShellSelect
                 | Self::Diff
                 | Self::Agenda
+                | Self::Modules
         )
     }
 
@@ -169,6 +187,8 @@ mod tests {
         assert_eq!(BufferKind::FileTree.keymap_name(), Some("file-tree"));
         assert_eq!(BufferKind::Help.keymap_name(), Some("help"));
         assert_eq!(BufferKind::Debug.keymap_name(), Some("debug"));
+        assert_eq!(BufferKind::Shell.keymap_name(), Some("shell-normal"));
+        assert_eq!(BufferKind::ShellSelect.keymap_name(), Some("shell-select"));
         assert_eq!(BufferKind::Text.keymap_name(), None);
         assert_eq!(BufferKind::Conversation.keymap_name(), None);
     }
@@ -269,6 +289,16 @@ mod tests {
     #[test]
     fn diff_buffer_kind_mode_name() {
         assert_eq!(BufferKind::Diff.mode_name(), "Diff");
+    }
+
+    #[test]
+    fn buffer_mode_normal_mode_only() {
+        assert!(BufferKind::Dashboard.normal_mode_only());
+        assert!(BufferKind::Modules.normal_mode_only());
+        assert!(!BufferKind::Text.normal_mode_only());
+        assert!(!BufferKind::Help.normal_mode_only());
+        assert!(!BufferKind::GitStatus.normal_mode_only());
+        assert!(!BufferKind::Shell.normal_mode_only());
     }
 
     #[test]

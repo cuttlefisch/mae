@@ -1,3 +1,8 @@
+// @ai-caution: [dispatch] At 1,100+ lines this file is a semantic dumping
+// ground — config, themes, terminal, help, registers, options, toggles,
+// projects, modules, AI, and file management. Planned split into
+// dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs. See ROADMAP.md.
+
 //! UI commands: palette, help, messages, config, themes, registers.
 
 use crate::buffer::Buffer;
@@ -180,6 +185,9 @@ impl Editor {
             "help-reopen" => {
                 self.help_reopen();
             }
+            "kb-view" => {
+                self.help_return_to_view();
+            }
             "tutor" => {
                 self.open_help_at("tutorial:getting-started");
             }
@@ -224,6 +232,89 @@ impl Editor {
             }
             "shell-scroll-to-bottom" => {
                 self.pending_shell_scroll = Some(0);
+            }
+            "shell-select-mode" => {
+                let buf_idx = self.active_buffer_idx();
+                if self.buffers[buf_idx].kind != crate::BufferKind::Shell {
+                    self.set_status("Not a shell buffer");
+                } else {
+                    // Read scrollback from cached shell viewport data.
+                    let content = if let Some(viewport) = self.shell_viewports.get(&buf_idx) {
+                        viewport.join("\n")
+                    } else {
+                        String::new()
+                    };
+
+                    if content.is_empty() {
+                        self.set_status("No shell output to select");
+                    } else {
+                        // Reuse an existing *shell-select* buffer or create one.
+                        let existing = self.buffers.iter().position(|b| b.name == "*shell-select*");
+                        let new_idx = if let Some(i) = existing {
+                            self.buffers[i].replace_contents(&content);
+                            self.buffers[i].read_only = true;
+                            self.buffers[i].kind = crate::BufferKind::ShellSelect;
+                            i
+                        } else {
+                            let mut buf = crate::buffer::Buffer::new();
+                            buf.replace_contents(&content);
+                            buf.name = "*shell-select*".into();
+                            buf.kind = crate::BufferKind::ShellSelect;
+                            buf.modified = false;
+                            buf.read_only = true;
+                            self.buffers.push(buf);
+                            self.buffers.len() - 1
+                        };
+
+                        // Record the shell buffer as alternate so close returns to it.
+                        self.alternate_buffer_idx = Some(buf_idx);
+                        self.display_buffer(new_idx);
+                        // Move cursor to end of buffer so user sees most recent output.
+                        let line_count = self.buffers[new_idx].display_line_count();
+                        if line_count > 0 {
+                            let win = self.window_mgr.focused_window_mut();
+                            win.cursor_row = line_count.saturating_sub(1);
+                        }
+                        self.mark_full_redraw();
+                        self.set_status(
+                            "Shell select mode — use v to select, y to yank, q/Esc to exit",
+                        );
+                    }
+                }
+            }
+            "close-shell-select" => {
+                let select_idx = self
+                    .buffers
+                    .iter()
+                    .position(|b| b.kind == crate::BufferKind::ShellSelect);
+                if let Some(idx) = select_idx {
+                    // Switch to alternate buffer (the shell), or first non-select buffer.
+                    let dest = self
+                        .alternate_buffer_idx
+                        .filter(|&i| i != idx && i < self.buffers.len())
+                        .or_else(|| {
+                            self.buffers
+                                .iter()
+                                .position(|b| b.kind != crate::BufferKind::ShellSelect)
+                        })
+                        .unwrap_or(0);
+                    for win in self.window_mgr.iter_windows_mut() {
+                        if win.buffer_idx == idx {
+                            win.buffer_idx = dest;
+                            win.cursor_row = 0;
+                            win.cursor_col = 0;
+                        }
+                    }
+                    self.buffers.remove(idx);
+                    self.notify_buffer_removed(idx);
+                    for win in self.window_mgr.iter_windows_mut() {
+                        if win.buffer_idx > idx {
+                            win.buffer_idx -= 1;
+                        }
+                    }
+                    self.sync_mode_to_buffer();
+                    self.mark_full_redraw();
+                }
             }
             "send-to-shell" => {
                 self.send_line_to_shell();
@@ -309,6 +400,57 @@ For full setup guide: :help ai-setup";
             }
             "describe-configuration" => {
                 self.show_configuration_report();
+            }
+            "kb-health" => {
+                self.show_kb_health_report();
+            }
+            "describe-bindings" => {
+                self.show_bindings_report();
+            }
+            "describe-module" => {
+                let arg = self.command_line.trim().to_string();
+                let module_name = if arg.is_empty() { None } else { Some(arg) };
+                self.show_module_report(module_name.as_deref());
+            }
+            "describe-module-at-cursor" => {
+                // Extract module name from current line (first whitespace-delimited word).
+                let line_text = {
+                    let idx = self.active_buffer_idx();
+                    let buf = &self.buffers[idx];
+                    let row = self.window_mgr.focused_window().cursor_row;
+                    if row < buf.line_count() {
+                        buf.line_text(row)
+                    } else {
+                        String::new()
+                    }
+                };
+                let name = line_text
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty()
+                    && !name.starts_with('-')
+                    && !name.starts_with('=')
+                    && name != "Module"
+                    && name != "Total:"
+                    && name != "Press"
+                {
+                    self.show_module_report(Some(&name));
+                }
+            }
+            "describe-mode" => {
+                self.show_mode_report();
+            }
+            "module-reload" => {
+                // Module name comes from the command line argument.
+                let arg = self.command_line.trim().to_string();
+                if arg.is_empty() {
+                    self.set_status("Usage: :module-reload <name>".to_string());
+                } else {
+                    self.pending_module_reloads.push(arg.clone());
+                    self.set_status(format!("Reloading module '{}'...", arg));
+                }
             }
             "describe-display-policy" => {
                 let report = self.display_policy.format_report();
@@ -399,8 +541,8 @@ For full setup guide: :help ai-setup";
                 self.cycle_theme();
             }
             "set-splash-art" => {
-                self.command_palette =
-                    Some(crate::command_palette::CommandPalette::for_splash_art());
+                let palette = CommandPalette::for_splash_art(self);
+                self.command_palette = Some(palette);
                 self.set_mode(Mode::CommandPalette);
             }
 
@@ -411,19 +553,56 @@ For full setup guide: :help ai-setup";
             "project-browse" => self.project_browse(),
             "project-recent-files" => self.project_recent_files(),
             "project-switch" => self.project_switch_palette(),
+            "project-forget" => self.project_forget_palette(),
+            "project-clean" => self.project_clean(),
 
             // +notes (KB)
             "kb-find" => {
-                let nodes: Vec<(String, String)> = self
+                // Local KB nodes
+                let mut nodes: Vec<(String, String)> = self
                     .kb
                     .list_ids(None)
                     .iter()
                     .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
                     .collect();
+                // Federated instance nodes
+                for kb in self.kb_instances.values() {
+                    for id in kb.list_ids(None) {
+                        if let Some(n) = kb.get(&id) {
+                            nodes.push((id, n.title.clone()));
+                        }
+                    }
+                }
                 self.command_palette = Some(
                     crate::command_palette::CommandPalette::for_help_search(&nodes),
                 );
                 self.set_mode(Mode::CommandPalette);
+            }
+            "kb-edit-source" => {
+                self.help_edit_source();
+            }
+            "kb-create" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-create ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-delete" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-delete ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-register" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-register ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-reimport" => {
+                self.set_mode(Mode::Command);
+                self.command_line = "kb-reimport ".to_string();
+                self.command_cursor = self.command_line.len();
+            }
+            "kb-instances" => {
+                self.show_kb_instances();
             }
             "kb-save" => {
                 self.set_status("Usage: :kb-save <path>");
@@ -702,7 +881,20 @@ For full setup guide: :help ai-setup";
                 if let Some(cwd) = agent_cwd {
                     self.pending_shell_cwds.insert(new_idx, cwd);
                 }
-                self.display_buffer_and_focus(new_idx);
+                // @ai-caution: [window-split] Agent shells MUST use
+                // switch_to_buffer_non_conversation() + split_root(), NOT
+                // display_buffer_and_focus(). The latter steals conversation
+                // windows. Fixed in commit 8a52851.
+                self.switch_to_buffer_non_conversation(new_idx);
+                // Focus the window showing the agent shell.
+                let agent_win_id = self
+                    .window_mgr
+                    .iter_windows()
+                    .find(|w| w.buffer_idx == new_idx)
+                    .map(|w| w.id);
+                if let Some(wid) = agent_win_id {
+                    self.window_mgr.set_focused(wid);
+                }
                 let cmd = self.ai_editor.clone();
                 self.pending_agent_spawns.push((new_idx, cmd));
                 self.set_mode(Mode::ShellInsert);
@@ -938,7 +1130,7 @@ const DEMO_MARKUP: &str = "\
 
 ** Links
   See [[concept:buffer]] for buffer docs.
-  External: https://example.com
+  External: https://github.com/cuttlefisch/mae
 ";
 
 const DEMO_AGENDA: &str = "\

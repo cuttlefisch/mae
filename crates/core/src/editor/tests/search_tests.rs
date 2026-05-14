@@ -1,5 +1,4 @@
 use super::*;
-use crate::keymap::parse_key_seq;
 
 #[test]
 fn search_forward_finds_match() {
@@ -94,31 +93,19 @@ fn star_searches_word_under_cursor() {
     assert_eq!(editor.window_mgr.focused_window().cursor_col, 12);
 }
 
+// Search keybindings moved to modules/search/autoloads.scm.
+// Verify commands remain registered as kernel builtins.
 #[test]
-fn search_keybindings() {
+fn search_commands_exist() {
     let editor = Editor::new();
-    let normal = editor.keymaps.get("normal").unwrap();
-    use crate::keymap::LookupResult;
-    assert_eq!(
-        normal.lookup(&parse_key_seq("/")),
-        LookupResult::Exact("search-forward-start")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("?")),
-        LookupResult::Exact("search-backward-start")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("n")),
-        LookupResult::Exact("search-next")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("N")),
-        LookupResult::Exact("search-prev")
-    );
-    assert_eq!(
-        normal.lookup(&parse_key_seq("*")),
-        LookupResult::Exact("search-word-under-cursor")
-    );
+    assert!(editor.commands.contains("search-forward-start"));
+    assert!(editor.commands.contains("search-backward-start"));
+    assert!(editor.commands.contains("search-next"));
+    assert!(editor.commands.contains("search-prev"));
+    assert!(editor.commands.contains("search-word-under-cursor"));
+    assert!(editor
+        .commands
+        .contains("search-word-under-cursor-backward"));
 }
 
 #[test]

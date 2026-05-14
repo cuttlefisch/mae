@@ -223,7 +223,7 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         | "switch_buffer" | "rename_file" | "file_read" => Some("editing"),
 
         "kb_search" | "kb_list" | "kb_get" | "kb_links_from" | "kb_links_to" | "kb_graph"
-        | "help_open" => Some("help"),
+        | "kb_search_context" | "help_open" => Some("help"),
 
         "project_search" | "project_files" | "project_info" => Some("project"),
 
@@ -257,6 +257,11 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         "execute_command" => Some("scrolling"),
 
         "babel_execute" | "babel_tangle" | "org_export" | "kb_instances" => Some("babel"),
+
+        "list_modules" => Some("modules"),
+
+        "kb_health" | "kb_register" | "kb_unregister" | "kb_reimport" | "kb_create"
+        | "kb_update" | "kb_delete" => Some("federation"),
 
         _ => None,
     }

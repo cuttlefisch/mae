@@ -51,6 +51,7 @@ pub struct ToolProperty {
 /// A tool call requested by the AI model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    #[serde(default)]
     pub id: String,
     pub name: String,
     pub arguments: serde_json::Value,
@@ -147,6 +148,8 @@ pub enum AiEvent {
         session_id: String,
         agent_name: String,
     },
+    /// Result of network connectivity check.
+    NetworkDiagnostic(crate::connectivity::ConnectivityResult),
     /// An error occurred in the AI transport.
     Error(String, Option<String>),
     /// Incremental cost tally after a successful provider round. The
@@ -168,6 +171,8 @@ pub enum AiEvent {
         turn_tokens_in: u64,
         turn_tokens_out: u64,
         turn_cache_read: u64,
+        /// Latency of this API call in milliseconds.
+        latency_ms: u64,
     },
     /// Fired once the first time cumulative session cost crosses the
     /// configured warning threshold. The editor posts this to
@@ -199,6 +204,11 @@ pub enum AiEvent {
 pub enum AiCommand {
     /// Start a new conversation turn.
     Prompt(String),
+    /// Direct delegate to sub-agent (bypasses LLM round-trip).
+    /// Used by `:verify` and similar commands.
+    Delegate { profile: String, objective: String },
+    /// Network connectivity check — HTTP HEAD, no LLM call.
+    PingNetwork { base_url: Option<String> },
     /// Cancel the current operation.
     Cancel,
     /// Shut down the AI task.

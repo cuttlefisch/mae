@@ -22,7 +22,7 @@ Markdown link: [MAE on GitHub](https://github.com/cuttlefisch/mae)
 
 Another link: [Emacs source](https://git.savannah.gnu.org/cgit/emacs.git)
 
-Bare URL (not concealed): https://example.com
+Bare URL (not concealed): https://github.com/cuttlefisch/mae
 
 ## Code Blocks
 
@@ -56,7 +56,7 @@ print(list(fibonacci(10)))
 - Regular list item
 - **Bold list item** with ~~strikethrough~~
 - Item with `inline code` and *italics*
-- Item with a [link](https://example.com) inside
+- Item with a [link](https://github.com/cuttlefisch/mae) inside
 
 ## Checkboxes
 
@@ -120,5 +120,5 @@ Try: Tab/S-Tab to navigate cells, `:table-align` to re-align.
 ## Everything Together
 
 This paragraph has **bold**, *italic*, `code`, ~~strikethrough~~, and a
-[concealed link](https://example.com) all in one place. The heading above
+[concealed link](https://github.com/cuttlefisch/mae) all in one place. The heading above
 should have extra top padding, and code blocks should have a tinted background.

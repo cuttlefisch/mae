@@ -98,12 +98,98 @@ jobs:
       - name: Validate new-user flow in clean container
         run: docker compose run --rm --build new-user
 
-  code-map:
-    name: code-map freshness
+  e2e-package-install:
+    name: e2e / package install
     runs-on: ubuntu-latest
+    needs: check
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Check code-map is up to date
-        run: make code-map-check
+      - name: Build TUI binary
+        run: cargo build --release --workspace --exclude mae-gui --exclude mae-test-fixtures
+      - name: Declare test package in init.scm
+        run: |
+          mkdir -p ~/.config/mae
+          cat > ~/.config/mae/init.scm <<'SCHEME'
+          (package! "splash-themes" :source "github:cuttlefisch/mae-splash-themes")
+          SCHEME
+      - name: Run mae sync
+        run: ./target/release/mae sync
+      - name: Verify package installed
+        run: test -f ~/.config/mae/packages/splash-themes/module.toml
+      - name: Validate config loads
+        run: ./target/release/mae --check-config
+      - name: Verify lockfile
+        run: test -f ~/.config/mae/packages.lock
+
+  code-map:
+    name: code-map freshness
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate code-map if stale
+        run: |
+          make code-map
+          if git diff --quiet docs/CODE_MAP.md docs/CODE_MAP.json; then
+            echo "Code map is up to date."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/CODE_MAP.md docs/CODE_MAP.json
+            git commit -m "docs: auto-update code-map [skip ci]"
+            git push
+          fi
+
+  badges:
+    name: update badges
+    runs-on: ubuntu-latest
+    needs: [check]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Count tests
+        id: tests
+        run: |
+          OUTPUT=$(cargo test --workspace --exclude mae-gui --exclude mae-test-fixtures 2>&1)
+          TOTAL=$(echo "$OUTPUT" | grep -oP '\d+ passed' | awk '{s+=$1} END {print s}')
+          FORMATTED=$(printf "%'d" "$TOTAL")
+          echo "count=$FORMATTED" >> $GITHUB_OUTPUT
+
+      - name: Count lines of code
+        id: loc
+        run: |
+          cargo install tokei --locked 2>/dev/null || true
+          JSON=$(tokei crates/ modules/ scheme/ -t Rust,Scheme,TOML -o json)
+          CODE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['Total']['code'])")
+          echo "count=~$((CODE / 1000))k" >> $GITHUB_OUTPUT
+
+      - name: Update test badge
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.MAE_BADGE_TOKEN }}
+          gistID: ${{ vars.MAE_BADGE_GIST }}
+          filename: mae-tests.json
+          label: tests
+          message: "${{ steps.tests.outputs.count }} passing"
+          color: brightgreen
+
+      - name: Update LOC badge
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.MAE_BADGE_TOKEN }}
+          gistID: ${{ vars.MAE_BADGE_GIST }}
+          filename: mae-loc.json
+          label: lines of code
+          message: "${{ steps.loc.outputs.count }}"
+          color: informational

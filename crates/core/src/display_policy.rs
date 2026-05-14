@@ -104,6 +104,10 @@ impl DisplayPolicy {
             BufferKind::Agenda => DisplayAction::ReplaceFocused,
             // Full window — editable sandbox
             BufferKind::Demo => DisplayAction::ReplaceFocused,
+            // Shell select replaces the focused window (same as shell-normal → select)
+            BufferKind::ShellSelect => DisplayAction::ReplaceFocused,
+            // Module list/detail replaces focused (like git-status)
+            BufferKind::Modules => DisplayAction::ReplaceFocused,
         }
     }
 
@@ -137,6 +141,8 @@ impl DisplayPolicy {
             BufferKind::Conversation,
             BufferKind::Agenda,
             BufferKind::Demo,
+            BufferKind::ShellSelect,
+            BufferKind::Modules,
         ];
 
         for kind in &kinds {
@@ -234,6 +240,8 @@ pub fn parse_buffer_kind(s: &str) -> Option<BufferKind> {
         "diff" => Some(BufferKind::Diff),
         "agenda" => Some(BufferKind::Agenda),
         "demo" => Some(BufferKind::Demo),
+        "shellselect" | "shell-select" => Some(BufferKind::ShellSelect),
+        "modules" => Some(BufferKind::Modules),
         _ => None,
     }
 }
@@ -260,6 +268,8 @@ mod tests {
             BufferKind::Diff,
             BufferKind::Agenda,
             BufferKind::Demo,
+            BufferKind::ShellSelect,
+            BufferKind::Modules,
         ];
         for kind in &kinds {
             let _ = policy.action_for(*kind);

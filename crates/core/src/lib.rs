@@ -1,5 +1,10 @@
+//! mae-core: Buffer management, editor state, event dispatch.
+//!
+//! @stability: stable
+//! @since: 0.1.0
+
 pub mod agenda_view;
-pub mod babel;
+pub use mae_babel as babel;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -16,7 +21,7 @@ pub mod display_policy;
 pub mod display_region;
 pub mod editor;
 pub mod event_record;
-pub mod export;
+pub use mae_export as export;
 pub mod file_browser;
 pub mod file_picker;
 pub mod file_tree;
@@ -47,7 +52,21 @@ pub mod window;
 pub mod word;
 pub mod wrap;
 
-pub use buffer::{Buffer, BufferKind, BufferLocalOptions};
+pub use buffer::{BabelEditContext, Buffer, BufferKind, BufferLocalOptions};
+
+/// A Scheme-defined AI tool registered via `register-ai-tool!`.
+#[derive(Debug, Clone)]
+pub struct SchemeToolDef {
+    pub name: String,
+    pub description: String,
+    /// (param_name, param_type, param_description)
+    pub params: Vec<(String, String, String)>,
+    pub required: Vec<String>,
+    /// Scheme function name to call with JSON args
+    pub handler_fn: String,
+    /// Permission tier: "read", "write", "shell", "privileged"
+    pub permission: String,
+}
 pub use buffer_mode::BufferMode;
 pub use buffer_view::BufferView;
 pub use command_palette::{CommandPalette, PaletteEntry, PalettePurpose};
@@ -75,10 +94,12 @@ pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };
 pub use lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
-pub use mae_kb::{parse_links, KnowledgeBase, Node as KbNode, NodeKind as KbNodeKind};
+pub use mae_kb::{
+    parse_links, BrokenLink, BrokenLinkKind, KnowledgeBase, Node as KbNode, NodeKind as KbNodeKind,
+};
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
-pub use project::{detect_project_root, Project, ProjectConfig, RecentFiles};
+pub use project::{detect_project_root, Project, ProjectConfig, ProjectList, RecentFiles};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};

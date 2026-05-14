@@ -1,0 +1,6 @@
+[package]
+name = "mae-snippets"
+description = "Snippet expansion engine — tab-stops, mirrors, field navigation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

@@ -38,6 +38,7 @@ pub(crate) async fn run_terminal_loop(
     all_tools: &[mae_ai::ToolDefinition],
     permission_policy: &mae_ai::PermissionPolicy,
     app_config: &config::Config,
+    mcp_client_mgr: &ai_event_handler::McpClientMgrRef,
 ) -> io::Result<()> {
     let mut renderer = TerminalRenderer::new()?;
     let mut event_stream = EventStream::new();
@@ -105,11 +106,16 @@ pub(crate) async fn run_terminal_loop(
                 deferred_ai_reply.is_some(),
                 last_mcp_activity.is_some() || !deferred_mcp_reply.is_empty(),
             );
+            // Rekey after health_check zombie cleanup.
+            for removed_idx in std::mem::take(&mut editor.pending_buffer_removals) {
+                mae_core::editor::rekey_after_remove(&mut shell_terminals, removed_idx);
+                mae_core::editor::rekey_after_remove(&mut shell_last_dims, removed_idx);
+                mae_core::editor::rekey_after_remove(&mut shell_generations, removed_idx);
+            }
+            // Autosave + swap writes (same 30s cadence as GUI HealthTick).
+            editor.try_autosave();
             last_health_check = tokio::time::Instant::now();
         }
-
-        // Autosave check (runs on every loop iteration, try_autosave gates on interval).
-        editor.try_autosave();
 
         editor.clamp_all_cursors();
 
@@ -271,6 +277,10 @@ pub(crate) async fn run_terminal_loop(
                 if let Err(e) = save_history(editor) {
                     error!(error = %e, "failed to save history");
                 }
+                // Save persistent project list
+                if let Some(data_dir) = editor.mae_data_dir() {
+                    let _ = editor.project_list.save(&data_dir);
+                }
             }
 
             // If debug mode is enabled, save a tombstone dump.
@@ -328,6 +338,19 @@ pub(crate) async fn run_terminal_loop(
         );
         shell_lifecycle::resize_shells(editor, &renderer, &shell_terminals, &mut shell_last_dims);
         shell_lifecycle::manage_shell_lifecycle(editor, &mut shell_terminals);
+
+        // Rekey binary-owned shell maps after any buffer removals this tick.
+        for removed_idx in std::mem::take(&mut editor.pending_buffer_removals) {
+            mae_core::editor::rekey_after_remove(&mut shell_terminals, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut shell_last_dims, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut shell_generations, removed_idx);
+        }
+
+        // Process module reload requests.
+        let reloads = std::mem::take(&mut editor.pending_module_reloads);
+        for module_name in reloads {
+            crate::bootstrap::reload_module(&module_name, scheme, editor);
+        }
         trace!("drain_intents_and_lifecycle exit");
 
         // Detect theme changes and update shell terminal colors.
@@ -420,7 +443,11 @@ pub(crate) async fn run_terminal_loop(
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
-                                editor.set_status("AI operation cancelled");
+                                if editor.cleanup_self_test() {
+                                    editor.set_status("[AI] Cancelled — self-test state restored");
+                                } else {
+                                    editor.set_status("AI operation cancelled");
+                                }
                             } else if editor.mode == Mode::ShellInsert {
                                 handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                             }
@@ -440,6 +467,9 @@ pub(crate) async fn run_terminal_loop(
                                 editor.ai_streaming = false;
                                 editor.input_lock = mae_core::InputLock::None;
                                 pending_interactive_event = None;
+                                if editor.cleanup_self_test() {
+                                    editor.set_status("[AI] Cancelled — self-test state restored");
+                                }
                             }
                         }
                     }
@@ -523,6 +553,7 @@ pub(crate) async fn run_terminal_loop(
                     ai_event_tx,
                     ai_command_tx,
                     scheme,
+                    mcp_client_mgr,
                 };
                 ai_event_handler::handle_ai_event(editor, ai_event, ctx);
             }

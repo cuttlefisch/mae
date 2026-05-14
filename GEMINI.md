@@ -35,7 +35,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
 
 | Crate | Purpose |
 |---|---|
-| `mae-core` | Buffer management (rope), editor state, commands, keymap, syntax, babel, export |
+| `mae-core` | Buffer management (rope), editor state, commands, keymap, syntax |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend |
 | `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages |
@@ -45,6 +45,13 @@ The project README (`README.md`) contains the architecture spec and stack ration
 | `mae-kb` | Knowledge base — graph store, org parser, bidirectional links |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) |
 | `mae-mcp` | MCP server — Unix socket, JSON-RPC, stdio shim |
+| `mae-babel` | Org-babel executor — 12 languages, persistent sessions, language backends |
+| `mae-export` | Org/Markdown export — HTML, Markdown, TOC, syntax highlighting |
+| `mae-snippets` | YASnippet-style templates — tab-stops, mirrors, transforms |
+| `mae-format` | Formatter bridge — prettier, black, rustfmt (complements LSP format) |
+| `mae-make` | Build runner — Makefile/Cargo.toml/package.json detection |
+| `mae-lookup` | Unified lookup — LSP def + docs URL + man pages |
+| `mae-spell` | Spellcheck — hunspell/aspell integration, inline markers |
 | `mae` | Binary crate — event loop, key handling, CLI entry point |
 
 ## Architecture Principles
@@ -72,7 +79,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 ## Development Status
 
-**v0.7.0-dev** — 2,629 tests, all 10 phases complete.
+**v0.9.0-dev** — 3,059+ tests, all 11 phases complete.
 
 See `ROADMAP.md` for granular milestone tracking:
 - Core editor, Scheme runtime, AI integration, LSP/DAP, syntax highlighting
@@ -82,6 +89,9 @@ See `ROADMAP.md` for granular milestone tracking:
 - Large document performance (graceful degradation, binary search display regions, content hash clipping)
 - LSP+DAP polish (rename, format, symbol outline, breadcrumbs, peek references, watch expressions, exception breakpoints)
 - Render pipeline performance (tiered redraw levels, frame snapshot profiling, cache separation)
+- Module system (19 modules, Doom Emacs model, `module.toml` manifests, `mae pkg` CLI)
+- KB federation (live watching, edit-source, RAG, Obsidian/org-roam import)
+- Feature crate extraction (mae-babel, mae-export, mae-snippets, mae-format, mae-make, mae-lookup, mae-spell)
 
 ### Key Modules
 

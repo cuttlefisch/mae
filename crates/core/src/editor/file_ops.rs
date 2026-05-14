@@ -174,7 +174,7 @@ impl Editor {
                 }
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
-                self.refresh_git_diff(idx);
+                self.request_git_diff(idx);
                 self.fire_hook("after-save");
             }
             Err(e) => {
@@ -1104,18 +1104,18 @@ impl Editor {
                         let should_switch = self
                             .project
                             .as_ref()
-                            .map(|p| p.root != root)
+                            .map(|p| p.root != root && !root.starts_with(&p.root))
                             .unwrap_or(true);
                         if should_switch {
-                            let had_project = self.project.is_some();
                             self.project = Some(crate::project::Project::from_root(root.clone()));
                             self.refresh_git_branch();
-                            // Signal LSP to update root when project is first detected.
-                            if !had_project {
-                                let root_path = root.display().to_string();
-                                self.pending_lsp_root_change =
-                                    Some(format!("file://{}", root_path));
-                            }
+                            // Signal LSP to update workspace folder on every project switch.
+                            let root_path = root.display().to_string();
+                            self.pending_lsp_root_change = Some(format!("file://{}", root_path));
+                        }
+                        // Persist to project list
+                        if let Some(ref proj) = self.project {
+                            self.project_list.touch(root.clone(), proj.name.clone());
                         }
                     }
                     // Ingest project as KB node
@@ -1181,7 +1181,7 @@ impl Editor {
                 }
                 // Notify any running LSP server that this buffer is open.
                 self.lsp_notify_did_open();
-                self.refresh_git_diff(new_idx);
+                self.request_git_diff(new_idx);
                 self.fire_hook("buffer-open");
                 if let Some(lang) = detected_lang {
                     self.fire_hook(&format!("buffer-open:{}", lang.id()));

@@ -8,6 +8,7 @@ mod doctor;
 mod gui_event;
 mod key_handling;
 mod lsp_bridge;
+pub mod pkg;
 mod shell_keys;
 mod shell_lifecycle;
 mod terminal_loop;
@@ -89,7 +90,13 @@ fn main() -> io::Result<()> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
-        println!("  doctor                  Check prerequisites, config, LSP/DAP, AI provider");
+        println!("  sync                    Materialize declared state (clone/update packages)");
+        println!("  upgrade                 Fetch latest for all packages");
+        println!("  purge                   Remove packages not declared in init.scm");
+        println!("  list                    List all discovered modules");
+        println!("  info <NAME>             Show module details");
+        println!("  create <NAME>           Scaffold a new module");
+        println!("  doctor [NAME]           Validate manifests, check LSP/DAP, AI provider");
         println!();
         println!("CONFIG:");
         println!("  {}", config::config_path().display());
@@ -108,6 +115,21 @@ fn main() -> io::Result<()> {
         println!("  MAE_SKIP_WIZARD=1   Skip the first-run wizard");
         println!("  MAE_LOG / RUST_LOG  tracing filter (e.g. mae=debug)");
         return Ok(());
+    }
+    if args.get(1).is_some_and(|a| a == "pkg") {
+        let code = pkg::cli::run_pkg_cli(&args[2..]);
+        std::process::exit(code);
+    }
+    // Flat top-level subcommands (Doom-style): mae sync, mae upgrade, mae purge, etc.
+    if let Some(subcmd) = args.get(1).map(|s| s.as_str()) {
+        match subcmd {
+            "sync" | "upgrade" | "purge" | "list" | "info" | "create" => {
+                let rest: Vec<String> = args[2..].to_vec();
+                let code = pkg::cli::dispatch_subcmd(subcmd, &rest);
+                std::process::exit(code);
+            }
+            _ => {}
+        }
     }
     if args.iter().any(|a| a == "doctor" || a == "--doctor") {
         let code = doctor::run_doctor();
@@ -177,7 +199,7 @@ fn main() -> io::Result<()> {
                 std::process::exit(1);
             }
         };
-        load_init_file(&mut scheme, &mut editor);
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
         // Check if init.scm set an error status
         let status = &editor.status_msg;
         let has_error = status.starts_with("Error in");
@@ -240,12 +262,24 @@ fn main() -> io::Result<()> {
     editor.watchdog_stall_count = watchdog_state.stall_count.clone();
     editor.watchdog_stall_recovery = watchdog_state.stall_recovery.clone();
 
+    // Load persistent project list from XDG data dir.
+    if !clean_mode {
+        if let Some(data_dir) = editor.mae_data_dir() {
+            editor.project_list = mae_core::ProjectList::load(&data_dir);
+            editor
+                .project_list
+                .sync_to_recent(&mut editor.recent_projects);
+        }
+    }
+
     // Auto-detect project from CWD if not already set (skipped in clean mode).
     if !clean_mode && editor.project.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
             if let Some(root) = mae_core::detect_project_root(&cwd) {
                 editor.recent_projects.push(root.clone());
-                editor.project = Some(mae_core::Project::from_root(root));
+                let proj = mae_core::Project::from_root(root.clone());
+                editor.project_list.touch(root, proj.name.clone());
+                editor.project = Some(proj);
             }
         }
     }
@@ -332,8 +366,48 @@ fn main() -> io::Result<()> {
 
     // Load init.scm and history.scm (skipped in clean mode)
     if !clean_mode {
-        load_init_file(&mut scheme, &mut editor);
+        let _module_registry = load_init_file(&mut scheme, &mut editor);
         load_history(&mut scheme, &mut editor);
+    }
+
+    // Load KB federation registry and import enabled instances.
+    if !clean_mode {
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
+            .join("mae");
+        // Migrate kb-registry.toml from config → data (v0.9.0)
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("mae");
+        let old_registry = config_dir.join("kb-registry.toml");
+        let new_registry = data_dir.join("kb-registry.toml");
+        if old_registry.exists() && !new_registry.exists() {
+            let _ = std::fs::create_dir_all(&data_dir);
+            if std::fs::rename(&old_registry, &new_registry).is_ok() {
+                info!("migrated kb-registry.toml from config to data directory");
+            }
+        }
+        let registry = mae_kb::federation::KbRegistry::load(&data_dir);
+        for inst in &registry.instances {
+            if !inst.enabled {
+                continue;
+            }
+            if inst.org_dir.exists() {
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "loading KB instance");
+                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                info!(
+                    name = %inst.name,
+                    nodes = report.nodes_imported,
+                    skipped = report.nodes_skipped,
+                    errors = report.errors.len(),
+                    "KB instance loaded"
+                );
+                editor.kb_instances.insert(inst.uuid.clone(), kb);
+            } else {
+                info!(name = %inst.name, dir = %inst.org_dir.display(), "KB instance dir missing, skipping");
+            }
+        }
+        editor.kb_registry = registry;
     }
 
     // Fire app-start hook after initialization is complete.
@@ -379,6 +453,7 @@ fn main() -> io::Result<()> {
         mcp_socket_path,
         all_tools,
         permission_policy,
+        mcp_client_mgr,
     ) = rt.block_on(async {
         let (ai_event_rx, ai_event_tx, ai_command_tx) = setup_ai(&editor);
         info!(
@@ -411,12 +486,49 @@ fn main() -> io::Result<()> {
         let (dap_event_rx, dap_command_tx) = setup_dap();
         info!("DAP task spawned");
 
-        let all_tools = {
+        let mut all_tools = {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
+            tools.extend(mae_ai::scheme_tools_to_definitions(&editor.scheme_ai_tools));
             tools
         };
         let permission_policy = config::resolve_permission_policy(&app_config);
+
+        // MCP client: connect to external MCP servers configured in config.toml
+        let mcp_client_configs = {
+            let raw_toml: toml::Value = std::fs::read_to_string(config::config_path())
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(toml::Value::Table(Default::default()));
+            mae_mcp::client_mgr::McpClientManager::parse_configs(&raw_toml)
+        };
+        let mcp_client_mgr = {
+            let mut mgr = mae_mcp::client_mgr::McpClientManager::new(mcp_client_configs);
+            mgr.start_all().await;
+            // Convert external tools to ToolDefinitions for the AI agent
+            for ext in mgr.external_tools() {
+                let prefixed_name = format!("mcp_{}_{}", ext.server_name, ext.name);
+                all_tools.push(mae_ai::ToolDefinition {
+                    name: prefixed_name,
+                    description: format!("[{}] {}", ext.server_name, ext.description),
+                    parameters: mae_ai::ToolParameters {
+                        schema_type: "object".into(),
+                        properties: std::collections::HashMap::new(), // external schema not mapped
+                        required: vec![],
+                    },
+                    permission: Some(mae_ai::PermissionTier::Privileged),
+                });
+            }
+            if mgr.has_servers() {
+                let status = mgr.status();
+                info!(
+                    server_count = status.len(),
+                    total_tools = mgr.external_tools().len(),
+                    "MCP external servers initialized"
+                );
+            }
+            std::sync::Arc::new(tokio::sync::Mutex::new(mgr))
+        };
 
         // MCP bridge: Unix socket for external agents (Claude Code, etc.)
         cleanup_stale_mcp_sockets();
@@ -448,6 +560,7 @@ fn main() -> io::Result<()> {
             mcp_socket_path,
             all_tools,
             permission_policy,
+            mcp_client_mgr,
         )
     });
 
@@ -506,6 +619,7 @@ fn main() -> io::Result<()> {
                 all_tools,
                 permission_policy,
                 app_config,
+                mcp_client_mgr,
             );
         }
     }
@@ -526,6 +640,7 @@ fn main() -> io::Result<()> {
         &all_tools,
         &permission_policy,
         &app_config,
+        &mcp_client_mgr,
     ))?;
 
     let _ = std::fs::remove_file(&mcp_socket_path);
@@ -562,6 +677,7 @@ fn run_gui(
     all_tools: Vec<mae_ai::ToolDefinition>,
     permission_policy: mae_ai::PermissionPolicy,
     app_config: config::Config,
+    mcp_client_mgr: ai_event_handler::McpClientMgrRef,
 ) -> io::Result<()> {
     use gui_event::MaeEvent;
     use std::sync::atomic::AtomicBool;
@@ -637,6 +753,7 @@ fn run_gui(
         dap_command_tx,
         mcp_socket_path,
         app_config,
+        mcp_client_mgr,
         ctrl_held: false,
         alt_held: false,
         shift_held: false,
@@ -774,6 +891,7 @@ struct GuiApp {
     // Config
     mcp_socket_path: String,
     app_config: config::Config,
+    mcp_client_mgr: ai_event_handler::McpClientMgrRef,
 
     // Input state
     ctrl_held: bool,
@@ -835,6 +953,13 @@ impl GuiApp {
         );
         shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
 
+        // Rekey binary-owned shell maps after any buffer removals this tick.
+        for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+            mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+        }
+
         // Detect theme changes and update shell terminal colors.
         if self.editor.theme.name != self.last_theme_name {
             self.last_theme_name = self.editor.theme.name.clone();
@@ -844,6 +969,12 @@ impl GuiApp {
         // Clean up generation tracking for removed shells.
         self.shell_generations
             .retain(|idx, _| self.shell_terminals.contains_key(idx));
+
+        // Process module reload requests.
+        let reloads = std::mem::take(&mut self.editor.pending_module_reloads);
+        for module_name in reloads {
+            bootstrap::reload_module(&module_name, &mut self.scheme, &mut self.editor);
+        }
     }
 
     /// Send shutdown commands to AI/LSP/DAP tasks.
@@ -857,6 +988,10 @@ impl GuiApp {
         if !self.editor.clean_mode {
             if let Err(e) = bootstrap::save_history(&self.editor) {
                 error!(error = %e, "failed to save history");
+            }
+            // Save persistent project list
+            if let Some(data_dir) = self.editor.mae_data_dir() {
+                let _ = self.editor.project_list.save(&data_dir);
             }
         }
 
@@ -924,6 +1059,7 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     ai_event_tx: &self.ai_event_tx,
                     ai_command_tx: &self.ai_command_tx,
                     scheme: &mut self.scheme,
+                    mcp_client_mgr: &self.mcp_client_mgr,
                 };
                 ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
                 self.dirty = true;
@@ -1010,6 +1146,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     self.deferred_ai_reply.is_some(),
                     self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
                 );
+                // Rekey after health_check zombie cleanup.
+                for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+                    mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+                }
                 // Autosave check (piggybacks on 30s health tick).
                 self.editor.try_autosave();
             }
@@ -1121,7 +1263,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
-                            self.editor.set_status("AI operation cancelled");
+                            if self.editor.cleanup_self_test() {
+                                self.editor
+                                    .set_status("[AI] Cancelled — self-test state restored");
+                            } else {
+                                self.editor.set_status("AI operation cancelled");
+                            }
                         } else if self.editor.mode == mae_core::Mode::ShellInsert {
                             let ct_event = key_handling::keypress_to_crossterm(&kp);
                             shell_keys::handle_shell_key(
@@ -1157,6 +1304,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             self.editor.ai_streaming = false;
                             self.editor.input_lock = mae_core::InputLock::None;
                             self.pending_interactive_event = None;
+                            if self.editor.cleanup_self_test() {
+                                self.editor
+                                    .set_status("[AI] Cancelled — self-test state restored");
+                            }
                         }
                     }
 

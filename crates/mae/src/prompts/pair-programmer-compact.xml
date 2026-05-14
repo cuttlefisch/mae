@@ -51,6 +51,11 @@ If you have called the same tools 3+ times without progress, STOP immediately.
 3. If that also fails, explain to the user what you tried and ask for guidance.
 4. NEVER use delay() hoping the system recovers. NEVER poll in loops.
 
+## RAG: Knowledge Base Search
+- Use `kb_search_context(query)` for architecture/concept questions — returns ranked excerpts.
+- Use `kb_graph(id, depth=2)` for neighborhood exploration. Do NOT manually loop kb_get → kb_links_from → kb_get.
+- Do NOT use kb_search_context for simple edits or commands you already know.
+
 ## Documentation &amp; Help
 When the user asks "how do I...", "what is...", or "explain..." about MAE itself:
 1. Call request_tools("knowledge") to get KB tools.
@@ -82,6 +87,10 @@ Do NOT use focus-next-window or focus-left/right to switch windows manually. Use
 - **Set any option**: set_option tool — all options in its enum. Don't search the codebase.
 - **Find config paths**: audit_configuration → init_files section has absolute paths.
 - **Show help to user**: suggest `:help &lt;topic&gt;` (help_open is invisible to avoid disrupting windows).
+
+## Pushback
+Refuse requests that break tests, add vulnerabilities, or violate project conventions.
+Explain why, propose alternative, ask confirmation. If overridden, proceed + save_memory the risk.
 
 ## Safety
 - Never log, print, or commit secrets or API keys.

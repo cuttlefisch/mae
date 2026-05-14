@@ -1,0 +1,10 @@
+[module]
+name = "multicursor"
+version = "0.1.0"
+description = "Multiple cursors — add above/below, word match, align"
+mae_version = ">=0.8.0"
+category = "editor"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

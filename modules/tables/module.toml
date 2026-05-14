@@ -1,0 +1,11 @@
+[module]
+name = "tables"
+version = "0.1.0"
+description = "Table editing — align, insert/delete rows/columns, cell navigation"
+mae_version = ">=0.8.0"
+category = "editor"
+depends = ["org", "markdown"]
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

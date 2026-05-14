@@ -1246,6 +1246,18 @@ impl SkiaCanvas {
         self.image_cache.get(path).and_then(|v| v.as_ref())
     }
 
+    /// Query the natural (pixel) dimensions of a cached raster image.
+    ///
+    /// Returns `Some((width, height))` for raster images (PNG/JPG).
+    /// Returns `None` for SVG (no intrinsic pixel size) or load failure.
+    pub fn image_natural_size(&mut self, path: &Path) -> Option<(u32, u32)> {
+        self.load_cached_image(path);
+        match self.image_cache.get(path).and_then(|v| v.as_ref()) {
+            Some(CachedImage::Raster(img)) => Some((img.width() as u32, img.height() as u32)),
+            _ => None,
+        }
+    }
+
     /// Draw an image from the cache at the given pixel rectangle.
     ///
     /// Loads (and caches) the image if not already loaded. Uses a single method

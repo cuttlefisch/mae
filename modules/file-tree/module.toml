@@ -1,0 +1,10 @@
+[module]
+name = "file-tree"
+version = "0.1.0"
+description = "NERDTree-style file browser sidebar"
+mae_version = ">=0.8.0"
+category = "ui"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

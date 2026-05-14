@@ -91,8 +91,11 @@ impl Editor {
         let path = std::path::PathBuf::from(crate::file_picker::expand_tilde(path_str));
         if path.is_dir() {
             self.recent_projects.push(path.clone());
-            self.project = Some(crate::project::Project::from_root(path.clone()));
+            let proj = crate::project::Project::from_root(path.clone());
+            self.project_list.touch(path.clone(), proj.name.clone());
+            self.project = Some(proj);
             self.refresh_git_branch();
+            self.save_project_list();
             self.set_status(format!("Added & switched to project: {}", path.display()));
         } else {
             self.set_status(format!("Not a directory: {}", path_str));
@@ -100,14 +103,79 @@ impl Editor {
     }
 
     /// `remove-project` — remove a directory from recent projects.
-    pub(crate) fn remove_project(&mut self, path_str: &str) {
-        let path = std::path::PathBuf::from(path_str);
+    pub fn remove_project(&mut self, path_str: &str) {
+        let path = std::path::PathBuf::from(crate::file_picker::expand_tilde(path_str));
         let before = self.recent_projects.len();
         self.recent_projects.remove(&path);
+        self.project_list.remove(&path);
         if self.recent_projects.len() < before {
-            self.set_status(format!("Removed project: {}", path_str));
+            self.save_project_list();
+            self.set_status(format!("Removed project: {}", path.display()));
         } else {
             self.set_status(format!("Project not found: {}", path_str));
+        }
+    }
+
+    /// `project-clean` — prune subprojects and missing entries from the project list.
+    pub(crate) fn project_clean(&mut self) {
+        let before: Vec<String> = self
+            .project_list
+            .projects
+            .iter()
+            .map(|e| e.root.display().to_string())
+            .collect();
+        self.project_list.prune_subprojects();
+        self.project_list.prune_missing();
+        let after: std::collections::HashSet<String> = self
+            .project_list
+            .projects
+            .iter()
+            .map(|e| e.root.display().to_string())
+            .collect();
+        let removed: Vec<&str> = before
+            .iter()
+            .filter(|p| !after.contains(p.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+        // Sync back to in-memory recent_projects
+        self.recent_projects = crate::project::RecentProjects::default();
+        self.project_list.sync_to_recent(&mut self.recent_projects);
+        self.save_project_list();
+        if removed.is_empty() {
+            self.set_status(format!(
+                "Project list clean: {} projects, nothing removed",
+                after.len()
+            ));
+        } else {
+            self.set_status(format!(
+                "Removed {} project(s): {}",
+                removed.len(),
+                removed.join(", ")
+            ));
+        }
+    }
+
+    /// `project-forget` — open palette to select a project to remove.
+    pub(crate) fn project_forget_palette(&mut self) {
+        let roots: Vec<String> = self
+            .project_list
+            .sorted()
+            .iter()
+            .map(|e| e.root.display().to_string())
+            .collect();
+        if roots.is_empty() {
+            self.set_status("No projects to forget");
+            return;
+        }
+        let name_refs: Vec<&str> = roots.iter().map(|s| s.as_str()).collect();
+        self.command_palette = Some(CommandPalette::for_forget_project(&name_refs));
+        self.set_mode(Mode::CommandPalette);
+    }
+
+    /// Best-effort save of `projects.toml` to XDG data dir.
+    fn save_project_list(&self) {
+        if let Some(data_dir) = self.mae_data_dir() {
+            let _ = self.project_list.save(&data_dir);
         }
     }
 

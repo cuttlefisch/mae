@@ -1,3 +1,8 @@
+// @ai-caution: [rendering] O(log n) display region lookup via partition_point.
+// Regions MUST be sorted by byte_start. Unsorted regions cause silent rendering
+// corruption — no assertion guards this at runtime. If you modify region
+// creation, ensure the output is sorted.
+
 //! Display regions: buffer text ranges with display overrides.
 //!
 //! Emacs text-property `invisible` + `display` equivalent. A `DisplayRegion`
@@ -1021,15 +1026,15 @@ mod tests {
 
     #[test]
     fn parse_md_link_basic() {
-        let (url, label) = parse_md_link("[Click](http://example.com)").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_md_link("[Click](http://mae.invalid)").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, "Click");
     }
 
     #[test]
     fn parse_md_link_empty_label() {
-        let (url, label) = parse_md_link("[](http://example.com)").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_md_link("[](http://mae.invalid)").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, "");
     }
 
@@ -1041,15 +1046,15 @@ mod tests {
 
     #[test]
     fn parse_org_link_with_label() {
-        let (url, label) = parse_org_link("[[http://example.com][Click]]").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_org_link("[[http://mae.invalid][Click]]").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, Some("Click".to_string()));
     }
 
     #[test]
     fn parse_org_link_no_label() {
-        let (url, label) = parse_org_link("[[http://example.com]]").unwrap();
-        assert_eq!(url, "http://example.com");
+        let (url, label) = parse_org_link("[[http://mae.invalid]]").unwrap();
+        assert_eq!(url, "http://mae.invalid");
         assert_eq!(label, None);
     }
 

@@ -297,7 +297,14 @@ mod tests {
 
     #[test]
     fn recursive_macro_guard() {
+        use crate::keymap::parse_key_seq;
         let mut ed = Editor::new();
+        // Bind @ → replay-macro-await (normally from modules/macros/autoloads.scm)
+        // so the keymap lookup during replay works.
+        ed.keymaps
+            .get_mut("normal")
+            .unwrap()
+            .bind(parse_key_seq("@"), "replay-macro-await");
         // @a → @a: self-referential macro.
         // replay_macro kicks off the chain; inner replay calls surface the
         // depth error through set_status (dispatch_char_motion catches it),
@@ -319,22 +326,13 @@ mod tests {
 
     // --- Keymap bindings ---
 
+    // Macro keybindings moved to modules/macros/autoloads.scm.
+    // Verify commands remain registered as kernel builtins.
     #[test]
-    fn normal_keymap_has_macro_bindings() {
+    fn macro_commands_registered() {
         let ed = Editor::new();
-        let km = ed.keymaps.get("normal").unwrap();
-        use crate::keymap::parse_key_seq;
-        // q is an exact match (start-recording-await)
-        assert_eq!(
-            km.lookup(&parse_key_seq("q")),
-            LookupResult::Exact("start-recording-await")
-        );
-        // @ is an exact match (replay-macro-await) — @@ is handled by the
-        // dispatch_char_motion "replay-macro" arm detecting ch == '@'
-        assert_eq!(
-            km.lookup(&parse_key_seq("@")),
-            LookupResult::Exact("replay-macro-await")
-        );
+        assert!(ed.commands.contains("start-recording-await"));
+        assert!(ed.commands.contains("replay-macro-await"));
     }
 
     #[test]

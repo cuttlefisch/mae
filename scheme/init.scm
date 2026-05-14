@@ -31,8 +31,8 @@
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; 2. Theme
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Available: default, dracula, gruvbox-dark, catppuccin-mocha,
-;;            nord, solarized-dark, solarized-light, tokyo-night, one-dark
+;; Available: default, light-ansi, dracula, gruvbox-dark, gruvbox-light,
+;;            catppuccin-mocha, solarized-dark, one-dark
 
 (set-theme "catppuccin-mocha")
 

@@ -120,12 +120,13 @@ impl Keymap {
     }
 
     /// Bind a key sequence to a command name.
-    pub fn bind(&mut self, seq: Vec<KeyPress>, command: impl Into<String>) {
+    /// Returns the previous command if this overwrites an existing binding.
+    pub fn bind(&mut self, seq: Vec<KeyPress>, command: impl Into<String>) -> Option<String> {
         // Register all proper prefixes
         for i in 1..seq.len() {
             self.prefixes.insert(seq[..i].to_vec());
         }
-        self.bindings.insert(seq, command.into());
+        self.bindings.insert(seq, command.into())
     }
 
     /// Look up a key sequence.
@@ -366,6 +367,38 @@ pub fn serialize_keypress(kp: &KeyPress) -> String {
 /// Serialize a key sequence (macro body) to a compact string.
 pub fn serialize_macro(keys: &[KeyPress]) -> String {
     keys.iter().map(serialize_keypress).collect()
+}
+
+/// Format a key sequence as a human-readable string with spaces between keys.
+/// E.g. `[SPC, m, l]` → `"SPC m l"`.
+pub fn format_key_seq(keys: &[KeyPress]) -> String {
+    keys.iter()
+        .map(|kp| {
+            let s = serialize_keypress(kp);
+            if s == "<Space>" {
+                "SPC".to_string()
+            } else if s.starts_with('<') && s.ends_with('>') {
+                s[1..s.len() - 1].to_string()
+            } else {
+                s
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Snapshot all keymap bindings as `(keymap_name, key_sequence) → command` pairs.
+/// Used for detecting keybinding conflicts before/after module loading.
+pub fn snapshot_all_keymaps(
+    keymaps: &HashMap<String, Keymap>,
+) -> HashMap<(String, Vec<KeyPress>), String> {
+    let mut snap = HashMap::new();
+    for (name, km) in keymaps {
+        for (seq, cmd) in km.bindings() {
+            snap.insert((name.clone(), seq.clone()), cmd.clone());
+        }
+    }
+    snap
 }
 
 /// Deserialize a macro string back to a `Vec<KeyPress>`.

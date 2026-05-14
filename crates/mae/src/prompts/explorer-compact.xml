@@ -29,6 +29,10 @@ If you have called the same tools 3+ times without progress, STOP immediately.
 2. If that also fails, report what you tried and what you found so far.
 3. NEVER use delay() or poll in loops.
 
+## RAG: Knowledge Base Search
+- Use `kb_search_context(query)` for concept questions — returns ranked excerpts.
+- Use `kb_graph(id, depth=2)` for neighborhood exploration. Do NOT loop kb_get → kb_links_from manually.
+
 ## Documentation &amp; Help
 When asked about MAE features, commands, or keybindings:
 1. Use kb_search(query) to find relevant help topics.

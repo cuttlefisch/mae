@@ -131,6 +131,12 @@ impl Editor {
             "babel-kill-sessions" => {
                 self.babel_kill_sessions();
             }
+            "babel-edit-special" => {
+                self.babel_edit_special();
+            }
+            "babel-edit-commit" => {
+                self.babel_edit_commit();
+            }
             // Export commands
             "org-export-html" => {
                 self.org_export_html();
@@ -141,9 +147,38 @@ impl Editor {
             "org-export-subtree" => {
                 self.org_export_subtree();
             }
+            // In-buffer format conversion
+            "markdown-to-org" => {
+                self.markdown_to_org();
+            }
+            "org-to-markdown" => {
+                self.org_to_markdown_buffer();
+            }
             // KB federation commands
             "kb-instances" => {
                 self.kb_instances();
+            }
+            "kb-register" => {
+                self.set_status("Usage: :kb-register <name> <directory>");
+            }
+            "kb-unregister" => {
+                self.set_status("Usage: :kb-unregister <name>");
+            }
+            "kb-reimport" => {
+                self.set_status("Usage: :kb-reimport <name>");
+            }
+            // Help buffer heading folding
+            "help-cycle" => {
+                self.help_heading_cycle();
+            }
+            "help-global-cycle" => {
+                self.help_heading_global_cycle();
+            }
+            "help-close-all-folds" => {
+                self.help_close_all_folds();
+            }
+            "help-open-all-folds" => {
+                self.help_open_all_folds();
             }
             // Display region link navigation
             "text-next-link" => {

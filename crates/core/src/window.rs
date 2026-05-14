@@ -839,6 +839,17 @@ impl WindowManager {
         }
     }
 
+    /// Reset to a single window showing `buffer_idx`, discarding all other windows.
+    pub fn reset_to_single(&mut self, buffer_idx: usize) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let window = Window::new(id, buffer_idx);
+        self.windows.clear();
+        self.windows.insert(id, window);
+        self.layout = LayoutNode::Leaf(id);
+        self.focused = id;
+    }
+
     /// Get the focused window.
     pub fn focused_window(&self) -> &Window {
         self.windows
@@ -1015,6 +1026,9 @@ impl WindowManager {
         Ok(new_id)
     }
 
+    // @ai-caution: [window-split] Pop-up windows and agent shells MUST use
+    // split_root() to place beside the conversation group. Plain split() splits
+    // within the focused window, stealing conversation layout. Fixed in 8a52851.
     /// Split at the root level: wraps the entire existing layout as the first
     /// child and creates a new leaf as the second child. This keeps window
     /// groups (like the conversation pair) intact on one side.
@@ -1052,6 +1066,49 @@ impl WindowManager {
             ratio,
             first: Box::new(old_layout),
             second: Box::new(LayoutNode::Leaf(new_id)),
+        };
+
+        Ok(new_id)
+    }
+
+    /// Split at the root level with the new leaf as the FIRST child (left/top).
+    /// The existing layout becomes the SECOND child (right/bottom). Used by the
+    /// file tree sidebar so it always appears at the leftmost position regardless
+    /// of the current window arrangement.
+    pub fn split_root_prepend(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        ratio: f32,
+    ) -> Result<WindowId, String> {
+        // Check minimum size against total available area.
+        match direction {
+            SplitDirection::Vertical => {
+                let smaller = (available.width as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_WIDTH {
+                    return Err("Cannot split: too narrow".to_string());
+                }
+            }
+            SplitDirection::Horizontal => {
+                let smaller = (available.height as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_HEIGHT {
+                    return Err("Cannot split: too short".to_string());
+                }
+            }
+        }
+
+        let new_id = self.next_id;
+        self.next_id += 1;
+        self.windows.insert(new_id, Window::new(new_id, buffer_idx));
+
+        // New leaf is FIRST child (left/top), existing layout is SECOND (right/bottom).
+        let old_layout = std::mem::replace(&mut self.layout, LayoutNode::Leaf(0));
+        self.layout = LayoutNode::Split {
+            direction,
+            ratio,
+            first: Box::new(LayoutNode::Leaf(new_id)),
+            second: Box::new(old_layout),
         };
 
         Ok(new_id)
@@ -1160,6 +1217,78 @@ impl WindowManager {
     /// Check whether a leaf is inside any Group.
     pub fn is_in_group(&self, leaf_id: WindowId) -> bool {
         self.group_label(leaf_id).is_some()
+    }
+
+    /// Collect all leaf IDs that share the same Group as `id`.
+    /// Returns empty vec if `id` is not in a group.
+    pub fn group_member_ids(&self, id: WindowId) -> Vec<WindowId> {
+        if let Some(label) = self.group_label(id) {
+            Self::collect_group_leaves(&self.layout, label)
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn collect_group_leaves(node: &LayoutNode, target_label: &str) -> Vec<WindowId> {
+        match node {
+            LayoutNode::Leaf(_) => Vec::new(),
+            LayoutNode::Split { first, second, .. } => {
+                let mut out = Self::collect_group_leaves(first, target_label);
+                out.extend(Self::collect_group_leaves(second, target_label));
+                out
+            }
+            LayoutNode::Group { label, inner } => {
+                if label == target_label {
+                    Self::all_leaves(inner)
+                } else {
+                    Self::collect_group_leaves(inner, target_label)
+                }
+            }
+        }
+    }
+
+    fn all_leaves(node: &LayoutNode) -> Vec<WindowId> {
+        match node {
+            LayoutNode::Leaf(id) => vec![*id],
+            LayoutNode::Split { first, second, .. } => {
+                let mut out = Self::all_leaves(first);
+                out.extend(Self::all_leaves(second));
+                out
+            }
+            LayoutNode::Group { inner, .. } => Self::all_leaves(inner),
+        }
+    }
+
+    /// Close all windows in the same group as `id`.
+    /// Returns buffer indices of the closed windows.
+    /// Returns empty vec if `id` is not in a group or can't close (would leave 0 windows).
+    pub fn close_group(&mut self, id: WindowId) -> Vec<usize> {
+        let members = self.group_member_ids(id);
+        if members.is_empty() {
+            return Vec::new();
+        }
+        // Don't close if it would leave zero windows
+        if members.len() >= self.windows.len() {
+            return Vec::new();
+        }
+        let mut buf_indices = Vec::new();
+        for &wid in &members {
+            if let Some(win) = self.windows.get(&wid) {
+                buf_indices.push(win.buffer_idx);
+            }
+            self.remove_leaf(wid);
+            self.windows.remove(&wid);
+        }
+        // Refocus if needed
+        if members.contains(&self.focused) {
+            self.focused = self.first_leaf_id(&self.layout);
+        }
+        buf_indices
+    }
+
+    /// Check whether any window is currently displaying the given buffer index.
+    pub fn any_window_shows(&self, buf_idx: usize) -> bool {
+        self.windows.values().any(|w| w.buffer_idx == buf_idx)
     }
 
     /// Close a window. Cannot close the last window.
@@ -2881,6 +3010,110 @@ mod tests {
             .unwrap();
         wm.wrap_subtree_as_group(&[0], "g".to_string());
         assert_eq!(wm.first_leaf_id(&wm.layout), 0);
+    }
+
+    // --- close_group tests ---
+
+    #[test]
+    fn close_group_removes_all_members() {
+        // Split(Group(Split(0, b)), c): close_group(0) removes both 0 and b.
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        let c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        assert_eq!(wm.window_count(), 3);
+        let buf_indices = wm.close_group(0);
+        assert_eq!(buf_indices.len(), 2);
+        assert_eq!(wm.window_count(), 1);
+        assert_eq!(wm.focused_id(), c_id);
+    }
+
+    #[test]
+    fn close_group_returns_buffer_indices() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "pair".to_string());
+        let _c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        let bufs = wm.close_group(b_id);
+        assert!(bufs.contains(&0)); // window 0 shows buffer 0
+        assert!(bufs.contains(&1)); // window b_id shows buffer 1
+    }
+
+    #[test]
+    fn close_non_group_window_unchanged() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        // No group wrapping — close_group should return empty
+        let bufs = wm.close_group(0);
+        assert!(bufs.is_empty());
+        assert_eq!(wm.window_count(), 2);
+        // Normal close still works
+        wm.close(b_id);
+        assert_eq!(wm.window_count(), 1);
+    }
+
+    #[test]
+    fn close_group_refocuses_outside() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "conv".to_string());
+        wm.set_focused(0);
+        let c_id = wm
+            .split(SplitDirection::Vertical, 2, default_area())
+            .unwrap();
+        // Focus inside group, close group
+        wm.set_focused(b_id);
+        wm.close_group(b_id);
+        assert_eq!(wm.focused_id(), c_id);
+    }
+
+    #[test]
+    fn group_member_ids_returns_all_leaves() {
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "pair".to_string());
+        let members = wm.group_member_ids(0);
+        assert_eq!(members.len(), 2);
+        assert!(members.contains(&0));
+        assert!(members.contains(&b_id));
+    }
+
+    #[test]
+    fn any_window_shows_buffer() {
+        let mut wm = WindowManager::new(0);
+        let _b_id = wm
+            .split(SplitDirection::Vertical, 1, default_area())
+            .unwrap();
+        assert!(wm.any_window_shows(0));
+        assert!(wm.any_window_shows(1));
+        assert!(!wm.any_window_shows(42));
+    }
+
+    #[test]
+    fn close_group_wont_remove_last_windows() {
+        // If group contains all windows, close_group refuses.
+        let mut wm = WindowManager::new(0);
+        let b_id = wm
+            .split(SplitDirection::Horizontal, 1, default_area())
+            .unwrap();
+        wm.wrap_subtree_as_group(&[0, b_id], "all".to_string());
+        let bufs = wm.close_group(0);
+        assert!(bufs.is_empty(), "should refuse to close all windows");
+        assert_eq!(wm.window_count(), 2);
     }
 
     // --- Pixel scrolling tests ---

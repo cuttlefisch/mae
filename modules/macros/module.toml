@@ -1,0 +1,10 @@
+[module]
+name = "macros"
+version = "0.1.0"
+description = "Keyboard macro recording and replay — q, @"
+mae_version = ">=0.8.0"
+category = "editor"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"

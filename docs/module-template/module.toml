@@ -1,0 +1,33 @@
+# MAE Module Manifest
+#
+# Required fields:
+#   name        — unique module identifier (lowercase, hyphens)
+#   version     — semver (major.minor.patch)
+#   description — one-line summary shown in :describe-module
+#   mae_version — semver constraint for minimum MAE version (e.g. ">=0.9.0")
+#   category    — one of: editor, lang, tools, ui, completion, app, checkers, os
+#
+# Optional fields:
+#   author      — module author name or handle
+#   license     — SPDX license identifier (default: same as MAE = GPL-3.0-or-later)
+#   homepage    — URL for docs or repository
+#   depends     — list of module names this module requires
+
+[module]
+name = "my-module"
+version = "0.1.0"
+description = "Short description of what this module does"
+mae_version = ">=0.9.0"
+category = "editor"
+# author = "Your Name"
+# license = "GPL-3.0-or-later"
+# homepage = "https://github.com/you/mae-my-module"
+# depends = ["org"]
+
+# Optional flags — users enable with +flag in init.scm
+# Example: (use-modules! '((my-module +extra)))
+# [flags]
+# extra = { doc = "Enable extra feature X" }
+
+[entry]
+autoloads = "autoloads.scm"

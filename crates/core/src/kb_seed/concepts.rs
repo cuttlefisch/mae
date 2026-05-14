@@ -413,6 +413,10 @@ surface the AI agent queries via its `kb_*` tools — you and the AI read the sa
 - [[concept:buffer-view|BufferView Enum]] — mode-specific state on Buffer\n\
 - [[concept:keymap-inheritance|Keymap Inheritance]] — overlay keymaps with parent fallback\n\
 - [[concept:package-system|Package System]] — require/provide for Scheme extensions\n\
+- [[concept:modules|Module System]] — structured packages with manifests, flags, and CLI\n\
+- [[concept:flags|Module Flags]] — optional sub-features with +flag syntax\n\
+- [[concept:design-philosophy|Design Philosophy]] — composition over inheritance, stable API\n\
+- [[guide:extension-authoring|Extension Authoring Guide]] — how to create MAE modules\n\
 - [[concept:option-registry|Option Registry]] — single source of truth for editor settings\n\
 - [[concept:scheme-api|Scheme API]] — ~50 functions for buffer/window/command/keymap access\n\
 - [[concept:ai-modes|AI Agent vs Chat]] — when to use each AI interface\n\
@@ -512,25 +516,161 @@ Every tool has a permission tier: ReadOnly, Write, Shell, \
 Privileged. Users control how far the agent can act autonomously.\n\n\
 See also: [[concept:knowledge-base]], [[concept:command]], [[concept:agent-bootstrap]]\n";
 
-pub(super) const CONCEPT_KB: &str = "MAE's **knowledge base** is a typed graph of nodes with \
-bidirectional link markers. It started as the help system's backing store and is \
-designed to grow into an org-roam-equivalent personal knowledge graph.\n\n\
-## Why one system for both?\n\
-Help pages, keybinding docs, architectural essays, user notes, and AI-authored findings \
-all want the same three properties:\n\
-1. Addressable (stable id).\n\
-2. Linkable (`[[other-node]]`).\n\
-3. Queryable by a peer (the AI gets the same query surface the human does).\n\n\
+pub(super) const CONCEPT_KB: &str = "\
+MAE's **knowledge base** is a typed graph of nodes with bidirectional \
+link markers. It serves as both the built-in help system and a personal \
+knowledge graph (org-roam-equivalent).\n\n\
+## Graph model\n\
+- Typed nodes with bidirectional links (`id|display` syntax).\n\
+- Reverse index: O(1) `links_to()` — who points at this node?\n\
+- Pre-lowercased search cache + FTS5 full-text search (porter stemmer + unicode61).\n\
+- `NodeKind` enum: Index, Command, Concept, Key, Note, Project.\n\
+- `NodeSource` provenance: Seed, UserOrg, Manual, Federation.\n\n\
 ## Node namespaces\n\
 - `index` — the entry page.\n\
 - `cmd:<name>` — one per registered [[concept:command|Command]] (auto-generated).\n\
 - `concept:<slug>` — architectural concepts (hand-authored).\n\
 - `key:<context>` — keybinding summaries.\n\
-- (Future) `note:<slug>` — user notes; `file:<path>` — per-file AI notes.\n\n\
+- `option:<name>` — editor options.\n\
+- `module:<name>` — module documentation.\n\
+- `scheme:<name>` — Scheme API functions.\n\
+- `lesson:<slug>` — interactive tutorials.\n\n\
+## Federation\n\
+The KB supports multiple instances: a local KB (seed + user help) plus N external \
+instances registered from org-roam directories. See [[concept:kb-federation]].\n\n\
 ## AI surface\n\
-The agent reaches the KB via the `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, and \
-`kb_links_to` tools. Same nodes the human reads via `:help`.\n\n\
-See also: [[concept:ai-as-peer]], [[index]]\n";
+The agent reaches the KB via `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, \
+`kb_links_to`, `kb_graph`, and `kb_health`. Same nodes the human reads via `:help`. \
+Federation tools: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.\n\n\
+See also: [[concept:kb-federation]], [[concept:kb-workflows]], [[concept:ai-as-peer]], [[index]]\n";
+
+pub(super) const CONCEPT_KB_FEDERATION: &str = "\
+KB **federation** lets you register external org directories as searchable \
+knowledge base instances alongside MAE's built-in help.\n\n\
+## Architecture\n\
+```\n\
+┌─────────────────────────────────────────┐\n\
+│           MAE Knowledge Base            │\n\
+├─────────────┬───────────────────────────┤\n\
+│  Local KB   │  Federated Instances      │\n\
+│  (seed +    │  ┌─────────┐ ┌─────────┐ │\n\
+│   user help │  │RoamNotes│ │ Work KB │ │\n\
+│   + AI)     │  │ 2,500   │ │ 87      │ │\n\
+│  200+ nodes │  │ nodes   │ │ nodes   │ │\n\
+│             │  └─────────┘ └─────────┘ │\n\
+└─────────────┴───────────────────────────┘\n\
+         ↕ search / get / graph\n\
+    ┌─────────────────────┐\n\
+    │  :help  │  AI tools │\n\
+    │  SPC h  │  kb_*     │\n\
+    └─────────────────────┘\n\
+```\n\n\
+## Design principle\n\
+**The org directory is READ-ONLY for the KB layer. SQLite is derived.**\n\
+Your org files remain the canonical source of truth. MAE reads them, \
+builds an in-memory graph, and never writes to your org directory \
+(except one sentinel file: `eor-instance.org`).\n\n\
+## Registry\n\
+Stored at `~/.config/mae/kb-registry.toml`. Each instance has:\n\
+- UUID (generated or read from sentinel file)\n\
+- Name (user-chosen display label)\n\
+- Org directory path\n\
+- Enabled flag\n\
+- Last import timestamp\n\n\
+## Sentinel file\n\
+When you register a directory, MAE creates `eor-instance.org` with the \
+instance UUID. This file is safe to delete — MAE recreates it on next \
+registration. It marks the directory as a MAE KB instance.\n\n\
+## Link scheme\n\
+- `eor:node-id` — local-first lookup (checks local KB, then instances).\n\
+- `eor:uuid/node-id` — targeted lookup in a specific instance.\n\n\
+## Import pipeline\n\
+1. Recursive `walkdir` over the org directory.\n\
+2. Parse each `.org` file for `:ID:` properties (file-level + heading-level).\n\
+3. Files without `:ID:` are counted but skipped.\n\
+4. File-path links (images, attachments) are NOT treated as KB links.\n\
+5. Duplicate `:ID:` values are detected and reported.\n\
+6. Health metrics (orphans, broken links, namespaces) computed automatically.\n\n\
+## Commands\n\
+- `:kb-register <name> <path>` — register and import.\n\
+- `:kb-unregister <name>` — remove instance.\n\
+- `:kb-reimport <name>` — refresh after editing org files.\n\
+- `:kb-instances` — list registered instances.\n\
+- `:kb-health` — health report (orphans, broken links, namespace counts).\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[lesson:kb-import-roam]]\n";
+
+pub(super) const CONCEPT_KB_WORKFLOWS: &str = "\
+Workflows for exploring, authoring, migrating, and maintaining your knowledge base.\n\n\
+## Exploration\n\
+- `:help <topic>` or `SPC h h` — fuzzy search all KB nodes.\n\
+- `SPC h s` — full-text search.\n\
+- `SPC n f` / `:kb-find` — search with fuzzy matching.\n\
+- Tab/Enter in Help buffer — follow links, navigate graph.\n\
+- `C-o` — jump back in help history.\n\n\
+## Authoring\n\
+- Create `.org` files in `~/.config/mae/help/` with `:ID:` properties.\n\
+- `:help-edit <topic>` — open/create a user help node for editing.\n\
+- User-authored nodes are loaded on startup alongside seed nodes.\n\n\
+## Migration from org-roam\n\
+See [[lesson:kb-import-roam]] for step-by-step instructions.\n\
+Quick version: `:kb-register MyNotes ~/org-roam`\n\n\
+## Backup and restore\n\
+**Your org files ARE the backup.** They're plain text on disk — version \
+them with git, sync them with any tool you like.\n\
+- The SQLite cache is disposable: delete it and reimport, zero data loss.\n\
+- `:kb-save <path>` exports a SQLite snapshot (useful for sharing the index).\n\
+- `:kb-load <path>` imports a snapshot.\n\
+- `:kb-reimport <name>` rebuilds from org source.\n\
+- **There is no new data format to manage.** Your existing org files + \
+git workflow = complete data lifecycle.\n\n\
+## Health monitoring\n\
+- `:kb-health` — orphan nodes, broken links, namespace distribution.\n\
+- Health metrics are also reported automatically after `:kb-register` and `:kb-reimport`.\n\n\
+## AI access\n\
+The AI agent uses the same tools: `kb_search`, `kb_get`, `kb_graph`. \
+It sees everything you see. Ask it: \"find notes about X\" or \
+\"import my KB at ~/RoamNotes\".\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-federation]]\n";
+
+pub(super) const CONCEPT_KB_ALTERNATIVES: &str = "\
+How MAE's knowledge base compares to Obsidian and Roam Research.\n\n\
+## Feature comparison\n\
+| Feature | MAE KB | Obsidian | Roam Research |\n\
+|---------|--------|----------|---------------|\n\
+| Data format | Org-mode (plain text) | Markdown | Proprietary JSON |\n\
+| Storage | Local files + SQLite index | Local vault | Cloud (proprietary) |\n\
+| Link model | Typed graph, reverse index | Wiki-links, backlinks | Block references |\n\
+| Search | FTS5 + fuzzy + substring | Basic full-text | Full-text + filter |\n\
+| AI integration | Peer actor (same API) | Plugin (Copilot) | None native |\n\
+| Federation | Multi-directory, cross-KB | Single vault | Single graph |\n\
+| Open source | GPL-3.0 | Freemium, closed core | Proprietary |\n\
+| Offline | Full offline | Full offline | Requires sync |\n\
+| Extensibility | Scheme + module system | JS plugins | CSS themes only |\n\n\
+## Migration paths\n\n\
+### From Obsidian\n\
+- Obsidian vaults are Markdown files with wiki-style links.\n\
+- Convert to org via pandoc: `pandoc -f markdown -t org input.md -o output.org`\n\
+- Add `:ID:` properties (org-roam's `org-roam-migrate-wizard` helps).\n\
+- Register: `:kb-register MyVault ~/converted-vault`\n\n\
+### From Roam Research\n\
+- Export as Markdown or JSON from Roam settings.\n\
+- Convert to org, assign `:ID:` properties.\n\
+- `((block-ref))` maps lossy to heading-level `:ID:` nodes.\n\
+- Register: `:kb-register RoamExport ~/roam-export`\n\n\
+## Philosophy: why local-first + AI-peer + plain-text-canonical\n\n\
+1. **Plain text is the only immortal format.** SQLite is derived. Cloud sync \
+is a dependency. Org files survive every tool transition.\n\
+2. **AI as peer, not plugin.** MAE's AI calls `kb_search`, `kb_get`, `kb_graph` — \
+the same query surface the human uses. No impedance mismatch.\n\
+3. **Federation > monolithic vault.** Life has multiple knowledge domains. \
+Obsidian forces one vault or vault-switching. MAE federates: each domain \
+is a registered instance, searchable together.\n\
+4. **Ownership means exit.** Your org files are yours. No account, no sync \
+service, no API key required to read your own notes.\n\
+5. **Performance at the editor layer.** In-memory graph with pre-lowercased \
+search cache. FTS5 with porter stemmer. Sub-millisecond search across \
+thousands of nodes. No Electron, no browser runtime.\n\n\
+See also: [[concept:knowledge-base]], [[concept:kb-federation]], [[concept:kb-workflows]]\n";
 
 pub(super) const CONCEPT_PROJECT: &str =
     "A **project** in MAE is a directory with optional `.project` TOML configuration.\n\n\
@@ -716,6 +856,8 @@ surface and report what works, what's broken, and what's unavailable.\n\n\
 | **lsp** | `lsp_diagnostics`, `lsp_document_symbols` (needs LSP server) |\n\
 | **dap** | `dap_start`, `dap_set_breakpoint`, `dap_step` (needs lldb-dap or debugpy) |\n\
 | **git** | `git_status`, `git_diff`, `git_log`, `git_stash_list` (needs git repo) |\n\
+| **modules** | `list_modules`, `describe-module`, module KB nodes |\n\
+| **federation** | `kb_instances`, `kb_health`, `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives` |\n\
 | **performance** | `introspect` timing metrics, lock contention, anomaly detection |\n\n\
 ## State management\n\
 The self-test uses `editor_save_state` before tests and `editor_restore_state` after \
@@ -795,8 +937,9 @@ backend uses ratatui/crossterm. The binary selects the backend at startup based 
 See also: [[concept:terminal]], [[concept:mode]], [[index]]\n";
 
 pub(super) const CONCEPT_PACKAGE_SYSTEM: &str = "\
-The **package system** enables Scheme-based extensions via `require`/`provide`.\n\n\
-## Loading\n\
+The **package system** enables Scheme-based extensions via `require`/`provide` \
+and the **module system** for structured, discoverable packages.\n\n\
+## Loading primitives\n\
 - `(require \"feature\")` — searches `load-path` for `feature.scm` and evaluates it.\n\
 - `(provide \"feature\")` — marks the current file as providing a feature.\n\
 - `(featurep \"feature\")` — returns `#t` if the feature is loaded.\n\n\
@@ -807,7 +950,13 @@ Default: `~/.config/mae/packages/`, `~/.config/mae/lisp/`.\n\
 ## Autoload\n\
 `CommandSource::Autoload { feature }` enables deferred loading: when a command is first \
 dispatched, `(require feature)` is triggered, then the command re-dispatches.\n\n\
-See also: [[concept:hooks]], [[concept:options]], [[index]]\n";
+## Module system (v0.9.0)\n\
+Modules are self-contained packages with a `module.toml` manifest. They follow a \
+Doom Emacs-inspired three-file model:\n\
+- `module.toml` — identity, version, dependencies, flags\n\
+- `autoloads.scm` — keybindings, command registration (eager, runs before user config)\n\
+- `init.scm` — feature logic (lazy, loaded on first command use)\n\n\
+See also: [[concept:modules]], [[concept:flags]], [[guide:extension-authoring]], [[index]]\n";
 
 pub(super) const CONCEPT_OPTION_REGISTRY: &str = "\
 The **option registry** (`options.rs`) is the single source of truth for all editor settings.\n\n\
@@ -909,3 +1058,240 @@ Inline markup spans intentionally exclude `markup.heading` — heading spans \
 would trigger `line_heading_scale()` in `compute_layout()`, breaking uniform \
 line heights in conversation buffers.\n\n\
 See also: [[concept:options]], [[concept:buffer]], [[concept:ai-as-peer]]\n";
+
+pub(super) const CONCEPT_MODULES: &str = "\
+The **module system** is MAE's structured package infrastructure, introduced in v0.9.0. \
+It follows the Doom Emacs model: modules are self-contained Scheme packages that register \
+commands, keybindings, options, and hooks — composing on the kernel rather than inheriting from it.\n\n\
+## Structure\n\
+Every module has three files:\n\
+| File | Purpose | When loaded |\n\
+|------|---------|-------------|\n\
+| `module.toml` | Manifest: name, version, deps, flags | Before Scheme init (TOML parsing) |\n\
+| `autoloads.scm` | Keybindings, command stubs, options | Eager: after init.scm, before config.scm |\n\
+| `init.scm` | Feature logic, provides feature | Lazy: on first command use |\n\n\
+## Loading order\n\
+```\n\
+config.toml → SchemeRuntime::new()\n\
+  → init.scm (module declarations)\n\
+  → discover_modules() → resolve_deps() → load_module_autoloads()\n\
+  → config.scm (user customization — runs AFTER module autoloads)\n\
+```\n\n\
+**Key invariant:** Module autoloads run BEFORE `config.scm`. Users can override any \
+module keybinding or option in their config.\n\n\
+## Built-in modules\n\
+MAE ships 9 built-in modules: dashboard, surround, marks-jumps, search, registers, \
+macros, tables, multicursor, file-tree. Each extracts keybindings from hardcoded Rust \
+into Scheme autoloads while commands remain in the kernel.\n\n\
+## Manifest (`module.toml`)\n\
+```toml\n\
+[module]\n\
+name = \"search\"\n\
+version = \"0.1.0\"\n\
+description = \"Search and highlight\"\n\
+category = \"editor\"\n\
+mae_version = \">=0.9.0\"\n\
+```\n\n\
+## CLI\n\
+- `mae pkg list` — show all discovered modules\n\
+- `mae pkg doctor [NAME]` — validate manifests and entry points\n\
+- `mae pkg info <NAME>` — detailed module information\n\
+- `mae pkg create <NAME>` — scaffold a new module\n\n\
+## Introspection\n\
+- `:describe-module <name>` — manifest, commands, options, status\n\
+- `:describe-bindings` — full keymap table for current mode\n\
+- `:describe-mode` — current buffer's mode, keymap, and options\n\
+- `(module-loaded? \"name\")` — check if a module is loaded\n\
+- `(module-list)` — list all active modules\n\n\
+## Live reload\n\
+`:module-reload <name>` unregisters and re-evaluates a module's autoloads \
+without restarting the editor.\n\n\
+See also: [[concept:package-system]], [[concept:flags]], [[concept:design-philosophy]], \
+[[guide:extension-authoring]], [[index]]\n";
+
+pub(super) const CONCEPT_FLAGS: &str = "\
+**Flags** are optional sub-features that modules can declare. They follow Doom Emacs's \
+`+flag` syntax and enable conditional loading of module functionality.\n\n\
+## Declaration\n\
+Flags are declared in `module.toml`:\n\
+```toml\n\
+[flags]\n\
+agenda = { doc = \"Task/schedule agenda view across org files\" }\n\
+babel = { doc = \"Code block execution and tangling\" }\n\
+```\n\n\
+## Usage in Scheme\n\
+```scheme\n\
+(when-flag \"+agenda\"\n\
+  (autoload \"open-agenda\" \"org-agenda\" \"Open agenda view\")\n\
+  (define-key \"normal\" \"SPC o a\" \"open-agenda\"))\n\
+```\n\n\
+## Enabling flags\n\
+Flags are enabled in `init.scm` via the `mae!` macro (planned):\n\
+```scheme\n\
+(mae!\n\
+  :lang (org +agenda +babel)\n\
+  :editor (multicursor +align))\n\
+```\n\n\
+## Validation\n\
+`mae pkg doctor` warns about:\n\
+- Unknown flags (typos)\n\
+- Flags declared but never checked\n\
+- Missing flag documentation\n\n\
+See also: [[concept:modules]], [[concept:package-system]], [[index]]\n";
+
+pub(super) const CONCEPT_DESIGN_PHILOSOPHY: &str = "\
+MAE's **design philosophy** for modules follows four principles derived from \
+35 years of Emacs history.\n\n\
+## 1. Composition over inheritance\n\
+- Register commands, not subclasses\n\
+- Compose via hooks, not method overrides\n\
+- Extend via keymaps with parent chains, not by patching existing maps\n\
+- Configure via options, not by mutating global state\n\n\
+## 2. Single source of truth\n\
+The Scheme code is both the declaration AND the implementation. \
+`module.toml` declares identity only (name, version, deps, flags). \
+Everything the module provides (commands, options, keybindings) is registered \
+exclusively in `autoloads.scm`.\n\n\
+## 3. Stable API contract\n\
+The module API is the set of Scheme functions, hooks, options, commands, and keymaps \
+that modules can rely on:\n\
+- **Additions** = minor version bump, never breaking\n\
+- **Removals/renames** = major version bump, with deprecation cycle\n\
+- `mae_version` constraint in `module.toml` declares minimum MAE version\n\n\
+## 4. No framework, no SDK\n\
+Modules import nothing — they call registered Scheme functions:\n\
+```scheme\n\
+(define-command \"my-cmd\" (lambda () (buffer-insert \"hello\")) \"Insert hello\")\n\
+(define-key \"normal\" \"SPC x h\" \"my-cmd\")\n\
+(define-option! \"my_option\" \"string\" \"default\" \"My option doc\")\n\
+(add-hook! \"after-save\" \"my-after-save-fn\")\n\
+(provide-feature \"my-module\")\n\
+```\n\n\
+## Kernel boundary\n\
+The line: **if it needs `tokio`, PTY, or FFI, it's kernel. If it's commands + \
+keybindings + hooks + options, it's a module.** LSP, DAP, Shell, and AI stay \
+as Rust crates.\n\n\
+## Pitfall avoidance\n\
+| Pitfall | Source | MAE avoidance |\n\
+|---------|--------|---------------|\n\
+| Namespace pollution | Emacs | Convention prefix + `mae pkg doctor` warnings |\n\
+| Load-order hell | Emacs | Topo-sorted autoloads → config.scm |\n\
+| Silent command shadowing | Emacs | Conflict warnings on duplicate registration |\n\
+| Metadata in comments | Emacs | Structured `module.toml` |\n\
+| Implicit flags | Doom | Flags declared in `module.toml [flags]` |\n\n\
+See also: [[concept:modules]], [[concept:ai-as-peer]], [[index]]\n";
+
+pub(super) const GUIDE_EXTENSION_AUTHORING: &str = "\
+# Extension Authoring Guide\n\n\
+This guide covers creating, testing, and publishing MAE modules.\n\n\
+## Quick start\n\
+```bash\n\
+mae pkg create my-module\n\
+cd modules/my-module\n\
+# edit module.toml, autoloads.scm, init.scm\n\
+mae pkg doctor my-module\n\
+```\n\n\
+## Module structure\n\n\
+Every module has three files:\n\n\
+### `module.toml` — identity\n\
+```toml\n\
+[module]\n\
+name = \"my-module\"\n\
+version = \"0.1.0\"\n\
+description = \"What the module does\"\n\
+category = \"editor\"    # editor | lang | tools | ui | ai | completion\n\
+mae_version = \">=0.9.0\"\n\
+\n\
+[flags]\n\
+extra = { doc = \"Enable extra feature\" }\n\
+\n\
+[dependencies]\n\
+# other-module = \">=0.1.0\"\n\
+\n\
+[entry]\n\
+init = \"init.scm\"\n\
+autoloads = \"autoloads.scm\"\n\
+```\n\n\
+### `autoloads.scm` — eager registration\n\
+Runs at startup before user config. Register commands, keybindings, options:\n\
+```scheme\n\
+;; Commands\n\
+(define-command \"my-greet\" (lambda () (buffer-insert \"Hello!\")) \"Greet\")\n\
+\n\
+;; Keybindings\n\
+(define-key \"normal\" \"SPC x g\" \"my-greet\")\n\
+\n\
+;; Options\n\
+(define-option! \"my_greeting\" \"string\" \"Hello!\" \"The greeting text\")\n\
+\n\
+;; Hooks\n\
+(add-hook! \"after-save\" \"my-after-save-fn\")\n\
+\n\
+;; Conditional on flags\n\
+(when-flag \"+extra\"\n\
+  (define-key \"normal\" \"SPC x e\" \"my-extra-cmd\"))\n\
+```\n\n\
+### `init.scm` — lazy initialization\n\
+Loaded on first command use via autoload:\n\
+```scheme\n\
+;; Full feature logic here\n\
+(provide-feature \"my-module\")\n\
+```\n\n\
+## Scheme API reference\n\n\
+### Buffer operations\n\
+- `(buffer-insert text)` — insert text at cursor\n\
+- `(buffer-delete-range start end)` — delete range\n\
+- `(buffer-replace-range start end text)` — replace range\n\
+- `(buffer-text-range start end)` — read range\n\
+- `*buffer-name*`, `*buffer-text*`, `*buffer-char-count*` — buffer state\n\n\
+### Cursor & navigation\n\
+- `(cursor-goto row col)` — move cursor\n\
+- `*cursor-row*`, `*cursor-col*` — current position\n\
+- `(open-file path)` — open a file\n\
+- `(switch-to-buffer name)` — switch buffer\n\n\
+### Commands\n\
+- `(define-command name fn doc)` — register a command\n\
+- `(run-command name)` — execute a command\n\
+- `(command-exists? name)` — check if registered\n\
+- `(undefine-command! name)` — remove (for unload)\n\n\
+### Keymaps\n\
+- `(define-key keymap key command)` — bind key to command\n\
+- `(define-keymap name parent)` — create a new keymap\n\
+- `(undefine-key! keymap key)` — remove binding\n\n\
+### Options\n\
+- `(define-option! name type default doc)` — register option\n\
+- `(set-option! name value)` — set value\n\
+- `(get-option name)` — read value\n\
+- `(undefine-option! name)` — remove (for unload)\n\n\
+### Hooks\n\
+- `(add-hook! hook fn)` — subscribe to event\n\
+- `(remove-hook! hook fn)` — unsubscribe\n\
+- `(run-hook! hook)` — trigger event\n\n\
+### Module queries\n\
+- `(module-loaded? name)` — is module active?\n\
+- `(module-version name)` — version string or `#f`\n\
+- `(module-list)` — all active module names\n\
+- `(module-flags name)` — enabled flags for module\n\
+- `(when-module name fn)` — conditional on module presence\n\
+- `(when-flag flag fn)` — conditional on flag\n\n\
+### Deprecation\n\
+- `(deprecate-function! old new since)` — register deprecation\n\
+- `(check-deprecated name)` — check and warn once\n\n\
+## Testing your module\n\n\
+1. **Manifest validation:** `mae pkg doctor my-module`\n\
+2. **Load validation:** `mae --check-config` (loads all modules)\n\
+3. **Live development:** `:module-reload my-module` after editing\n\
+4. **Disable test:** comment out module in init.scm, verify editor starts\n\
+5. **Override test:** add overrides in config.scm, verify they take effect\n\n\
+## Naming conventions\n\n\
+Module authors MUST prefix definitions with the module name:\n\
+- Commands: `my-module-command` (not `command`)\n\
+- Options: `my_module_option` (underscores for TOML)\n\
+- Scheme symbols: `my-module-helper` (not `helper`)\n\n\
+`mae pkg doctor` warns about unprefixed definitions.\n\n\
+## Reference implementation\n\n\
+The `dashboard` module is the simplest complete example. See `modules/dashboard/` \
+for the canonical three-file pattern.\n\n\
+For a more complex example with module-owned keymaps, see `modules/file-tree/`.\n\n\
+See also: [[concept:modules]], [[concept:flags]], [[concept:design-philosophy]], \
+[[concept:package-system]], [[concept:scheme-api]], [[index]]\n";

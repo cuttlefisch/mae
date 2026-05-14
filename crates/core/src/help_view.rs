@@ -37,6 +37,8 @@ pub struct HelpView {
     pub focused_link: Option<LinkIdx>,
     /// Link spans in the rendered rope text. Populated by `help_populate_buffer`.
     pub rendered_links: Vec<HelpLinkSpan>,
+    /// Indices into `rendered_links` that point to broken/unresolvable targets.
+    pub broken_links: std::collections::HashSet<usize>,
 }
 
 impl HelpView {
@@ -48,6 +50,7 @@ impl HelpView {
             scroll: 0,
             focused_link: None,
             rendered_links: Vec::new(),
+            broken_links: std::collections::HashSet::new(),
         }
     }
 

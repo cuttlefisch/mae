@@ -1,6 +1,6 @@
 # MAE Roadmap
 
-**Current version:** v0.7.0-dev · **Tests:** 2,629 passing · **Status:** Alpha — all 10 phases complete, polish in progress.
+**Current version:** v0.9.0-dev · **Tests:** 3,186 passing · **Status:** Alpha — all 11 phases + Phase G complete, feature crate extraction done.
 
 ---
 
@@ -14,34 +14,81 @@
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | SQLite + FTS5, org parser, 200+ nodes, bidirectional links, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
-| 7. Documentation | ✅ Complete | Tutor (12 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
+| 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
 | 9. Babel + Export | ✅ Complete | 12-language executor, HTML/Markdown export, noweb, tangle, KB federation |
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
+| 11. Module System | ✅ Complete | 9 modules extracted (Doom model), `module.toml` manifests, `mae pkg` CLI, flags, live reload |
 
 ---
 
 ## Known Bugs
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
+- [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
 
 ---
 
 ## In Progress / Planned
 
+### Phase G: Feature Crate Extraction + Babel Gaps (v0.9.0) — COMPLETE
+
+- [x] `mae-babel` crate extracted from `mae-core` (7 files, zero import changes downstream)
+- [x] `mae-export` crate extracted from `mae-core` (3 files, depends on `mae-babel`)
+- [x] Block ref resolution: `resolve_block_ref()` reads cached `#+RESULTS:` (was stub)
+- [x] Persistent REPL sessions: `SessionManager` with sentinel-based output capture
+- [x] Per-language backends: `LanguageBackend` trait + 4 implementations (shell, script, compiled, internal)
+- [x] Compiled backend: hash-based binary caching in `~/.cache/mae/babel/`
+- [x] `PendingSchemeEval` variant: scheme blocks routed to editor runtime
+- [x] Babel edit-special: `SPC m '` opens src block in dedicated buffer with language mode
+- [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
+
 ### Near-term
-- [ ] PDF preview (GUI inline rendering)
-- [ ] Scheme module system (package manager architecture)
+- [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
-- [ ] Org ↔ Markdown bidirectional conversion
+- [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
 - [ ] Investigate `bincode` unmaintained dependency (RUSTSEC-2025-0141) — transitive via `steel-core`; evaluate alternatives (`bitcode`, `postcard`) or upstream Steel fix
 
+### Doom Parity Roadmap: Future Feature Crates
+
+**Tier 1: High-value, self-contained (next 2-3 releases)**
+
+| Crate | Doom Equivalent | Description |
+|-------|----------------|-------------|
+| `mae-snippets` | `:editor/snippets` | YASnippet-style templates with tab-stops, mirrors, transforms |
+| `mae-spell` | `:checkers/spell` | Spellcheck via hunspell/aspell, inline markers, `z=` suggest |
+| `mae-format` | `:editor/format` | Formatter bridge (prettier, black, rustfmt) — complements LSP format |
+| `mae-lookup` | `:tools/lookup` | Unified lookup: LSP def + docs URL + man + Dash/Devdocs |
+| `mae-make` | `:tools/make` | Build runner: detect Makefile/Cargo.toml/package.json, `SPC c b` |
+
+**Tier 2: Language IDE modules (Scheme, not Rust crates)**
+
+| Module | Doom Equivalent | What it configures |
+|--------|----------------|-------------------|
+| `lang-python` | `:lang/python` | pyright/pylsp, debugpy, virtualenv, REPL |
+| `lang-rust` | `:lang/rust` | rust-analyzer, lldb-dap, cargo, test runner |
+| `lang-go` | `:lang/go` | gopls, dlv, go commands |
+| `lang-javascript` | `:lang/javascript` | ts-ls, chrome-debugger, npm |
+| `lang-cc` | `:lang/cc` | clangd, lldb-dap, cmake |
+
+**Tier 3: Editor enhancement crates (future releases)**
+
+| Crate | Doom Equivalent | Description |
+|-------|----------------|-------------|
+| `mae-dired` | `:emacs/dired` | Buffer-based file manager |
+| `mae-undo-tree` | `:emacs/undo` | Undo tree visualization |
+| `mae-workspace` | `:ui/workspaces` | Named workspace sessions, per-project layouts |
+| `mae-zen` | `:ui/zen` | Distraction-free writing mode |
+
 ### AI
-- [ ] Memory synthesis (sub-agent reads persistent memory into context)
-- [ ] Dynamic MCP tool discovery (fuzzy search across servers)
-- [ ] Verification specialist (isolated test execution sub-agent)
+- [x] Semantic tool search (`search_tools` — fuzzy match over 146+ tool names/descriptions)
+- [x] Dynamic MCP tool discovery (external MCP server connections, `mcp_{server}_{tool}` namespacing)
+- [x] `request_tools` accepts specific tool names (completes search→request workflow)
+- [x] Memory synthesis (`synthesize_memory()` in bootstrap.rs — categorizes/deduplicates/budgets memory per model)
+- [x] Verification specialist (verifier profile, `AiCommand::Delegate`, scoped tools)
 - [ ] AI session playback & undo (step-through replay of code changes)
-- [ ] Network status command (`:ai-status` with connectivity diagnostics)
+- [x] Network status command (`:ai-ping`, `connectivity_check()` — HTTP HEAD, no LLM round-trip)
+- [ ] `:mcp-status` / `:mcp-reconnect` commands (MCP server management UI)
 
 ### Org-mode
 - [ ] Table formulas (`#+TBLFM:` with Calc-like syntax)
@@ -52,6 +99,12 @@
 - [ ] PR comment summaries (auto-summarize changes on PR amend)
 - [ ] Free AI-assisted setup (Gemini free tier for first-run guidance)
 - [ ] Step-through command execution (inspect AI tool call stdin/stdout)
+
+### Architecture Debt (v0.9.1+)
+
+- [ ] **Editor struct field extraction**: ~100+ fields accumulating (Emacs buffer.c trajectory). Extract into named sub-structs: `LspContext` (7 fields), `DapContext` (3+ fields), `ModuleContext` (4 fields), `RenderContext` (5+ fields). Keeps LOC flat, improves cohesion.
+- [ ] **dispatch/ui.rs split**: At 1,141 lines, "UI" dispatch is a semantic dumping ground (config, themes, terminal, help, registers, options, toggles, projects, AI). Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs.
+- [ ] **Custom theme filesystem loading**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 
 ---
 
@@ -125,27 +178,33 @@
 
 </details>
 
+<details>
+<summary>Phase 11 details — Module System + KB Federation (v0.9.0)</summary>
+
+- 9 modules extracted: dashboard, surround, marks-jumps, search, registers, macros, tables, multicursor, file-tree
+- Doom Emacs-inspired three-file model: `module.toml`, `autoloads.scm`, `init.scm`
+- `mae pkg` CLI: list, doctor, info, create, sync, upgrade
+- Module flags (`+flag` syntax), dependency resolution, live reload
+- `describe-module`, `describe-mode`, `describe-bindings` introspection commands
+- KB federation fully wired: `:kb-register`, `:kb-unregister`, `:kb-reimport`, `:kb-instances`
+- Recursive org-dir import with health metrics (orphans, broken links, namespaces)
+- Federated search across local KB + N external instances
+- AI tools: `kb_register`, `kb_unregister`, `kb_reimport` with structured JSON responses
+- Registry persistence (`~/.config/mae/kb-registry.toml`), startup auto-load
+- KB documentation: `concept:kb-federation`, `concept:kb-workflows`, `concept:kb-vs-alternatives`
+- Tutorial: `lesson:kb-import-roam` (Lesson 13)
+- Self-test categories: `modules`, `federation`
+
+</details>
+
 ---
 
 ## Architecture Invariants
 
 These are non-negotiable constraints derived from Emacs git history analysis:
 
-1. **No file exceeds 3,000 lines** — Emacs's `xdisp.c` is 38,605 lines. We enforce module splits.
+1. **No file exceeds 3,500 lines** — Emacs's `xdisp.c` is 38,605 lines. We enforce module splits. (Exception: `window.rs` at ~3,434 lines — variable-height line math and smooth scrolling justify the size. Under active monitoring.)
 2. **No Global Interpreter Lock** — Emacs spent 23,901 commits on GC retrofit. We use Rust ownership.
 3. **AI is a peer, not a plugin** — same `dispatch_builtin()` for human and AI.
 4. **Module boundaries enable distributed ownership** — 11 crates with clear responsibilities.
 5. **Runtime redefinability is sacred** — Scheme `defadvice`, live REPL, hot reload.
-
-## Near-Term Technical Debt (v0.8.0)
-
-### Editor struct extraction
-`editor/mod.rs` is 4,006 lines with 80+ pub fields spanning LSP, DAP, AI, completion, and debug concerns. Extract `LspState`, `DapState`, and `AiState` structs to bring it under 3,500 lines.
-
-### Upgrade path pre-work
-Before introducing a module/package system, these foundations must be in place:
-- **Config versioning** — `config_version` field in config.toml (added in v0.7.0)
-- **KB migration framework** — step-wise schema migrations with `NodeSource` provenance tracking (added in v0.7.0)
-- **Scheme API deprecation mechanism** — `mae-api-version` global + deprecation wrappers
-- **Forward-compatible serialization** — conversation format accepts unknown-higher versions with warning (added in v0.7.0)
-- **Package manifest spec** — `package.scm` format (name, version, dependencies)
