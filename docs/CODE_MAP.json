@@ -2573,6 +2573,10 @@
       "doc": "Switch to a recent project (SPC p p)"
     },
     {
+      "name": "project-clean",
+      "doc": "Prune stale/sub-project entries (SPC p c)"
+    },
+    {
       "name": "search-buffer",
       "doc": "Search in current buffer (SPC s s)"
     },

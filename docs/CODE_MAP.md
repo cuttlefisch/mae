@@ -426,7 +426,7 @@ Source: `crates/spell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (477 built-in)
+## Commands (478 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -788,6 +788,7 @@ Source: `crates/spell/src/lib.rs`
 | `project-browse` | Browse project directory (SPC p d) |
 | `project-recent-files` | Recent files in project (SPC p r) |
 | `project-switch` | Switch to a recent project (SPC p p) |
+| `project-clean` | Prune stale/sub-project entries (SPC p c) |
 | `search-buffer` | Search in current buffer (SPC s s) |
 | `yank-file-path` | Copy buffer file path to clipboard (SPC f y) |
 | `rename-file` | Rename current file (SPC f R) |
