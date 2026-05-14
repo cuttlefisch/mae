@@ -84,6 +84,9 @@ pub(super) fn handle_command_palette_mode(
                 (Some(root_str), PalettePurpose::SwitchProject) => {
                     editor.add_project(&root_str);
                 }
+                (Some(root_str), PalettePurpose::ForgetProject) => {
+                    editor.remove_project(&root_str);
+                }
                 (None, PalettePurpose::SwitchProject) => {
                     // No match selected — treat query as a typed path
                     if !query.is_empty() {

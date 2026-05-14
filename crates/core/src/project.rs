@@ -84,6 +84,9 @@ const BUILD_MARKERS: &[&str] = &[
 /// Anchors (VCS dirs, `.project`) win immediately.  Build markers
 /// (`Cargo.toml`, `package.json`, …) are tracked as fallbacks so that a
 /// subcrate `Cargo.toml` doesn't beat the workspace `.git`.
+///
+/// Returns `None` if the detected root is `$HOME` (matches Projectile's
+/// default `projectile-ignored-projects` behavior).
 pub fn detect_project_root(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_file() {
         start.parent()?.to_path_buf()
@@ -95,7 +98,7 @@ pub fn detect_project_root(start: &Path) -> Option<PathBuf> {
         // Anchors win immediately.
         for marker in ANCHOR_MARKERS {
             if dir.join(marker).exists() {
-                return Some(dir);
+                return Some(dir).filter(|r| !is_home_dir(r));
             }
         }
         // Track nearest build marker as fallback.
@@ -108,9 +111,16 @@ pub fn detect_project_root(start: &Path) -> Option<PathBuf> {
             }
         }
         if !dir.pop() {
-            return build_fallback;
+            return build_fallback.filter(|r| !is_home_dir(r));
         }
     }
+}
+
+/// Returns `true` if `path` is the user's home directory.
+fn is_home_dir(path: &Path) -> bool {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|home| path == home)
 }
 
 /// Bounded list of recently used project roots.
@@ -274,10 +284,20 @@ impl ProjectList {
     }
 
     /// Remove entries whose root is inside another entry's root.
+    ///
+    /// Safety: requires the "parent" to have ≥3 path components (excludes
+    /// `/home/user`) AND to have an anchor marker on disk proving it's a real
+    /// project root. This prevents `$HOME` from nuking all projects beneath it.
     pub fn prune_subprojects(&mut self) {
         let roots: Vec<PathBuf> = self.projects.iter().map(|e| e.root.clone()).collect();
-        self.projects
-            .retain(|e| !roots.iter().any(|r| r != &e.root && e.root.starts_with(r)));
+        self.projects.retain(|e| {
+            !roots.iter().any(|r| {
+                r != &e.root
+                    && e.root.starts_with(r)
+                    && r.components().count() > 2
+                    && ANCHOR_MARKERS.iter().any(|m| r.join(m).exists())
+            })
+        });
     }
 
     /// Remove entries whose root directory no longer exists on disk.
@@ -550,17 +570,24 @@ link = "FOO.org"
 
     #[test]
     fn project_list_prune_subprojects() {
+        // Use real tempdir so the anchor check (.git exists) passes.
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+        fs::create_dir_all(workspace.join(".git")).unwrap();
+        let subcrate = workspace.join("crates/core");
+        fs::create_dir_all(&subcrate).unwrap();
+
         let mut pl = ProjectList::default();
-        pl.touch(PathBuf::from("/workspace"), "WS".into());
-        pl.touch(PathBuf::from("/workspace/crates/core"), "Core".into());
+        pl.touch(workspace.clone(), "WS".into());
+        pl.touch(subcrate.clone(), "Core".into());
         pl.touch(PathBuf::from("/other"), "Other".into());
 
         pl.prune_subprojects();
         assert_eq!(pl.projects.len(), 2);
         let roots: Vec<&Path> = pl.projects.iter().map(|e| e.root.as_path()).collect();
-        assert!(roots.contains(&Path::new("/workspace")));
+        assert!(roots.contains(&workspace.as_path()));
         assert!(roots.contains(&Path::new("/other")));
-        assert!(!roots.contains(&Path::new("/workspace/crates/core")));
+        assert!(!roots.contains(&subcrate.as_path()));
     }
 
     #[test]
@@ -589,5 +616,66 @@ link = "FOO.org"
         assert_eq!(loaded.projects.len(), 2);
         assert_eq!(loaded.projects[0].name, "Alpha");
         assert_eq!(loaded.projects[1].name, "Beta");
+    }
+
+    #[test]
+    fn prune_subprojects_does_not_nuke_from_home() {
+        // Simulate $HOME in the project list — should NOT remove everything beneath it.
+        // The component count guard (≤2 for /home/user) prevents pruning.
+        let mut pl = ProjectList::default();
+        pl.touch(PathBuf::from("/home/user"), "Home".into());
+        pl.touch(PathBuf::from("/home/user/src/foo"), "Foo".into());
+        pl.touch(PathBuf::from("/home/user/src/bar"), "Bar".into());
+
+        pl.prune_subprojects();
+        // All 3 should survive: /home/user has only 2 components so it's excluded
+        assert_eq!(pl.projects.len(), 3);
+    }
+
+    #[test]
+    fn prune_subprojects_works_for_deep_parents() {
+        // A proper parent with >2 components AND an anchor on disk should prune.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        // Create .git so the anchor check passes
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let sub = root.join("crates/core");
+
+        let mut pl = ProjectList::default();
+        pl.touch(root.clone(), "Workspace".into());
+        pl.touch(sub.clone(), "Core".into());
+        pl.touch(PathBuf::from("/other/project"), "Other".into());
+
+        pl.prune_subprojects();
+        // Sub should be pruned (parent has >2 components + .git on disk)
+        let roots: Vec<&Path> = pl.projects.iter().map(|e| e.root.as_path()).collect();
+        assert!(roots.contains(&root.as_path()));
+        assert!(roots.contains(&Path::new("/other/project")));
+        assert!(!roots.contains(&sub.as_path()));
+    }
+
+    #[test]
+    fn detect_project_root_skips_home_dir() {
+        // If HOME is set and has a .git, detect_project_root should return None
+        // when starting from HOME itself.
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_home = tmp.path().to_path_buf();
+        fs::create_dir_all(fake_home.join(".git")).unwrap();
+
+        // Temporarily override HOME
+        let orig = std::env::var_os("HOME");
+        std::env::set_var("HOME", &fake_home);
+
+        let result = detect_project_root(&fake_home);
+        assert_eq!(
+            result, None,
+            "$HOME should not be detected as a project root"
+        );
+
+        // Restore
+        match orig {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }

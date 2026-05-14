@@ -351,6 +351,7 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::ForgetProject
             | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {

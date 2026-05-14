@@ -405,6 +405,7 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
             | mae_core::command_palette::PalettePurpose::SetTheme
             | mae_core::command_palette::PalettePurpose::SetSplashArt
             | mae_core::command_palette::PalettePurpose::GitBranch
+            | mae_core::command_palette::PalettePurpose::ForgetProject
             | mae_core::command_palette::PalettePurpose::MiniDialog
     );
     let max_name_width = if full_width_name {

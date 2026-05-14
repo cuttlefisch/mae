@@ -914,6 +914,10 @@ impl CommandRegistry {
         reg.register_builtin("project-recent-files", "Recent files in project (SPC p r)");
         reg.register_builtin("project-switch", "Switch to a recent project (SPC p p)");
         reg.register_builtin("project-clean", "Prune stale/sub-project entries (SPC p c)");
+        reg.register_builtin(
+            "project-forget",
+            "Remove a project from the known list (SPC p D)",
+        );
 
         // Search aliases
         reg.register_builtin("search-buffer", "Search in current buffer (SPC s s)");
