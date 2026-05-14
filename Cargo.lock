@@ -2241,10 +2241,6 @@ name = "mae-spell"
 version = "0.8.3"
 
 [[package]]
-name = "mae-test-fixtures"
-version = "0.8.3"
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

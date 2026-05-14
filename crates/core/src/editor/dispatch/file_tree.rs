@@ -43,33 +43,24 @@ impl Editor {
                     let tree_buf_idx = self.buffers.len();
                     self.buffers.push(tree_buf);
 
-                    // Remember which buffer the current window shows.
-                    let original_buf_idx = self.active_buffer_idx();
+                    // Remember active buffer for auto-reveal after split.
+                    let active_buf_idx = self.active_buffer_idx();
 
-                    // Split the focused window vertically with ~20% for the tree.
+                    // Split at the root so the tree always appears at the leftmost
+                    // position, regardless of how many splits exist.
                     let area = self.default_area();
-                    match self.window_mgr.split_with_ratio(
+                    match self.window_mgr.split_root_prepend(
                         SplitDirection::Vertical,
-                        original_buf_idx,
+                        tree_buf_idx,
                         area,
                         0.2,
                     ) {
-                        Ok(new_win_id) => {
-                            // After split: focused window (left) shows original_buf_idx,
-                            // new window (right) shows original_buf_idx too.
-                            // We want: focused window (left) = tree, new window (right) = content.
-                            // Swap: give focused window the tree buffer, new window keeps original.
-                            let focused_id = self.window_mgr.focused_id();
-                            if let Some(focused_win) = self.window_mgr.window_mut(focused_id) {
-                                focused_win.buffer_idx = tree_buf_idx;
-                            }
-                            // The new window already has original_buf_idx, so focus it.
-                            self.window_mgr.set_focused(new_win_id);
-                            self.file_tree_window_id = Some(focused_id);
+                        Ok(tree_win_id) => {
+                            self.file_tree_window_id = Some(tree_win_id);
                             // Auto-reveal the current file in the tree.
                             if let Some(current_path) = self
                                 .buffers
-                                .get(original_buf_idx)
+                                .get(active_buf_idx)
                                 .and_then(|b| b.file_path().map(|p| p.to_path_buf()))
                             {
                                 if let Some(ft) = self.buffers[tree_buf_idx].file_tree_mut() {

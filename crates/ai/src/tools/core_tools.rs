@@ -938,7 +938,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
                         ToolProperty {
                             prop_type: "string".into(),
                             description: "Benchmark type".into(),
-                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into(), "scroll_stress".into()]),
+                            enum_values: Some(vec!["buffer_insert".into(), "buffer_delete".into(), "syntax_parse".into(), "scroll_stress".into(), "kb_search_stress".into(), "kb_graph_stress".into()]),
                         },
                     ),
                     (

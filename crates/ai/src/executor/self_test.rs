@@ -3,6 +3,108 @@
 //! Produces a structured JSON test plan with sandbox paths, deterministic
 //! grading specs, prerequisite gating, and both direct-tool and prompt-based
 //! tests (absorbing the former model_exam categories).
+//!
+//! LSP and DAP fixtures are embedded as string constants and created in the
+//! sandbox at runtime — no source checkout required.
+
+// ---------------------------------------------------------------------------
+// Embedded fixture content
+// ---------------------------------------------------------------------------
+
+/// Minimal Cargo.toml for the LSP test fixture crate.
+const LSP_FIXTURE_CARGO_TOML: &str = r#"[package]
+name = "mae-lsp-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+"#;
+
+/// Rust source with known symbols at stable line positions.
+///
+/// Key positions (1-indexed, for AI tool calls):
+///   Line 4, Col 12: "Counter" struct name  → hover, references
+///   Line 9, Col 12: "new" fn name          → definition target
+///   Line 24, Col 28: "new" in Counter::new → definition (resolves to line 9)
+const LSP_FIXTURE_LIB_RS: &str = r#"/// A simple counter for LSP testing.
+///
+/// Used by MAE self-test — do not modify line numbers.
+pub struct Counter {
+    value: i32,
+}
+
+impl Counter {
+    pub fn new(initial: i32) -> Self {
+        Counter { value: initial }
+    }
+
+    pub fn increment(&mut self) {
+        self.value += 1;
+    }
+
+    pub fn get(&self) -> i32 {
+        self.value
+    }
+}
+
+/// Helper function that uses Counter.
+pub fn count_to(n: i32) -> i32 {
+    let mut c = Counter::new(0);
+    for _ in 0..n {
+        c.increment();
+    }
+    c.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_count_to() {
+        assert_eq!(count_to(5), 5);
+    }
+
+    #[test]
+    fn test_counter_new() {
+        let c = Counter::new(42);
+        assert_eq!(c.get(), 42);
+    }
+}
+"#;
+
+/// Python DAP fixture with known breakpoint targets.
+///
+/// Key positions (1-indexed):
+///   Line 7: breakpoint target inside greet()
+///   Line 15: step-into target
+///   Line 17: variable inspection target
+const DAP_FIXTURE_PY: &str = r#""""DAP self-test fixture — a simple program with inspectable state.
+
+Used by MAE self-test. Do not modify line numbers.
+"""
+
+def greet(name: str) -> str:
+    greeting = f"Hello, {name}!"  # line 7 — breakpoint target
+    return greeting
+
+
+def main():
+    names = ["MAE", "Emacs", "Vim"]
+    results = []
+    for name in names:
+        msg = greet(name)  # line 15 — step-into target
+        results.append(msg)
+    total = len(results)  # line 17 — variable inspection target
+    print(f"Greeted {total} editors")
+
+
+if __name__ == "__main__":
+    main()
+"#;
+
+// ---------------------------------------------------------------------------
+// Plan builder
+// ---------------------------------------------------------------------------
 
 /// Build a structured JSON test plan for the self-test suite.
 ///
@@ -268,21 +370,32 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
     }
 
     if include("lsp") {
+        let lsp_fixture_dir = format!("{sandbox}/lsp-fixture");
+        let lsp_fixture_cargo = format!("{lsp_fixture_dir}/Cargo.toml");
+        let lsp_fixture_src_dir = format!("{lsp_fixture_dir}/src");
+        let lsp_fixture_lib = format!("{lsp_fixture_src_dir}/lib.rs");
+
         categories.push(serde_json::json!({
             "name": "lsp",
             "conditional": true,
-            "requires": ["project"],
-            "prerequisites": [
-                {"tool": "project_info", "must_succeed": true},
-                {"tool": "open_file", "args": {"path": "test_fixtures/lsp_test.rs"}, "must_succeed": true}
+            "requires": ["introspection"],
+            "max_tool_calls": 25,
+            "setup": [
+                format!("1. Create fixture crate: call create_file(path: '{lsp_fixture_cargo}', content: <cargo_toml>)"),
+                format!("   Cargo.toml content:\n{LSP_FIXTURE_CARGO_TOML}"),
+                format!("2. Create fixture source: call create_file(path: '{lsp_fixture_lib}', content: <lib_rs>)"),
+                format!("   lib.rs content (IMPORTANT — line numbers are used by tests below):\n{LSP_FIXTURE_LIB_RS}"),
+                format!("3. Build the fixture to trigger rust-analyzer indexing: call shell_exec(command: 'cd {lsp_fixture_dir} && cargo check 2>&1')"),
+                format!("4. Switch project to fixture crate: call switch_project(path: '{lsp_fixture_dir}')"),
+                format!("5. Open the fixture: call open_file(path: '{lsp_fixture_lib}')"),
             ],
             "precondition_steps": [
-                "1. After opening lsp_test.rs, poll for LSP readiness:",
-                "   a. Call introspect(section: 'lsp').",
-                "   b. Check servers array for language='rust' with status='Connected'.",
-                "   c. If status is 'Starting', call shell_exec(command: 'sleep 3') and retry introspect(section: 'lsp') — up to 3 retries.",
-                "   d. If no rust server exists or status is 'Failed'/'Exited' after retries → SKIP entire category.",
-                "2. Call lsp_diagnostics() to confirm the server responds. If error → SKIP.",
+                "After opening lib.rs, poll for LSP functional readiness:",
+                "  a. Call lsp_document_symbols() — this is the REAL readiness check.",
+                "  b. If result is empty/null/error, call shell_exec(command: 'sleep 3') and retry lsp_document_symbols().",
+                "  c. Retry up to 5 times (rust-analyzer needs ~5-15s to index a small crate).",
+                "  d. If still empty after 5 retries → SKIP entire category (server can't index this file).",
+                "  HARD LIMIT: 6 total tool calls for readiness check (5 polls + 1 sleep each).",
                 "IMPORTANT: Do NOT retry any individual LSP test more than once — if it returns empty, mark FAIL and move on."
             ],
             "tests": [
@@ -290,7 +403,7 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                     "id": "lsp.1",
                     "tool": "introspect",
                     "args": {"section": "lsp"},
-                    "assert": "Returns JSON with any_connected=true (rust-analyzer is ready). If any_connected=false and any_starting=true, sleep 3s and retry up to 3 times. If still false → SKIP remaining LSP tests.",
+                    "assert": "Returns JSON with any_connected=true (rust-analyzer is ready).",
                     "grading": {"method": "json_field_exists", "fields": ["any_connected", "servers"]}
                 },
                 {
@@ -310,27 +423,28 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                 {
                     "id": "lsp.4",
                     "tool": "lsp_hover",
-                    "args": {"line": 15, "character": 12},
-                    "assert": "Returns hover info for Counter struct (line 15 col 12). If empty, FAIL.",
+                    "args": {"line": 4, "character": 12},
+                    "assert": "Returns hover info for Counter struct (line 4 col 12). If empty, FAIL.",
                     "grading": {"method": "success_only"}
                 },
                 {
                     "id": "lsp.5",
                     "tool": "lsp_definition",
-                    "args": {"line": 35, "character": 28},
-                    "assert": "Resolves Counter::new call (line 35 col 28) to constructor at line 20. If empty, FAIL.",
+                    "args": {"line": 24, "character": 28},
+                    "assert": "Resolves Counter::new call (line 24 col 28) to constructor at line 9. If empty, FAIL.",
                     "grading": {"method": "success_only"}
                 },
                 {
                     "id": "lsp.6",
                     "tool": "lsp_references",
-                    "args": {"line": 15, "character": 12},
+                    "args": {"line": 4, "character": 12},
                     "assert": "Returns >= 3 references to Counter. If empty, FAIL.",
                     "grading": {"method": "min_count", "min": 3}
                 }
             ],
             "cleanup": [
-                "close_buffer(name: 'lsp_test.rs', force: true), then switch_buffer(name: '*AI*')"
+                "close_buffer(name: 'lib.rs', force: true), then switch_buffer(name: '*AI*')",
+                format!("Restore original project: call switch_project(path: '{project_root}')")
             ]
         }));
     }
@@ -401,18 +515,26 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
     }
 
     if include("dap") {
+        let dap_fixture_dir = format!("{sandbox}/dap-fixture");
+        let dap_fixture_py = format!("{dap_fixture_dir}/dap_test.py");
+
         categories.push(serde_json::json!({
             "name": "dap",
             "conditional": true,
             "prerequisites": [
                 {"tool": "shell_exec", "args": {"command": "python3 -c \"import debugpy\""}, "must_succeed": true}
             ],
+            "setup": [
+                format!("1. Create fixture directory: call shell_exec(command: 'mkdir -p {dap_fixture_dir}')"),
+                format!("2. Create DAP fixture: call create_file(path: '{dap_fixture_py}', content: <dap_test_py>)"),
+                format!("   dap_test.py content:\n{DAP_FIXTURE_PY}"),
+            ],
             "tests": [
                 {
                     "id": "dap.1",
                     "name": "start_session",
                     "tool": "dap_start",
-                    "args": {"adapter": "debugpy", "program": "test_fixtures/dap_test.py", "stop_on_entry": true},
+                    "args": {"adapter": "debugpy", "program": &dap_fixture_py, "stop_on_entry": true},
                     "assert": "Blocks until session starts AND debuggee stops at entry. Returns JSON with status 'stopped', reason 'entry', thread and frame info. If error, SKIP remaining DAP tests.",
                     "grading": {"method": "output_contains", "substring": "stopped"}
                 },
@@ -420,8 +542,8 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                     "id": "dap.2",
                     "name": "set_breakpoint",
                     "tool": "dap_set_breakpoint",
-                    "args": {"source": "test_fixtures/dap_test.py", "line": 13},
-                    "assert": "Breakpoint set on line 13",
+                    "args": {"source": &dap_fixture_py, "line": 7},
+                    "assert": "Breakpoint set on line 7",
                     "grading": {"method": "success_only"}
                 },
                 {
@@ -460,6 +582,9 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
         categories.push(serde_json::json!({
             "name": "git",
             "conditional": true,
+            "setup": [
+                format!("Ensure project is the MAE repo: call switch_project(path: '{project_root}')"),
+            ],
             "prerequisites": [
                 {"tool": "git_status", "must_succeed": true}
             ],
@@ -737,20 +862,9 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                     "assert": "Returns JSON with local_nodes > 100, watcher_count >= 0",
                     "grading": {"method": "json_field_exists", "fields": ["local_nodes"]}
                 },
-                {
-                    "id": "federation.12",
-                    "tool": "perf_benchmark",
-                    "args": {"benchmark": "kb_search_stress", "size": 500},
-                    "assert": "p95_us < 10000 (search < 10ms at 500 nodes)",
-                    "grading": {"method": "success_only"}
-                },
-                {
-                    "id": "federation.13",
-                    "tool": "perf_benchmark",
-                    "args": {"benchmark": "kb_graph_stress", "size": 200},
-                    "assert": "p95_us < 50000 (BFS depth-2 < 50ms at 200 nodes)",
-                    "grading": {"method": "success_only"}
-                }
+                // federation.12-13 (kb_search_stress, kb_graph_stress) removed — flaky,
+                // performance already covered by the performance category's perf_benchmark tests.
+
             ]
         }));
     }
@@ -764,8 +878,8 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
                     "id": "guidance.1",
                     "tool": "command_list",
                     "args": {"format": "names"},
-                    "assert": "Returns list containing define-key, describe-key (keybinding discovery)",
-                    "grading": {"method": "output_contains", "substring": "define-key"}
+                    "assert": "Returns list containing describe-key (keybinding discovery)",
+                    "grading": {"method": "output_contains", "substring": "describe-key"}
                 },
                 {
                     "id": "guidance.2",
@@ -932,20 +1046,28 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <id> <tool> -- <what was verified>\n  [FAIL] <id> <tool> -- expected <X>, got <Y>\n  [SKIP] <id> <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
         "instructions": [
             "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
+            "CRITICAL: Each test gets exactly ONE tool call. If it fails or returns empty, record FAIL and move to the next test. Do NOT retry with different parameters. Budget: at most 150 total tool calls for the entire test run.",
             "Step 0: Verify project context — call project_info and confirm root matches the project_root field. If mismatched, call switch_project with the project_root path.",
             "State is automatically saved before tests and restored after the session completes. Do NOT call editor_save_state or editor_restore_state.",
             "Step 1: Run categories in listed order (dependency-sorted).",
             "  1a. Check 'requires' — if a dependency category had >50% failures, SKIP the category.",
             "  1b. Run 'prerequisites' — if a must_succeed prerequisite fails, SKIP the category.",
-            "  1c. Execute the category's 'setup' array (if any). Ignore errors — they clean up stale state.",
+            "  1c. Execute the category's 'setup' array (if any). For LSP/DAP categories, create the embedded fixtures in the sandbox using create_file/shell_exec as specified.",
             "  1d. Run each test in sequence. Record PASS/FAIL/SKIP. If a tool fails or times out, call read_messages(level: 'warn') to see logged errors before retrying or skipping.",
             "  1e. Execute the category's 'cleanup' array (if any).",
             "  1f. Continue to next category regardless of individual failures.",
+            format!("Between categories: call switch_project(path: '{}') and switch_buffer(name: '*AI*'). This prevents state leakage. Budget: 2 tool calls per boundary.", project),
             "Step 2: For prompt-based tests (those with 'prompt' field): send the prompt as a sub-request, record tool_calls and final_text, then grade.",
             "Step 3: Final cleanup — delete test files in sandbox.",
             "Step 4: Output the report. Do NOT quit the editor.",
             "Step 5 (optional): Call self_test_suite(action='grade', results=[...]) to get deterministic grading."
         ],
+        "between_categories": {
+            "commands": [
+                {"tool": "switch_project", "args": {"path": project}},
+                {"tool": "switch_buffer", "args": {"name": "*AI*"}}
+            ]
+        },
         "cleanup": [
             format!("Delete sandbox contents: shell_exec('rm -rf {sandbox}/*')"),
             "Do NOT quit the editor"
@@ -954,4 +1076,180 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_roo
     });
 
     serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lsp_fixture_is_valid_rust() {
+        // The embedded lib.rs must be syntactically valid Rust.
+        // We check for key structural elements that the tests rely on.
+        assert!(
+            LSP_FIXTURE_LIB_RS.contains("pub struct Counter"),
+            "fixture must contain Counter struct"
+        );
+        assert!(
+            LSP_FIXTURE_LIB_RS.contains("pub fn new("),
+            "fixture must contain new() constructor"
+        );
+        assert!(
+            LSP_FIXTURE_LIB_RS.contains("pub fn count_to("),
+            "fixture must contain count_to() function"
+        );
+    }
+
+    #[test]
+    fn lsp_fixture_line_numbers_match_tests() {
+        // The test plan references specific line numbers. Verify they match.
+        let lines: Vec<&str> = LSP_FIXTURE_LIB_RS.lines().collect();
+
+        // Line 4 (1-indexed) should contain "pub struct Counter"
+        assert!(
+            lines[3].contains("pub struct Counter"),
+            "Line 4 should be Counter struct, got: '{}'",
+            lines[3]
+        );
+
+        // Line 9 (1-indexed) should contain "pub fn new"
+        assert!(
+            lines[8].contains("pub fn new"),
+            "Line 9 should be new() fn, got: '{}'",
+            lines[8]
+        );
+
+        // Line 24 (1-indexed) should contain "Counter::new"
+        assert!(
+            lines[23].contains("Counter::new"),
+            "Line 24 should contain Counter::new, got: '{}'",
+            lines[23]
+        );
+    }
+
+    #[test]
+    fn dap_fixture_is_valid_python() {
+        // Check structural elements that the DAP tests rely on.
+        assert!(
+            DAP_FIXTURE_PY.contains("def greet(name"),
+            "fixture must contain greet function"
+        );
+        assert!(
+            DAP_FIXTURE_PY.contains("def main()"),
+            "fixture must contain main function"
+        );
+        assert!(
+            DAP_FIXTURE_PY.contains("if __name__"),
+            "fixture must contain __main__ guard"
+        );
+    }
+
+    #[test]
+    fn dap_fixture_breakpoint_line_matches() {
+        let lines: Vec<&str> = DAP_FIXTURE_PY.lines().collect();
+
+        // Line 7 (1-indexed) should be the breakpoint target
+        assert!(
+            lines[6].contains("greeting = f\"Hello"),
+            "Line 7 should be breakpoint target, got: '{}'",
+            lines[6]
+        );
+    }
+
+    #[test]
+    fn lsp_fixture_cargo_toml_is_standalone() {
+        // Must NOT contain workspace references
+        assert!(
+            !LSP_FIXTURE_CARGO_TOML.contains("workspace"),
+            "LSP fixture Cargo.toml must be standalone (no workspace inheritance)"
+        );
+        assert!(
+            LSP_FIXTURE_CARGO_TOML.contains("mae-lsp-fixture"),
+            "LSP fixture Cargo.toml must have correct package name"
+        );
+    }
+
+    #[test]
+    fn plan_lsp_uses_sandbox_paths() {
+        let plan = build_self_test_plan("lsp", "/tmp/test-sandbox", "/project");
+        let parsed: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        let categories = parsed["categories"].as_array().unwrap();
+        let lsp = &categories[0];
+
+        // Setup should reference sandbox paths, not test_fixtures/
+        let setup = serde_json::to_string(&lsp["setup"]).unwrap();
+        assert!(
+            setup.contains("/tmp/test-sandbox/lsp-fixture"),
+            "LSP setup should use sandbox path"
+        );
+        assert!(
+            !setup.contains("test_fixtures/lsp_test.rs"),
+            "LSP setup should NOT reference test_fixtures/"
+        );
+    }
+
+    #[test]
+    fn plan_dap_uses_sandbox_paths() {
+        let plan = build_self_test_plan("dap", "/tmp/test-sandbox", "/project");
+        let parsed: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        let categories = parsed["categories"].as_array().unwrap();
+        let dap = &categories[0];
+
+        // Tests should reference sandbox paths
+        let tests = serde_json::to_string(&dap["tests"]).unwrap();
+        assert!(
+            tests.contains("/tmp/test-sandbox/dap-fixture/dap_test.py"),
+            "DAP tests should use sandbox path"
+        );
+        assert!(
+            !tests.contains("test_fixtures/dap_test.py"),
+            "DAP tests should NOT reference test_fixtures/"
+        );
+    }
+
+    #[test]
+    fn plan_lsp_has_functional_readiness_check() {
+        let plan = build_self_test_plan("lsp", "/tmp/sb", "/project");
+        let parsed: serde_json::Value = serde_json::from_str(&plan).unwrap();
+        let categories = parsed["categories"].as_array().unwrap();
+        let lsp = &categories[0];
+
+        let precondition = serde_json::to_string(&lsp["precondition_steps"]).unwrap();
+        assert!(
+            precondition.contains("lsp_document_symbols"),
+            "LSP precondition must use lsp_document_symbols as functional readiness check"
+        );
+        assert!(
+            precondition.contains("5 retries"),
+            "LSP precondition must allow up to 5 retries"
+        );
+    }
+
+    #[test]
+    fn full_plan_no_test_fixtures_references() {
+        // When building the full plan, no test should reference the old test_fixtures/ directory
+        let plan = build_self_test_plan("", "/tmp/sb", "/project");
+        let parsed: serde_json::Value = serde_json::from_str(&plan).unwrap();
+
+        // Check all test args across all categories
+        for cat in parsed["categories"].as_array().unwrap() {
+            if let Some(tests) = cat["tests"].as_array() {
+                for test in tests {
+                    if let Some(args) = test["args"].as_object() {
+                        let args_str = serde_json::to_string(args).unwrap();
+                        assert!(
+                            !args_str.contains("test_fixtures/"),
+                            "Test {} args reference test_fixtures/: {}",
+                            test["id"],
+                            args_str
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

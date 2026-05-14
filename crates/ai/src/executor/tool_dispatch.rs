@@ -320,8 +320,19 @@ pub fn execute_tool(
                             .unwrap_or_default();
                         let mut grades = Vec::new();
                         for entry in arr {
-                            let test_id =
-                                entry.get("test_id").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                            let test_id = entry
+                                .get("test_id")
+                                .and_then(|v| {
+                                    v.as_str()
+                                        .map(String::from)
+                                        .or_else(|| v.as_u64().map(|n| n.to_string()))
+                                })
+                                .unwrap_or_else(|| "0".to_string());
+                            let test_id_num: usize = test_id
+                                .rsplit('.')
+                                .next()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
                             let tool_calls: Vec<ToolCall> = entry
                                 .get("tool_calls")
                                 .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -330,7 +341,7 @@ pub fn execute_tool(
                                 .get("final_text")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
-                            if let Some(test) = tests.iter().find(|t| t.id == test_id) {
+                            if let Some(test) = tests.iter().find(|t| t.id == test_id_num) {
                                 grades.push(super::model_exam::grade_exam_response(
                                     test,
                                     &tool_calls,

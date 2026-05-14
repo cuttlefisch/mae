@@ -56,6 +56,22 @@ pub enum BufferKind {
     Modules,
 }
 
+impl BufferKind {
+    /// Kinds that belong in dedicated side windows — never valid as a
+    /// kill-buffer fallback or AI file-open target for editing windows.
+    pub fn is_sidebar(&self) -> bool {
+        matches!(
+            self,
+            BufferKind::FileTree
+                | BufferKind::Conversation
+                | BufferKind::Debug
+                | BufferKind::Messages
+                | BufferKind::Dashboard
+                | BufferKind::ShellSelect
+        )
+    }
+}
+
 /// A single edit operation, stored for undo/redo.
 ///
 /// Emacs lesson: undo.c uses an unbounded cons-list truncated at GC time.

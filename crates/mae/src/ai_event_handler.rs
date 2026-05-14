@@ -304,23 +304,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai_last_output_scroll = None;
 
             // Auto-restore editor state and clean up sandbox after self-test session.
-            if editor.self_test_active {
-                editor.self_test_active = false;
-                // Clean up test sandbox.
-                if let Some(sandbox_dir) = editor.test_sandbox_dir.take() {
-                    mae_ai::executor::sandbox::cleanup_sandbox(&sandbox_dir);
-                    info!(sandbox = %sandbox_dir.display(), "cleaned up test sandbox");
-                }
-                match editor.restore_state() {
-                    Ok(summary) => {
-                        info!(summary = %summary, "auto-restored editor state after self-test");
-                        editor.set_status(format!("[AI] Done — {}", summary));
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to auto-restore state after self-test");
-                        editor.set_status("[AI] Done (state restore failed)");
-                    }
-                }
+            if editor.cleanup_self_test() {
+                editor.set_status("[AI] Done — state restored");
             } else {
                 editor.set_status("[AI] Done");
             }

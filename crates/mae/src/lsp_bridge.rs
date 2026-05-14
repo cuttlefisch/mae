@@ -585,7 +585,8 @@ pub(crate) fn handle_lsp_event(
             false
         }
         LspTaskEvent::WorkspaceSymbolResult { .. } => false,
-        LspTaskEvent::DocumentSymbolResult { uri: _, symbols } => {
+        LspTaskEvent::DocumentSymbolResult { uri, symbols } => {
+            mark_connected_from_uri(editor, &uri);
             // Flatten hierarchical DocumentSymbol tree into outline entries.
             fn flatten_symbols(
                 symbols: &[mae_lsp::protocol::DocumentSymbol],

@@ -439,7 +439,11 @@ pub(crate) async fn run_terminal_loop(
                                 if let Some(ref tx) = ai_command_tx {
                                     let _ = tx.try_send(AiCommand::Cancel);
                                 }
-                                editor.set_status("AI operation cancelled");
+                                if editor.cleanup_self_test() {
+                                    editor.set_status("[AI] Cancelled — self-test state restored");
+                                } else {
+                                    editor.set_status("AI operation cancelled");
+                                }
                             } else if editor.mode == Mode::ShellInsert {
                                 handle_shell_key(editor, key, &mut shell_terminals, &mut shell_pending_keys);
                             }
@@ -459,6 +463,9 @@ pub(crate) async fn run_terminal_loop(
                                 editor.ai_streaming = false;
                                 editor.input_lock = mae_core::InputLock::None;
                                 pending_interactive_event = None;
+                                if editor.cleanup_self_test() {
+                                    editor.set_status("[AI] Cancelled — self-test state restored");
+                                }
                             }
                         }
                     }

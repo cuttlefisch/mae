@@ -452,16 +452,36 @@ impl Editor {
             win.cursor_col = 0;
             self.set_status("Buffer killed — [scratch]");
         } else {
+            // If killing a FileTree buffer, close its dedicated window.
+            if self.buffers[idx].kind == crate::buffer::BufferKind::FileTree {
+                if let Some(win_id) = self.file_tree_window_id.take() {
+                    self.window_mgr.close(win_id);
+                }
+            }
             self.lsp_notify_did_close_for_buffer(idx);
             self.buffers.remove(idx);
             self.notify_buffer_removed(idx);
+            // Collect dedicated window IDs before mutable iteration.
+            let dedicated: Vec<crate::window::WindowId> = self
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == idx)
+                .map(|w| w.id)
+                .collect();
             for win in self.window_mgr.iter_windows_mut() {
                 if win.buffer_idx == idx {
-                    win.buffer_idx = idx.saturating_sub(1).min(self.buffers.len() - 1);
+                    win.buffer_idx = find_replacement_buffer(&self.buffers, idx);
                     win.cursor_row = 0;
                     win.cursor_col = 0;
                 } else if win.buffer_idx > idx {
                     win.buffer_idx -= 1;
+                }
+            }
+            // Close dedicated windows whose buffer was killed rather than
+            // reassigning them to an unrelated buffer.
+            for wid in dedicated {
+                if self.is_dedicated_window(wid) {
+                    self.window_mgr.close(wid);
                 }
             }
             let new_idx = self.active_buffer_idx();
@@ -481,9 +501,7 @@ impl Editor {
         self.notify_buffer_removed(idx);
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx == idx {
-                win.buffer_idx = idx
-                    .saturating_sub(1)
-                    .min(self.buffers.len().saturating_sub(1));
+                win.buffer_idx = find_replacement_buffer(&self.buffers, idx);
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             } else if win.buffer_idx > idx {
@@ -530,4 +548,24 @@ impl Editor {
             self.buffers[idx].insert_text_at(line_start, &transformed);
         }
     }
+}
+
+/// Find a non-sidebar buffer near `near` to use as a replacement when
+/// a buffer is killed. Prefers buffers at lower indices first, then higher.
+fn find_replacement_buffer(buffers: &[Buffer], near: usize) -> usize {
+    let start = near.min(buffers.len().saturating_sub(1));
+    for offset in 0..buffers.len() {
+        if start >= offset {
+            let j = start - offset;
+            if !buffers[j].kind.is_sidebar() {
+                return j;
+            }
+        }
+        let j = start + offset + 1;
+        if j < buffers.len() && !buffers[j].kind.is_sidebar() {
+            return j;
+        }
+    }
+    // Fallback: everything is a sidebar, just pick the nearest.
+    start
 }

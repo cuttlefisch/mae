@@ -40,7 +40,7 @@ pub fn grade_tool_result(
     output: &str,
     success: bool,
 ) -> TestGrade {
-    let id = parse_test_id(test_id);
+    let id = test_id_string(test_id);
 
     match spec {
         GradingSpec::SuccessOnly => TestGrade {
@@ -150,7 +150,7 @@ pub fn grade_prompt_result(
     tool_calls: &[crate::types::ToolCall],
     final_text: &str,
 ) -> TestGrade {
-    let id = parse_test_id(test_id);
+    let id = test_id_string(test_id);
 
     match spec {
         GradingSpec::ExactTool { expected_tools } => {
@@ -353,12 +353,8 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
-fn parse_test_id(id: &str) -> usize {
-    // Parse "category.N" → N, or just try as number.
-    id.rsplit('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
+fn test_id_string(id: &str) -> String {
+    id.to_string()
 }
 
 #[cfg(test)]

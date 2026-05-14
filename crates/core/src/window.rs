@@ -1068,6 +1068,49 @@ impl WindowManager {
         Ok(new_id)
     }
 
+    /// Split at the root level with the new leaf as the FIRST child (left/top).
+    /// The existing layout becomes the SECOND child (right/bottom). Used by the
+    /// file tree sidebar so it always appears at the leftmost position regardless
+    /// of the current window arrangement.
+    pub fn split_root_prepend(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        ratio: f32,
+    ) -> Result<WindowId, String> {
+        // Check minimum size against total available area.
+        match direction {
+            SplitDirection::Vertical => {
+                let smaller = (available.width as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_WIDTH {
+                    return Err("Cannot split: too narrow".to_string());
+                }
+            }
+            SplitDirection::Horizontal => {
+                let smaller = (available.height as f32 * ratio.min(1.0 - ratio)) as u16;
+                if smaller < MIN_WINDOW_HEIGHT {
+                    return Err("Cannot split: too short".to_string());
+                }
+            }
+        }
+
+        let new_id = self.next_id;
+        self.next_id += 1;
+        self.windows.insert(new_id, Window::new(new_id, buffer_idx));
+
+        // New leaf is FIRST child (left/top), existing layout is SECOND (right/bottom).
+        let old_layout = std::mem::replace(&mut self.layout, LayoutNode::Leaf(0));
+        self.layout = LayoutNode::Split {
+            direction,
+            ratio,
+            first: Box::new(LayoutNode::Leaf(new_id)),
+            second: Box::new(old_layout),
+        };
+
+        Ok(new_id)
+    }
+
     /// Wrap the smallest subtree containing all `leaf_ids` in a `Group` node.
     /// If the leaves span the entire root, the root itself is wrapped.
     pub fn wrap_subtree_as_group(&mut self, leaf_ids: &[WindowId], label: String) {

@@ -1247,7 +1247,12 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             if let Some(ref tx) = self.ai_command_tx {
                                 let _ = tx.try_send(AiCommand::Cancel);
                             }
-                            self.editor.set_status("AI operation cancelled");
+                            if self.editor.cleanup_self_test() {
+                                self.editor
+                                    .set_status("[AI] Cancelled — self-test state restored");
+                            } else {
+                                self.editor.set_status("AI operation cancelled");
+                            }
                         } else if self.editor.mode == mae_core::Mode::ShellInsert {
                             let ct_event = key_handling::keypress_to_crossterm(&kp);
                             shell_keys::handle_shell_key(
@@ -1283,6 +1288,10 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                             self.editor.ai_streaming = false;
                             self.editor.input_lock = mae_core::InputLock::None;
                             self.pending_interactive_event = None;
+                            if self.editor.cleanup_self_test() {
+                                self.editor
+                                    .set_status("[AI] Cancelled — self-test state restored");
+                            }
                         }
                     }
 

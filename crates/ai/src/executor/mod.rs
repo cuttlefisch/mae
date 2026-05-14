@@ -577,11 +577,17 @@ mod tests {
         let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         let cats = plan["categories"].as_array().unwrap();
         let lsp_cat = &cats[0];
-        // open_file should be in prerequisites, not tests
-        let prereqs = lsp_cat["prerequisites"].as_array().unwrap();
+        // Setup should create fixture files in sandbox (not rely on test_fixtures/)
+        let setup = serde_json::to_string(&lsp_cat["setup"]).unwrap();
         assert!(
-            prereqs.iter().any(|p| p["tool"] == "open_file"),
-            "prerequisites should include open_file"
+            setup.contains("lsp-fixture"),
+            "setup should create fixture in sandbox"
+        );
+        // Precondition steps should use lsp_document_symbols as functional readiness check
+        let precondition = serde_json::to_string(&lsp_cat["precondition_steps"]).unwrap();
+        assert!(
+            precondition.contains("lsp_document_symbols"),
+            "precondition should use lsp_document_symbols for readiness"
         );
         // First test should be introspect (LSP readiness check)
         let tests = lsp_cat["tests"].as_array().unwrap();

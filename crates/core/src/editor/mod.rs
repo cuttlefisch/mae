@@ -2031,6 +2031,42 @@ impl Editor {
         false
     }
 
+    /// Returns true if `win_id` belongs to a dedicated purpose (file tree,
+    /// conversation pair) and should never be repurposed for general buffer routing.
+    pub fn is_dedicated_window(&self, win_id: crate::window::WindowId) -> bool {
+        if self.file_tree_window_id == Some(win_id) {
+            return true;
+        }
+        if let Some(ref pair) = self.conversation_pair {
+            if win_id == pair.output_window_id || win_id == pair.input_window_id {
+                return true;
+            }
+        }
+        // Fallback: check buffer kind for other sidebar types (debug, messages, etc.)
+        if let Some(w) = self.window_mgr.window(win_id) {
+            if w.buffer_idx < self.buffers.len() && self.buffers[w.buffer_idx].kind.is_sidebar() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Clean up self-test state after cancellation or completion.
+    /// Returns true if cleanup was performed.
+    pub fn cleanup_self_test(&mut self) -> bool {
+        if !self.self_test_active {
+            return false;
+        }
+        self.self_test_active = false;
+        if let Some(ref dir) = self.test_sandbox_dir.take() {
+            if dir.exists() && dir.starts_with(std::env::temp_dir()) {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+        let _ = self.restore_state();
+        true
+    }
+
     /// Switch to buffer `idx` but avoid stealing focus from a conversation window.
     ///
     /// If the focused window shows a conversation buffer, the new buffer is
@@ -2129,7 +2165,21 @@ impl Editor {
             rekey_after_remove(&mut win.saved_view_states, removed_idx);
         }
 
-        // 6. Signal the binary to rekey its own maps
+        // 6. Conversation pair buffer indices
+        if let Some(ref mut pair) = self.conversation_pair {
+            if pair.output_buffer_idx == removed_idx || pair.input_buffer_idx == removed_idx {
+                self.conversation_pair = None; // invalidate
+            } else {
+                if pair.output_buffer_idx > removed_idx {
+                    pair.output_buffer_idx -= 1;
+                }
+                if pair.input_buffer_idx > removed_idx {
+                    pair.input_buffer_idx -= 1;
+                }
+            }
+        }
+
+        // 7. Signal the binary to rekey its own maps
         self.pending_buffer_removals.push(removed_idx);
     }
 
@@ -2163,13 +2213,12 @@ impl Editor {
             return true;
         }
 
-        // 2. Can we put it in a non-focused window that isn't a conversation?
+        // 2. Can we put it in a non-focused, non-dedicated window?
         let focused_id = self.window_mgr.focused_id();
-        let other = self
-            .window_mgr
-            .iter_windows()
-            .find(|w| w.id != focused_id && !self.is_conversation_buffer(w.buffer_idx))
-            .map(|w| w.id);
+        let win_ids: Vec<_> = self.window_mgr.iter_windows().map(|w| w.id).collect();
+        let other = win_ids
+            .into_iter()
+            .find(|&wid| wid != focused_id && !self.is_dedicated_window(wid));
 
         if let Some(other_id) = other {
             if let Some(win) = self.window_mgr.window_mut(other_id) {
