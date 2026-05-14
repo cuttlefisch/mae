@@ -582,9 +582,16 @@ For full setup guide: :help ai-setup";
                 self.help_edit_source();
             }
             "kb-create" => {
-                self.set_mode(Mode::Command);
-                self.command_line = "kb-create ".to_string();
-                self.command_cursor = self.command_line.len();
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_kb_create());
+                self.set_mode(Mode::CommandPalette);
+            }
+            "kb-insert-link" => {
+                let nodes = self.kb_all_node_pairs();
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_kb_insert_link(&nodes),
+                );
+                self.set_mode(Mode::CommandPalette);
             }
             "kb-delete" => {
                 self.set_mode(Mode::Command);

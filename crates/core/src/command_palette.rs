@@ -37,6 +37,8 @@ pub enum PalettePurpose {
     AiProfile,
     GitBranch,
     ForgetProject,
+    KbCreate,
+    KbInsertLink,
     MiniDialog,
 }
 
@@ -56,6 +58,8 @@ impl PalettePurpose {
             Self::AiProfile => "AI Prompt Profile",
             Self::GitBranch => "Git Branch",
             Self::ForgetProject => "Forget Project",
+            Self::KbCreate => "New Note",
+            Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
         }
     }
@@ -280,6 +284,38 @@ impl CommandPalette {
         Self::with_name_list(roots, PalettePurpose::ForgetProject)
     }
 
+    /// KB create note palette: empty prompt, user types title freely.
+    /// Used by `SPC n c` / `kb-create`.
+    pub fn for_kb_create() -> Self {
+        CommandPalette {
+            query: String::new(),
+            entries: Vec::new(),
+            filtered: Vec::new(),
+            selected: 0,
+            purpose: PalettePurpose::KbCreate,
+        }
+    }
+
+    /// KB insert link palette: populated with all KB node ids + titles.
+    /// Used by `SPC n i` / `kb-insert-link`.
+    pub fn for_kb_insert_link(nodes: &[(String, String)]) -> Self {
+        let entries: Vec<PaletteEntry> = nodes
+            .iter()
+            .map(|(id, title)| PaletteEntry {
+                name: id.clone(),
+                doc: title.clone(),
+            })
+            .collect();
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::KbInsertLink,
+        }
+    }
+
     /// Splash art picker palette. Lists built-in + custom registered arts.
     pub fn for_splash_art(editor: &crate::Editor) -> Self {
         let names = crate::render_common::splash::available_splash_names(editor);
@@ -413,6 +449,8 @@ mod tests {
             PalettePurpose::AiProfile,
             PalettePurpose::GitBranch,
             PalettePurpose::ForgetProject,
+            PalettePurpose::KbCreate,
+            PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
         ];
         for p in &purposes {

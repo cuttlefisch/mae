@@ -187,6 +187,11 @@
 ;;   (run-command "scratch"))
 ;; (define-command "scratch-note" "Open scratch buffer" "scratch-note")
 
+;; ── Knowledge Base ──────────────────────────────────────────────────
+;; Set a default directory for user-created notes (org-roam-directory).
+;; Uncomment and adjust the path to enable file-backed notes via SPC n c.
+;; (set-option! "kb-notes-dir" "~/RoamNotes")
+
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; Local Variables — add machine-local overrides below this line.
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

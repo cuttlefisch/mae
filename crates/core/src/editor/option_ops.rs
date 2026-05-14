@@ -123,6 +123,11 @@ impl super::Editor {
             "kb_search_excerpt_length" => self.kb_search_excerpt_length.to_string(),
             "kb_search_max_results" => self.kb_search_max_results.to_string(),
             "kb_auto_register" => self.kb_auto_register.to_string(),
+            "kb_notes_dir" => self
+                .kb_notes_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             _ => return None,
@@ -483,6 +488,14 @@ impl super::Editor {
             }
             "kb_auto_register" => {
                 self.kb_auto_register = parse_option_bool(value)?;
+            }
+            "kb_notes_dir" => {
+                if value.is_empty() {
+                    self.kb_notes_dir = None;
+                } else {
+                    let expanded = crate::file_picker::expand_tilde(value);
+                    self.kb_notes_dir = Some(std::path::PathBuf::from(expanded));
+                }
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;

@@ -606,6 +606,8 @@ pub struct Editor {
     pub kb_search_max_results: usize,
     /// KB option: auto-register org directories in project root.
     pub kb_auto_register: bool,
+    /// KB option: default directory for user-created notes (org-roam-directory equivalent).
+    pub kb_notes_dir: Option<std::path::PathBuf>,
     /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
     /// Append guidance on revisit to steer away from manual graph traversal loops.
     /// Cleared when a new AI conversation starts.
@@ -1149,6 +1151,7 @@ impl Editor {
             kb_search_excerpt_length: 500,
             kb_search_max_results: 20,
             kb_auto_register: false,
+            kb_notes_dir: None,
             kb_ai_visited_ids: std::collections::HashSet::new(),
             config_dir_override: None,
             data_dir_override: None,

@@ -184,16 +184,21 @@ impl Editor {
             }
             "kb-create" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-create <id> <title>"),
+                    None => self.set_status("Usage: :kb-create <title> or :kb-create <id> <title>"),
                     Some(input) => {
                         let parts: Vec<&str> = input.splitn(2, ' ').collect();
-                        if parts.len() < 2 {
-                            self.set_status("Usage: :kb-create <id> <title>");
-                        } else {
+                        if parts.len() == 2 && (parts[0].contains(':') || !parts[0].contains(' ')) {
+                            // Legacy: explicit id + title
                             let id = parts[0];
                             let title = parts[1].trim();
                             match self.kb_create_node(id, title, "", mae_kb::NodeKind::Note) {
                                 Ok(()) => {}
+                                Err(e) => self.set_status(e),
+                            }
+                        } else {
+                            // New: title-only, auto-generate ID
+                            match self.kb_create_note_from_title(input) {
+                                Ok(_) => {}
                                 Err(e) => self.set_status(e),
                             }
                         }

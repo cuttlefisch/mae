@@ -1078,12 +1078,16 @@ impl CommandRegistry {
         );
         reg.register_builtin(
             "kb-create",
-            "Create a new KB node: kb-create <id> <title> (SPC n c)",
+            "Create a new note — type title, auto-generates ID (SPC n c)",
         );
         reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
         reg.register_builtin(
+            "kb-insert-link",
+            "Insert org-style link to a KB node at cursor (SPC n i)",
+        );
+        reg.register_builtin(
             "kb-instances",
-            "Show all registered KB federation instances (SPC n i)",
+            "Show all registered KB federation instances (SPC n I)",
         );
 
         // Help / KB navigation

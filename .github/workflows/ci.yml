@@ -174,7 +174,21 @@ jobs:
           CODE=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['Total']['code'])")
           echo "count=~$((CODE / 1000))k" >> $GITHUB_OUTPUT
 
+      - name: Validate badge config
+        run: |
+          if [ -z "${{ secrets.MAE_BADGE_TOKEN }}" ]; then
+            echo "::warning::MAE_BADGE_TOKEN secret is not set — skipping badge updates"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+          if [ -z "${{ vars.MAE_BADGE_GIST }}" ]; then
+            echo "::warning::MAE_BADGE_GIST variable is not set — skipping badge updates"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+        id: badge_check
+
       - name: Update test badge
+        if: steps.badge_check.outputs.skip != 'true'
+        continue-on-error: true
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.MAE_BADGE_TOKEN }}
@@ -185,6 +199,8 @@ jobs:
           color: brightgreen
 
       - name: Update LOC badge
+        if: steps.badge_check.outputs.skip != 'true'
+        continue-on-error: true
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.MAE_BADGE_TOKEN }}

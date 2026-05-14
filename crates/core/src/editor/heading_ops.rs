@@ -706,7 +706,7 @@ impl Editor {
     }
 
     /// Insert text at the current cursor position (insert mode helper).
-    pub(crate) fn insert_at_cursor(&mut self, text: &str) {
+    pub fn insert_at_cursor(&mut self, text: &str) {
         let buf_idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window();
         let pos = self.buffers[buf_idx].char_offset_at(win.cursor_row, win.cursor_col);

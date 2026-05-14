@@ -175,6 +175,13 @@ impl Editor {
                 // Notify any running LSP server that the file was saved.
                 self.lsp_notify_did_save();
                 self.request_git_diff(idx);
+                // If saved file is inside a KB instance dir, reimport it
+                // so the in-memory graph stays in sync (watcher may be disabled).
+                if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
+                    if self.kb_path_in_instance(&path) {
+                        self.kb_reimport_file(&path);
+                    }
+                }
                 self.fire_hook("after-save");
             }
             Err(e) => {

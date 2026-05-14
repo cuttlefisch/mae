@@ -408,6 +408,121 @@ impl Editor {
         self.set_status(format!("{} KB instance(s) registered", count));
     }
 
+    /// Create a KB note from just a title (org-roam-style).
+    ///
+    /// Auto-generates a `user:TIMESTAMP-slug` ID. If `kb_notes_dir` is set,
+    /// persists the note as an `.org` file and imports it into the matching
+    /// KB instance. Otherwise creates an ephemeral in-memory node.
+    ///
+    /// Returns `(id, Option<path>)` — the node id and the file path if written.
+    pub fn kb_create_note_from_title(
+        &mut self,
+        title: &str,
+    ) -> Result<(String, Option<std::path::PathBuf>), String> {
+        let slug = mae_kb::slugify(title);
+        if slug.is_empty() {
+            return Err("Title cannot be empty".to_string());
+        }
+        let timestamp = mae_kb::timestamp_id();
+        let id = format!("user:{}-{}", timestamp, slug);
+
+        if let Some(dir) = self.kb_notes_dir.clone() {
+            // Ensure directory exists
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("Cannot create kb-notes-dir: {}", e))?;
+
+            // Write .org file
+            let filename = format!("{}.org", slug);
+            let path = dir.join(&filename);
+            let content = format!(
+                ":PROPERTIES:\n:ID: {}\n:END:\n#+title: {}\n#+filetags:\n\n",
+                id, title
+            );
+            std::fs::write(&path, &content)
+                .map_err(|e| format!("Cannot write note file: {}", e))?;
+
+            // Insert into matching KB instance (if registered)
+            self.kb_insert_to_notes_instance(&id, title, &path);
+
+            // Open the file for editing
+            self.open_file(&path);
+
+            self.set_status(format!("Created: {}", title));
+            Ok((id, Some(path)))
+        } else {
+            // Ephemeral in-memory node (fallback)
+            self.kb_create_node(&id, title, "", mae_kb::NodeKind::Note)?;
+            Ok((id, None))
+        }
+    }
+
+    /// Insert a node into the KB instance that covers `kb_notes_dir`.
+    /// Falls back to inserting into the local KB if no matching instance.
+    fn kb_insert_to_notes_instance(&mut self, id: &str, title: &str, path: &std::path::Path) {
+        let node = mae_kb::Node::new(id, title, mae_kb::NodeKind::Note, "")
+            .with_source(mae_kb::NodeSource::UserOrg, 0)
+            .with_source_file(path);
+
+        // Try to find a registered instance whose org_dir matches kb_notes_dir
+        let notes_dir = self.kb_notes_dir.clone();
+        if let Some(ref dir) = notes_dir {
+            for inst in &self.kb_registry.instances {
+                if inst.org_dir == *dir {
+                    if let Some(kb) = self.kb_instances.get_mut(&inst.uuid) {
+                        kb.insert(node);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Fallback: insert into local KB
+        self.kb.insert(node);
+    }
+
+    /// Collect all KB node (id, title) pairs from local + federated instances.
+    pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = self.kb.all_id_title_pairs();
+        let mut seen: std::collections::HashSet<String> =
+            pairs.iter().map(|(id, _)| id.clone()).collect();
+
+        for kb in self.kb_instances.values() {
+            for (id, title) in kb.all_id_title_pairs() {
+                if seen.insert(id.clone()) {
+                    pairs.push((id, title));
+                }
+            }
+        }
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs
+    }
+
+    /// Re-import a single file into the KB instance that covers its directory.
+    /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
+    pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
+        for (uuid, inst) in self
+            .kb_registry
+            .instances
+            .iter()
+            .map(|i| (i.uuid.clone(), i.org_dir.clone()))
+        {
+            if path.starts_with(&inst) {
+                if let Some(kb) = self.kb_instances.get_mut(&uuid) {
+                    kb.ingest_org_file(path);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Check if a path is inside a registered KB instance directory.
+    pub fn kb_path_in_instance(&self, path: &std::path::Path) -> bool {
+        self.kb_registry
+            .instances
+            .iter()
+            .any(|i| path.starts_with(&i.org_dir))
+    }
+
     /// Search across local KB and all federated instances.
     /// Returns (instance_name_or_none, node) pairs, deduplicated by node ID.
     /// Local results take priority over federated.
