@@ -2158,7 +2158,8 @@ impl Editor {
         }
 
         // 1. Is this buffer already visible?
-        if self.window_mgr.iter_windows().any(|w| w.buffer_idx == idx) {
+        if let Some(w) = self.window_mgr.iter_windows().find(|w| w.buffer_idx == idx) {
+            self.ai_target_window_id = Some(w.id);
             return true;
         }
 
@@ -2177,6 +2178,7 @@ impl Editor {
                 win.cursor_col = 0;
             }
             self.ai_work_window_id = Some(other_id);
+            self.ai_target_window_id = Some(other_id);
             self.mark_full_redraw();
             return true;
         }
@@ -2194,26 +2196,45 @@ impl Editor {
             if let Some(id) = non_conv_win {
                 self.window_mgr.set_focused(id);
             } else if let Some(ref pair) = self.conversation_pair {
-                // All windows are conversation — steal the output window temporarily
-                // instead of splitting (which creates narrow panes beside the
-                // conversation group). The output window is restored on session end.
-                if let Some(win) = self.window_mgr.window_mut(pair.output_window_id) {
-                    win.buffer_idx = idx;
-                    win.cursor_row = 0;
-                    win.cursor_col = 0;
+                // All windows are conversation. Agent shells are persistent
+                // interactive sessions — stealing the output window would
+                // permanently replace the conversation display. Skip the steal
+                // and fall through to the split attempt below.
+                let is_agent_shell = idx < self.buffers.len() && self.buffers[idx].agent_shell;
+                if !is_agent_shell {
+                    // Non-agent buffer: steal output temporarily (restored on session end).
+                    let out_id = pair.output_window_id;
+                    if let Some(win) = self.window_mgr.window_mut(out_id) {
+                        win.buffer_idx = idx;
+                        win.cursor_row = 0;
+                        win.cursor_col = 0;
+                    }
+                    self.ai_work_window_id = Some(out_id);
+                    self.ai_target_window_id = Some(out_id);
+                    self.mark_full_redraw();
+                    return true;
                 }
-                self.ai_work_window_id = Some(pair.output_window_id);
-                self.mark_full_redraw();
-                return true;
+                // Agent shell: fall through to split attempt.
             }
         }
         let area = self.default_area();
-        match self
-            .window_mgr
-            .split(crate::window::SplitDirection::Vertical, idx, area)
-        {
+        let is_agent = idx < self.buffers.len() && self.buffers[idx].agent_shell;
+
+        // For agent shells, use split_root to guarantee the shell gets a
+        // top-level window beside the entire conversation group, regardless
+        // of which conversation pane is focused.
+        let split_result = if is_agent {
+            self.window_mgr
+                .split_root(crate::window::SplitDirection::Vertical, idx, area, 0.5)
+        } else {
+            self.window_mgr
+                .split(crate::window::SplitDirection::Vertical, idx, area)
+        };
+
+        match split_result {
             Ok(new_id) => {
                 self.ai_work_window_id = Some(new_id);
+                self.ai_target_window_id = Some(new_id);
                 self.mark_full_redraw();
                 true
             }
@@ -2320,6 +2341,11 @@ impl Editor {
         if let Some(id) = win_id {
             self.window_mgr.set_focused(id);
         }
+        // No forced fallback: if display_buffer() routed the buffer via
+        // switch_to_buffer_non_conversation (e.g. split_root for agent
+        // shells), the buffer is already placed in a new window that may
+        // not match the iter_windows search above. Forcing it into the
+        // focused window would steal conversation windows.
         if prev_idx != buf_idx {
             self.alternate_buffer_idx = Some(prev_idx);
         }
@@ -2354,6 +2380,18 @@ impl Editor {
         direction: crate::window::SplitDirection,
         ratio: f32,
     ) {
+        // Redirect focus away from conversation windows before splitting,
+        // so the split happens outside the conversation group.
+        if self.is_conversation_buffer(self.active_buffer_idx()) {
+            let non_conv_win = self
+                .window_mgr
+                .iter_windows()
+                .find(|w| !self.is_conversation_buffer(w.buffer_idx))
+                .map(|w| w.id);
+            if let Some(nc_id) = non_conv_win {
+                self.window_mgr.set_focused(nc_id);
+            }
+        }
         let area = self.default_area();
         match self
             .window_mgr

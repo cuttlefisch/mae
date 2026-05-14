@@ -1190,7 +1190,7 @@ mod tests {
 
     #[test]
     fn self_test_plan_instructions_no_manual_save_restore() {
-        let plan_json = build_self_test_plan("", "");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let instructions = plan["instructions"].as_array().unwrap();
         let all_text: String = instructions
@@ -1291,7 +1291,7 @@ mod tests {
     /// tracker can track progress correctly.
     #[test]
     fn self_test_plan_tools_all_classified() {
-        let plan_json = build_self_test_plan("", "");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
 
@@ -1324,7 +1324,7 @@ mod tests {
     /// in the tool registry (or be a special tool like self_test_suite).
     #[test]
     fn self_test_plan_tools_match_registry() {
-        let plan_json = build_self_test_plan("", "");
+        let plan_json = build_self_test_plan("", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
 
@@ -1358,7 +1358,7 @@ mod tests {
 
     #[test]
     fn guidance_category_exists() {
-        let plan_json = build_self_test_plan("guidance", "");
+        let plan_json = build_self_test_plan("guidance", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let categories = plan["categories"].as_array().unwrap();
         assert_eq!(categories.len(), 1);
@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn guidance_category_has_expected_test_count() {
-        let plan_json = build_self_test_plan("guidance", "");
+        let plan_json = build_self_test_plan("guidance", "", "");
         let plan: serde_json::Value = serde_json::from_str(&plan_json).unwrap();
         let tests = plan["categories"][0]["tests"].as_array().unwrap();
         assert_eq!(tests.len(), 5, "Guidance category should have 5 tests");
@@ -1385,9 +1385,53 @@ mod tests {
 
     #[test]
     fn executor_submodule_self_test_plan_parses() {
-        let json = super::self_test::build_self_test_plan("", "");
+        let json = super::self_test::build_self_test_plan("", "", "");
         let val: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(val["version"], 3);
         assert!(val["categories"].as_array().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn self_test_plan_has_project_root_field() {
+        let json = build_self_test_plan("", "/tmp/sandbox", "/home/user/project");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(plan["project_root"], "/home/user/project");
+    }
+
+    #[test]
+    fn self_test_plan_has_step0_project_context() {
+        let json = build_self_test_plan("", "", "");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let instructions = plan["instructions"].as_array().unwrap();
+        let all_text: String = instructions
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            all_text.contains("project_info") || all_text.contains("switch_project"),
+            "Instructions should mention project context verification"
+        );
+    }
+
+    #[test]
+    fn self_test_scrolling_no_repeat_instructions() {
+        let json = build_self_test_plan("scrolling", "", "");
+        let plan: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let categories = plan["categories"].as_array().unwrap();
+        let scrolling = categories
+            .iter()
+            .find(|c| c["name"] == "scrolling")
+            .unwrap();
+        let tests = scrolling["tests"].as_array().unwrap();
+        for test in tests {
+            let assert_str = test["assert"].as_str().unwrap_or("");
+            assert!(
+                !assert_str.to_lowercase().contains("repeat"),
+                "Scrolling test {} assert should not contain 'repeat': {}",
+                test["id"],
+                assert_str
+            );
+        }
     }
 }

@@ -134,7 +134,22 @@ pub fn execute_tool(
                     let project_root = editor
                         .active_project_root()
                         .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                        .unwrap_or_else(|| {
+                            // No editor project set — find MAE workspace root
+                            // from the binary itself. current_exe() returns e.g.
+                            // .../target/debug/mae; detect_project_root walks up
+                            // to find .git / Cargo.toml / .project markers.
+                            std::env::current_exe()
+                                .ok()
+                                .and_then(|exe| mae_core::detect_project_root(&exe))
+                                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+                        });
+                    // Ensure the editor has a project set so subsequent tools
+                    // (git, project_files, etc.) operate in the right context.
+                    if editor.active_project_root().is_none() {
+                        let idx = editor.active_buffer_idx();
+                        editor.buffers[idx].project_root = Some(project_root.clone());
+                    }
                     let sandbox = super::sandbox::create_test_sandbox(&project_root);
                     editor.test_sandbox_dir = Some(sandbox.dir);
                 }
@@ -148,7 +163,11 @@ pub fn execute_tool(
                     .get("categories")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                super::self_test::build_self_test_plan(filter, &sandbox_path)
+                let project_root_str = editor
+                    .active_project_root()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                super::self_test::build_self_test_plan(filter, &sandbox_path, &project_root_str)
             }
             "grade" => {
                 let model = call
@@ -281,7 +300,7 @@ pub fn execute_tool(
                 // Delegate to self_test_suite with exam-only categories.
                 let exam_cats =
                     "tool_selection,parameter_accuracy,output_interpretation,multi_step,pushback";
-                super::self_test::build_self_test_plan(exam_cats, "")
+                super::self_test::build_self_test_plan(exam_cats, "", "")
             }
             "grade" => {
                 // Legacy grading path — use original exam grading.

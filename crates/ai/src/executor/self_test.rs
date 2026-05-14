@@ -11,7 +11,7 @@
 ///
 /// `sandbox_path` is the sandbox directory for file-write confinement.
 /// If empty, `/tmp/mae-self-test` is used as a fallback.
-pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str) -> String {
+pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str, project_root: &str) -> String {
     let filters: Vec<&str> = if filter.is_empty() {
         vec![]
     } else {
@@ -542,8 +542,8 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str) -> String {
                 {
                     "id": "scrolling.6",
                     "tool": "execute_command",
-                    "args": {"command": "scroll-down-line"},
-                    "assert": "Success (repeat 5 times)",
+                    "args": {"command": "scroll-half-down"},
+                    "assert": "Success — moves viewport down by half a page",
                     "grading": {"method": "success_only"}
                 },
                 {
@@ -556,8 +556,8 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str) -> String {
                 {
                     "id": "scrolling.8",
                     "tool": "execute_command",
-                    "args": {"command": "scroll-up-line"},
-                    "assert": "Success (repeat 5 times)",
+                    "args": {"command": "scroll-half-up"},
+                    "assert": "Success — moves viewport up by half a page",
                     "grading": {"method": "success_only"}
                 },
                 {
@@ -919,13 +919,20 @@ pub(crate) fn build_self_test_plan(filter: &str, sandbox_path: &str) -> String {
         }));
     }
 
+    let project = if project_root.is_empty() {
+        sandbox
+    } else {
+        project_root
+    };
     let plan = serde_json::json!({
         "version": 3,
         "sandbox": sandbox,
+        "project_root": project,
         "description": "MAE self-test plan v3. Call each tool with the given args, check the assertion, report [PASS]/[FAIL]/[SKIP] per test. Tests with 'prompt' field are prompt-based (model exam style). Tests with 'grading' field support deterministic server-side grading via action='grade'.",
         "output_format": "=== MAE Self-Test Report ===\nCategory: <name>\n  [PASS] <id> <tool> -- <what was verified>\n  [FAIL] <id> <tool> -- expected <X>, got <Y>\n  [SKIP] <id> <tool> -- <reason>\n\nSummary: N passed, N failed, N skipped",
         "instructions": [
             "IMPORTANT: Do NOT call self_test_suite again once you have the plan. You already have everything you need.",
+            "Step 0: Verify project context — call project_info and confirm root matches the project_root field. If mismatched, call switch_project with the project_root path.",
             "State is automatically saved before tests and restored after the session completes. Do NOT call editor_save_state or editor_restore_state.",
             "Step 1: Run categories in listed order (dependency-sorted).",
             "  1a. Check 'requires' — if a dependency category had >50% failures, SKIP the category.",

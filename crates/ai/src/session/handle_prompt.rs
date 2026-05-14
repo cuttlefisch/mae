@@ -422,17 +422,38 @@ impl AgentSession {
             };
 
             if !response.tool_calls.is_empty() {
+                // Auto-detect self-test mode when the model calls self_test_suite.
+                // The prompt-based detection (above) only catches `:self-test`;
+                // this catches interactive sessions where the user asks the agent
+                // to run self-tests via normal chat.
+                if !self.is_self_test
+                    && response
+                        .tool_calls
+                        .iter()
+                        .any(|c| c.name == "self_test_suite")
+                {
+                    info!("auto-detected self_test_suite tool call — enabling self-test mode");
+                    self.is_self_test = true;
+                    self.progress = super::progress::ProgressTracker::new(15, true);
+                }
+
                 // Signature: sorted tool names + arguments for robust comparison.
-                // Exclude pure debug_state polls from oscillation detection — repeated
-                // state reads during debugging are legitimate, not loops.
+                // Exclude pure read-only observation tools from oscillation
+                // detection — repeated state reads during debugging or
+                // self-tests are legitimate, not loops.
+                const OBSERVATION_TOOLS: &[&str] =
+                    &["debug_state", "cursor_info", "editor_state", "perf_stats"];
                 let sig_calls: Vec<String> = response
                     .tool_calls
                     .iter()
-                    .filter(|c| c.name != "debug_state" || response.tool_calls.len() > 1)
+                    .filter(|c| {
+                        !OBSERVATION_TOOLS.contains(&c.name.as_str())
+                            || response.tool_calls.len() > 1
+                    })
                     .map(|c| format!("{}:{}", c.name, c.arguments))
                     .collect();
                 let turn_sig = if sig_calls.is_empty() {
-                    // Pure debug_state poll — use a unique non-repeating signature
+                    // Pure observation poll — use a unique non-repeating signature
                     format!("_poll_{}", self.turn_history.len())
                 } else {
                     let mut sorted = sig_calls;

@@ -650,3 +650,178 @@ fn close_window_fires_window_close_hook() {
         "window-close hook should fire"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Window group integrity: agent shell vs conversation (Fixes 0-3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn switch_to_buffer_non_conv_sets_target_window_id() {
+    let mut editor = Editor::new();
+    // Add a second buffer (Text).
+    editor.buffers.push(Buffer::new());
+    // Split so we have two windows.
+    editor.dispatch_builtin("split-vertical");
+    assert_eq!(editor.window_mgr.window_count(), 2);
+    // Call switch_to_buffer_non_conversation for buffer 1.
+    let ok = editor.switch_to_buffer_non_conversation(1);
+    assert!(ok);
+    // ai_target_window_id must be set.
+    assert!(
+        editor.ai_target_window_id.is_some(),
+        "ai_target_window_id must be set by switch_to_buffer_non_conversation"
+    );
+    // The target window should show buffer 1.
+    let tw_id = editor.ai_target_window_id.unwrap();
+    let tw = editor.window_mgr.window(tw_id).unwrap();
+    assert_eq!(tw.buffer_idx, 1);
+}
+
+#[test]
+fn switch_to_buffer_non_conv_visible_sets_target_window() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    editor.dispatch_builtin("split-vertical");
+    // Put buffer 1 in one of the windows.
+    let second_win_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != 0)
+        .map(|w| w.id)
+        .unwrap();
+    editor
+        .window_mgr
+        .window_mut(second_win_id)
+        .unwrap()
+        .buffer_idx = 1;
+    // Step 1 path: buffer already visible.
+    let ok = editor.switch_to_buffer_non_conversation(1);
+    assert!(ok);
+    assert_eq!(editor.ai_target_window_id, Some(second_win_id));
+}
+
+#[test]
+fn agent_shell_does_not_steal_conversation_output() {
+    let mut editor = Editor::new();
+    // Set up conversation pair: buffer 0 = output, buffer 1 = input.
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".to_string();
+    editor.buffers.push(input_buf);
+    // Split to create the conversation layout.
+    editor.dispatch_builtin("split-vertical");
+    let win_ids: Vec<_> = editor.window_mgr.iter_windows().map(|w| w.id).collect();
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: win_ids[0],
+        input_window_id: win_ids[1],
+    });
+    // Mark buffer 0 as conversation.
+    editor.buffers[0].kind = crate::BufferKind::Conversation;
+    // Now add an agent shell buffer.
+    let mut shell_buf = Buffer::new_shell("*agent-shell*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    // Try to display it. The steal path should be skipped for agent shells.
+    let result = editor.switch_to_buffer_non_conversation(shell_idx);
+    // Should succeed via split (or at least not steal the output window).
+    assert!(result);
+    // The conversation output window should NOT show the shell buffer.
+    let out_win = editor.window_mgr.window(win_ids[0]).unwrap();
+    assert_ne!(
+        out_win.buffer_idx, shell_idx,
+        "Agent shell must not steal the conversation output window"
+    );
+}
+
+#[test]
+fn display_buffer_and_focus_places_text_buffer() {
+    let mut editor = Editor::new();
+    editor.buffers.push(Buffer::new());
+    // display_buffer_and_focus for buffer 1, which is not in any window.
+    // AvoidConversation policy should place it in the focused window.
+    editor.display_buffer_and_focus(1);
+    assert_eq!(
+        editor.active_buffer_idx(),
+        1,
+        "Buffer should be visible after display_buffer_and_focus"
+    );
+}
+
+/// Reproduction test for the exact user scenario:
+/// Focus on *ai-input* → open agent shell → shell must NOT steal *AI* window.
+#[test]
+fn agent_shell_opens_beside_conversation_group() {
+    let mut editor = Editor::new();
+    // Buffer 0 = *AI* (Conversation output)
+    editor.buffers[0].name = "*AI*".to_string();
+    editor.buffers[0].kind = crate::BufferKind::Conversation;
+
+    // Buffer 1 = *ai-input* (Conversation input)
+    let mut input_buf = Buffer::new();
+    input_buf.name = "*ai-input*".to_string();
+    input_buf.kind = crate::BufferKind::Conversation;
+    editor.buffers.push(input_buf);
+
+    // Create conversation layout: split horizontal, output on top, input below.
+    let area = editor.default_area();
+    let input_win_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Horizontal, 1, area)
+        .expect("split should succeed");
+    // Window 0 = *AI*, input_win_id = *ai-input*.
+    editor.conversation_pair = Some(crate::editor::ConversationPair {
+        output_buffer_idx: 0,
+        input_buffer_idx: 1,
+        output_window_id: 0,
+        input_window_id: input_win_id,
+    });
+
+    // Simulate user's init.scm: dashboard_dismiss_on_split = true
+    editor.dashboard_dismiss_on_split = true;
+
+    // Focus the *ai-input* window (as the user had).
+    editor.window_mgr.set_focused(input_win_id);
+    assert_eq!(editor.active_buffer_idx(), 1);
+
+    // Buffer 2 = agent shell
+    let mut shell_buf = Buffer::new_shell("*AI:claude*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = 2;
+
+    // This is the code path triggered by `open-ai-agent` → `display_buffer_and_focus`.
+    editor.display_buffer_and_focus(shell_idx);
+
+    // Verify: 3 windows (conversation pair + new shell window).
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        3,
+        "Should have 3 windows: *AI* + *ai-input* + agent shell"
+    );
+
+    // Verify: *AI* output window still shows buffer 0 (not stolen).
+    let out_win = editor.window_mgr.window(0).unwrap();
+    assert_eq!(
+        out_win.buffer_idx, 0,
+        "*AI* output window must still show the conversation buffer"
+    );
+
+    // Verify: *ai-input* window still shows buffer 1.
+    let in_win = editor.window_mgr.window(input_win_id).unwrap();
+    assert_eq!(
+        in_win.buffer_idx, 1,
+        "*ai-input* window must still show the input buffer"
+    );
+
+    // Verify: agent shell is visible in a window.
+    let shell_win = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.buffer_idx == shell_idx);
+    assert!(
+        shell_win.is_some(),
+        "Agent shell must be visible in its own window"
+    );
+}
