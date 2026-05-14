@@ -2,17 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- Resolve splash-art image paths relative to module dir ([71f2fe1](https://github.com/cuttlefisch/mae/commit/71f2fe1d597a40ade3e1d385a9e08bc1ca7f3c0f))
+- Splash screen polish — centering, unicode width, mode guard ([87f10fb](https://github.com/cuttlefisch/mae/commit/87f10fb67084299e03a78b425077075123a0e7ae))
+- Add missing splash options + image_natural_size method ([f11d48f](https://github.com/cuttlefisch/mae/commit/f11d48fa9d0a5c0a019e33af7a46db17ab49abbd))
+- Tolerate missing `id` in exam tool_calls + first exam result ([cbb668e](https://github.com/cuttlefisch/mae/commit/cbb668eba7f05c8ea47fc552180d174be7ce63d3))
+- Shell exit orphan windows, buffer readiness mode sync, dead hooks ([5757b86](https://github.com/cuttlefisch/mae/commit/5757b865566fa41d55786c2aabb859d0005f82a6))
+- Agent shell steals conversation window + self-test oscillation abort ([8a52851](https://github.com/cuttlefisch/mae/commit/8a528517a9d8010404c2217d125eb23ca0f9aaab))
+- Self-test reliability — sandbox confinement, LSP readiness, shell lifecycle ([0fa4654](https://github.com/cuttlefisch/mae/commit/0fa465496d9768db9fa542d24e6fc44cd03ec079))
+- Anchor-first project detection + persistent project list ([12fa240](https://github.com/cuttlefisch/mae/commit/12fa240cea1dc5697b74daa345cd574006ddf06e))
+- Safe project pruning + interactive project-forget (SPC p D) ([ba34aef](https://github.com/cuttlefisch/mae/commit/ba34aefc472f3484c113b395e92de5ec35d6e13d))
+
+### Features
+
+- Memory synthesis, network status, verifier agent, org↔markdown conversion, splash image sizing ([7266a37](https://github.com/cuttlefisch/mae/commit/7266a372ba6602efefaa7a988e0304874efb8553))
+- MCP client, tool search, model exam, verifier agent + fix shell buffer corruption ([8ac8803](https://github.com/cuttlefisch/mae/commit/8ac8803d1ae356401f51ea6618f072cad065f7cb))
+- Model exam persistence, docs refresh, CI fix ([496ef35](https://github.com/cuttlefisch/mae/commit/496ef35771248b46f79b4c79b24053bc37f0332b))
+- Unified test system (sandbox+grading) + LSP readiness probe ([bc201e9](https://github.com/cuttlefisch/mae/commit/bc201e9abe70b7ce337b03cec4c67857e9f2defe))
+
+### Miscellaneous
+
+- Update Cargo.lock after main backmerge ([d9c8279](https://github.com/cuttlefisch/mae/commit/d9c827951e6eb42413570cfdb179c099c8d6cf5d))
+- Regenerate code map after project detection changes ([057a07c](https://github.com/cuttlefisch/mae/commit/057a07cb77bd2a50724ba0ba7720282451ff51ba))
+- Pre-release polish — docs, fragility markers, module READMEs ([511da23](https://github.com/cuttlefisch/mae/commit/511da23e3718537c17d3d5d5640b749dc3a06cf7))
+
+## [0.8.3] - 2026-05-13
+
+### Miscellaneous
+
+- Bump version to 0.8.3 ([94844fa](https://github.com/cuttlefisch/mae/commit/94844fa4f4965dda64e0426cb41da97032e5c503))
+
 ## [0.8.2] - 2026-05-13
+
+### Bug Fixes
+
+- Shell-select buffer exit path + KB fuzzy search, window groups, AI tools ([ce2471e](https://github.com/cuttlefisch/mae/commit/ce2471e3e863358036a796a856c86eb5870fe7f7))
 
 ### CI
 
 - *(deps)* Bump the ci-dependencies group with 2 updates ([418ac68](https://github.com/cuttlefisch/mae/commit/418ac6846112f52afa0bc7775c74cb69687e8b6c))
 
+### Documentation
+
+- Add module system KB nodes and extension authoring guide ([81008d3](https://github.com/cuttlefisch/mae/commit/81008d335efc52553b636c79e01340385bc37bd5))
+
+### Features
+
+- Module system foundation (M1-M3) — manifest, resolver, loader, CLI, 3 extractions ([16c2c74](https://github.com/cuttlefisch/mae/commit/16c2c740d25990a9219c352cdb194d4711b1de2b))
+- Extract 5 Tier 1 modules — search, registers, macros, tables, multicursor ([7910936](https://github.com/cuttlefisch/mae/commit/79109367d3bf4a623c1fc85f59756a55df7101b1))
+- Add `mae pkg info` and `mae pkg create` CLI subcommands ([102b178](https://github.com/cuttlefisch/mae/commit/102b1789851a6193a314a50325ef19f3818a24f5))
+- Extract file-tree module (Tier 2) — first module-owned keymap ([71248ef](https://github.com/cuttlefisch/mae/commit/71248ef6650114eee471acfe48edc01fdeaca75e))
+- M4 — describe-mode command, deprecation mechanism ([db0824e](https://github.com/cuttlefisch/mae/commit/db0824efcd0857e2b22a8acaeeddf9525fd2d1dc))
+- Declarative package management, module KB nodes, CI badges (M1-M5) ([5d707ef](https://github.com/cuttlefisch/mae/commit/5d707ef183657ec05d957565f05e8b60ee8298fd))
+- KB federation lifecycle — live watching, edit-source, RAG, keybindings (W1-W6) ([88978d4](https://github.com/cuttlefisch/mae/commit/88978d41b44b983d3603915bed9f81e0b12e2fa6))
+- KB UX improvements — Obsidian/org-roam reading parity ([e7acbe4](https://github.com/cuttlefisch/mae/commit/e7acbe46ebf9474a94c63694c310f760a0118d8a))
+- Scheme API gaps, advice system, module extraction, reliability (A-F) ([663bb79](https://github.com/cuttlefisch/mae/commit/663bb79642fe1a1387de67c20ee7b95a973abcd4))
+- Babel crate extraction, persistent sessions, language backends, edit-special (G1-G4d) ([a757ad2](https://github.com/cuttlefisch/mae/commit/a757ad24389cc167d94c0a23970cd05b5b63f150))
+- Doom Parity Tier 1 — snippets, format, make, lookup, spell crates + mod.rs split (H1-H6) ([45dcf01](https://github.com/cuttlefisch/mae/commit/45dcf019a610293fa671a25fc99565d810976c60))
+- Tool validation, ai-status!, register-ai-tool! (I1-I3) ([5efadd3](https://github.com/cuttlefisch/mae/commit/5efadd36c0eb3048d95205311dd0b11e01b89543))
+- Model table expansion, source metadata, module template, planner-compact (I5-I8) ([a732612](https://github.com/cuttlefisch/mae/commit/a7326122210b2848ef8430b21706603807492379))
+- God-file splits + module system hardening (J1-J5) ([2c2c0f4](https://github.com/cuttlefisch/mae/commit/2c2c0f400cfe843b94ec9302d5253403a7014b79))
+- Custom splash art, local package source, e2e CI (K1-K4) ([5ed1b1e](https://github.com/cuttlefisch/mae/commit/5ed1b1ef0990fec75c6453793879b22a3d85d573))
+
 ### Miscellaneous
 
+- Track .claude/commands/ skills in git, keep settings.local.json ignored ([389a72d](https://github.com/cuttlefisch/mae/commit/389a72d8e714a698b0db9be0068f878c667f3008))
+- Bump MSRV to 1.95, Dockerfile to rust:1.95 ([147a930](https://github.com/cuttlefisch/mae/commit/147a930a11654502bb2d57213355c6def640a6d8))
 - *(deps)* Bump the rust-dependencies group with 14 updates ([0bae408](https://github.com/cuttlefisch/mae/commit/0bae408d92ea90c07580e34e535006986df9e1c6))
 - Bump MSRV to 1.95 (sysinfo 0.39.1 requires it) ([780d642](https://github.com/cuttlefisch/mae/commit/780d642b62aad22f7c2f3b84895f00c0b3e26771))
 - Bump version to 0.8.2 ([6472c4d](https://github.com/cuttlefisch/mae/commit/6472c4d6f4e2ffd209c1280ae3882eab42fa00bb))
+
+### Performance
+
+- Streaming save, async git diff, autosave cadence (I4) ([8f0c8d0](https://github.com/cuttlefisch/mae/commit/8f0c8d0cc0e9373ff49706692e150d7fd6903dcd))
 
 ## [0.8.1] - 2026-05-11
 
