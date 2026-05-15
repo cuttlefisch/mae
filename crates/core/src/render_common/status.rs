@@ -218,7 +218,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     // Priority 3.5: capture mode indicator.
     if editor.capture_state.is_some() {
         segments.push(Segment::new(
-            " [Capture: C-c C-c finish | C-c C-k abort]".to_string(),
+            " [Capture: SPC n s finish | SPC n k abort | C-c C-c/C-k]".to_string(),
             3,
         ));
     }

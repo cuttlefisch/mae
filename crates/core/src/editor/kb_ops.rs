@@ -13,8 +13,10 @@ pub struct KbWatcherStats {
     pub events_upserted: u64,
     /// Total nodes removed via watcher drain.
     pub events_removed: u64,
-    /// Events skipped due to debounce or drain cap.
-    pub events_skipped: u64,
+    /// Events skipped due to debounce (too recent).
+    pub suppressed_debounce: u64,
+    /// Events skipped due to 50ms timebox deadline.
+    pub suppressed_timebox: u64,
     /// Events suppressed by write-guard (MAE-initiated writes).
     pub events_suppressed: u64,
     /// Total reimport calls from all sources (save, watcher, explicit).
@@ -25,6 +27,10 @@ pub struct KbWatcherStats {
     pub last_drain_us: u64,
     /// Number of events processed in the last drain.
     pub last_drain_event_count: usize,
+    /// Cumulative drain microseconds (for computing avg).
+    pub drain_us_sum: u64,
+    /// Number of drain cycles that processed at least one event.
+    pub drain_count: u64,
 }
 
 /// Result of a KB registration or reimport operation.
@@ -620,6 +626,7 @@ impl Editor {
             // Debounce: skip if last drain was too recent
             if let Some(last) = self.kb_last_drain.get(&uuid) {
                 if last.elapsed() < debounce_dur {
+                    self.kb_watcher_stats.suppressed_debounce += 1;
                     continue;
                 }
             }
@@ -645,13 +652,13 @@ impl Editor {
 
             let skipped = changes.len().saturating_sub(max_events);
             if skipped > 0 {
-                self.kb_watcher_stats.events_skipped += skipped as u64;
+                self.kb_watcher_stats.suppressed_timebox += skipped as u64;
             }
 
             for change in changes.into_iter().take(max_events) {
                 // Time-boxing: break if we've exceeded the 50ms budget
                 if std::time::Instant::now() > deadline {
-                    self.kb_watcher_stats.events_skipped += 1;
+                    self.kb_watcher_stats.suppressed_timebox += 1;
                     break;
                 }
 
@@ -692,12 +699,88 @@ impl Editor {
         let elapsed_us = drain_start.elapsed().as_micros() as u64;
         self.kb_watcher_stats.last_drain_us = elapsed_us;
         self.kb_watcher_stats.last_drain_event_count = total_processed;
+        if total_processed > 0 {
+            self.kb_watcher_stats.drain_us_sum += elapsed_us;
+            self.kb_watcher_stats.drain_count += 1;
+            self.kb_watcher_stats.reimports_total +=
+                self.kb_watcher_stats.events_upserted + self.kb_watcher_stats.events_removed;
+        }
         self.perf_stats.kb_watcher_drain_us = elapsed_us;
         self.perf_stats.kb_watcher_events += total_processed as u64;
 
         if changed {
             self.fire_hook("after-kb-change");
         }
+    }
+
+    /// Validate links in the current buffer's KB node after save.
+    /// Shows a status bar warning if broken links are found.
+    /// Advisory only — does NOT block the save.
+    pub fn validate_kb_links_on_save(&mut self) {
+        let idx = self.active_buffer_idx();
+        let buf = &self.buffers[idx];
+
+        // Only validate KB-sourced buffers (have a source_file or daily: prefix)
+        let node_id: Option<String> = buf.file_path().and_then(|path| {
+            // Find a node whose source_file matches this path
+            self.kb
+                .all_id_title_pairs()
+                .into_iter()
+                .find_map(|(id, _)| {
+                    self.kb.get(&id).and_then(|n| {
+                        n.source_file
+                            .as_ref()
+                            .filter(|sf| sf.as_path() == path)
+                            .map(|_| id.clone())
+                    })
+                })
+        });
+
+        // Also check dailies buffers
+        let node_id = node_id.or_else(|| {
+            let name = &self.buffers[self.active_buffer_idx()].name;
+            if name.starts_with("daily:") {
+                Some(name.clone())
+            } else {
+                None
+            }
+        });
+
+        if let Some(id) = node_id {
+            let missing = self.kb.validate_links(&id);
+            // Also check federated instances for the targets
+            let missing: Vec<_> = missing
+                .into_iter()
+                .filter(|target| !self.kb_instances.values().any(|kb| kb.contains(target)))
+                .collect();
+            if !missing.is_empty() {
+                self.set_status(format!(
+                    "Warning: {} broken link(s) in this node",
+                    missing.len()
+                ));
+            }
+        }
+    }
+
+    /// Clean up orphan user notes (no links in or out).
+    /// Preserves seed nodes (cmd:, concept:, lesson:, scheme:, option:).
+    /// Returns the number of orphans removed.
+    pub fn kb_cleanup_orphans(&mut self) -> usize {
+        let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
+        let report = self.kb.health_report();
+        let to_remove: Vec<String> = report
+            .orphan_ids
+            .into_iter()
+            .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
+            .collect();
+        let count = to_remove.len();
+        for id in &to_remove {
+            self.kb.remove(id);
+        }
+        if count > 0 {
+            self.fire_hook("after-kb-change");
+        }
+        count
     }
 }
 

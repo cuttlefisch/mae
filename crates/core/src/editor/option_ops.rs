@@ -849,7 +849,8 @@ impl super::Editor {
     }
 
     pub fn show_kb_health_report(&mut self) {
-        let report = self.kb.health_report();
+        let mut report = self.kb.health_report();
+        report.stale_nodes = self.kb.detect_stale_nodes();
         let mut lines = Vec::new();
         lines.push("KB Health Report".to_string());
         lines.push("================".to_string());
@@ -940,6 +941,49 @@ impl super::Editor {
                 }
             }
         }
+        lines.push(String::new());
+
+        // Stale nodes (source file deleted).
+        lines.push(format!("Stale Nodes ({})", report.stale_nodes.len()));
+        lines.push("-------------------".to_string());
+        if report.stale_nodes.is_empty() {
+            lines.push("  (none)".to_string());
+        } else {
+            for s in &report.stale_nodes {
+                lines.push(format!(
+                    "  {} — {} (was: {})",
+                    s.id,
+                    s.title,
+                    s.source_file.display()
+                ));
+            }
+        }
+        lines.push(String::new());
+
+        // Watcher performance metrics.
+        let ws = &self.kb_watcher_stats;
+        lines.push("Watcher Metrics".to_string());
+        lines.push("---------------".to_string());
+        lines.push(format!("  Reimports total:     {}", ws.reimports_total));
+        lines.push(format!("  Events upserted:     {}", ws.events_upserted));
+        lines.push(format!("  Events removed:      {}", ws.events_removed));
+        lines.push(format!("  Suppressed debounce: {}", ws.suppressed_debounce));
+        lines.push(format!("  Suppressed timebox:  {}", ws.suppressed_timebox));
+        lines.push(format!(
+            "  Suppressed write-guard: {}",
+            ws.events_suppressed
+        ));
+        lines.push(format!("  Errors:              {}", ws.errors));
+        let avg_ms = if ws.drain_count > 0 {
+            format!(
+                "{:.1}ms",
+                ws.drain_us_sum as f64 / ws.drain_count as f64 / 1000.0
+            )
+        } else {
+            "n/a".to_string()
+        };
+        lines.push(format!("  Avg reimport time:   {}", avg_ms));
+        lines.push(format!("  Total drain cycles:  {}", ws.drain_count));
 
         let content = lines.join("\n");
         let mut buf = crate::buffer::Buffer::new();

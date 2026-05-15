@@ -404,6 +404,14 @@ For full setup guide: :help ai-setup";
             "kb-health" => {
                 self.show_kb_health_report();
             }
+            "kb-cleanup-orphans" => {
+                let count = self.kb_cleanup_orphans();
+                if count == 0 {
+                    self.set_status("No orphan user notes to remove");
+                } else {
+                    self.set_status(format!("Removed {} orphan note(s)", count));
+                }
+            }
             "describe-bindings" => {
                 self.show_bindings_report();
             }

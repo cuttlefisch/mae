@@ -179,6 +179,7 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC b n"), "next-buffer");
         normal.bind(parse_key_seq_spaced("SPC b p"), "prev-buffer");
         normal.bind(parse_key_seq_spaced("SPC b l"), "alternate-file");
+        normal.bind(parse_key_seq_spaced("SPC b a"), "alternate-file");
         normal.bind(parse_key_seq_spaced("SPC b m"), "view-messages");
         normal.bind(parse_key_seq_spaced("SPC b N"), "new-buffer");
         normal.bind(parse_key_seq_spaced("SPC b D"), "force-kill-buffer");
@@ -317,9 +318,12 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
         normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
         normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");
-        // Capture mode (org-roam parity)
+        // Capture mode (org-roam parity) — leader alternatives for discoverability
         normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
         normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n s"), "capture-finalize");
+        normal.bind(parse_key_seq_spaced("SPC n k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n C"), "kb-cleanup-orphans");
         normal.bind(parse_key_seq_spaced("SPC n I"), "kb-instances");
         normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)

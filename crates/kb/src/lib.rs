@@ -286,6 +286,14 @@ fn is_uuid_like(s: &str) -> bool {
             .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
+/// A node whose `source_file` points to a path that no longer exists on disk.
+#[derive(Debug, Clone)]
+pub struct StaleNode {
+    pub id: String,
+    pub title: String,
+    pub source_file: std::path::PathBuf,
+}
+
 /// Health report for the knowledge base — orphans, broken links, namespace stats.
 #[derive(Debug, Clone)]
 pub struct KbHealthReport {
@@ -294,6 +302,7 @@ pub struct KbHealthReport {
     pub orphan_ids: Vec<String>,
     pub broken_links: Vec<BrokenLink>,
     pub namespace_counts: HashMap<String, usize>,
+    pub stale_nodes: Vec<StaleNode>,
 }
 
 /// Pre-lowercased search cache for a single node. Populated at insert
@@ -736,6 +745,7 @@ impl KnowledgeBase {
             orphan_ids,
             broken_links: result.broken_links,
             namespace_counts: result.namespace_counts,
+            stale_nodes: Vec::new(), // populated lazily by caller via detect_stale_nodes()
         }
     }
 
@@ -744,6 +754,55 @@ impl KnowledgeBase {
         let mut v = self.links_in.get(target).cloned().unwrap_or_default();
         v.sort();
         v
+    }
+
+    /// Detect nodes whose `source_file` points to a path that no longer exists.
+    /// This is intentionally lazy — call on-demand (health report, reimport),
+    /// not on every drain tick (filesystem stat per node is expensive).
+    pub fn detect_stale_nodes(&self) -> Vec<StaleNode> {
+        self.nodes
+            .values()
+            .filter_map(|n| {
+                n.source_file.as_ref().and_then(|path| {
+                    if !path.exists() {
+                        Some(StaleNode {
+                            id: n.id.clone(),
+                            title: n.title.clone(),
+                            source_file: path.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// Remove stale nodes (source file deleted) and return the count removed.
+    pub fn remove_stale_nodes(&mut self) -> usize {
+        let stale_ids: Vec<String> = self
+            .detect_stale_nodes()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        let count = stale_ids.len();
+        for id in stale_ids {
+            self.remove(&id);
+        }
+        count
+    }
+
+    /// Validate links in a node's body, returning IDs of missing targets.
+    pub fn validate_links(&self, node_id: &str) -> Vec<String> {
+        let body = match self.nodes.get(node_id) {
+            Some(n) => &n.body,
+            None => return Vec::new(),
+        };
+        parse_links(body)
+            .into_iter()
+            .filter(|(target, _)| !self.nodes.contains_key(target))
+            .map(|(target, _)| target)
+            .collect()
     }
 
     /// Return all (id, title) pairs for all nodes, sorted by id.
@@ -1286,6 +1345,84 @@ mod tests {
                 ("a".to_string(), "Alpha".to_string()),
                 ("b".to_string(), "Beta".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn stale_node_detected_after_file_delete() {
+        let mut kb = KnowledgeBase::new();
+        let fake_path = std::path::PathBuf::from("/tmp/mae-test-nonexistent-12345.org");
+        // Ensure path doesn't exist
+        assert!(!fake_path.exists());
+        kb.insert(
+            Node::new("stale-test", "Stale", NodeKind::Note, "body").with_source_file(&fake_path),
+        );
+        let stale = kb.detect_stale_nodes();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, "stale-test");
+        assert_eq!(stale[0].source_file, fake_path);
+    }
+
+    #[test]
+    fn link_validation_warns_on_broken_link() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("a", "A", NodeKind::Note, "[[missing-id]]"));
+        kb.insert(Node::new("b", "B", NodeKind::Note, "[[a]]")); // valid
+        let missing = kb.validate_links("a");
+        assert_eq!(missing, vec!["missing-id"]);
+        let missing = kb.validate_links("b");
+        assert!(missing.is_empty(), "link to existing node should be valid");
+    }
+
+    #[test]
+    fn cleanup_orphans_removes_user_notes() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new(
+            "orphan-note",
+            "Orphan",
+            NodeKind::Note,
+            "no links",
+        ));
+        kb.insert(Node::new("a", "A", NodeKind::Note, "[[b]]"));
+        kb.insert(Node::new("b", "B", NodeKind::Note, ""));
+        // orphan-note has no links in or out — should be removable
+        let report = kb.health_report();
+        assert!(report.orphan_ids.contains(&"orphan-note".to_string()));
+        // Simulate cleanup (same logic as Editor::kb_cleanup_orphans)
+        let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
+        let to_remove: Vec<String> = report
+            .orphan_ids
+            .into_iter()
+            .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
+            .collect();
+        for id in &to_remove {
+            kb.remove(id);
+        }
+        assert!(!kb.contains("orphan-note"));
+        assert!(kb.contains("a"));
+        assert!(kb.contains("b"));
+    }
+
+    #[test]
+    fn cleanup_orphans_preserves_seed_nodes() {
+        let mut kb = KnowledgeBase::new();
+        kb.insert(Node::new("cmd:save", "Save", NodeKind::Command, ""));
+        kb.insert(Node::new("concept:buffer", "Buffer", NodeKind::Concept, ""));
+        kb.insert(Node::new("lesson:intro", "Intro", NodeKind::Note, ""));
+        kb.insert(Node::new("scheme:define", "Define", NodeKind::Note, ""));
+        kb.insert(Node::new("option:theme", "Theme", NodeKind::Note, ""));
+        // All are orphans (no links), but should be preserved by seed prefix filter
+        let report = kb.health_report();
+        let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
+        let to_remove: Vec<String> = report
+            .orphan_ids
+            .into_iter()
+            .filter(|id| !seed_prefixes.iter().any(|p| id.starts_with(p)))
+            .collect();
+        assert!(
+            to_remove.is_empty(),
+            "seed nodes should be preserved: {:?}",
+            to_remove
         );
     }
 }

@@ -957,6 +957,10 @@ impl CommandRegistry {
             "Show KB health report (orphans, broken links, namespace counts)",
         );
         reg.register_builtin(
+            "kb-cleanup-orphans",
+            "Remove orphan user notes with no links (SPC n C)",
+        );
+        reg.register_builtin(
             "describe-display-policy",
             "Show the active display policy rules (how buffers are placed in windows)",
         );

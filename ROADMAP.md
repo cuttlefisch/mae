@@ -44,6 +44,7 @@
 - [x] Babel edit-commit: `SPC m '` in edit buffer writes body back to source
 
 ### Near-term
+- [ ] Server-client architecture refactoring and hardening
 - [ ] PDF preview (GUI inline rendering via `hayro` pure-Rust rasterizer + midnight mode)
 - [ ] Semantic code search (vector embeddings)
 - [x] Org ↔ Markdown bidirectional conversion (`:markdown-to-org`, `:org-to-markdown`)
