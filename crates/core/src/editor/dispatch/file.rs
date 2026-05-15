@@ -83,7 +83,17 @@ impl Editor {
                 self.kill_buffer_at(idx);
             }
             "switch-buffer" => {
-                let mut names: Vec<String> = self.buffers.iter().map(|b| b.name.clone()).collect();
+                let mut names: Vec<String> = self
+                    .buffers
+                    .iter()
+                    .filter(|b| {
+                        !matches!(
+                            b.kind,
+                            crate::BufferKind::ShellSelect | crate::BufferKind::Demo
+                        )
+                    })
+                    .map(|b| b.name.clone())
+                    .collect();
                 if !names.iter().any(|n| n == "*Messages*") {
                     names.push("*Messages*".to_string());
                 }
@@ -170,13 +180,19 @@ impl Editor {
             "kill-other-buffers" => {
                 let active = self.active_buffer_idx();
                 let to_remove: Vec<usize> = (0..self.buffers.len())
-                    .filter(|&i| i != active && !self.buffers[i].modified)
+                    .filter(|&i| {
+                        i != active
+                            && !self.buffers[i].modified
+                            && !self.buffers[i].kind.is_sidebar()
+                            && self.buffers[i].kind != crate::BufferKind::Dashboard
+                    })
                     .collect();
                 let killed = to_remove.len();
                 for &i in to_remove.iter().rev() {
                     self.buffers.remove(i);
                     self.notify_buffer_removed(i);
                 }
+                self.ensure_scratch_exists();
                 let buf_count = self.buffers.len();
                 for win in self.window_mgr.iter_windows_mut() {
                     if win.buffer_idx >= buf_count {

@@ -316,7 +316,11 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("SPC n d"), "kb-delete");
         normal.bind(parse_key_seq_spaced("SPC n r"), "kb-register");
         normal.bind(parse_key_seq_spaced("SPC n R"), "kb-reimport");
-        normal.bind(parse_key_seq_spaced("SPC n i"), "kb-instances");
+        normal.bind(parse_key_seq_spaced("SPC n i"), "kb-insert-link");
+        // Capture mode (org-roam parity)
+        normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
+        normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
+        normal.bind(parse_key_seq_spaced("SPC n I"), "kb-instances");
         normal.bind(parse_key_seq_spaced("SPC n h"), "kb-health");
         // +code (LSP shortcuts)
         normal.bind(parse_key_seq_spaced("SPC c d"), "lsp-goto-definition");

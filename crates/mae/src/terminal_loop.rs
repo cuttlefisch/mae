@@ -523,6 +523,14 @@ pub(crate) async fn run_terminal_loop(
                             _ => {}
                         }
                     }
+                    Some(Ok(Event::FocusGained)) => {
+                        // Check if current buffer's file changed on disk
+                        let idx = editor.active_buffer_idx();
+                        if editor.mini_dialog.is_none() {
+                            editor.check_and_reload_buffer(idx);
+                        }
+                        tui_dirty = true;
+                    }
                     Some(Ok(Event::Resize(w, h))) => {
                         editor.last_layout_area = mae_core::WinRect {
                             x: 0,

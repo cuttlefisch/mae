@@ -11,12 +11,7 @@ use super::Editor;
 impl Editor {
     /// Run a git command and put output in a read-only scratch buffer.
     fn git_command_to_buffer(&mut self, args: &[&str], buf_name: &str) {
-        let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        let root = self.git_root();
 
         match std::process::Command::new("git")
             .args(args)
@@ -81,13 +76,38 @@ impl Editor {
         });
     }
 
+    /// Populate `buffer.git_branch` if missing and the buffer has a project root.
+    /// Cheap no-op if already populated. Called on buffer focus change.
+    pub fn ensure_buffer_git_branch(&mut self, buf_idx: usize) {
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].git_branch.is_some() {
+            return;
+        }
+        let dir = self.buffers[buf_idx]
+            .project_root
+            .clone()
+            .or_else(|| self.project.as_ref().map(|p| p.root.clone()));
+        self.buffers[buf_idx].git_branch = dir.and_then(|d| {
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&d)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+    }
+
     pub fn git_status(&mut self) {
         use crate::git_status::*;
 
         let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
+            .active_project_root()
+            .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
 
@@ -874,21 +894,15 @@ impl Editor {
     }
 
     fn git_root(&self) -> std::path::PathBuf {
-        self.project
-            .as_ref()
-            .map(|p| p.root.clone())
+        self.active_project_root()
+            .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default()
     }
 
     /// Amend the previous commit.
     pub fn git_amend(&mut self) {
-        let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        let root = self.git_root();
 
         info!("opening amend commit message buffer");
         let commit_file = root.join(".git/COMMIT_EDITMSG");
@@ -902,12 +916,7 @@ impl Editor {
     }
 
     fn run_git_porcelain(&self, args: &[&str]) -> (bool, String, String) {
-        let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        let root = self.git_root();
 
         match std::process::Command::new("git")
             .args(args)
@@ -1034,12 +1043,7 @@ impl Editor {
         self.git_command_to_buffer(&["diff"], "*git-diff*");
     }
     pub(crate) fn git_commit(&mut self) {
-        let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        let root = self.git_root();
 
         info!("opening commit message buffer");
         let commit_file = root.join(".git/COMMIT_EDITMSG");
@@ -1070,10 +1074,11 @@ impl Editor {
             Some(p) => p.to_path_buf(),
             None => return,
         };
-        let root = self
-            .project
-            .as_ref()
-            .map(|p| p.root.clone())
+        // Use buffer's project root if available, then editor-wide, then CWD.
+        let root = self.buffers[buffer_idx]
+            .project_root
+            .clone()
+            .or_else(|| self.project.as_ref().map(|p| p.root.clone()))
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
 

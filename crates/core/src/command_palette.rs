@@ -37,6 +37,8 @@ pub enum PalettePurpose {
     AiProfile,
     GitBranch,
     ForgetProject,
+    KbFindOrCreate,
+    KbInsertLink,
     MiniDialog,
 }
 
@@ -56,6 +58,8 @@ impl PalettePurpose {
             Self::AiProfile => "AI Prompt Profile",
             Self::GitBranch => "Git Branch",
             Self::ForgetProject => "Forget Project",
+            Self::KbFindOrCreate => "Find or Create",
+            Self::KbInsertLink => "Insert Link",
             Self::MiniDialog => "Dialog",
         }
     }
@@ -116,6 +120,9 @@ pub enum MiniDialogContext {
         heading_line: usize,
     },
     AgendaFilterTag,
+    RevertBuffer {
+        buf_idx: usize,
+    },
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)
@@ -202,6 +209,9 @@ pub struct CommandPalette {
     pub selected: usize,
     /// What to do with the selection on Enter.
     pub purpose: PalettePurpose,
+    /// When true, the query input line is selected (not any list item).
+    /// Used by KbFindOrCreate/KbInsertLink to offer a "create from query" action.
+    pub query_selected: bool,
 }
 
 impl CommandPalette {
@@ -237,6 +247,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose: PalettePurpose::HelpSearch,
+            query_selected: false,
         }
     }
 
@@ -280,6 +291,50 @@ impl CommandPalette {
         Self::with_name_list(roots, PalettePurpose::ForgetProject)
     }
 
+    /// KB find-or-create palette: pre-populated with all KB nodes.
+    /// Typing filters; Enter on a match opens it, Enter with no match creates.
+    /// Used by `SPC n c` / `SPC n f`.
+    pub fn for_kb_find_or_create(nodes: &[(String, String)]) -> Self {
+        let mut entries: Vec<PaletteEntry> = nodes
+            .iter()
+            .map(|(id, title)| PaletteEntry {
+                name: id.clone(),
+                doc: title.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::KbFindOrCreate,
+            query_selected: false,
+        }
+    }
+
+    /// KB insert link palette: populated with all KB node ids + titles.
+    /// Used by `SPC n i` / `kb-insert-link`.
+    pub fn for_kb_insert_link(nodes: &[(String, String)]) -> Self {
+        let entries: Vec<PaletteEntry> = nodes
+            .iter()
+            .map(|(id, title)| PaletteEntry {
+                name: id.clone(),
+                doc: title.clone(),
+            })
+            .collect();
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::KbInsertLink,
+            query_selected: false,
+        }
+    }
+
     /// Splash art picker palette. Lists built-in + custom registered arts.
     pub fn for_splash_art(editor: &crate::Editor) -> Self {
         let names = crate::render_common::splash::available_splash_names(editor);
@@ -294,6 +349,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose: PalettePurpose::SetSplashArt,
+            query_selected: false,
         }
     }
 
@@ -312,6 +368,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose,
+            query_selected: false,
         }
     }
 
@@ -332,6 +389,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             purpose,
+            query_selected: false,
         }
     }
 
@@ -360,15 +418,34 @@ impl CommandPalette {
             self.filtered = scored.into_iter().map(|(idx, _)| idx).collect();
         }
         self.selected = 0;
+        // For find-or-create palettes, auto-select query line when no matches.
+        if self.has_create_from_query() {
+            self.query_selected = !self.query.is_empty() && self.filtered.is_empty();
+        }
     }
 
     pub fn move_down(&mut self) {
+        if self.query_selected {
+            self.query_selected = false;
+            self.selected = 0;
+            return;
+        }
         if !self.filtered.is_empty() {
             self.selected = (self.selected + 1) % self.filtered.len();
         }
     }
 
     pub fn move_up(&mut self) {
+        if self.query_selected {
+            return; // already at top
+        }
+        if self.has_create_from_query()
+            && !self.query.is_empty()
+            && (self.filtered.is_empty() || self.selected == 0)
+        {
+            self.query_selected = true;
+            return;
+        }
         if !self.filtered.is_empty() {
             if self.selected == 0 {
                 self.selected = self.filtered.len() - 1;
@@ -379,12 +456,24 @@ impl CommandPalette {
     }
 
     /// Name of the currently selected command, if any.
+    /// Returns `None` when `query_selected` is true (user is on the "create" line).
     pub fn selected_name(&self) -> Option<&str> {
+        if self.query_selected {
+            return None;
+        }
         if self.filtered.is_empty() {
             return None;
         }
         let idx = self.filtered[self.selected];
         Some(&self.entries[idx].name)
+    }
+
+    /// Whether this palette supports creating from the query text.
+    pub fn has_create_from_query(&self) -> bool {
+        matches!(
+            self.purpose,
+            PalettePurpose::KbFindOrCreate | PalettePurpose::KbInsertLink
+        )
     }
 
     /// The entry at position `pos` in the filtered list.
@@ -413,6 +502,8 @@ mod tests {
             PalettePurpose::AiProfile,
             PalettePurpose::GitBranch,
             PalettePurpose::ForgetProject,
+            PalettePurpose::KbFindOrCreate,
+            PalettePurpose::KbInsertLink,
             PalettePurpose::MiniDialog,
         ];
         for p in &purposes {

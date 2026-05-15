@@ -81,6 +81,8 @@ struct SharedState {
     pending_autoloads: Vec<(String, String, String)>,
     /// Pending display-rule overrides: (kind_name, action_string).
     pending_display_rules: Vec<(String, String)>,
+    /// Pending replaceable-kind changes: (kind_name, enable).
+    pending_replaceable_kinds: Vec<(String, bool)>,
     /// Paths to add to org agenda files via `(agenda-add! PATH)`.
     pending_agenda_adds: Vec<String>,
     /// Paths to remove from org agenda files via `(agenda-remove! PATH)`.
@@ -363,6 +365,19 @@ impl SchemeRuntime {
             s.lock().unwrap().pending_display_rules.push((kind, action));
             SteelVal::Void
         });
+
+        // (set-buffer-kind-replaceable! KIND ENABLE) — mark a buffer kind as replaceable
+        let s = shared.clone();
+        engine.register_fn(
+            "set-buffer-kind-replaceable!",
+            move |kind: String, enable: bool| {
+                s.lock()
+                    .unwrap()
+                    .pending_replaceable_kinds
+                    .push((kind, enable));
+                SteelVal::Void
+            },
+        );
 
         // --- Shell terminal bindings ---
 
@@ -1710,6 +1725,27 @@ impl SchemeRuntime {
                         "Invalid display rule: kind='{}', action='{}'",
                         kind_str, action_str
                     ));
+                }
+            }
+        }
+
+        // Apply replaceable-kind changes from (set-buffer-kind-replaceable!)
+        for (kind_str, enable) in state.pending_replaceable_kinds.drain(..) {
+            use mae_core::display_policy::parse_buffer_kind;
+            match parse_buffer_kind(&kind_str) {
+                Some(kind) => {
+                    if enable {
+                        if !editor.replaceable_kinds.contains(&kind) {
+                            editor.replaceable_kinds.push(kind);
+                        }
+                    } else {
+                        editor.replaceable_kinds.retain(|k| *k != kind);
+                    }
+                    debug!(kind = %kind_str, enable = %enable, "replaceable kind updated");
+                }
+                None => {
+                    warn!(kind = %kind_str, "invalid set-buffer-kind-replaceable! arg");
+                    editor.set_status(format!("Unknown buffer kind: '{}'", kind_str));
                 }
             }
         }
