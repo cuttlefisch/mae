@@ -24,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+pub mod activity;
 pub mod federation;
 pub mod fuzzy;
 pub mod org;
@@ -365,6 +366,11 @@ impl KnowledgeBase {
         self.nodes.get(id)
     }
 
+    /// Get a mutable reference to a node by ID.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut Node> {
+        self.nodes.get_mut(id)
+    }
+
     /// Insert (or overwrite) a node. Returns the previous node, if any.
     /// Rebuilds the reverse index entries for this node's links.
     pub fn insert(&mut self, node: Node) -> Option<Node> {
@@ -514,6 +520,30 @@ impl KnowledgeBase {
             })
             .collect();
         scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Search nodes then re-sort results by activity score (highest first).
+    /// Falls back to normal search order for nodes without activity properties.
+    pub fn search_sorted_by_activity(
+        &self,
+        query: &str,
+        weights: &activity::ActivityWeights,
+        today: (i32, u32, u32),
+    ) -> Vec<String> {
+        let ids = self.search(query);
+        let mut scored: Vec<(String, f64)> = ids
+            .into_iter()
+            .map(|id| {
+                let score = self
+                    .get(&id)
+                    .map(|n| activity::activity_score(&n.properties, weights, today))
+                    .unwrap_or(0.0);
+                (id, score)
+            })
+            .collect();
+        // Stable sort: equal-score nodes keep their original search rank.
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.into_iter().map(|(id, _)| id).collect()
     }
 

@@ -627,6 +627,10 @@ pub struct Editor {
     /// Paths currently being written by MAE itself (activity tracking, chain-fill).
     /// Watcher events for these paths are suppressed to prevent cascading reimports.
     pub kb_write_guard: std::collections::HashSet<std::path::PathBuf>,
+    /// KB option: enable activity tracking (last-accessed/modified/linked timestamps).
+    pub kb_activity_tracking: bool,
+    /// KB option: decay rate for activity scoring.
+    pub kb_activity_decay: f64,
     /// KB option: dailies directory (explicit setting or derived from kb_notes_dir/daily).
     pub kb_dailies_dir: Option<std::path::PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -1174,6 +1178,8 @@ impl Editor {
             capture_state: None,
             kb_ai_visited_ids: std::collections::HashSet::new(),
             kb_write_guard: std::collections::HashSet::new(),
+            kb_activity_tracking: true,
+            kb_activity_decay: 0.01,
             kb_dailies_dir: None,
             kb_daily_chain_gap_max: 90,
             config_dir_override: None,

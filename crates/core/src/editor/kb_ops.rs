@@ -701,6 +701,45 @@ impl Editor {
     }
 }
 
+/// Current date as YYYY-MM-DD using proper calendar math.
+fn today_str() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (y, m, d) = unix_secs_to_date(secs);
+    mae_kb::activity::format_date(y, m, d)
+}
+
+/// Current date as (year, month, day). Used by dailies (Part 4).
+#[allow(dead_code)]
+fn today_ymd() -> (i32, u32, u32) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    unix_secs_to_date(secs)
+}
+
+/// Convert Unix epoch seconds to (year, month, day).
+/// Civil calendar conversion without chrono.
+fn unix_secs_to_date(secs: u64) -> (i32, u32, u32) {
+    // Algorithm from Howard Hinnant's civil_from_days
+    let z = (secs / 86400) as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
+}
+
 /// Simple ISO-8601 timestamp without pulling in chrono.
 fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -715,6 +754,126 @@ fn chrono_now() -> String {
     let months = remainder_days / 30 + 1;
     let day = remainder_days % 30 + 1;
     format!("{:04}-{:02}-{:02}", years, months, day)
+}
+
+impl Editor {
+    /// Record an access event for a KB node. Updates `:last-accessed:` in the
+    /// source .org file (if any) and in-memory properties.
+    pub fn kb_record_access(&mut self, node_id: &str) {
+        if !self.kb_activity_tracking {
+            return;
+        }
+        let today = today_str();
+        self.kb_update_property_on_disk(node_id, "last-accessed", &today);
+    }
+
+    /// Record a modification event. Computes body hash, compares to stored
+    /// `:hash:`, and updates `:last-modified:` + `:hash:` if changed.
+    pub fn kb_record_modification(&mut self, path: &std::path::Path) {
+        if !self.kb_activity_tracking {
+            return;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let new_hash = mae_kb::activity::body_hash(&content);
+        // Find the node by source file path
+        let node_id = self.kb_find_node_by_path(path).map(|n| n.id.clone());
+        let Some(node_id) = node_id else {
+            return;
+        };
+        // Check existing hash
+        let old_hash = self
+            .kb_find_node_by_path(path)
+            .and_then(|n| n.properties.get("hash").cloned());
+        if old_hash.as_deref() == Some(&new_hash) {
+            return; // Content unchanged
+        }
+        let today = today_str();
+        // Write hash and last-modified to file
+        self.kb_update_property_in_file(path, "hash", &new_hash);
+        self.kb_update_property_in_file(path, "last-modified", &today);
+        // Update in-memory node properties
+        if let Some(node) = self.kb_get_node_mut(&node_id) {
+            node.properties.insert("hash".to_string(), new_hash);
+            node.properties.insert("last-modified".to_string(), today);
+        }
+    }
+
+    /// Record a link event for a target node. Updates `:last-linked:`.
+    pub fn kb_record_link(&mut self, target_id: &str) {
+        if !self.kb_activity_tracking {
+            return;
+        }
+        let today = today_str();
+        self.kb_update_property_on_disk(target_id, "last-linked", &today);
+    }
+
+    /// Update a single property in a node's source .org file on disk.
+    /// Uses write-guard to prevent cascade.
+    fn kb_update_property_on_disk(&mut self, node_id: &str, key: &str, value: &str) {
+        // Find the source file for this node
+        let source_path = self.kb_node_source_path(node_id);
+        let Some(path) = source_path else {
+            return;
+        };
+        self.kb_update_property_in_file(&path, key, value);
+        // Update in-memory node properties
+        if let Some(node) = self.kb_get_node_mut(node_id) {
+            node.properties.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    /// Write a property to a .org file and reimport. Uses write-guard.
+    fn kb_update_property_in_file(&mut self, path: &std::path::Path, key: &str, value: &str) {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let Some(updated) = mae_kb::org::update_property(&content, key, value) else {
+            return;
+        };
+        // Guard the path to prevent watcher cascade
+        self.kb_write_guard.insert(path.to_path_buf());
+        if std::fs::write(path, &updated).is_ok() {
+            // Reimport synchronously to keep in-memory KB in sync
+            self.kb_reimport_file(path);
+            self.kb_watcher_stats.reimports_total += 1;
+        }
+    }
+
+    /// Find a node by its source file path (across all KB instances).
+    fn kb_find_node_by_path(&self, path: &std::path::Path) -> Option<&mae_kb::Node> {
+        for kb in self.kb_instances.values() {
+            for id in kb.list_ids(None) {
+                if let Some(node) = kb.get(&id) {
+                    if node.source_file.as_deref() == Some(path) {
+                        return Some(node);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the source file path for a node by ID.
+    fn kb_node_source_path(&self, node_id: &str) -> Option<std::path::PathBuf> {
+        for kb in self.kb_instances.values() {
+            if let Some(node) = kb.get(node_id) {
+                return node.source_file.clone();
+            }
+        }
+        None
+    }
+
+    /// Get a mutable reference to a node by ID (across all KB instances).
+    fn kb_get_node_mut(&mut self, node_id: &str) -> Option<&mut mae_kb::Node> {
+        for kb in self.kb_instances.values_mut() {
+            if let Some(node) = kb.get_mut(node_id) {
+                return Some(node);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

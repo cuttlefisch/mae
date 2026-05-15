@@ -131,6 +131,14 @@ impl super::Editor {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            "kb_activity_tracking" => self.kb_activity_tracking.to_string(),
+            "kb_activity_decay" => self.kb_activity_decay.to_string(),
+            "kb_dailies_dir" => self
+                .kb_dailies_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            "kb_daily_chain_gap_max" => self.kb_daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             _ => return None,
@@ -510,6 +518,29 @@ impl super::Editor {
                     let expanded = crate::file_picker::expand_tilde(value);
                     self.kb_notes_dir = Some(std::path::PathBuf::from(expanded));
                 }
+            }
+            "kb_activity_tracking" => {
+                self.kb_activity_tracking = parse_option_bool(value)?;
+            }
+            "kb_activity_decay" => {
+                let v: f64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_activity_decay = v.clamp(0.0001, 1.0);
+            }
+            "kb_dailies_dir" => {
+                if value.is_empty() {
+                    self.kb_dailies_dir = None;
+                } else {
+                    let expanded = crate::file_picker::expand_tilde(value);
+                    self.kb_dailies_dir = Some(std::path::PathBuf::from(expanded));
+                }
+            }
+            "kb_daily_chain_gap_max" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_daily_chain_gap_max = v.clamp(1, 365);
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;
