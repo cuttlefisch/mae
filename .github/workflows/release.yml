@@ -110,25 +110,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate code map
-        run: |
-          cargo install --locked --path tools/code-map
-          code-map --workspace-root .
-        continue-on-error: true
-
-      - name: Commit fresh code-map to main
-        run: |
-          if git diff --quiet docs/CODE_MAP.md docs/CODE_MAP.json 2>/dev/null; then
-            echo "Code map unchanged, skipping commit"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add docs/CODE_MAP.md docs/CODE_MAP.json
-            git commit -m "docs: update code-map for ${GITHUB_REF_NAME}"
-            git push origin HEAD:main
-          fi
-        continue-on-error: true
-
       - name: Generate changelog
         run: |
           cargo install git-cliff
