@@ -179,7 +179,11 @@ impl Editor {
                 // so the in-memory graph stays in sync (watcher may be disabled).
                 if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                     if self.kb_path_in_instance(&path) {
+                        // Guard the path so the watcher doesn't re-ingest
+                        // what we just saved (deduplicate sync+async reimport).
+                        self.kb_write_guard.insert(path.clone());
                         self.kb_reimport_file(&path);
+                        self.kb_watcher_stats.reimports_total += 1;
                         // Refresh help buffer if it's showing a node from this file
                         self.refresh_help_if_stale();
                     }

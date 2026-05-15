@@ -15,6 +15,10 @@ pub struct KbWatcherStats {
     pub events_removed: u64,
     /// Events skipped due to debounce or drain cap.
     pub events_skipped: u64,
+    /// Events suppressed by write-guard (MAE-initiated writes).
+    pub events_suppressed: u64,
+    /// Total reimport calls from all sources (save, watcher, explicit).
+    pub reimports_total: u64,
     /// Watcher errors encountered.
     pub errors: u64,
     /// Duration of the last drain operation in microseconds.
@@ -653,6 +657,13 @@ impl Editor {
 
                 match change {
                     mae_kb::watch::OrgChange::Upserted(path) => {
+                        // Suppress events for paths MAE is currently writing
+                        // (activity tracking, chain-fill) to prevent cascade.
+                        if self.kb_write_guard.remove(&path) {
+                            self.kb_watcher_stats.events_suppressed += 1;
+                            total_processed += 1;
+                            continue;
+                        }
                         if let Some(kb) = self.kb_instances.get_mut(&uuid) {
                             let ids = kb.ingest_org_file(&path);
                             if let Some(w) = self.kb_watchers.get(&uuid) {

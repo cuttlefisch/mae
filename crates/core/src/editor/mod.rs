@@ -624,6 +624,13 @@ pub struct Editor {
     /// Append guidance on revisit to steer away from manual graph traversal loops.
     /// Cleared when a new AI conversation starts.
     pub kb_ai_visited_ids: std::collections::HashSet<String>,
+    /// Paths currently being written by MAE itself (activity tracking, chain-fill).
+    /// Watcher events for these paths are suppressed to prevent cascading reimports.
+    pub kb_write_guard: std::collections::HashSet<std::path::PathBuf>,
+    /// KB option: dailies directory (explicit setting or derived from kb_notes_dir/daily).
+    pub kb_dailies_dir: Option<std::path::PathBuf>,
+    /// KB option: max days to walk backwards when chain-filling dailies (default 90).
+    pub kb_daily_chain_gap_max: usize,
 
     /// Override for config dir (test isolation — prevents clobbering ~/.config/mae).
     pub config_dir_override: Option<std::path::PathBuf>,
@@ -1166,6 +1173,9 @@ impl Editor {
             kb_notes_dir: None,
             capture_state: None,
             kb_ai_visited_ids: std::collections::HashSet::new(),
+            kb_write_guard: std::collections::HashSet::new(),
+            kb_dailies_dir: None,
+            kb_daily_chain_gap_max: 90,
             config_dir_override: None,
             data_dir_override: None,
             babel_confirm: true,
