@@ -1,0 +1,9 @@
+[module]
+name = "dailies"
+version = "0.1.0"
+description = "Org-roam-style daily notes with chain-back linking"
+mae_version = ">=0.9.0"
+category = "app"
+
+[entry]
+autoloads = "autoloads.scm"
