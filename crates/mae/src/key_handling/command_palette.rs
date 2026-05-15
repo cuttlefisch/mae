@@ -32,7 +32,11 @@ pub(super) fn handle_command_palette_mode(
             editor.set_mode(Mode::Normal);
         }
         KeyCode::Enter => {
-            let name = palette.selected_name().map(|s| s.to_string());
+            let selected_entry = palette
+                .selected_name()
+                .and_then(|_| palette.entry_at(palette.selected).cloned());
+            let name = selected_entry.as_ref().map(|e| e.name.clone());
+            let selected_doc = selected_entry.map(|e| e.doc.clone());
             let purpose = palette.purpose;
             let query = palette.query.clone();
             editor.command_palette = None;
@@ -46,8 +50,20 @@ pub(super) fn handle_command_palette_mode(
                     editor.set_theme_by_name(&theme);
                     crate::config::persist_editor_preference("theme", &theme);
                 }
-                (Some(node_id), PalettePurpose::HelpSearch) => {
+                (Some(node_id), PalettePurpose::HelpSearch)
+                | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);
+                }
+                (None, PalettePurpose::KbFindOrCreate) => {
+                    let title = query.trim();
+                    if title.is_empty() {
+                        editor.set_status("Note title cannot be empty");
+                    } else {
+                        match editor.kb_create_note_from_title(title) {
+                            Ok(_) => {}
+                            Err(e) => editor.set_status(e),
+                        }
+                    }
                 }
                 (Some(buf_name), PalettePurpose::SwitchBuffer) => {
                     if buf_name == "*Messages*" {
@@ -86,6 +102,30 @@ pub(super) fn handle_command_palette_mode(
                 }
                 (Some(root_str), PalettePurpose::ForgetProject) => {
                     editor.remove_project(&root_str);
+                }
+                (None, PalettePurpose::KbInsertLink) => {
+                    // No match — create node from query, then insert link
+                    let title = query.trim();
+                    if title.is_empty() {
+                        editor.set_status("Note title cannot be empty");
+                    } else {
+                        match editor.kb_create_note_from_title(title) {
+                            Ok((new_id, _)) => {
+                                let link = format!("[[{}|{}]]", new_id, title);
+                                editor.insert_at_cursor(&link);
+                                editor.set_status(format!("Created + linked: {}", title));
+                            }
+                            Err(e) => editor.set_status(e),
+                        }
+                    }
+                }
+                (Some(node_id), PalettePurpose::KbInsertLink) => {
+                    // Insert [[id|title]] at cursor
+                    let doc = selected_doc.unwrap_or_default();
+                    let display = if doc.is_empty() { node_id.clone() } else { doc };
+                    let link = format!("[[{}|{}]]", node_id, display);
+                    editor.insert_at_cursor(&link);
+                    editor.set_status(format!("Inserted link to {}", display));
                 }
                 (None, PalettePurpose::SwitchProject) => {
                     // No match selected — treat query as a typed path
@@ -403,6 +443,19 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             if !tag.is_empty() {
                 editor.set_status(format!("Agenda filter: :{tag}:"));
                 // Agenda refresh with tag filter — handled by M8
+            }
+        }
+        MiniDialogContext::RevertBuffer { buf_idx } => {
+            let buf_idx = *buf_idx;
+            if buf_idx < editor.buffers.len() {
+                match editor.buffers[buf_idx].reload_from_disk() {
+                    Ok(()) => {
+                        let name = editor.buffers[buf_idx].name.clone();
+                        editor.set_status(format!("Reloaded: {}", name));
+                    }
+                    Err(e) => editor.set_status(format!("Reload failed: {}", e)),
+                }
+                editor.fire_hook("file-changed-on-disk");
             }
         }
     }

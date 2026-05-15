@@ -7,7 +7,7 @@ use std::io::{self, Stdout};
 
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -79,7 +79,12 @@ impl TerminalRenderer {
     pub fn new() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableFocusChange
+        )?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
         Ok(TerminalRenderer { terminal })
@@ -121,6 +126,7 @@ impl Renderer for TerminalRenderer {
         execute!(
             self.terminal.backend_mut(),
             SetCursorStyle::DefaultUserShape,
+            DisableFocusChange,
             DisableMouseCapture,
             LeaveAlternateScreen
         )?;

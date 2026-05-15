@@ -778,8 +778,8 @@ fn agent_shell_opens_beside_conversation_group() {
         input_window_id: input_win_id,
     });
 
-    // Simulate user's init.scm: dashboard_dismiss_on_split = true
-    editor.dashboard_dismiss_on_split = true;
+    // Simulate user's init.scm: dashboard is replaceable
+    editor.replaceable_kinds.push(crate::BufferKind::Dashboard);
 
     // Focus the *ai-input* window (as the user had).
     editor.window_mgr.set_focused(input_win_id);

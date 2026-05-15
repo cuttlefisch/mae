@@ -215,6 +215,14 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         }
     }
 
+    // Priority 3.5: capture mode indicator.
+    if editor.capture_state.is_some() {
+        segments.push(Segment::new(
+            " [Capture: C-c C-c finish | C-c C-k abort]".to_string(),
+            3,
+        ));
+    }
+
     // Priority 6.5: nyan mode progress bar.
     if editor.nyan_mode {
         let nyan = build_nyan_segment(buf, win);
@@ -259,15 +267,20 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
     }
 
     // Priority 8: git branch + project name (first to drop).
-    let git_info = editor
+    // Prefer per-buffer context, falling back to editor-wide globals.
+    let buf = editor.active_buffer();
+    let git_info = buf
         .git_branch
         .as_ref()
+        .or(editor.git_branch.as_ref())
         .map(|b| format!("  {}", truncate_branch(b, 20)))
         .unwrap_or_default();
-    let project_info = editor
-        .project
+    let project_info = buf
+        .project_root
         .as_ref()
-        .map(|p| format!(" [{}]", p.name))
+        .and_then(|p| p.file_name())
+        .map(|n| format!(" [{}]", n.to_string_lossy()))
+        .or_else(|| editor.project.as_ref().map(|p| format!(" [{}]", p.name)))
         .unwrap_or_default();
     let git_project = format!("{}{}", git_info, project_info);
     if !git_project.is_empty() {

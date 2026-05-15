@@ -705,6 +705,96 @@ impl KnowledgeBase {
         v.sort();
         v
     }
+
+    /// Return all (id, title) pairs for all nodes, sorted by id.
+    pub fn all_id_title_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = self
+            .nodes
+            .values()
+            .map(|n| (n.id.clone(), n.title.clone()))
+            .collect();
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs
+    }
+}
+
+/// Generate a URL-friendly slug from a title.
+///
+/// Lowercases, replaces non-alphanumeric chars with hyphens,
+/// collapses consecutive hyphens, trims leading/trailing hyphens.
+pub fn slugify(title: &str) -> String {
+    title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Generate a timestamp-based ID prefix: "20260515T143000".
+pub fn timestamp_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Convert to date-time components (approximate, no leap second handling).
+    let mut days = secs / 86400;
+    let day_secs = secs % 86400;
+    let hours = day_secs / 3600;
+    let minutes = (day_secs % 3600) / 60;
+    let seconds = day_secs % 60;
+
+    // Year calculation.
+    #[allow(clippy::manual_is_multiple_of)]
+    let is_leap_year = |y: u64| -> bool { y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) };
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    // Month calculation.
+    let is_leap = is_leap_year(year);
+    let month_days = [
+        31,
+        if is_leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 0;
+    for (i, &md) in month_days.iter().enumerate() {
+        if days < md {
+            month = i + 1;
+            break;
+        }
+        days -= md;
+    }
+    if month == 0 {
+        month = 12;
+    }
+    let day = days + 1;
+
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 #[cfg(test)]
@@ -1119,5 +1209,43 @@ mod tests {
         // And the reverse index records it too (so if you later add 'missing',
         // backlinks appear retroactively).
         assert_eq!(kb.links_to("missing"), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Distributed Systems"), "distributed-systems");
+        assert_eq!(slugify("  Hello World  "), "hello-world");
+        assert_eq!(slugify("foo--bar__baz"), "foo-bar-baz");
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("OneWord"), "oneword");
+        assert_eq!(slugify("a+b=c"), "a-b-c");
+    }
+
+    #[test]
+    fn timestamp_id_format() {
+        let ts = timestamp_id();
+        assert_eq!(
+            ts.len(),
+            15,
+            "expected 15 chars: YYYYMMDDTHHMMSS, got {}",
+            ts
+        );
+        assert!(ts.contains('T'), "timestamp should contain T separator");
+    }
+
+    #[test]
+    fn all_id_title_pairs_sorted() {
+        let kb = kb_with(vec![
+            Node::new("b", "Beta", NodeKind::Note, ""),
+            Node::new("a", "Alpha", NodeKind::Note, ""),
+        ]);
+        let pairs = kb.all_id_title_pairs();
+        assert_eq!(
+            pairs,
+            vec![
+                ("a".to_string(), "Alpha".to_string()),
+                ("b".to_string(), "Beta".to_string()),
+            ]
+        );
     }
 }

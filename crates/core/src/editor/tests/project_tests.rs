@@ -113,3 +113,54 @@ fn open_file_does_not_switch_to_subcrate() {
     // Project should NOT have switched to the subcrate
     assert_eq!(ed.project.as_ref().unwrap().root, root.to_path_buf());
 }
+
+#[test]
+fn open_file_from_different_project_does_not_switch_global() {
+    use std::io::Write;
+    // Project A
+    let dir_a = tempfile::tempdir().unwrap();
+    fs::File::create(dir_a.path().join("Cargo.toml"))
+        .unwrap()
+        .write_all(b"[package]\nname = \"proj-a\"")
+        .unwrap();
+    let src_a = dir_a.path().join("main.rs");
+    fs::File::create(&src_a)
+        .unwrap()
+        .write_all(b"fn a() {}")
+        .unwrap();
+
+    // Project B
+    let dir_b = tempfile::tempdir().unwrap();
+    fs::File::create(dir_b.path().join("Cargo.toml"))
+        .unwrap()
+        .write_all(b"[package]\nname = \"proj-b\"")
+        .unwrap();
+    let src_b = dir_b.path().join("lib.rs");
+    fs::File::create(&src_b)
+        .unwrap()
+        .write_all(b"fn b() {}")
+        .unwrap();
+
+    let mut editor = Editor::new();
+    // Open file A — sets global project (first file, project is None).
+    editor.open_file(src_a.to_str().unwrap());
+    let original_root = editor.project.as_ref().unwrap().root.clone();
+    editor.pending_lsp_root_change = None;
+
+    // Open file from a different project.
+    editor.open_file(src_b.to_str().unwrap());
+
+    // Global project unchanged.
+    assert_eq!(editor.project.as_ref().unwrap().root, original_root);
+    assert!(editor.pending_lsp_root_change.is_none());
+    // But the new buffer knows its own project root.
+    let buf_b = editor.buffers.last().unwrap();
+    assert!(
+        buf_b.project_root.is_some(),
+        "buffer should have its own project_root"
+    );
+    assert_eq!(
+        buf_b.project_root.as_ref().unwrap(),
+        &dir_b.path().canonicalize().unwrap()
+    );
+}

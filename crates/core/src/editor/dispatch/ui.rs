@@ -557,34 +557,21 @@ For full setup guide: :help ai-setup";
             "project-clean" => self.project_clean(),
 
             // +notes (KB)
-            "kb-find" => {
-                // Local KB nodes
-                let mut nodes: Vec<(String, String)> = self
-                    .kb
-                    .list_ids(None)
-                    .iter()
-                    .filter_map(|id| self.kb.get(id).map(|n| (id.clone(), n.title.clone())))
-                    .collect();
-                // Federated instance nodes
-                for kb in self.kb_instances.values() {
-                    for id in kb.list_ids(None) {
-                        if let Some(n) = kb.get(&id) {
-                            nodes.push((id, n.title.clone()));
-                        }
-                    }
-                }
-                self.command_palette = Some(
-                    crate::command_palette::CommandPalette::for_help_search(&nodes),
-                );
+            "kb-find" | "kb-create" => {
+                let nodes = self.kb_all_node_pairs();
+                self.command_palette =
+                    Some(crate::command_palette::CommandPalette::for_kb_find_or_create(&nodes));
                 self.set_mode(Mode::CommandPalette);
             }
             "kb-edit-source" => {
                 self.help_edit_source();
             }
-            "kb-create" => {
-                self.set_mode(Mode::Command);
-                self.command_line = "kb-create ".to_string();
-                self.command_cursor = self.command_line.len();
+            "kb-insert-link" => {
+                let nodes = self.kb_all_node_pairs();
+                self.command_palette = Some(
+                    crate::command_palette::CommandPalette::for_kb_insert_link(&nodes),
+                );
+                self.set_mode(Mode::CommandPalette);
             }
             "kb-delete" => {
                 self.set_mode(Mode::Command);
@@ -617,6 +604,40 @@ For full setup guide: :help ai-setup";
                 self.kb = crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
                 let count = self.kb.list_ids(None).len();
                 self.set_status(format!("KB rebuilt: {} nodes", count));
+            }
+            "capture-finalize" => {
+                if let Some(cap) = self.capture_state.take() {
+                    self.dispatch_builtin("save");
+                    let ret = cap
+                        .return_buffer_idx
+                        .min(self.buffers.len().saturating_sub(1));
+                    self.display_buffer(ret);
+                    self.set_status("Capture finalized");
+                } else {
+                    self.set_status("No active capture");
+                }
+            }
+            "capture-abort" => {
+                if let Some(cap) = self.capture_state.take() {
+                    // Force-kill the capture buffer (no save prompt)
+                    self.dispatch_builtin("force-kill-buffer");
+                    // Delete the file from disk
+                    if let Some(ref path) = cap.file_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    // Remove node from KB
+                    self.kb.remove(&cap.node_id);
+                    for kb in self.kb_instances.values_mut() {
+                        kb.remove(&cap.node_id);
+                    }
+                    let ret = cap
+                        .return_buffer_idx
+                        .min(self.buffers.len().saturating_sub(1));
+                    self.display_buffer(ret);
+                    self.set_status("Capture aborted");
+                } else {
+                    self.set_status("No active capture");
+                }
             }
             "ai-save" => {
                 self.set_status("Usage: :ai-save <path>");
@@ -791,7 +812,7 @@ For full setup guide: :help ai-setup";
                 let cwd = self.buffers[idx]
                     .file_path()
                     .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .or_else(|| self.project.as_ref().map(|p| p.root.clone()));
+                    .or_else(|| self.active_project_root().map(|p| p.to_path_buf()));
                 if let Some(dir) = cwd {
                     let shell_name = format!("*Terminal {}*", self.buffers.len());
                     let buf = Buffer::new_shell(shell_name);
@@ -1042,6 +1063,7 @@ For full setup guide: :help ai-setup";
                         filtered: Vec::new(),
                         selected: 0,
                         purpose: PalettePurpose::MiniDialog,
+                        query_selected: false,
                     });
                     self.set_mode(Mode::CommandPalette);
                     self.set_status("Edit link — Tab: next field, Enter: apply, Esc: cancel");

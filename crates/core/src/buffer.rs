@@ -196,6 +196,9 @@ pub struct Buffer {
     /// When set, `Editor::active_project_root()` prefers this over the
     /// editor-wide `project` field, enabling per-buffer project context.
     pub project_root: Option<PathBuf>,
+    /// Per-buffer git branch, lazily populated on focus change.
+    /// Status bar prefers this over the global `Editor.git_branch`.
+    pub git_branch: Option<String>,
     /// Whether this is an AI agent shell (spawned by `open-ai-agent`).
     /// Agent shells are auto-closed when the process exits.
     pub agent_shell: bool,
@@ -311,6 +314,7 @@ impl Buffer {
             saved_undo_depth: None,
             file_mtime: None,
             project_root: None,
+            git_branch: None,
             agent_shell: false,
             folded_ranges: Vec::new(),
             generation: 0,

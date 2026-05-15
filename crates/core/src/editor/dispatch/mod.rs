@@ -515,6 +515,18 @@ impl Editor {
         }
     }
 
+    /// Ensure at least one non-sidebar text buffer exists. If none remains after
+    /// a bulk kill, create a fresh `[scratch]` buffer.
+    pub fn ensure_scratch_exists(&mut self) {
+        let has_user_buf = self
+            .buffers
+            .iter()
+            .any(|b| !b.kind.is_sidebar() && b.kind != crate::BufferKind::Dashboard);
+        if !has_user_buf {
+            self.buffers.push(Buffer::new());
+        }
+    }
+
     /// Focus a window in the given direction with proper hook firing and mode sync.
     fn focus_direction(&mut self, dir: Direction) {
         self.fire_hook("focus-out");
@@ -522,9 +534,13 @@ impl Editor {
         let area = self.default_area();
         self.window_mgr.focus_direction(dir, area);
         self.sync_mode_to_buffer();
+        // Refresh help buffer on focus (picks up node edits from other windows).
+        let idx = self.active_buffer_idx();
+        if self.buffers[idx].kind == crate::buffer::BufferKind::Help {
+            self.help_populate_buffer(idx);
+        }
         // When focusing a conversation output buffer, jump cursor to the last line
         // so the user sees the most recent content (not stranded at row 0).
-        let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::buffer::BufferKind::Conversation {
             let last_line = self.buffers[idx].display_line_count().saturating_sub(1);
             let vh = self.focused_viewport_height();

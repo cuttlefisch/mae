@@ -269,8 +269,8 @@ fn next_prev_buffer_preserves_position() {
 fn dashboard_default_stays_on_split() {
     let mut editor = Editor::new();
     editor.install_dashboard();
-    // Default: dashboard_dismiss_on_split = false
-    assert!(!editor.dashboard_dismiss_on_split);
+    // Default: replaceable_kinds is empty (dashboard stays)
+    assert!(!editor.is_kind_replaceable(crate::BufferKind::Dashboard));
 
     // Create a Help buffer and display it (Help uses ReuseOrSplit)
     let mut help_buf = Buffer::new();
@@ -303,7 +303,7 @@ fn dashboard_default_stays_on_split() {
 fn dashboard_dismissed_when_option_set() {
     let mut editor = Editor::new();
     editor.install_dashboard();
-    editor.dashboard_dismiss_on_split = true;
+    editor.replaceable_kinds.push(crate::BufferKind::Dashboard);
 
     // Create a Help buffer and display it
     let mut help_buf = Buffer::new();
@@ -336,6 +336,154 @@ fn dashboard_dismissed_when_option_set() {
         .iter_windows()
         .any(|w| w.buffer_idx == help_idx);
     assert!(has_help_win, "Help buffer should be visible");
+}
+
+// Replaceable window tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dashboard_replaced_by_agent_shell_when_replaceable() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    editor.replaceable_kinds.push(crate::BufferKind::Dashboard);
+
+    // Set layout area large enough for splits
+    editor.last_layout_area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+    };
+
+    // Create an agent shell buffer
+    let mut shell_buf = Buffer::new_shell("*AI:claude*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+
+    // switch_to_buffer_non_conversation should replace dashboard, not split
+    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    assert!(ok, "switch should succeed");
+
+    // Should still be 1 window (dashboard replaced), not 2 (split)
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        1,
+        "Dashboard should be replaced, not split alongside"
+    );
+
+    // The single window should show the shell buffer
+    let win = editor.window_mgr.focused_window();
+    assert_eq!(
+        win.buffer_idx, shell_idx,
+        "Window should show the agent shell"
+    );
+}
+
+#[test]
+fn dashboard_stays_when_not_replaceable() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+    // Default: replaceable_kinds is empty
+
+    editor.last_layout_area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+    };
+
+    let mut shell_buf = Buffer::new_shell("*AI:claude*");
+    shell_buf.agent_shell = true;
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+
+    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    assert!(ok, "switch should succeed");
+
+    // Should have 2 windows (split alongside dashboard)
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        2,
+        "Dashboard should stay — split alongside it"
+    );
+}
+
+#[test]
+fn kill_other_buffers_preserves_sidebar() {
+    let mut editor = Editor::new();
+    editor.install_dashboard();
+
+    // Add a Messages buffer (sidebar kind)
+    let mut msg_buf = Buffer::new();
+    msg_buf.kind = crate::BufferKind::Messages;
+    msg_buf.name = "*Messages*".into();
+    editor.buffers.push(msg_buf);
+
+    // Add a Debug buffer (sidebar kind)
+    let mut dbg_buf = Buffer::new();
+    dbg_buf.kind = crate::BufferKind::Debug;
+    dbg_buf.name = "*Debug*".into();
+    editor.buffers.push(dbg_buf);
+
+    // Add two text buffers
+    let mut text1 = Buffer::new();
+    text1.name = "file1.rs".into();
+    editor.buffers.push(text1);
+    let mut text2 = Buffer::new();
+    text2.name = "file2.rs".into();
+    editor.buffers.push(text2);
+
+    // Focus on one of the text buffers
+    let text1_idx = editor.buffers.len() - 2;
+    editor.window_mgr.focused_window_mut().buffer_idx = text1_idx;
+
+    editor.dispatch_builtin("kill-other-buffers");
+
+    // Dashboard, Messages, Debug should survive (sidebar kinds)
+    let kinds: Vec<_> = editor.buffers.iter().map(|b| b.kind).collect();
+    assert!(
+        kinds.contains(&crate::BufferKind::Dashboard),
+        "Dashboard should survive kill-other-buffers"
+    );
+    assert!(
+        kinds.contains(&crate::BufferKind::Messages),
+        "Messages should survive kill-other-buffers"
+    );
+    assert!(
+        kinds.contains(&crate::BufferKind::Debug),
+        "Debug should survive kill-other-buffers"
+    );
+
+    // The other text buffer (file2.rs) should be killed
+    let names: Vec<_> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+    assert!(
+        !names.contains(&"file2.rs"),
+        "Non-active text buffer should be killed"
+    );
+}
+
+#[test]
+fn scratch_buffer_guaranteed_after_kill() {
+    let mut editor = Editor::new();
+    // Start with only the default [scratch]
+    assert_eq!(editor.buffers.len(), 1);
+
+    // Replace it with a sidebar-only buffer
+    editor.buffers[0].kind = crate::BufferKind::Dashboard;
+    editor.buffers[0].name = "[dashboard]".into();
+
+    editor.ensure_scratch_exists();
+
+    // Should have created a new scratch buffer
+    let has_text = editor
+        .buffers
+        .iter()
+        .any(|b| !b.kind.is_sidebar() && b.kind != crate::BufferKind::Dashboard);
+    assert!(
+        has_text,
+        "ensure_scratch_exists should create a [scratch] buffer"
+    );
 }
 
 // --- New keybindings ---

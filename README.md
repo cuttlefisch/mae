@@ -8,7 +8,7 @@
 
 An AI-native lisp machine editor. The human and the AI are peer actors calling
 the same Scheme primitives. Built on a Rust core with an embedded R7RS-small
-runtime. 3,186 tests.
+runtime.
 
 <p align="center">
   <img src="assets/mae-screenshot.png" alt="MAE dashboard screenshot" width="700">

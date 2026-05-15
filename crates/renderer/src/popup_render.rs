@@ -327,13 +327,32 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
     let prompt_style = ts(editor, "ui.popup.key");
     let doc_style = ts(editor, "ui.popup.text");
 
+    let query_style = if palette.query_selected {
+        selection_style
+    } else {
+        text_style
+    };
     let query_line = Line::from(vec![
         Span::styled("> ", prompt_style),
-        Span::styled(&palette.query, text_style),
+        Span::styled(&palette.query, query_style),
     ]);
 
-    let results_height = (inner.height - 1) as usize;
+    // Reserve a row for the "[Create]" hint when applicable.
+    let has_create = palette.has_create_from_query() && !palette.query.is_empty();
+    let chrome_rows = 1 + if has_create { 1 } else { 0 }; // query line + optional create hint
+    let results_height = (inner.height as usize).saturating_sub(chrome_rows);
     let mut lines = vec![query_line];
+
+    // Virtual "[Create]" row for find-or-create palettes.
+    if has_create {
+        let create_style = if palette.query_selected {
+            selection_style
+        } else {
+            prompt_style
+        };
+        let hint = format!(" [Create] \"{}\"", palette.query);
+        lines.push(Line::from(Span::styled(hint, create_style)));
+    }
 
     let start = if palette.selected >= results_height {
         palette.selected - results_height + 1
@@ -378,12 +397,13 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
     {
         let entry = &palette.entries[entry_idx];
         let actual_idx = start + display_idx;
-        let row_style = if actual_idx == palette.selected {
+        let is_selected = actual_idx == palette.selected && !palette.query_selected;
+        let row_style = if is_selected {
             selection_style
         } else {
             text_style
         };
-        let doc_row_style = if actual_idx == palette.selected {
+        let doc_row_style = if is_selected {
             selection_style
         } else {
             doc_style
