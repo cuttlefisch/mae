@@ -385,10 +385,39 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         return;
     }
 
+    let query_fg = if palette.query_selected {
+        selection_fg
+    } else {
+        text_fg
+    };
+    if palette.query_selected {
+        if let Some(bg) = selection_bg {
+            canvas.draw_rect_fill(inner.row, inner.col, inner.width, 1, bg);
+        }
+    }
     canvas.draw_text_at(inner.row, inner.col, "> ", prompt_fg);
-    canvas.draw_text_at(inner.row, inner.col + 2, &palette.query, text_fg);
+    canvas.draw_text_at(inner.row, inner.col + 2, &palette.query, query_fg);
 
-    let results_height = inner.height.saturating_sub(1);
+    // Virtual "[Create]" row for find-or-create palettes.
+    let has_create = palette.has_create_from_query() && !palette.query.is_empty();
+    let chrome_rows = 1 + if has_create { 1 } else { 0 };
+    if has_create {
+        let create_row = inner.row + 1;
+        let create_fg = if palette.query_selected {
+            selection_fg
+        } else {
+            prompt_fg
+        };
+        if palette.query_selected {
+            if let Some(bg) = selection_bg {
+                canvas.draw_rect_fill(create_row, inner.col, inner.width, 1, bg);
+            }
+        }
+        let hint = format!("[Create] \"{}\"", palette.query);
+        canvas.draw_text_at(create_row, inner.col + 1, &hint, create_fg);
+    }
+
+    let results_height = inner.height.saturating_sub(chrome_rows);
     let start = if palette.selected >= results_height {
         palette.selected - results_height + 1
     } else {
@@ -432,8 +461,8 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
     {
         let entry = &palette.entries[entry_idx];
         let actual_idx = start + display_idx;
-        let is_selected = actual_idx == palette.selected;
-        let row = inner.row + 1 + display_idx;
+        let is_selected = actual_idx == palette.selected && !palette.query_selected;
+        let row = inner.row + chrome_rows + display_idx;
 
         if is_selected {
             if let Some(bg) = selection_bg {

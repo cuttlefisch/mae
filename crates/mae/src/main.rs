@@ -1177,6 +1177,14 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                 self.shutdown();
                 event_loop.exit();
             }
+            WindowEvent::Focused(true) => {
+                // Check if current buffer's file changed on disk
+                let idx = self.editor.active_buffer_idx();
+                if self.editor.mini_dialog.is_none() {
+                    self.editor.check_and_reload_buffer(idx);
+                }
+                self.dirty = true;
+            }
             WindowEvent::Resized(size) => {
                 self.renderer.handle_resize(size.width, size.height);
                 if let Ok((w, h)) = self.renderer.size() {

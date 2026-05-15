@@ -409,12 +409,13 @@ fn switching_project_sets_pending_lsp_root_change() {
     // Consume the pending change from project A.
     editor.pending_lsp_root_change = None;
 
-    // Open a file in project B — should trigger a new LSP root notification.
-    editor.open_file(src_b.to_str().unwrap());
+    // Implicit file open no longer switches global project (Part 1 of
+    // project-context-preservation). Use explicit add_project() instead.
+    editor.add_project(dir_b.path().to_str().unwrap());
     let root_uri = editor
         .pending_lsp_root_change
         .as_ref()
-        .expect("should signal LSP root change on project switch");
+        .expect("should signal LSP root change on explicit project switch");
     assert!(
         root_uri.contains(dir_b.path().to_str().unwrap()),
         "URI should point to project B root, got: {}",

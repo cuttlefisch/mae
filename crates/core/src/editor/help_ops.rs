@@ -618,12 +618,32 @@ impl Editor {
     /// If a help buffer exists, switch to it. Otherwise, reopen the last one.
     pub fn help_return_to_view(&mut self) {
         if let Some(idx) = self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
-            self.display_buffer(idx);
+            // Refresh the help content before showing it
+            self.help_populate_buffer(idx);
+            // Replace focused window directly (not via display_policy which may split)
+            let win = self.window_mgr.focused_window_mut();
+            win.buffer_idx = idx;
+            win.cursor_row = 0;
+            win.cursor_col = 0;
+            self.sync_mode_to_buffer();
+            self.mark_full_redraw();
         } else if self.last_help_state.is_some() {
             self.help_reopen();
         } else {
             self.set_status("No KB view to return to");
         }
+    }
+
+    /// Re-render the help buffer if it exists and the underlying KB node has changed.
+    /// Called after save, focus-in, or KB reimport.
+    pub fn refresh_help_if_stale(&mut self) {
+        let help_idx = match self.buffers.iter().position(|b| b.kind == BufferKind::Help) {
+            Some(idx) => idx,
+            None => return,
+        };
+        // Always repopulate — the KB may have changed.
+        // help_populate_buffer is cheap (string formatting, no I/O).
+        self.help_populate_buffer(help_idx);
     }
 
     // --- Help buffer heading folding (Fix 4) ---

@@ -95,6 +95,7 @@ impl Editor {
             self.project_list.touch(path.clone(), proj.name.clone());
             self.project = Some(proj);
             self.refresh_git_branch();
+            self.pending_lsp_root_change = Some(format!("file://{}", path.display()));
             self.save_project_list();
             self.set_status(format!("Added & switched to project: {}", path.display()));
         } else {

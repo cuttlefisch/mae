@@ -110,7 +110,10 @@ impl super::Editor {
             "heading_scale_h1" => self.heading_scale_h1.to_string(),
             "heading_scale_h2" => self.heading_scale_h2.to_string(),
             "heading_scale_h3" => self.heading_scale_h3.to_string(),
-            "dashboard_dismiss_on_split" => self.dashboard_dismiss_on_split.to_string(),
+            "dashboard_dismiss_on_split" => self
+                .replaceable_kinds
+                .contains(&crate::BufferKind::Dashboard)
+                .to_string(),
             "large_file_lines" => self.large_file_lines.to_string(),
             "degrade_threshold_chars" => self.degrade_threshold_chars.to_string(),
             "degrade_threshold_line_length" => self.degrade_threshold_line_length.to_string(),
@@ -424,7 +427,18 @@ impl super::Editor {
                 }
             }
             "dashboard_dismiss_on_split" => {
-                self.dashboard_dismiss_on_split = parse_option_bool(value)?;
+                let val = parse_option_bool(value)?;
+                if val {
+                    if !self
+                        .replaceable_kinds
+                        .contains(&crate::BufferKind::Dashboard)
+                    {
+                        self.replaceable_kinds.push(crate::BufferKind::Dashboard);
+                    }
+                } else {
+                    self.replaceable_kinds
+                        .retain(|k| *k != crate::BufferKind::Dashboard);
+                }
             }
             "large_file_lines" => {
                 let v: usize = value

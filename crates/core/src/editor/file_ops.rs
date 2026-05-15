@@ -180,6 +180,8 @@ impl Editor {
                 if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
                     if self.kb_path_in_instance(&path) {
                         self.kb_reimport_file(&path);
+                        // Refresh help buffer if it's showing a node from this file
+                        self.refresh_help_if_stale();
                     }
                 }
                 self.fire_hook("after-save");
@@ -1044,8 +1046,8 @@ impl Editor {
         &self.command_line
     }
 
-    /// Check if a buffer's backing file changed on disk and reload if clean,
-    /// or warn if the buffer has unsaved modifications.
+    /// Check if a buffer's backing file changed on disk and prompt the user
+    /// to reload (clean buffers) or warn (dirty buffers).
     pub fn check_and_reload_buffer(&mut self, idx: usize) {
         if idx >= self.buffers.len() {
             return;
@@ -1059,17 +1061,15 @@ impl Editor {
                 "Warning: {} changed on disk (buffer has unsaved changes)",
                 name
             ));
+            self.fire_hook("file-changed-on-disk");
         } else {
-            match self.buffers[idx].reload_from_disk() {
-                Ok(()) => {
-                    self.set_status(format!("Reloaded: {}", name));
-                }
-                Err(e) => {
-                    self.set_status(format!("Reload failed for {}: {}", name, e));
-                }
-            }
+            // Prompt user instead of silently reloading
+            let question = format!("{} changed on disk. Reload? (y/n)", name);
+            self.mini_dialog = Some(crate::command_palette::MiniDialogState::confirm(
+                question,
+                crate::command_palette::MiniDialogContext::RevertBuffer { buf_idx: idx },
+            ));
         }
-        self.fire_hook("file-changed-on-disk");
     }
 
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
@@ -1107,26 +1107,22 @@ impl Editor {
                     // Auto-detect project root from the opened file's location
                     if let Some(root) = crate::project::detect_project_root(&canonical) {
                         self.recent_projects.push(root.clone());
-                        // Switch project context if it differs from current
-                        let should_switch = self
-                            .project
-                            .as_ref()
-                            .map(|p| p.root != root && !root.starts_with(&p.root))
-                            .unwrap_or(true);
-                        if should_switch {
+
+                        // Only auto-set global project when none is set yet (first file open).
+                        // Subsequent files get per-buffer project_root via Buffer::from_file().
+                        // Explicit project switching (SPC p p, :add-project) still sets Editor.project.
+                        if self.project.is_none() {
                             self.project = Some(crate::project::Project::from_root(root.clone()));
                             self.refresh_git_branch();
-                            // Signal LSP to update workspace folder on every project switch.
                             let root_path = root.display().to_string();
                             self.pending_lsp_root_change = Some(format!("file://{}", root_path));
                         }
-                        // Persist to project list
-                        if let Some(ref proj) = self.project {
-                            self.project_list.touch(root.clone(), proj.name.clone());
-                        }
-                    }
-                    // Ingest project as KB node
-                    if let Some(ref proj) = self.project {
+
+                        // Always persist to project list for the recent-projects palette.
+                        let proj = crate::project::Project::from_root(root.clone());
+                        self.project_list.touch(root.clone(), proj.name.clone());
+
+                        // Ingest project as KB node (use detected root, not global project).
                         let config_body = proj
                             .config
                             .as_ref()
@@ -1137,7 +1133,7 @@ impl Editor {
                                 )
                             })
                             .unwrap_or_default();
-                        self.kb.ingest_project(&proj.name, &proj.root, &config_body);
+                        self.kb.ingest_project(&proj.name, &root, &config_body);
                     }
                 }
 

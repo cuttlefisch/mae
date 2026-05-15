@@ -42,6 +42,16 @@ pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::KbWatcherStats;
+
+/// State for an active note capture session (org-roam parity).
+/// Set when `kb_create_note_from_title` creates a note; cleared by
+/// `capture-finalize` (C-c C-c) or `capture-abort` (C-c C-k).
+#[derive(Debug, Clone)]
+pub struct CaptureState {
+    pub node_id: String,
+    pub file_path: Option<std::path::PathBuf>,
+    pub return_buffer_idx: usize,
+}
 pub use lsp_ops::{DocumentHighlightRange, HighlightKind, LspLocation, LspRange};
 pub use marks::Mark;
 
@@ -608,6 +618,8 @@ pub struct Editor {
     pub kb_auto_register: bool,
     /// KB option: default directory for user-created notes (org-roam-directory equivalent).
     pub kb_notes_dir: Option<std::path::PathBuf>,
+    /// Active capture state (org-roam C-c C-c / C-c C-k flow).
+    pub capture_state: Option<CaptureState>,
     /// KB node IDs visited via AI tools (kb_get/links_from/links_to) this session.
     /// Append guidance on revisit to steer away from manual graph traversal loops.
     /// Cleared when a new AI conversation starts.
@@ -979,9 +991,9 @@ pub struct Editor {
     /// GUI cell height in pixels (set by GUI after font init). Default 16.0.
     /// TUI should set to 1.0.
     pub gui_cell_height: f32,
-    /// When true, dashboard windows are closed when any non-dashboard buffer
-    /// is displayed via a split path. Default false (Doom parity: dashboard stays).
-    pub dashboard_dismiss_on_split: bool,
+    /// Buffer kinds whose windows can be replaced by new content instead of splitting.
+    /// Configured via `set-buffer-kind-replaceable!` in Scheme or `dashboard_dismiss_on_split` in config.
+    pub replaceable_kinds: Vec<crate::BufferKind>,
     /// Line count threshold for viewport-local syntax highlighting (default 5000).
     pub large_file_lines: usize,
     /// Character count above which all features degrade (default 500_000).
@@ -1152,6 +1164,7 @@ impl Editor {
             kb_search_max_results: 20,
             kb_auto_register: false,
             kb_notes_dir: None,
+            capture_state: None,
             kb_ai_visited_ids: std::collections::HashSet::new(),
             config_dir_override: None,
             data_dir_override: None,
@@ -1294,7 +1307,7 @@ impl Editor {
             pending_rename_edit: None,
             gui_cell_width: 8.0,
             gui_cell_height: 16.0,
-            dashboard_dismiss_on_split: false,
+            replaceable_kinds: Vec::new(),
             large_file_lines: 5_000,
             degrade_threshold_chars: 500_000,
             degrade_threshold_line_length: 10_000,
@@ -2057,6 +2070,39 @@ impl Editor {
         false
     }
 
+    /// Returns true if windows showing this buffer kind can be replaced by new content.
+    pub fn is_kind_replaceable(&self, kind: crate::BufferKind) -> bool {
+        self.replaceable_kinds.contains(&kind)
+    }
+
+    /// Find a window showing a replaceable buffer kind. Returns the window ID.
+    /// Prefers the focused window if it's replaceable. Excludes conversation pair windows.
+    fn find_replaceable_window(&self) -> Option<crate::window::WindowId> {
+        let conv_ids = self
+            .conversation_pair
+            .as_ref()
+            .map(|p| [p.output_window_id, p.input_window_id]);
+        let focused_id = self.window_mgr.focused_id();
+        // Prefer the focused window (natural UX: what you see gets replaced).
+        if let Some(fw) = self.window_mgr.window(focused_id) {
+            if fw.buffer_idx < self.buffers.len()
+                && self.is_kind_replaceable(self.buffers[fw.buffer_idx].kind)
+                && !conv_ids.is_some_and(|ids| ids.contains(&focused_id))
+            {
+                return Some(focused_id);
+            }
+        }
+        // Then check all other windows.
+        self.window_mgr
+            .iter_windows()
+            .find(|w| {
+                w.buffer_idx < self.buffers.len()
+                    && self.is_kind_replaceable(self.buffers[w.buffer_idx].kind)
+                    && !conv_ids.is_some_and(|ids| ids.contains(&w.id))
+            })
+            .map(|w| w.id)
+    }
+
     /// Returns true if `win_id` belongs to a dedicated purpose (file tree,
     /// conversation pair) and should never be repurposed for general buffer routing.
     pub fn is_dedicated_window(&self, win_id: crate::window::WindowId) -> bool {
@@ -2069,8 +2115,12 @@ impl Editor {
             }
         }
         // Fallback: check buffer kind for other sidebar types (debug, messages, etc.)
+        // but exclude replaceable kinds — those windows CAN be repurposed.
         if let Some(w) = self.window_mgr.window(win_id) {
-            if w.buffer_idx < self.buffers.len() && self.buffers[w.buffer_idx].kind.is_sidebar() {
+            if w.buffer_idx < self.buffers.len()
+                && self.buffers[w.buffer_idx].kind.is_sidebar()
+                && !self.is_kind_replaceable(self.buffers[w.buffer_idx].kind)
+            {
                 return true;
             }
         }
@@ -2258,6 +2308,19 @@ impl Editor {
             return true;
         }
 
+        // 2.5: If there's a replaceable window (e.g. dashboard), take it over.
+        if let Some(repl_id) = self.find_replaceable_window() {
+            if let Some(win) = self.window_mgr.window_mut(repl_id) {
+                win.buffer_idx = idx;
+                win.cursor_row = 0;
+                win.cursor_col = 0;
+            }
+            self.ai_work_window_id = Some(repl_id);
+            self.ai_target_window_id = Some(repl_id);
+            self.mark_full_redraw();
+            return true;
+        }
+
         // 3. Fallback: split a window. Prefer a non-conversation window to avoid
         // splitting the tiny *ai-input* pane or the *AI* output pane.
         let focused_is_conv = self.is_conversation_buffer(self.active_buffer_idx());
@@ -2368,19 +2431,12 @@ impl Editor {
                         win.cursor_row = 0;
                         win.cursor_col = 0;
                     }
-                } else if self.dashboard_dismiss_on_split && kind != crate::BufferKind::Dashboard {
-                    // Replace dashboard windows instead of splitting alongside them.
-                    let dashboard_win = self
-                        .window_mgr
-                        .iter_windows()
-                        .find(|w| {
-                            w.buffer_idx < self.buffers.len()
-                                && self.buffers[w.buffer_idx].kind == crate::BufferKind::Dashboard
-                        })
-                        .map(|w| w.id);
-                    if let Some(dw_id) = dashboard_win {
-                        // Replace the dashboard window's buffer directly.
-                        if let Some(win) = self.window_mgr.window_mut(dw_id) {
+                } else if let Some(repl_id) = self.find_replaceable_window() {
+                    // Replace a replaceable window instead of splitting alongside it.
+                    if kind
+                        != self.buffers[self.window_mgr.window(repl_id).unwrap().buffer_idx].kind
+                    {
+                        if let Some(win) = self.window_mgr.window_mut(repl_id) {
                             win.buffer_idx = buf_idx;
                             win.cursor_row = 0;
                             win.cursor_col = 0;
@@ -2512,6 +2568,7 @@ impl Editor {
     /// a sensible default based on buffer kind.
     pub fn sync_mode_to_buffer(&mut self) {
         let idx = self.active_buffer_idx();
+        self.ensure_buffer_git_branch(idx);
         let kind = self.buffers[idx].kind;
 
         if let Some(saved) = self.buffers[idx].saved_mode {

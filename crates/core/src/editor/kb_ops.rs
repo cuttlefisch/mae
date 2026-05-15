@@ -444,10 +444,34 @@ impl Editor {
             // Insert into matching KB instance (if registered)
             self.kb_insert_to_notes_instance(&id, title, &path);
 
+            // Record return buffer before opening new file
+            let return_idx = self.active_buffer_idx();
+
             // Open the file for editing
             self.open_file(&path);
 
-            self.set_status(format!("Created: {}", title));
+            // Seed help buffer so SPC n v can toggle back to rendered view
+            self.open_help_at(&id);
+            // Switch focus back to the .org file (user wants to edit)
+            if let Some(file_idx) = self
+                .buffers
+                .iter()
+                .position(|b| b.file_path().is_some_and(|p| p == path))
+            {
+                self.display_buffer(file_idx);
+            }
+
+            // Enter capture mode (C-c C-c to finalize, C-c C-k to abort)
+            self.capture_state = Some(super::CaptureState {
+                node_id: id.clone(),
+                file_path: Some(path.clone()),
+                return_buffer_idx: return_idx,
+            });
+
+            self.set_status(format!(
+                "Capture: {} — C-c C-c to finish, C-c C-k to abort",
+                title
+            ));
             Ok((id, Some(path)))
         } else {
             // Ephemeral in-memory node (fallback)

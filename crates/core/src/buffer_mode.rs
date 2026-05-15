@@ -137,7 +137,7 @@ impl BufferMode for BufferKind {
     }
 
     fn normal_mode_only(&self) -> bool {
-        matches!(self, Self::Dashboard | Self::Modules)
+        matches!(self, Self::Dashboard | Self::Modules | Self::Help)
     }
 
     fn read_only(&self) -> bool {
@@ -296,7 +296,7 @@ mod tests {
         assert!(BufferKind::Dashboard.normal_mode_only());
         assert!(BufferKind::Modules.normal_mode_only());
         assert!(!BufferKind::Text.normal_mode_only());
-        assert!(!BufferKind::Help.normal_mode_only());
+        assert!(BufferKind::Help.normal_mode_only());
         assert!(!BufferKind::GitStatus.normal_mode_only());
         assert!(!BufferKind::Shell.normal_mode_only());
     }

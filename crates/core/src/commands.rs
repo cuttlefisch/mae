@@ -1078,9 +1078,14 @@ impl CommandRegistry {
         );
         reg.register_builtin(
             "kb-create",
-            "Create a new note — type title, auto-generates ID (SPC n c)",
+            "Find or create a note — type title, auto-generates ID (SPC n c)",
         );
         reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n d)");
+        reg.register_builtin(
+            "capture-finalize",
+            "Save note and return from capture (C-c C-c)",
+        );
+        reg.register_builtin("capture-abort", "Abort capture, delete note (C-c C-k)");
         reg.register_builtin(
             "kb-insert-link",
             "Insert org-style link to a KB node at cursor (SPC n i)",

@@ -79,9 +79,9 @@ pub use debug::{
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    BlameEntry, BlameOverlay, CodeActionItem, CodeActionMenu, CompletionItem, Diagnostic,
-    DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind,
-    HoverPopup, InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
+    BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu, CompletionItem,
+    Diagnostic, DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor,
+    HighlightKind, HoverPopup, InputLock, LspLocation, LspRange, LspServerInfo, LspServerStatus,
     PeekReferenceLocation, PeekReferencesState, PeekState, SignatureHelpInfo, SignatureHelpState,
     SymbolOutlineEntry, SymbolOutlineState,
 };

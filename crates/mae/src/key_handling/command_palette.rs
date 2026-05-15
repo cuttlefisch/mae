@@ -50,8 +50,20 @@ pub(super) fn handle_command_palette_mode(
                     editor.set_theme_by_name(&theme);
                     crate::config::persist_editor_preference("theme", &theme);
                 }
-                (Some(node_id), PalettePurpose::HelpSearch) => {
+                (Some(node_id), PalettePurpose::HelpSearch)
+                | (Some(node_id), PalettePurpose::KbFindOrCreate) => {
                     editor.open_help_at(&node_id);
+                }
+                (None, PalettePurpose::KbFindOrCreate) => {
+                    let title = query.trim();
+                    if title.is_empty() {
+                        editor.set_status("Note title cannot be empty");
+                    } else {
+                        match editor.kb_create_note_from_title(title) {
+                            Ok(_) => {}
+                            Err(e) => editor.set_status(e),
+                        }
+                    }
                 }
                 (Some(buf_name), PalettePurpose::SwitchBuffer) => {
                     if buf_name == "*Messages*" {
@@ -91,14 +103,18 @@ pub(super) fn handle_command_palette_mode(
                 (Some(root_str), PalettePurpose::ForgetProject) => {
                     editor.remove_project(&root_str);
                 }
-                (_, PalettePurpose::KbCreate) => {
-                    // KbCreate uses the query as the title (no selection needed)
+                (None, PalettePurpose::KbInsertLink) => {
+                    // No match — create node from query, then insert link
                     let title = query.trim();
                     if title.is_empty() {
                         editor.set_status("Note title cannot be empty");
                     } else {
                         match editor.kb_create_note_from_title(title) {
-                            Ok(_) => {}
+                            Ok((new_id, _)) => {
+                                let link = format!("[[{}|{}]]", new_id, title);
+                                editor.insert_at_cursor(&link);
+                                editor.set_status(format!("Created + linked: {}", title));
+                            }
                             Err(e) => editor.set_status(e),
                         }
                     }
@@ -427,6 +443,19 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             if !tag.is_empty() {
                 editor.set_status(format!("Agenda filter: :{tag}:"));
                 // Agenda refresh with tag filter — handled by M8
+            }
+        }
+        MiniDialogContext::RevertBuffer { buf_idx } => {
+            let buf_idx = *buf_idx;
+            if buf_idx < editor.buffers.len() {
+                match editor.buffers[buf_idx].reload_from_disk() {
+                    Ok(()) => {
+                        let name = editor.buffers[buf_idx].name.clone();
+                        editor.set_status(format!("Reloaded: {}", name));
+                    }
+                    Err(e) => editor.set_status(format!("Reload failed: {}", e)),
+                }
+                editor.fire_hook("file-changed-on-disk");
             }
         }
     }

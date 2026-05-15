@@ -34,7 +34,8 @@ impl Editor {
                 if let Some(path) = args {
                     self.open_file(path);
                 } else {
-                    self.set_status("Usage: :e <filename>");
+                    // No args = revert current buffer (like vim :e)
+                    self.dispatch_builtin("revert-buffer");
                 }
                 true
             }
