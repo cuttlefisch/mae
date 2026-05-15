@@ -24,7 +24,7 @@ use crate::{KnowledgeBase, Node, NodeKind};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 /// Error type wrapping rusqlite and serde errors for the persistence layer.
 #[derive(Debug)]
@@ -111,7 +111,8 @@ fn init_schema(conn: &Connection) -> Result<(), PersistError> {
             priority        TEXT,
             source          TEXT,
             source_version  INTEGER,
-            aliases_json    TEXT NOT NULL DEFAULT '[]'
+            aliases_json    TEXT NOT NULL DEFAULT '[]',
+            properties_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE IF NOT EXISTS links (
             src     TEXT NOT NULL,
@@ -162,6 +163,9 @@ fn check_schema_version(conn: &Connection) -> Result<(), PersistError> {
     }
     if found < 4 {
         migrate_v3_to_v4(conn)?;
+    }
+    if found < 5 {
+        migrate_v4_to_v5(conn)?;
     }
     Ok(())
 }
@@ -239,6 +243,19 @@ fn migrate_v3_to_v4(conn: &Connection) -> Result<(), PersistError> {
     Ok(())
 }
 
+fn migrate_v4_to_v5(conn: &Connection) -> Result<(), PersistError> {
+    let tx = conn.unchecked_transaction()?;
+    if !has_column(conn, "nodes", "properties_json")? {
+        tx.execute(
+            "ALTER TABLE nodes ADD COLUMN properties_json TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
 impl KnowledgeBase {
     /// Write the full KB to a SQLite file at `path`. Creates the file
     /// if absent and overwrites all existing node/link/FTS rows atomically
@@ -253,7 +270,7 @@ impl KnowledgeBase {
         tx.execute("DELETE FROM node_tags", [])?;
         {
             let mut ins_node = tx.prepare(
-                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO nodes (id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut ins_link =
                 tx.prepare("INSERT OR IGNORE INTO links (src, dst, display) VALUES (?, ?, ?)")?;
@@ -265,6 +282,7 @@ impl KnowledgeBase {
             for node in self.nodes_values() {
                 let tags_json = serde_json::to_string(&node.tags)?;
                 let aliases_json = serde_json::to_string(&node.aliases)?;
+                let properties_json = serde_json::to_string(&node.properties)?;
                 let pri_str = node.priority.map(|c| c.to_string());
                 let source_str = node.source.map(|s| match s {
                     crate::NodeSource::Seed => "seed",
@@ -283,6 +301,7 @@ impl KnowledgeBase {
                     &source_str,
                     &node.source_version,
                     &aliases_json,
+                    &properties_json,
                 ])?;
                 ins_fts.execute(params![
                     &node.id,
@@ -318,12 +337,13 @@ impl KnowledgeBase {
         check_schema_version(&conn)?;
         init_schema(&conn)?; // no-op if already initialized
         *self = KnowledgeBase::new();
-        // Check if aliases_json column exists (pre-v4 databases may not have it).
+        // Check if optional columns exist (pre-v4/v5 databases may not have them).
         let has_aliases = has_column(&conn, "nodes", "aliases_json")?;
-        let query_str = if has_aliases {
-            "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json FROM nodes ORDER BY id"
-        } else {
-            "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version FROM nodes ORDER BY id"
+        let has_properties = has_column(&conn, "nodes", "properties_json")?;
+        let query_str = match (has_aliases, has_properties) {
+            (true, true) => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json FROM nodes ORDER BY id",
+            (true, false) => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json FROM nodes ORDER BY id",
+            _ => "SELECT id, title, kind, body, tags_json, todo_state, priority, source, source_version FROM nodes ORDER BY id",
         };
         let mut stmt = conn.prepare(query_str)?;
         let rows = stmt.query_map([], |row| {
@@ -341,6 +361,11 @@ impl KnowledgeBase {
             } else {
                 "[]".to_string()
             };
+            let properties_json: String = if has_properties {
+                row.get(10)?
+            } else {
+                "{}".to_string()
+            };
             Ok((
                 id,
                 title,
@@ -352,6 +377,7 @@ impl KnowledgeBase {
                 source_str,
                 source_version,
                 aliases_json,
+                properties_json,
             ))
         })?;
         let mut count = 0;
@@ -367,9 +393,12 @@ impl KnowledgeBase {
                 source_str,
                 source_version,
                 aliases_json,
+                properties_json,
             ) = row?;
             let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let aliases: Vec<String> = serde_json::from_str(&aliases_json).unwrap_or_default();
+            let properties: std::collections::HashMap<String, String> =
+                serde_json::from_str(&properties_json).unwrap_or_default();
             let priority = priority_str.and_then(|s| s.chars().next());
             let source = source_str.as_deref().map(|s| match s {
                 "seed" => crate::NodeSource::Seed,
@@ -380,7 +409,8 @@ impl KnowledgeBase {
             });
             let mut node = Node::new(id, title, kind_from_str(&kind), body)
                 .with_tags(tags)
-                .with_aliases(aliases);
+                .with_aliases(aliases)
+                .with_properties(properties);
             node.todo_state = todo_state;
             node.priority = priority;
             node.source = source;
@@ -794,6 +824,73 @@ mod tests {
         let mut kb2 = KnowledgeBase::new();
         kb2.load_from_sqlite(&path).unwrap();
         assert_eq!(kb2.get("n2").unwrap().aliases, vec!["alias1".to_string()]);
+    }
+
+    #[test]
+    fn properties_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("kb.db");
+        let mut kb = KnowledgeBase::new();
+        let mut props = std::collections::HashMap::new();
+        props.insert("hash".to_string(), "deadbeef".to_string());
+        props.insert("last-modified".to_string(), "2026-01-15".to_string());
+        kb.insert(Node::new("n1", "Test", NodeKind::Note, "body").with_properties(props));
+        kb.save_to_sqlite(&path).unwrap();
+
+        let mut restored = KnowledgeBase::new();
+        restored.load_from_sqlite(&path).unwrap();
+        let node = restored.get("n1").unwrap();
+        assert_eq!(node.properties.get("hash").unwrap(), "deadbeef");
+        assert_eq!(node.properties.get("last-modified").unwrap(), "2026-01-15");
+    }
+
+    /// Migrate a v4 database (no properties_json) → v5.
+    #[test]
+    fn migrate_v4_to_current() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("v4.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE nodes (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
+                body TEXT NOT NULL, tags_json TEXT NOT NULL DEFAULT '[]',
+                todo_state TEXT, priority TEXT, source TEXT, source_version INTEGER,
+                aliases_json TEXT NOT NULL DEFAULT '[]'
+            );
+            CREATE TABLE links (
+                src TEXT NOT NULL, dst TEXT NOT NULL, display TEXT,
+                PRIMARY KEY (src, dst)
+            );
+            CREATE TABLE node_tags (
+                node_id TEXT NOT NULL, tag TEXT NOT NULL,
+                PRIMARY KEY (node_id, tag)
+            );
+            CREATE VIRTUAL TABLE nodes_fts USING fts5(
+                id UNINDEXED, title, body, tags, aliases,
+                tokenize='porter unicode61'
+            );
+            "#,
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        conn.execute(
+            "INSERT INTO nodes (id, title, kind, body) VALUES (?, ?, ?, ?)",
+            params!["n1", "Test", "note", "body"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO nodes_fts (id, title, body, tags, aliases) VALUES (?, ?, ?, ?, ?)",
+            params!["n1", "Test", "body", "", ""],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut kb = KnowledgeBase::new();
+        let n = kb.load_from_sqlite(&path).unwrap();
+        assert_eq!(n, 1);
+        let node = kb.get("n1").unwrap();
+        assert!(node.properties.is_empty());
     }
 
     /// A database from a future MAE version should return FutureSchema error.

@@ -96,6 +96,10 @@ pub struct Node {
     /// Alternative names for discoverability (e.g. "plugins" for concept:modules).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Arbitrary property drawer key-value pairs (e.g. last-accessed, hash).
+    /// Populated from org `:PROPERTIES:` drawer during ingest.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub properties: HashMap<String, String>,
     /// Path to the source `.org` file this node was parsed from (if any).
     /// Not serialized — ephemeral, populated during ingest.
     #[serde(skip)]
@@ -120,6 +124,7 @@ impl Node {
             source: None,
             source_version: None,
             aliases: Vec::new(),
+            properties: HashMap::new(),
             source_file: None,
         }
     }
@@ -147,6 +152,11 @@ impl Node {
 
     pub fn with_priority(mut self, priority: char) -> Self {
         self.priority = Some(priority);
+        self
+    }
+
+    pub fn with_properties(mut self, props: HashMap<String, String>) -> Self {
+        self.properties = props;
         self
     }
 
