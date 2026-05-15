@@ -2842,7 +2842,31 @@
     },
     {
       "name": "kb-delete",
-      "doc": "Delete a KB node by ID (SPC n d)"
+      "doc": "Delete a KB node by ID (SPC n D)"
+    },
+    {
+      "name": "daily-goto-today",
+      "doc": "Open today's daily note with chain-fill (SPC n d t)"
+    },
+    {
+      "name": "daily-goto-yesterday",
+      "doc": "Open yesterday's daily note (SPC n d y)"
+    },
+    {
+      "name": "daily-goto-date",
+      "doc": "Open daily note for a date (SPC n d d)"
+    },
+    {
+      "name": "daily-prev",
+      "doc": "Navigate to previous daily note (SPC n d p)"
+    },
+    {
+      "name": "daily-next",
+      "doc": "Navigate to next daily note (SPC n d n)"
+    },
+    {
+      "name": "kb-audit",
+      "doc": "Run KB audit report (SPC n H a)"
     },
     {
       "name": "capture-finalize",

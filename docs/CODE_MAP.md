@@ -430,7 +430,7 @@ Source: `crates/spell/src/lib.rs`
 | `command-exists?` | `crates/scheme/src/runtime.rs` |
 | `keymap-bindings` | `crates/scheme/src/runtime.rs` |
 
-## Commands (482 built-in)
+## Commands (488 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -855,7 +855,13 @@ Source: `crates/spell/src/lib.rs`
 | `kb-find` | Search KB nodes (SPC n f) |
 | `kb-edit-source` | Jump to source .org file for current help node (SPC n e) |
 | `kb-create` | Find or create a note — type title, auto-generates ID (SPC n c) |
-| `kb-delete` | Delete a KB node by ID (SPC n d) |
+| `kb-delete` | Delete a KB node by ID (SPC n D) |
+| `daily-goto-today` | Open today's daily note with chain-fill (SPC n d t) |
+| `daily-goto-yesterday` | Open yesterday's daily note (SPC n d y) |
+| `daily-goto-date` | Open daily note for a date (SPC n d d) |
+| `daily-prev` | Navigate to previous daily note (SPC n d p) |
+| `daily-next` | Navigate to next daily note (SPC n d n) |
+| `kb-audit` | Run KB audit report (SPC n H a) |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |
 | `capture-abort` | Abort capture, delete note (C-c C-k) |
 | `kb-insert-link` | Insert org-style link to a KB node at cursor (SPC n i) |
